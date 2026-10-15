@@ -3434,7 +3434,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     <p className="text-balance text-xs font-medium text-slate-600 max-md:min-h-8 md:text-sm">{dispatchPause ? (dispatchPause.type === 'error' ? t.dispatch.pausedUnavailable : t.dispatch.pausedNoOrders) : nextOrderTime ? t.dispatch.readyToAcceptOrders : t.dispatch.preparingQueue}</p>
                   </div>
                 </div>
-                <div className="-mx-5 -mb-5 flex items-center justify-center border-t border-white/70 px-4 py-3 md:-mx-10 md:-mb-10 md:px-10 md:py-6">
+                <div className="-mx-5 -mb-5 flex items-center justify-center border-t border-white/70 px-4 py-3 max-md:pb-6 md:-mx-10 md:-mb-10 md:px-10 md:py-6">
                   <button
                     type="button"
                     onClick={() => void handleStopWork(false).catch(() => undefined)}

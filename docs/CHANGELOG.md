@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · 手机端 End Session 按钮再上移
+- 需求：手机端等待派单面板里的 End Session 按钮再往上移一点。
+- 改动：按钮行下方留白增加 12px，按钮整体上移；船和海浪同步上移 12px，保持与按钮行的间距。桌面不变。
+- 文件：`src/components/employee/OrderDispatch.tsx`、`src/index.css`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；未在浏览器里查看实际效果。
+
 ## 2026-10-16 · 手机端等待派单：End Session 按钮下移到面板底部
 - 需求：手机端 Order Processing 等待派单面板下方有多余空白，End Session / Stop accepting orders 按钮应该放到面板最底部。
 - 改动：手机上等待派单时，面板内容区改为纵向撑满，计时器等内容在剩余空间里垂直居中，End Session 按钮行固定在面板最下方。桌面、平板及其他状态不变。
