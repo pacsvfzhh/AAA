@@ -5,6 +5,18 @@ const TONES = {
     square: 'bg-indigo-200/30',
     smallSquare: 'bg-blue-300/25',
   },
+  green: {
+    topCircle: 'bg-emerald-200/40',
+    bottomCircle: 'bg-teal-200/35',
+    square: 'bg-green-200/35',
+    smallSquare: 'bg-emerald-300/25',
+  },
+  rose: {
+    topCircle: 'bg-rose-200/40',
+    bottomCircle: 'bg-orange-200/35',
+    square: 'bg-red-200/30',
+    smallSquare: 'bg-rose-300/25',
+  },
   gold: {
     topCircle: 'bg-amber-200/45',
     bottomCircle: 'bg-orange-200/35',
@@ -13,7 +25,9 @@ const TONES = {
   },
 } as const;
 
-export default function PanelColorBlocks({ tone = 'blue' }: { tone?: keyof typeof TONES }) {
+export type PanelColorTone = keyof typeof TONES;
+
+export default function PanelColorBlocks({ tone = 'blue' }: { tone?: PanelColorTone }) {
   const colors = TONES[tone];
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">

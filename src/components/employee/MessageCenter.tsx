@@ -9,7 +9,6 @@ import { useLanguage } from '../../lib/i18n/context';
 import QuickCopyRichContent from './QuickCopyRichContent';
 import PageLoader from './PageLoader';
 import PanelColorBlocks from './PanelColorBlocks';
-import NotificationDetailBackground from './NotificationDetailBackground';
 import { NOTIFICATION_DETAIL_THEMES, getNotificationDetailTone } from './notificationDetailTheme';
 
 interface MessageCenterProps {
@@ -728,7 +727,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
             >
               {/* Content card */}
               <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" style={{ background: detailTheme.contentGradient }}>
-                <NotificationDetailBackground tone={detailTone} />
+                <PanelColorBlocks tone={detailTheme.blockTone} />
                 {/* Top accent line */}
                 <div className={`absolute left-6 right-6 top-0 z-10 h-[2px] rounded-full bg-gradient-to-r from-transparent to-transparent ${detailTheme.accentLine}`} />
 

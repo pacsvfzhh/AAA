@@ -1,3 +1,5 @@
+import type { PanelColorTone } from './PanelColorBlocks';
+
 export type NotificationDetailTone = 'normal' | 'high' | 'urgent' | 'reward';
 
 export interface NotificationDetailTheme {
@@ -22,8 +24,7 @@ export interface NotificationDetailTheme {
   unreadIcon: string;
   unreadLabel: string;
   footerButton: string;
-  orbPrimary: string;
-  orbSecondary: string;
+  blockTone: PanelColorTone;
 }
 
 const lightHeader = {
@@ -53,8 +54,7 @@ export const NOTIFICATION_DETAIL_THEMES: Record<NotificationDetailTone, Notifica
     unreadIcon: 'text-blue-600',
     unreadLabel: 'text-blue-700',
     footerButton: 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-lg shadow-blue-500/20 hover:from-blue-700 hover:to-cyan-600',
-    orbPrimary: '37,99,235',
-    orbSecondary: '14,165,233',
+    blockTone: 'blue',
   },
   high: {
     ...lightHeader,
@@ -72,8 +72,7 @@ export const NOTIFICATION_DETAIL_THEMES: Record<NotificationDetailTone, Notifica
     unreadIcon: 'text-emerald-600',
     unreadLabel: 'text-emerald-700',
     footerButton: 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white shadow-lg shadow-emerald-500/20 hover:from-emerald-700 hover:to-teal-600',
-    orbPrimary: '16,185,129',
-    orbSecondary: '20,184,166',
+    blockTone: 'green',
   },
   urgent: {
     ...lightHeader,
@@ -91,8 +90,7 @@ export const NOTIFICATION_DETAIL_THEMES: Record<NotificationDetailTone, Notifica
     unreadIcon: 'text-rose-600',
     unreadLabel: 'text-rose-700',
     footerButton: 'bg-gradient-to-r from-rose-600 to-orange-500 text-white shadow-lg shadow-rose-500/20 hover:from-rose-700 hover:to-orange-600',
-    orbPrimary: '244,63,94',
-    orbSecondary: '251,146,60',
+    blockTone: 'rose',
   },
   reward: {
     headerGradient: 'from-amber-500 via-yellow-500 to-orange-500',
@@ -116,8 +114,7 @@ export const NOTIFICATION_DETAIL_THEMES: Record<NotificationDetailTone, Notifica
     unreadIcon: 'text-amber-600',
     unreadLabel: 'text-amber-700',
     footerButton: 'bg-gradient-to-r from-amber-500 via-yellow-500 to-orange-500 text-amber-950 shadow-lg shadow-amber-500/25 hover:from-amber-600 hover:via-yellow-600 hover:to-orange-600',
-    orbPrimary: '245,158,11',
-    orbSecondary: '251,191,36',
+    blockTone: 'gold',
   },
 };
 

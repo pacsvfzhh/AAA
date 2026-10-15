@@ -2,7 +2,7 @@ import { AlertCircle, CheckCircle, Clock, Gift, Radio, Shield, Sparkles, Wallet,
 import { useResponsive } from '../../lib/useResponsive';
 import { useLanguage } from '../../lib/i18n/context';
 import QuickCopyRichContent from './QuickCopyRichContent';
-import NotificationDetailBackground from './NotificationDetailBackground';
+import PanelColorBlocks from './PanelColorBlocks';
 import { NOTIFICATION_DETAIL_THEMES, getNotificationDetailTone } from './notificationDetailTheme';
 
 export interface EmployeeNotificationDetailData {
@@ -100,7 +100,7 @@ export default function EmployeeNotificationDetailPanel({ message, onClose, embe
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden p-0">
         <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" style={{ background: theme.contentGradient }}>
-          <NotificationDetailBackground tone={tone} />
+          <PanelColorBlocks tone={theme.blockTone} />
           <div className={`absolute left-6 right-6 top-0 z-10 h-[2px] rounded-full bg-gradient-to-r from-transparent to-transparent ${theme.accentLine}`} />
 
           {isReward && (

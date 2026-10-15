@@ -19,8 +19,8 @@
 
 ## 2026-10-16 · 通知详情面板：公告风格背景，按优先级配色
 - 需求：铃铛 → Messages → 点击通知卡片进入的详情面板，内容背景要匹配公告面板风格，并按优先级配色；管理端员工预览同步。
-- 改动：内容区使用公告面板风格的白到浅色渐变，加柔光色块、点阵和虚线路线。普通蓝、重要绿、紧急红，奖金固定黄色；标题栏、标签、关闭按钮、底部按钮、链接、引用块和「标为已读」图标同步配色。管理端各处员工预览共用同一个详情面板，会按所选优先级显示。
-- 文件：`src/components/employee/notificationDetailTheme.ts`（新增）、`src/components/employee/NotificationDetailBackground.tsx`（新增）、`src/components/employee/EmployeeNotificationDetailPanel.tsx`、`src/components/employee/MessageCenter.tsx`
+- 改动：内容区直接使用通知面板的色块图案（大圆 + 圆角方块），按优先级换色：普通蓝、重要绿、紧急红，奖金固定黄色（带小菱形）。标题栏、标签、关闭按钮、底部按钮、链接、引用块和「标为已读」图标同步配色。`PanelColorBlocks` 新增 `green`、`rose` 配色。管理端各处员工预览共用同一个详情面板，会按所选优先级显示。
+- 文件：`src/components/employee/notificationDetailTheme.ts`（新增）、`src/components/employee/PanelColorBlocks.tsx`、`src/components/employee/EmployeeNotificationDetailPanel.tsx`、`src/components/employee/MessageCenter.tsx`
 - 数据库/服务端：无
 - 验证：typecheck 和 ESLint 通过；未在浏览器里查看实际效果。
 
