@@ -2680,8 +2680,8 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         <MessageCircle className="h-7 w-7 text-blue-500" strokeWidth={1.75} />
                       </div>
                     </div>
-                    <p className="text-[15px] font-semibold leading-6 text-slate-700">{t.customerService.noConversations}</p>
-                    <p className="mt-1 max-w-[250px] text-[13px] leading-5 text-slate-500">{t.customerService.noConversationsDesc}</p>
+                    <p className="text-[15px] font-semibold leading-6 text-blue-900">{t.customerService.noConversations}</p>
+                    <p className="mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.customerService.noConversationsDesc}</p>
                   </div>
                 ) : (
                   <div className="p-3 sm:p-4 space-y-2 sm:space-y-2.5">
