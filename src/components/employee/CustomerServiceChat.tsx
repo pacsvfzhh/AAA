@@ -2671,10 +2671,10 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         className={`w-full rounded-2xl transition-all duration-200 hover:translate-x-0.5 active:scale-[0.98] group relative overflow-hidden ${skipListAnimationRef.current ? '' : 'animate-[fadeInUp_0.4s_ease-out_both]'} ${
                           conv.customer.is_super
                             ? conv.unread_count > 0
-                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-amber-50 border border-orange-300 shadow-sm hover:shadow-md'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-r from-amber-100/80 via-amber-50 to-white border border-orange-300 shadow-[0_6px_16px_-8px_rgba(234,88,12,0.5)] hover:shadow-[0_8px_20px_-8px_rgba(234,88,12,0.6)]'
                               : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-amber-50/60 border border-amber-200 hover:border-amber-300 hover:shadow-md'
                             : conv.unread_count > 0
-                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-orange-50/70 border border-orange-200 shadow-sm hover:shadow-md'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-r from-orange-50 via-white to-white border border-orange-200 shadow-[0_6px_16px_-8px_rgba(234,88,12,0.45)] hover:shadow-[0_8px_20px_-8px_rgba(234,88,12,0.55)]'
                               : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-white border border-slate-200 hover:border-blue-200 hover:shadow-md'
                         }`}
                         style={skipListAnimationRef.current ? undefined : {
@@ -2682,9 +2682,9 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         }}
                       >
                         {conv.customer.is_super ? (
-                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-orange-500' : 'bg-amber-400'}`} aria-hidden="true"></span>
+                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-gradient-to-b from-orange-400 to-red-500' : 'bg-amber-400'}`} aria-hidden="true"></span>
                         ) : (
-                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-orange-500' : 'bg-blue-500/70'}`} aria-hidden="true"></span>
+                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-gradient-to-b from-orange-400 to-red-500' : 'bg-blue-500/70'}`} aria-hidden="true"></span>
                         )}
                         {conv.customer.is_super ? (
                           /* VIP card: 4-line vertical layout */
@@ -2703,7 +2703,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                 )}
                                 <CustomerAvatar
                                   customer={conv.customer}
-                                  className="w-11 h-11 sm:w-12 sm:h-12"
+                                  className={`w-11 h-11 sm:w-12 sm:h-12 ${conv.unread_count > 0 ? 'ring-2 ring-orange-400/70 ring-offset-2' : ''}`}
                                 />
                                 <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 sm:w-3.5 sm:h-3.5 rounded-full border-2 border-white transition-colors ${
                                   customerOnlineStatus.get(conv.customer.id)
@@ -2765,7 +2765,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                       </p>
                                     );
                                   })()}
-                                  <div className="flex items-center gap-1 text-[11px] text-amber-500/70 font-medium flex-shrink-0">
+                                  <div className={`flex items-center gap-1 text-[11px] flex-shrink-0 ${conv.unread_count > 0 ? 'font-semibold text-orange-600' : 'font-medium text-amber-500/70'}`}>
                                     <Clock className="w-3 h-3" />
                                     {formatTime(conv.last_message_time)}
                                   </div>
@@ -2779,7 +2779,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                             <div className="relative flex-shrink-0 mt-0.5">
                               <CustomerAvatar
                                 customer={conv.customer}
-                                className="w-10 h-10 sm:w-11 sm:h-11"
+                                className={`w-10 h-10 sm:w-11 sm:h-11 ${conv.unread_count > 0 ? 'ring-2 ring-orange-400/70 ring-offset-2' : ''}`}
                               />
                               <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border-2 border-white transition-colors ${
                                 customerOnlineStatus.get(conv.customer.id)
@@ -2824,7 +2824,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     </p>
                                   );
                                 })()}
-                                <div className="flex items-center gap-1 text-[11px] text-slate-400 font-medium flex-shrink-0">
+                                <div className={`flex items-center gap-1 text-[11px] flex-shrink-0 ${conv.unread_count > 0 ? 'font-semibold text-orange-600' : 'font-medium text-slate-400'}`}>
                                   <Clock className="w-3 h-3" />
                                   {formatTime(conv.last_message_time)}
                                 </div>
