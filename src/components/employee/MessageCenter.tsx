@@ -8,6 +8,7 @@ import { useResponsive } from '../../lib/useResponsive';
 import { useLanguage } from '../../lib/i18n/context';
 import QuickCopyRichContent from './QuickCopyRichContent';
 import PageLoader from './PageLoader';
+import PanelColorBlocks from './PanelColorBlocks';
 
 interface MessageCenterProps {
   employee: Employee;
@@ -459,7 +460,9 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
         </div>
 
         {/* Message List */}
-        <div className="relative flex-1 overflow-y-auto overscroll-y-contain">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <PanelColorBlocks />
+          <div className="relative h-full overflow-y-auto overscroll-y-contain">
           <div className="emp-compact-panel flex flex-col gap-4 px-4 lg:px-6 py-4 pb-8">
             {failedReadIds.size > 0 && (
               <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
@@ -470,14 +473,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
             {loading || !panelReady ? (
               <PageLoader variant="panel" label={t.messages.loading} className="!min-h-[calc(100dvh-180px)] lg:!min-h-[calc(100dvh-220px)]" />
             ) : messages.length === 0 ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-8 text-center">
-                <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-                  <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-blue-200/35"></div>
-                  <div className="absolute -bottom-20 -left-16 h-64 w-64 rounded-full bg-sky-200/35"></div>
-                  <div className="absolute left-7 top-[26%] h-14 w-14 rotate-12 rounded-2xl bg-indigo-200/30"></div>
-                  <div className="absolute bottom-[24%] right-9 h-10 w-10 -rotate-6 rounded-xl bg-blue-300/25"></div>
-                  <div className="absolute -left-10 top-1/2 h-[18px] w-[190px] -rotate-[24deg] rounded-full bg-white/50"></div>
-                </div>
+              <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
                 <div className="relative z-10 mb-5 h-[96px] w-[120px]" aria-hidden="true">
                   <span className="absolute left-1/2 top-1/2 h-[84px] w-[84px] -translate-x-1/2 -translate-y-1/2 -rotate-6 rounded-[28px] border-2 border-sky-300/40"></span>
                   <span className="absolute left-1/2 top-1/2 h-[74px] w-[74px] -translate-x-1/2 -translate-y-1/2 rotate-12 rounded-3xl border-2 border-blue-300/50"></span>
@@ -622,6 +618,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
               })}
               </div>
             )}
+          </div>
           </div>
         </div>
       </div>
