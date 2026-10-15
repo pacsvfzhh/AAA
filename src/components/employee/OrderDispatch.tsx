@@ -17,6 +17,18 @@ import DispatchGulls from './DispatchGulls';
 import DispatchShipSilhouette from './DispatchShipSilhouette';
 import { AcceptRing, OrderIcon3D, OrderSparkles } from './DispatchOrderVisuals';
 
+const STANDBY_YARD_STACKS = [
+  { x: 12, n: 3, tone: 0 }, { x: 38, n: 2, tone: 2 }, { x: 64, n: 1, tone: 1 },
+  { x: 274, n: 1, tone: 3 }, { x: 300, n: 2, tone: 1 }, { x: 326, n: 3, tone: 0 },
+].flatMap(stack => Array.from({ length: stack.n }, (_, k) => ({
+  key: `${stack.x}-${k}`,
+  x: stack.x,
+  y: 88 - 13 * k,
+  tone: (stack.tone + k) % 4,
+  assigned: stack.x === 300 && k === 1,
+})));
+
+
 interface DispatchAssignment {
   id: string;
   dispatch_order_id: string | null;
@@ -3661,86 +3673,45 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 85% 70% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
                     <div className="relative z-10 w-full">
-                      {/* Dispatch pipeline: queue -> dispatch -> assigned, with a throughput trend underneath */}
-                      <div className="dispatch-standby-item relative -mx-4 mb-3" style={{ '--leave-order': 4 } as CSSProperties} aria-hidden="true">
-                        <svg viewBox="0 0 340 132" className="block h-auto w-full" fill="none" xmlns="http://www.w3.org/2000/svg">
-                          <defs>
-                            <linearGradient id="ipm-blue" x1="0" y1="0" x2="1" y2="1">
-                              <stop offset="0" stopColor="#12356d" />
-                              <stop offset="1" stopColor="#2563eb" />
-                            </linearGradient>
-                            <linearGradient id="ipm-area" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0" stopColor="#2563eb" stopOpacity="0.2" />
-                              <stop offset="1" stopColor="#2563eb" stopOpacity="0" />
-                            </linearGradient>
-                            <linearGradient id="ipm-run" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="80" y2="0" gradientTransform={suppressAnimations ? 'translate(100 0)' : undefined}>
-                              <stop offset="0" stopColor="#2563eb" stopOpacity="0" />
-                              <stop offset="0.5" stopColor="#2563eb" stopOpacity="0.95" />
-                              <stop offset="1" stopColor="#2563eb" stopOpacity="0" />
-                              {!suppressAnimations && <animateTransform attributeName="gradientTransform" type="translate" values="-80 0;340 0;340 0" keyTimes="0;0.7;1" dur="4.6s" repeatCount="indefinite" />}
-                            </linearGradient>
-                            <linearGradient id="ipm-sheen" x1="0" y1="0" x2="1" y2="0">
-                              <stop offset="0" stopColor="#fff" stopOpacity="0" />
-                              <stop offset="0.5" stopColor="#fff" stopOpacity="0.55" />
-                              <stop offset="1" stopColor="#fff" stopOpacity="0" />
-                            </linearGradient>
-                            <clipPath id="ipm-card"><rect x="8" y="6" width="324" height="120" rx="14" /></clipPath>
-                            <filter id="ipm-shadow" x="-10%" y="-10%" width="120%" height="140%">
-                              <feDropShadow dx="0" dy="6" stdDeviation="6" floodColor="#1e3a8a" floodOpacity="0.14" />
-                            </filter>
-                          </defs>
+                      {/* Container yard: a gantry crane carries an order container from the queue stacks to the assigned stacks, on the panel's own wave line */}
+                      <div className="dispatch-standby-item relative -mx-4 mb-3" style={{ '--leave-order': 4, WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)', maskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)' } as CSSProperties} aria-hidden="true">
+                        <svg viewBox="0 0 360 120" className="block h-auto w-full" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <g>
+                            {STANDBY_YARD_STACKS.map(box => (
+                              <rect
+                                key={box.key}
+                                x={box.x}
+                                y={box.y}
+                                width="24"
+                                height="12"
+                                rx="1"
+                                className={box.assigned ? undefined : `shs-box shs-box-${box.tone}`}
+                                fill={box.assigned ? '#60a5fa' : undefined}
+                                fillOpacity={box.assigned ? 0.8 : undefined}
+                              />
+                            ))}
+                          </g>
 
-                          <rect x="8" y="6" width="324" height="120" rx="14" fill="#fff" fillOpacity="0.78" stroke="#dbeafe" strokeWidth="1" filter="url(#ipm-shadow)" />
-                          <g clipPath="url(#ipm-card)">
-                            <rect x="8" y="6" width="324" height="3" fill="url(#ipm-blue)" fillOpacity="0.85" />
-                            <path d="M24 84H316M24 98H316M24 112H316" stroke="#bfdbfe" strokeOpacity="0.8" strokeWidth="0.8" strokeDasharray="1.5 4" />
-                            <path d="M24 111C48 108 62 101 86 103S124 93 150 95S190 85 214 89S262 77 292 81S308 75 316 73V118H24Z" fill="url(#ipm-area)" />
-                            <path d="M24 111C48 108 62 101 86 103S124 93 150 95S190 85 214 89S262 77 292 81S308 75 316 73" stroke="#2563eb" strokeWidth="1.6" strokeLinecap="round" />
-                            <circle cx="316" cy="73" r="3" fill="#fff" stroke="#2563eb" strokeWidth="1.6" />
+                          <g stroke="#bfdbfe" strokeWidth="1.6" strokeLinecap="round">
+                            <path d="M118 100L128 38L138 100M222 100L232 38L242 100" />
+                            <path d="M124.1 62H131.9M120.9 82H135.1M228.1 62H235.9M224.9 82H239.1" strokeWidth="1.2" />
+                          </g>
+                          <path d="M104 38H256" stroke="#93c5fd" strokeWidth="3" strokeLinecap="round" />
+                          <rect x="102" y="31" width="13" height="9" rx="1.5" fill="#dbeafe" stroke="#bfdbfe" strokeWidth="1" />
+                          <path d="M0 100H360" stroke="#bfdbfe" strokeOpacity="0.9" strokeWidth="0.9" />
+
+                          <g>
                             {!suppressAnimations && (
-                              <g>
-                                <animateTransform attributeName="transform" type="translate" values="-120 0;380 0;380 0" keyTimes="0;0.55;1" dur="7s" repeatCount="indefinite" />
-                                <g transform="skewX(-20)">
-                                  <rect x="0" y="0" width="70" height="132" fill="url(#ipm-sheen)" />
-                                </g>
-                              </g>
+                              <animateTransform attributeName="transform" type="translate" values="-52 0;52 0;-52 0" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.45 0 0.55 1;0.45 0 0.55 1" dur="12s" repeatCount="indefinite" />
                             )}
-                          </g>
-
-                          <path d="M76 36H154M186 36H264" stroke="#dbeafe" strokeWidth="1.6" strokeLinecap="round" />
-                          <path d="M76 36H154M186 36H264" stroke="url(#ipm-run)" strokeWidth="2" strokeLinecap="round" />
-
-                          <g transform="translate(60 36)">
-                            <circle r="15" fill="#fff" stroke="#bfdbfe" strokeWidth="1.2" />
-                            <rect x="-6" y="-6.5" width="12" height="3" rx="1.5" fill="#12356d" />
-                            <rect x="-6" y="-1.5" width="12" height="3" rx="1.5" fill="#12356d" fillOpacity="0.7" />
-                            <rect x="-6" y="3.5" width="8" height="3" rx="1.5" fill="#12356d" fillOpacity="0.45" />
-                          </g>
-                          <g transform="translate(170 36)">
-                            <circle r="19" fill="#2563eb" fillOpacity="0.08" />
-                            <circle r="15" fill="url(#ipm-blue)" />
-                            <g stroke="#fff" strokeWidth="1.8" strokeLinecap="round" fill="none">
-                              <path d="M-6.5 0H-1C2.5 0 2.5 -5 6.5 -5" />
-                              <path d="M-1 0C2.5 0 2.5 5 6.5 5" />
-                            </g>
-                            <circle cx="-6.5" cy="0" r="2" fill="#fff" />
-                            <circle cx="6.5" cy="-5" r="2" fill="#fff" />
-                            <circle cx="6.5" cy="5" r="2" fill="#fff" />
-                          </g>
-                          <g transform="translate(280 36)">
-                            <circle r="15" fill="#fff" stroke="#bfdbfe" strokeWidth="1.2" />
-                            <path d="M-5.5 0.5L-1.8 4L5.5 -4" stroke="#12356d" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                          </g>
-
-                          <g fill="#12356d">
-                            <rect x="44" y="58" width="32" height="3" rx="1.5" fillOpacity="0.55" />
-                            <rect x="50" y="64" width="20" height="2.5" rx="1.25" fill="#cbd5e1" />
-                            <rect x="154" y="58" width="32" height="3" rx="1.5" fillOpacity="0.7" />
-                            <rect x="160" y="64" width="20" height="2.5" rx="1.25" fill="#cbd5e1" />
-                            <rect x="264" y="58" width="32" height="3" rx="1.5" fillOpacity="0.55" />
-                            <rect x="270" y="64" width="20" height="2.5" rx="1.25" fill="#cbd5e1" />
+                            <rect x="174" y="35" width="12" height="6" rx="1.5" fill="#60a5fa" />
+                            <path d="M180 41V56" stroke="#93c5fd" strokeWidth="1" />
+                            <rect x="170" y="56" width="20" height="2.5" rx="1" fill="#93c5fd" />
+                            <rect x="168" y="58.5" width="24" height="12" rx="1" fill="#2563eb" fillOpacity="0.88" />
+                            <path d="M173 59.5V69.5M177.5 59.5V69.5M182 59.5V69.5M186.5 59.5V69.5" stroke="#fff" strokeOpacity="0.3" strokeWidth="0.9" />
                           </g>
                         </svg>
+                        <DispatchWaves wavelengths={[320, 220, 320]} speeds={[18, 26, 34]} className="order-panel-sea" />
                       </div>
 
                       {/* Standby status */}
