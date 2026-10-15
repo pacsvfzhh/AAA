@@ -2938,9 +2938,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               <div className={`relative z-10 ${currentOrder.status === 'pending' ? 'flex min-h-0 flex-1 flex-col p-5 md:p-6 lg:p-10' : 'p-3 md:p-8'} ${currentOrder.status === 'accepted' ? `flex min-h-0 flex-1 flex-col ${acceptRevealPhase === 'cover' ? 'opacity-0' : acceptRevealPhase === 'out' ? 'dispatch-accept-content-in' : ''}` : ''}`}>
                 {/* Premium Header with Blockchain Aesthetic */}
                 <div className={currentOrder.status === 'accepted'
-                  ? `mb-3 grid grid-cols-1 gap-4 md:mb-6 lg:gap-6 ${isTablet ? '' : 'lg:grid-cols-5'}`
+                  ? `mb-3 grid grid-cols-1 gap-4 md:mb-6 lg:gap-6 ${isTablet ? '' : 'lg:grid-cols-7'}`
                   : `flex flex-col md:flex-row items-start md:items-center justify-between mb-3 space-y-2 md:space-y-0 ${currentOrder.status === 'pending' ? 'border-b border-white/20 pb-4 md:mb-4 md:pb-4 lg:mb-6 lg:pb-6' : 'md:mb-6'}`}>
-                  <div className={`flex items-center space-x-2 md:space-x-4 ${currentOrder.status === 'accepted' ? `min-w-0 ${isTablet ? '' : 'lg:col-span-3'}` : ''}`}>
+                  <div className={`flex items-center space-x-2 md:space-x-4 ${currentOrder.status === 'accepted' ? `min-w-0 ${isTablet ? '' : 'lg:col-span-5'}` : ''}`}>
                     {/* Enhanced Icon Container */}
                     <div className="relative">
                       {/* Glow effect */}
@@ -3017,8 +3017,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
                 {/* Order Content - Compact Blockchain Design */}
                 {/* MOBILE: Full Width Order Details First */}
-                <div className={`md:hidden mb-2.5 ${currentOrder.status === 'pending' ? 'flex flex-1 flex-col justify-center' : currentOrder.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
-                  <div className={`relative ${currentOrder.status === 'pending' ? 'py-3' : 'overflow-hidden rounded-lg border border-gray-200 bg-white/90 p-2.5 shadow-sm backdrop-blur-md'} ${currentOrder.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
+                <div className={`md:hidden mb-2.5 ${currentOrder.status === 'pending' ? 'flex flex-1 flex-col justify-center' : currentOrder.status === 'accepted' ? '-mx-3 flex min-h-0 flex-1 flex-col' : ''}`}>
+                  <div className={`relative ${currentOrder.status === 'pending' ? 'py-3' : `overflow-hidden border border-gray-200 bg-white/90 p-2.5 shadow-sm backdrop-blur-md ${currentOrder.status === 'accepted' ? 'rounded-none border-x-0 px-3.5' : 'rounded-lg'}`} ${currentOrder.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
                     {currentOrder.status === 'accepted' && !hasTimeout && (
                       <span className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-blue-600 via-sky-400 to-blue-500" aria-hidden="true" />
                     )}
@@ -3061,8 +3061,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                 </div>
 
                 {/* DESKTOP: Side-by-side layout */}
-                <div className={`hidden md:grid gap-4 lg:gap-6 ${currentOrder.status === 'accepted' ? (isTablet ? 'min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_auto]' : 'min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-5 lg:grid-rows-1') : 'min-h-0 grid-cols-1 md:flex-1 md:grid-rows-[minmax(0,1fr)_auto] md:items-stretch lg:grid-cols-5 lg:grid-rows-1 lg:items-center'}`}>
-                  <div className={`${currentOrder.status === 'accepted' && isTablet ? '' : 'lg:col-span-3'} ${currentOrder.status === 'pending' || currentOrder.status === 'accepted' ? 'min-h-0' : ''}`}>
+                <div className={`hidden md:grid gap-4 lg:gap-6 ${currentOrder.status === 'accepted' ? (isTablet ? 'min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_auto]' : 'min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-7 lg:grid-rows-1') : 'min-h-0 grid-cols-1 md:flex-1 md:grid-rows-[minmax(0,1fr)_auto] md:items-stretch lg:grid-cols-5 lg:grid-rows-1 lg:items-center'}`}>
+                  <div className={`${currentOrder.status === 'accepted' ? (isTablet ? '' : 'lg:col-span-5') : 'lg:col-span-3'} ${currentOrder.status === 'pending' || currentOrder.status === 'accepted' ? 'min-h-0' : ''}`}>
                     <div className={`relative transition-all duration-500 ${currentOrder.status === 'pending' ? 'h-full min-h-0 overflow-y-auto py-4 lg:h-auto lg:overflow-visible lg:py-6' : 'overflow-hidden rounded-2xl border border-gray-200 bg-white/90 p-8 shadow-sm backdrop-blur-xl'} ${currentOrder.status === 'accepted' ? 'flex h-full min-h-0 flex-col' : ''}`}>
                       {currentOrder.status !== 'pending' && (
                         <>
