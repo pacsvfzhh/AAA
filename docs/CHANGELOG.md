@@ -17,6 +17,14 @@
 
 ---
 
+## 2026-10-16 · 手机端 In Progress / New Order 面板尺寸偶尔变化
+- 需求：In Progress 面板要固定和 Order Processing 一样的尺寸，测试时发现面板尺寸偶尔会变。
+- 原因：面板高度用的是随浏览器地址栏、工具栏伸缩而变化的屏幕高度；而且每次窗口大小变化（包括只是工具栏滑动导致的高度变化）都会丢掉记住的 Order Processing 高度，面板就跟着跳。
+- 改动：①高度计算改用不随工具栏变化的屏幕高度（svh）。②只有屏幕宽度变化（换机型、旋转）才丢掉记住的高度，仅高度变化时面板尺寸保持不变。桌面和平板（宽度 600px 以上）的面板尺寸逻辑没改。
+- 文件：`src/components/employee/OrderDispatch.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；没有浏览器，未在真机上实测。
+
 ## 2026-10-16 · 恢复被误还原的 In Progress 文字颜色和小屏适配
 - 需求：In Progress、Complete task、ORDER DETAILS 的文字颜色没有生效。
 - 原因：「完成任务」透明度那次修改写入了一份过期的文件内容，把此前几处改动还原了：三处文字颜色、小屏手机 New Order 的收紧样式、四个面板统一高度的基准值（`SmoothHeight` 的 `minHeightFloor`）、待机面板的靠上对齐和间距等。

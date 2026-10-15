@@ -404,10 +404,15 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     return () => observer.disconnect();
   }, [currentOrder, viewportWidth]);
 
-  // The remembered height belongs to the old viewport; fall back to the viewport-based height until the idle panel is measured again.
+  // The remembered height belongs to the old device; a width change (device switch, rotation) drops it. Height-only resizes (mobile browser toolbars sliding) must not move the panel.
   useEffect(() => {
     if (!currentOrder) return;
-    const forget = () => setIdlePanelHeight(null);
+    let width = window.innerWidth;
+    const forget = () => {
+      if (window.innerWidth === width) return;
+      width = window.innerWidth;
+      setIdlePanelHeight(null);
+    };
     window.addEventListener('resize', forget);
     return () => window.removeEventListener('resize', forget);
   }, [currentOrder]);
@@ -2803,7 +2808,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
 
       {/* Work Control Panel - Premium Blue/White Design */}
-      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(480px,max(340px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_var(--dispatch-reserve,24px))))]' : 'h-[min(480px,max(340px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_var(--dispatch-reserve,24px))))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
+      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(480px,max(340px,calc(100svh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_var(--dispatch-reserve,24px))))]' : 'h-[min(480px,max(340px,calc(100svh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_var(--dispatch-reserve,24px))))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
         currentOrder?.status === 'pending'
           ? 'bg-[linear-gradient(125deg,#164c9b_0%,#2370bd_55%,#167da9_100%)] border-2 border-blue-400/50 shadow-[0_22px_60px_-16px_rgba(12,43,112,0.32)]'
           : `border-2 border-blue-200/90 shadow-[0_16px_48px_-18px_rgba(37,99,235,0.2),0_6px_20px_-10px_rgba(37,99,235,0.12)] transition-[border-color,box-shadow] duration-700 ${
@@ -2903,7 +2908,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           <SmoothHeight
             animate={panelResizing && !(!currentOrder && viewportWidth < 768)}
             holdMax={!currentOrder && viewportWidth < 768}
-            minHeightFloor="min(480px, max(340px, calc(100dvh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - var(--dispatch-reserve, 24px))))"
+            minHeightFloor="min(480px, max(340px, calc(100svh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - var(--dispatch-reserve, 24px))))"
             duration={1000}
             outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${!currentOrder ? 'max-md:flex max-md:flex-col' : ''}`}
             innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : !currentOrder ? 'max-md:flex max-md:flex-1 max-md:flex-col' : ''}
