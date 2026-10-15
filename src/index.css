@@ -2535,6 +2535,10 @@ button.employee-header-action {
   }
 }
 
+/* Gap kept between the dispatch panels and the bottom nav; short screens keep more because browser toolbars on real devices eat into the page. */
+:root { --dispatch-reserve: 24px; }
+@media (max-height: 640px) { :root { --dispatch-reserve: 56px; } }
+
 /* Short phones (iPhone SE): the End Session row is shorter, so the ship and sea sit lower with it. */
 @media (max-width: 599px) and (max-height: 640px) {
   .dispatch-veil-sea.dispatch-panel-sea { bottom: 68px; }
