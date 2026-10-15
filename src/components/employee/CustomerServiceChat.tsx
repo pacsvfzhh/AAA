@@ -2671,10 +2671,10 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         className={`w-full rounded-2xl transition-all duration-200 hover:translate-x-0.5 active:scale-[0.98] group relative overflow-hidden ${skipListAnimationRef.current ? '' : 'animate-[fadeInUp_0.4s_ease-out_both]'} ${
                           conv.customer.is_super
                             ? conv.unread_count > 0
-                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-r from-amber-100/80 via-amber-50 to-white border border-orange-300 shadow-[0_6px_16px_-8px_rgba(234,88,12,0.5)] hover:shadow-[0_8px_20px_-8px_rgba(234,88,12,0.6)]'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-r from-amber-200 via-amber-100 to-orange-100 border border-orange-400 shadow-[0_6px_16px_-8px_rgba(234,88,12,0.5)] hover:shadow-[0_8px_20px_-8px_rgba(234,88,12,0.6)]'
                               : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-amber-50/60 border border-amber-200 hover:border-amber-300 hover:shadow-md'
                             : conv.unread_count > 0
-                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-r from-orange-50 via-white to-white border border-orange-200 shadow-[0_6px_16px_-8px_rgba(234,88,12,0.45)] hover:shadow-[0_8px_20px_-8px_rgba(234,88,12,0.55)]'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-r from-orange-200 via-orange-100 to-orange-50 border border-orange-300 shadow-[0_6px_16px_-8px_rgba(234,88,12,0.45)] hover:shadow-[0_8px_20px_-8px_rgba(234,88,12,0.55)]'
                               : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-white border border-slate-200 hover:border-blue-200 hover:shadow-md'
                         }`}
                         style={skipListAnimationRef.current ? undefined : {
