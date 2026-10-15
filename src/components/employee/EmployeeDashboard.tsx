@@ -848,21 +848,11 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   };
 
   useEffect(() => {
-    if (showMessageToast || latestMessage || messageToastQueue.length === 0) return;
-    const [nextMessage, ...remainingMessages] = messageToastQueue;
-    setLatestMessage(nextMessage);
-    setMessageToastQueue(remainingMessages);
+    if (messageToastQueue.length === 0) return;
+    setLatestMessage(messageToastQueue[messageToastQueue.length - 1]);
+    setMessageToastQueue([]);
     setShowMessageToast(true);
-  }, [latestMessage, messageToastQueue, showMessageToast]);
-
-  useEffect(() => {
-    if (!showMessageToast || !latestMessage) return;
-    const timer = window.setTimeout(() => {
-      setShowMessageToast(false);
-      setLatestMessage(null);
-    }, 10000);
-    return () => window.clearTimeout(timer);
-  }, [latestMessage, showMessageToast]);
+  }, [messageToastQueue]);
 
   useLayoutEffect(() => {
     if (!showMessageToast || !latestMessage) {
@@ -1134,13 +1124,13 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                               </div>
                             </div>
                             <div className="min-w-0 flex-1">
-                              <span className={`block truncate text-[11px] font-bold uppercase leading-[14px] tracking-[0.12em] ${toastIsReward ? 'text-amber-50' : 'text-emerald-100'}`}>{toastIsReward ? 'Performance Reward' : t.header.newMessage}</span>
-                              <h3 className="truncate text-[13px] font-bold leading-[18px] text-white sm:text-[14px]">
+                              <span className={`block truncate text-[11px] font-bold uppercase leading-[13px] tracking-[0.12em] ${toastIsReward ? 'text-amber-50' : 'text-emerald-100'}`}>{toastIsReward ? 'Performance Reward' : t.header.newMessage}</span>
+                              <h3 className="truncate text-[12px] font-bold leading-[16px] text-white sm:text-[13px] sm:leading-[18px]">
                                 {latestMessage.summaryCount
                                   ? t.header.newMessagesSummary.replace('{n}', String(latestMessage.summaryCount))
                                   : latestMessage.title}
                               </h3>
-                              <p className="line-clamp-1 text-[12px] leading-[16px] text-white/90 sm:line-clamp-2 sm:text-[13px] sm:leading-[18px]">
+                              <p className="line-clamp-1 text-[11px] leading-[15px] text-white/90 sm:line-clamp-2 sm:text-[12px] sm:leading-[16px]">
                                 {latestMessage.summaryCount
                                   ? t.header.newMessagesSummaryHint
                                   : latestMessage.content.replace(/<[^>]*>/g, '').slice(0, 80)}
@@ -1163,7 +1153,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                             {toastIsReward ? (
                               <span className="min-w-0 truncate">
                                 <span className="mr-[8px] hidden text-[11px] font-bold uppercase tracking-wider text-white/85 sm:inline">{t.messages.rewardWalletLabel}</span>
-                                <span className="whitespace-nowrap text-[13px] font-black text-white sm:text-[14px]">+{Number(latestMessage.rewardAmount || 0).toFixed(2)} {latestMessage.rewardCurrency}</span>
+                                <span className="whitespace-nowrap text-[12px] font-black text-white sm:text-[13px]">+{Number(latestMessage.rewardAmount || 0).toFixed(2)} {latestMessage.rewardCurrency}</span>
                               </span>
                             ) : (
                               <span className="min-w-0 truncate text-[11px] font-semibold text-white/90 sm:text-[12px]">
@@ -1171,17 +1161,13 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                                  latestMessage.priority === 'high' ? t.header.highPriority : t.header.normal}
                               </span>
                             )}
-                            <div className={`flex h-[28px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[9px] bg-white px-[12px] shadow-md transition-all hover:scale-105 active:scale-95 sm:h-[32px] sm:rounded-[10px] sm:px-[14px] ${toastIsReward ? 'text-amber-700' : 'text-emerald-700'}`}>
-                              <span className="text-[12px] font-bold sm:text-[13px]">{t.header.view}</span>
+                            <div className={`flex h-[26px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[9px] bg-white px-[12px] shadow-md transition-all hover:scale-105 active:scale-95 sm:h-[30px] sm:rounded-[10px] sm:px-[14px] ${toastIsReward ? 'text-amber-700' : 'text-emerald-700'}`}>
+                              <span className="text-[11px] font-bold sm:text-[12px]">{t.header.view}</span>
                               <svg className="h-[11px] w-[11px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3} aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                             </div>
                           </div>
                         </div>
 
-                        {/* Progress bar */}
-                        <div className="relative h-[2px] bg-black/10">
-                          <div className="h-full animate-shrink-width" style={{ background: 'linear-gradient(90deg, #6ee7b7, #a7f3d0, #ffffff)' }} />
-                        </div>
                       </div>
                     </div>,
                     document.body
@@ -1673,22 +1659,11 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
           }
         }
 
-        @keyframes shrinkWidth {
-          from {
-            width: 100%;
-          }
-          to {
-            width: 0%;
-          }
-        }
 
         .animate-slide-in-down {
           animation: slideInDown 0.4s ease-out;
         }
 
-        .animate-shrink-width {
-          animation: shrinkWidth 10s linear;
-        }
 
       `}</style>
 
