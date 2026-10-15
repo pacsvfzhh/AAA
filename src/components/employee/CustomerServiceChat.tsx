@@ -278,12 +278,34 @@ interface CustomerServiceChatProps {
   employeeId: string;
 }
 
+const CS_WINDOW_CLOSE_MS = 220;
+const CS_WINDOW_ANIMATED_QUERY = '(min-width: 1024px) and (prefers-reduced-motion: no-preference)';
+
 export default function CustomerServiceChat({ employeeId }: CustomerServiceChatProps) {
   const { t, dateLocale } = useLanguage();
   const initialConversationSnapshot = employeeConversationCache.get(employeeId);
 
   const [isOpen, setIsOpen] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
   const [showConversationList, setShowConversationList] = useState(true);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
+  const requestClosePanel = () => {
+    if (isClosing) return;
+    if (!window.matchMedia(CS_WINDOW_ANIMATED_QUERY).matches) {
+      setIsOpen(false);
+      return;
+    }
+    setIsClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      setIsClosing(false);
+      setIsOpen(false);
+    }, CS_WINDOW_CLOSE_MS);
+  };
   const skipListAnimationRef = useRef(false);
   const employeeAdminIdRef = useRef<string | null>(null);
   const [conversations, setConversations] = useState<CustomerConversation[]>(
@@ -2563,7 +2585,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
 
       {isOpen && createPortal(
         <div
-          className="employee-modal-surface fixed inset-0 lg:bottom-4 lg:right-4 lg:top-auto lg:left-auto z-[10000] lg:z-50 w-full lg:w-[400px] xl:w-[460px] h-full lg:h-[600px] xl:h-[680px] lg:max-h-[calc(100vh_-_var(--employee-header-height,_76px)_-_2rem)] bg-white lg:rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          className={`employee-modal-surface customer-service-window ${isClosing ? 'customer-service-window--closing' : ''} fixed inset-0 lg:bottom-4 lg:right-4 lg:top-auto lg:left-auto z-[10000] lg:z-50 w-full lg:w-[400px] xl:w-[460px] h-full lg:h-[600px] xl:h-[680px] lg:max-h-[calc(100vh_-_var(--employee-header-height,_76px)_-_2rem)] bg-white lg:rounded-2xl shadow-2xl flex flex-col overflow-hidden`}
           style={{
             WebkitOverflowScrolling: 'touch',
           }}
@@ -2597,7 +2619,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsOpen(false)}
+                    onClick={requestClosePanel}
                     className="customer-service-panel-close emp-close-btn emp-close-btn--wrap group flex flex-shrink-0 items-center justify-center rounded-xl text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
                     style={{ WebkitTapHighlightColor: 'transparent' }}
                     aria-label={t.common.close}
