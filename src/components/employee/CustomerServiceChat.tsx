@@ -2681,13 +2681,10 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                           animationDelay: `${Math.min(index * 0.05, 0.4)}s`
                         }}
                       >
-                        {conv.customer.is_super ? (
-                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-gradient-to-b from-orange-400 to-red-500' : 'bg-amber-400'}`} aria-hidden="true"></span>
+                        {conv.unread_count > 0 ? (
+                          <span className={`pointer-events-none absolute inset-0 rounded-[15px] border-l-[7px] border-t-[5px] [mask-image:linear-gradient(to_right,#000_50%,transparent_100%)] ${conv.customer.is_super ? 'border-orange-500' : 'border-blue-600'}`} aria-hidden="true"></span>
                         ) : (
-                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-gradient-to-b from-blue-500 to-indigo-600' : 'bg-blue-500/70'}`} aria-hidden="true"></span>
-                        )}
-                        {conv.unread_count > 0 && (
-                          <span className={`pointer-events-none absolute inset-x-0 top-0 h-[4px] bg-gradient-to-r to-transparent ${conv.customer.is_super ? 'from-orange-400 via-amber-400/80' : 'from-blue-500 via-sky-400/80'}`} aria-hidden="true"></span>
+                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.customer.is_super ? 'bg-amber-400' : 'bg-blue-500/70'}`} aria-hidden="true"></span>
                         )}
                         {conv.customer.is_super ? (
                           /* VIP card: 4-line vertical layout */
