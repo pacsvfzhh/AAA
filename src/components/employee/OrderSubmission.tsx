@@ -939,7 +939,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
 
               <aside className="confirm-amount relative order-first flex flex-col justify-between overflow-hidden bg-gradient-to-br from-[#12356d] via-[#1b4b8f] to-blue-600 px-4 py-3.5 text-white sm:px-7 sm:py-5 lg:order-last lg:justify-center lg:px-6 lg:py-5">
                 <span className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rotate-[18deg] rounded-[30%] bg-white/10" aria-hidden="true" />
-                <span className="pointer-events-none absolute -bottom-12 left-1/3 h-24 w-24 rounded-full bg-cyan-300/10" aria-hidden="true" />
+                <span className="pointer-events-none absolute -bottom-10 -left-8 h-28 w-28 -rotate-[18deg] rounded-[30%] bg-white/10" aria-hidden="true" />
                 <span className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-cyan-300/70 via-white/30 to-transparent lg:hidden" aria-hidden="true" />
                 <svg className="pointer-events-none absolute -bottom-1 right-3 h-14 w-24 text-white/15 sm:h-16 sm:w-28 lg:h-20 lg:w-36" viewBox="0 0 120 64" fill="none" aria-hidden="true">
                   <g stroke="currentColor" strokeWidth="1.5">
