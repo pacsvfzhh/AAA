@@ -74,7 +74,7 @@ export function DispatchWaves({ className = '', wavelengths = [460, 230, 460], s
             className={`dispatch-veil-wave dispatch-veil-wave-${layer.key}`}
             viewBox="0 0 400 40"
             preserveAspectRatio="none"
-            style={{ animationDuration: `${(width / speeds[i]).toFixed(2)}s` }}
+            style={{ animationDuration: `calc(${(width / speeds[i]).toFixed(2)}s * var(--wave-slow, 1))` }}
           >
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">

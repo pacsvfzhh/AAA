@@ -3612,6 +3612,15 @@ button.dispatch-start-cta:active:not(:disabled) {
   height: 100%;
 }
 
+/* Phones: flatten the crests about each layer's baseline and slow the drift so the sea reads as calm. */
+@media (max-width: 767px) {
+  .dispatch-veil .dispatch-veil-sea { --wave-slow: 1.5; }
+  .dispatch-veil .dispatch-veil-wave { scale: 1 0.5; }
+  .dispatch-veil .dispatch-veil-wave-back { transform-origin: 0 40%; }
+  .dispatch-veil .dispatch-veil-wave-mid { transform-origin: 0 55%; }
+  .dispatch-veil .dispatch-veil-wave-front { transform-origin: 0 70%; }
+}
+
 .dispatch-veil-wave-back { animation: dispatchVeilWave 9s linear infinite; }
 .dispatch-veil-wave-mid { animation: dispatchVeilWave 7s linear infinite reverse; }
 .dispatch-veil-wave-front { animation: dispatchVeilWave 5.5s linear infinite; }
