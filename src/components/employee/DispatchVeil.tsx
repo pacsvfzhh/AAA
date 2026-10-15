@@ -152,12 +152,12 @@ export default function DispatchVeil({ phase, label, connect }: DispatchVeilProp
           <div className="dispatch-veil-hull">
             <span className="dispatch-veil-radar"><span /><span /><span /></span>
             <span className="dispatch-veil-radar-done" />
-            <DispatchShip idPrefix="dispatch-veil" className="dispatch-veil-ship" />
+            <DispatchShip idPrefix="dispatch-veil" waterline className="dispatch-veil-ship" />
           </div>
         ) : (
-          <DispatchShip idPrefix="dispatch-veil" className="dispatch-veil-ship" />
+          <DispatchShip idPrefix="dispatch-veil" waterline className="dispatch-veil-ship" />
         )}
-        <DispatchWaves />
+        <DispatchWaves intensity={1.2} />
         <div className="dispatch-veil-caption">
           <span className="dispatch-veil-label">{label}</span>
           <span className="dispatch-veil-track">

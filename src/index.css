@@ -3584,18 +3584,19 @@ button.dispatch-start-cta:active:not(:disabled) {
   width: min(300px, 46%);
   height: auto;
   margin-bottom: -14px;
-  filter: drop-shadow(0 10px 18px rgb(37 99 235 / 18%));
-  animation: dispatchVeilShip 1.8s ease-in-out infinite;
+  translate: 0 calc(14.3% + 11px);
+  transform-origin: 50% 86%;
+  animation: dispatchVeilShip 3s ease-in-out infinite;
 }
 
 @keyframes dispatchVeilShip {
-  0%, 100% { transform: translate(-6px, 0) rotate(-0.8deg); }
-  50% { transform: translate(6px, -5px) rotate(0.8deg); }
+  0%, 100% { transform: translate(-3px, 0) rotate(-0.5deg); }
+  50% { transform: translate(3px, -2px) rotate(0.5deg); }
 }
 
 .dispatch-veil-sea {
   position: relative;
-  z-index: 1;
+  z-index: 3;
   width: min(460px, 70%);
   height: 40px;
   overflow: hidden;
