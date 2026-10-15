@@ -20,6 +20,8 @@ const getDeliveredMessageType = (message: MessageWithRecipient): 'realtime' | 'l
   message.delivery_channel
     || (message.messages.delivery_mode === 'realtime_only' ? 'realtime' : 'login_popup');
 
+const MESSAGE_PANEL_ANIMATION_MS = 520;
+
 export default function MessageCenter({ employee, initialMessage, onClose, onSessionExpired }: MessageCenterProps) {
   const { t, dateLocale } = useLanguage();
   const [messages, setMessages] = useState<MessageWithRecipient[]>([]);
@@ -36,6 +38,23 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
   const { isDesktop } = useResponsive();
   const loadMessagesRef = useRef<(() => Promise<void>) | null>(null);
   const loadRequestIdRef = useRef(0);
+  const [isClosing, setIsClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
+  const requestClose = () => {
+    if (isClosing) return;
+    const animated = window.matchMedia('(min-width: 1024px) and (prefers-reduced-motion: no-preference)').matches;
+    if (!animated) {
+      onClose();
+      return;
+    }
+    setIsClosing(true);
+    closeTimerRef.current = window.setTimeout(onClose, MESSAGE_PANEL_ANIMATION_MS);
+  };
 
   useEffect(() => {
     void loadMessagesRef.current?.();
@@ -306,14 +325,20 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     <>
       {/* Backdrop */}
       <div
-        className="employee-modal-backdrop fixed inset-0 bg-slate-900/50"
-        style={{ touchAction: 'none', overscrollBehavior: 'contain', zIndex: 10000 }}
-        onClick={onClose}
+        className="employee-modal-backdrop message-center-backdrop fixed inset-0 bg-slate-900/50"
+        style={{
+          touchAction: 'none',
+          overscrollBehavior: 'contain',
+          zIndex: 10000,
+          opacity: isClosing ? 0 : 1,
+          transition: `opacity ${MESSAGE_PANEL_ANIMATION_MS}ms ease`,
+        }}
+        onClick={requestClose}
       />
 
       {/* Message Center Panel - full screen on mobile/tablet with solid background */}
       <div
-        className="employee-modal-surface message-center-panel fixed inset-0 lg:inset-auto lg:top-0 lg:right-0 lg:h-full lg:w-full lg:max-w-2xl lg:rounded-l-2xl lg:shadow-[-12px_0_32px_-12px_rgba(15,23,42,0.35)] overflow-hidden flex flex-col"
+        className={`employee-modal-surface message-center-panel ${isClosing ? 'message-center-panel--closing' : ''} fixed inset-0 lg:inset-auto lg:top-0 lg:right-0 lg:h-full lg:w-full lg:max-w-2xl lg:rounded-l-2xl lg:shadow-[-12px_0_32px_-12px_rgba(15,23,42,0.35)] overflow-hidden flex flex-col`}
         style={{ zIndex: 10001 }}
       >
         {/* SOLID opaque background - not transparent */}
@@ -366,7 +391,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
               </div>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={requestClose}
                 className="notification-panel-list-close emp-close-btn emp-close-btn--wrap group flex shrink-0 items-center justify-center rounded-xl text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
                 style={{ WebkitTapHighlightColor: 'transparent' }}
                 aria-label={t.messages.close}
