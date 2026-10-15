@@ -3661,59 +3661,85 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 85% 70% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
                     <div className="relative z-10 w-full">
-                      {/* Order flow motif: order -> processing -> done -> delivered along a route, blended into the panel */}
-                      <div className="dispatch-standby-item relative -mx-4 mb-2" style={{ '--leave-order': 4 } as CSSProperties} aria-hidden="true">
-                        <svg viewBox="0 0 340 120" className="block h-auto w-full" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      {/* Dispatch pipeline: queue -> dispatch -> assigned, with a throughput trend underneath */}
+                      <div className="dispatch-standby-item relative -mx-4 mb-3" style={{ '--leave-order': 4 } as CSSProperties} aria-hidden="true">
+                        <svg viewBox="0 0 340 132" className="block h-auto w-full" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <defs>
                             <linearGradient id="ipm-blue" x1="0" y1="0" x2="1" y2="1">
-                              <stop offset="0" stopColor="#1b4b84" />
-                              <stop offset="0.55" stopColor="#2563eb" />
-                              <stop offset="1" stopColor="#38bdf8" />
+                              <stop offset="0" stopColor="#12356d" />
+                              <stop offset="1" stopColor="#2563eb" />
                             </linearGradient>
-                            <linearGradient id="ipm-green" x1="0" y1="0" x2="1" y2="1">
-                              <stop offset="0" stopColor="#10b981" />
-                              <stop offset="1" stopColor="#34d399" />
+                            <linearGradient id="ipm-area" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0" stopColor="#2563eb" stopOpacity="0.2" />
+                              <stop offset="1" stopColor="#2563eb" stopOpacity="0" />
                             </linearGradient>
+                            <linearGradient id="ipm-run" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="80" y2="0" gradientTransform={suppressAnimations ? 'translate(100 0)' : undefined}>
+                              <stop offset="0" stopColor="#2563eb" stopOpacity="0" />
+                              <stop offset="0.5" stopColor="#2563eb" stopOpacity="0.95" />
+                              <stop offset="1" stopColor="#2563eb" stopOpacity="0" />
+                              {!suppressAnimations && <animateTransform attributeName="gradientTransform" type="translate" values="-80 0;340 0;340 0" keyTimes="0;0.7;1" dur="4.6s" repeatCount="indefinite" />}
+                            </linearGradient>
+                            <linearGradient id="ipm-sheen" x1="0" y1="0" x2="1" y2="0">
+                              <stop offset="0" stopColor="#fff" stopOpacity="0" />
+                              <stop offset="0.5" stopColor="#fff" stopOpacity="0.55" />
+                              <stop offset="1" stopColor="#fff" stopOpacity="0" />
+                            </linearGradient>
+                            <clipPath id="ipm-card"><rect x="8" y="6" width="324" height="120" rx="14" /></clipPath>
+                            <filter id="ipm-shadow" x="-10%" y="-10%" width="120%" height="140%">
+                              <feDropShadow dx="0" dy="6" stdDeviation="6" floodColor="#1e3a8a" floodOpacity="0.14" />
+                            </filter>
                           </defs>
-                          <path d="M30 40C20 10 90 0 120 18C160 36 150 80 110 92C70 104 40 90 30 40Z" fill="rgba(147,197,253,0.28)" />
-                          <path d="M200 70C220 40 290 50 320 76C340 100 280 116 240 108C205 100 190 90 200 70Z" fill="rgba(125,211,252,0.3)" />
-                          <rect x="150" y="6" width="22" height="22" rx="7" transform="rotate(18 161 17)" fill="rgba(165,180,252,0.22)" />
-                          <rect x="262" y="8" width="12" height="12" rx="4" transform="rotate(-14 268 14)" fill="rgba(147,197,253,0.32)" />
-                          <path d="M24 84Q76 28 124 62Q172 98 220 50Q268 6 316 34" stroke="#60a5fa" strokeOpacity="0.7" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="5 6" />
-                          <g transform="translate(14 72) rotate(-8 10 13)">
-                            <rect width="20" height="26" rx="4" fill="#fff" stroke="#93c5fd" strokeWidth="1.4" />
-                            <path d="M5 8h10M5 13h10M5 18h6" stroke="#60a5fa" strokeWidth="1.6" strokeLinecap="round" />
+
+                          <rect x="8" y="6" width="324" height="120" rx="14" fill="#fff" fillOpacity="0.78" stroke="#dbeafe" strokeWidth="1" filter="url(#ipm-shadow)" />
+                          <g clipPath="url(#ipm-card)">
+                            <rect x="8" y="6" width="324" height="3" fill="url(#ipm-blue)" fillOpacity="0.85" />
+                            <path d="M24 84H316M24 98H316M24 112H316" stroke="#bfdbfe" strokeOpacity="0.8" strokeWidth="0.8" strokeDasharray="1.5 4" />
+                            <path d="M24 111C48 108 62 101 86 103S124 93 150 95S190 85 214 89S262 77 292 81S308 75 316 73V118H24Z" fill="url(#ipm-area)" />
+                            <path d="M24 111C48 108 62 101 86 103S124 93 150 95S190 85 214 89S262 77 292 81S308 75 316 73" stroke="#2563eb" strokeWidth="1.6" strokeLinecap="round" />
+                            <circle cx="316" cy="73" r="3" fill="#fff" stroke="#2563eb" strokeWidth="1.6" />
+                            {!suppressAnimations && (
+                              <g>
+                                <animateTransform attributeName="transform" type="translate" values="-120 0;380 0;380 0" keyTimes="0;0.55;1" dur="7s" repeatCount="indefinite" />
+                                <g transform="skewX(-20)">
+                                  <rect x="0" y="0" width="70" height="132" fill="url(#ipm-sheen)" />
+                                </g>
+                              </g>
+                            )}
                           </g>
-                          <g transform="translate(124 62)">
-                            <circle r="21" stroke="#93c5fd" strokeWidth="1.2" strokeDasharray="3 4" opacity="0.8">
-                              {!suppressAnimations && <animateTransform attributeName="transform" type="rotate" from="360" to="0" dur="14s" repeatCount="indefinite" />}
-                            </circle>
-                            <circle r="14" fill="url(#ipm-blue)" stroke="#fff" strokeOpacity="0.7" strokeWidth="1.2" />
-                            <g stroke="#fff" strokeWidth="2" strokeLinecap="round">
-                              {!suppressAnimations && <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="9s" repeatCount="indefinite" />}
-                              <line x1="-8" x2="8" y1="0" y2="0" />
-                              <line x1="-8" x2="8" y1="0" y2="0" transform="rotate(45)" />
-                              <line x1="-8" x2="8" y1="0" y2="0" transform="rotate(90)" />
-                              <line x1="-8" x2="8" y1="0" y2="0" transform="rotate(135)" />
+
+                          <path d="M76 36H154M186 36H264" stroke="#dbeafe" strokeWidth="1.6" strokeLinecap="round" />
+                          <path d="M76 36H154M186 36H264" stroke="url(#ipm-run)" strokeWidth="2" strokeLinecap="round" />
+
+                          <g transform="translate(60 36)">
+                            <circle r="15" fill="#fff" stroke="#bfdbfe" strokeWidth="1.2" />
+                            <rect x="-6" y="-6.5" width="12" height="3" rx="1.5" fill="#12356d" />
+                            <rect x="-6" y="-1.5" width="12" height="3" rx="1.5" fill="#12356d" fillOpacity="0.7" />
+                            <rect x="-6" y="3.5" width="8" height="3" rx="1.5" fill="#12356d" fillOpacity="0.45" />
+                          </g>
+                          <g transform="translate(170 36)">
+                            <circle r="19" fill="#2563eb" fillOpacity="0.08" />
+                            <circle r="15" fill="url(#ipm-blue)" />
+                            <g stroke="#fff" strokeWidth="1.8" strokeLinecap="round" fill="none">
+                              <path d="M-6.5 0H-1C2.5 0 2.5 -5 6.5 -5" />
+                              <path d="M-1 0C2.5 0 2.5 5 6.5 5" />
                             </g>
-                            <circle r="4.5" fill="#2563eb" stroke="#fff" strokeWidth="1.6" />
+                            <circle cx="-6.5" cy="0" r="2" fill="#fff" />
+                            <circle cx="6.5" cy="-5" r="2" fill="#fff" />
+                            <circle cx="6.5" cy="5" r="2" fill="#fff" />
                           </g>
-                          <g transform="translate(220 50)">
-                            <circle r="11" fill="url(#ipm-green)" stroke="#fff" strokeOpacity="0.8" strokeWidth="1.2" />
-                            <path d="M-5 0L-1.5 3.5L5.5 -3.5" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                          <g transform="translate(280 36)">
+                            <circle r="15" fill="#fff" stroke="#bfdbfe" strokeWidth="1.2" />
+                            <path d="M-5.5 0.5L-1.8 4L5.5 -4" stroke="#12356d" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                           </g>
-                          <g transform="translate(316 34)">
-                            <path d="M0 -12L12 -6L0 0L-12 -6Z" fill="#bfdbfe" />
-                            <path d="M-12 -6L0 0V13L-12 7Z" fill="#60a5fa" />
-                            <path d="M0 0L12 -6V7L0 13Z" fill="#2563eb" />
+
+                          <g fill="#12356d">
+                            <rect x="44" y="58" width="32" height="3" rx="1.5" fillOpacity="0.55" />
+                            <rect x="50" y="64" width="20" height="2.5" rx="1.25" fill="#cbd5e1" />
+                            <rect x="154" y="58" width="32" height="3" rx="1.5" fillOpacity="0.7" />
+                            <rect x="160" y="64" width="20" height="2.5" rx="1.25" fill="#cbd5e1" />
+                            <rect x="264" y="58" width="32" height="3" rx="1.5" fillOpacity="0.55" />
+                            <rect x="270" y="64" width="20" height="2.5" rx="1.25" fill="#cbd5e1" />
                           </g>
-                          {!suppressAnimations && (
-                            <g>
-                              <animateMotion dur="4.5s" repeatCount="indefinite" path="M24 84Q76 28 124 62Q172 98 220 50Q268 6 316 34" />
-                              <circle r="8" fill="#60a5fa" fillOpacity="0.28" />
-                              <circle r="3.4" fill="#2563eb" />
-                            </g>
-                          )}
                         </svg>
                       </div>
 
