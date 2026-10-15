@@ -1,0 +1,2619 @@
+CREATE SCHEMA IF NOT EXISTS private;
+REVOKE ALL ON SCHEMA private FROM PUBLIC, anon, authenticated;
+
+LOCK TABLE admins, users, wallets, wallet_transactions, withdrawals IN ACCESS EXCLUSIVE MODE;
+
+ALTER TABLE wallet_transactions
+  ADD COLUMN IF NOT EXISTS operation_id uuid;
+
+ALTER TABLE withdrawals
+  ADD COLUMN IF NOT EXISTS last_operation_id uuid;
+
+ALTER TABLE wallets DROP CONSTRAINT IF EXISTS wallets_balances_finite_check;
+ALTER TABLE wallets
+  ADD CONSTRAINT wallets_balances_finite_check CHECK (
+    available_balance::text NOT IN ('NaN', 'Infinity', '-Infinity')
+    AND frozen_balance::text NOT IN ('NaN', 'Infinity', '-Infinity')
+  );
+ALTER TABLE wallet_transactions DROP CONSTRAINT IF EXISTS wallet_transactions_amounts_finite_check;
+ALTER TABLE wallet_transactions
+  ADD CONSTRAINT wallet_transactions_amounts_finite_check CHECK (
+    amount::text NOT IN ('NaN', 'Infinity', '-Infinity')
+    AND balance_before::text NOT IN ('NaN', 'Infinity', '-Infinity')
+    AND balance_after::text NOT IN ('NaN', 'Infinity', '-Infinity')
+  );
+ALTER TABLE withdrawals DROP CONSTRAINT IF EXISTS withdrawals_amount_finite_check;
+ALTER TABLE withdrawals
+  ADD CONSTRAINT withdrawals_amount_finite_check CHECK (
+    amount::text NOT IN ('NaN', 'Infinity', '-Infinity')
+  );
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_total_income_finite_check;
+ALTER TABLE users
+  ADD CONSTRAINT users_total_income_finite_check CHECK (
+    total_income::text NOT IN ('NaN', 'Infinity', '-Infinity')
+  );
+
+DROP INDEX IF EXISTS idx_wallet_transactions_reference_type;
+ALTER TABLE wallet_transactions
+  DROP CONSTRAINT IF EXISTS wallet_transactions_type_check;
+ALTER TABLE wallet_transactions
+  ADD CONSTRAINT wallet_transactions_type_check CHECK (
+    type IN (
+      'commission',
+      'withdrawal_request',
+      'withdrawal_approved',
+      'withdrawal_rejected',
+      'withdrawal_correction',
+      'manual_adjustment',
+      'tip'
+    )
+  );
+
+CREATE TABLE IF NOT EXISTS financial_admin_credentials (
+  admin_id uuid PRIMARY KEY REFERENCES admins(id) ON DELETE CASCADE,
+  password_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS financial_employee_credentials (
+  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  password_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS admin_financial_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_id uuid NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+  token_hash text NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS employee_financial_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash text NOT NULL UNIQUE,
+  tab_id text,
+  session_marker uuid NOT NULL,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE employee_financial_sessions
+  ADD COLUMN IF NOT EXISTS session_marker uuid;
+UPDATE users u
+SET current_session_token = NULL,
+    current_tab_id = NULL,
+    session_created_at = NULL
+WHERE EXISTS (
+  SELECT 1
+  FROM employee_financial_sessions s
+  WHERE s.user_id = u.id
+    AND s.session_marker IS NULL
+);
+UPDATE employee_financial_sessions
+SET session_marker = gen_random_uuid(),
+    revoked_at = COALESCE(revoked_at, now())
+WHERE session_marker IS NULL;
+ALTER TABLE employee_financial_sessions
+  ALTER COLUMN session_marker SET NOT NULL;
+
+CREATE TABLE IF NOT EXISTS financial_login_attempts (
+  account_type text NOT NULL CHECK (account_type IN ('admin', 'employee')),
+  username text NOT NULL,
+  failed_attempts integer NOT NULL DEFAULT 0,
+  locked_until timestamptz,
+  last_attempt_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_type, username)
+);
+
+CREATE TABLE IF NOT EXISTS financial_operations (
+  operation_id uuid PRIMARY KEY,
+  operation_type text NOT NULL,
+  actor_type text NOT NULL CHECK (actor_type IN ('admin', 'employee', 'system')),
+  actor_id uuid,
+  request_data jsonb NOT NULL,
+  result jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS wallet_balance_baselines (
+  user_id uuid PRIMARY KEY,
+  available_balance numeric NOT NULL CHECK (available_balance >= 0 AND available_balance::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  frozen_balance numeric NOT NULL CHECK (frozen_balance >= 0 AND frozen_balance::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  total_income numeric NOT NULL CHECK (total_income::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  last_ledger_id bigint NOT NULL DEFAULT 0,
+  established_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS wallet_ledger_entries (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  user_id uuid NOT NULL,
+  operation_id uuid NOT NULL,
+  source_type text NOT NULL CHECK (source_type IN ('wallet_transaction', 'withdrawal')),
+  source_id uuid NOT NULL,
+  event_type text NOT NULL,
+  available_delta numeric NOT NULL DEFAULT 0 CHECK (available_delta::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  frozen_delta numeric NOT NULL DEFAULT 0 CHECK (frozen_delta::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  income_delta numeric NOT NULL DEFAULT 0 CHECK (income_delta::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (operation_id, source_type, source_id, event_type)
+);
+
+CREATE TABLE IF NOT EXISTS wallet_reconciliation_queue (
+  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  attempts integer NOT NULL DEFAULT 0,
+  last_error text
+);
+
+CREATE TABLE IF NOT EXISTS wallet_reconciliation_audit (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  user_id uuid NOT NULL,
+  available_before numeric NOT NULL CHECK (available_before::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  available_after numeric NOT NULL CHECK (available_after::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  frozen_before numeric NOT NULL CHECK (frozen_before::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  frozen_after numeric NOT NULL CHECK (frozen_after::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  income_before numeric NOT NULL CHECK (income_before::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  income_after numeric NOT NULL CHECK (income_after::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  pending_amount numeric NOT NULL CHECK (pending_amount::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  ledger_total numeric NOT NULL CHECK (ledger_total::text NOT IN ('NaN', 'Infinity', '-Infinity')),
+  reason text NOT NULL,
+  repaired_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_financial_sessions_active
+  ON admin_financial_sessions (admin_id, expires_at)
+  WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_employee_financial_sessions_active
+  ON employee_financial_sessions (user_id, expires_at)
+  WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_wallet_ledger_user_id
+  ON wallet_ledger_entries (user_id, id);
+CREATE INDEX IF NOT EXISTS idx_wallet_reconciliation_queue_due
+  ON wallet_reconciliation_queue (next_attempt_at, requested_at);
+CREATE INDEX IF NOT EXISTS idx_wallet_reconciliation_audit_user
+  ON wallet_reconciliation_audit (user_id, repaired_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_transactions_operation_type
+  ON wallet_transactions (operation_id, type)
+  WHERE operation_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_transactions_tip_reference
+  ON wallet_transactions (reference_id)
+  WHERE type = 'tip' AND reference_id IS NOT NULL;
+
+ALTER TABLE financial_admin_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE financial_employee_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admin_financial_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_financial_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE financial_login_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE financial_operations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wallet_balance_baselines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wallet_ledger_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wallet_reconciliation_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wallet_reconciliation_audit ENABLE ROW LEVEL SECURITY;
+
+INSERT INTO financial_admin_credentials (admin_id, password_hash)
+SELECT id, password_hash
+FROM admins
+ON CONFLICT (admin_id) DO NOTHING;
+
+INSERT INTO financial_employee_credentials (user_id, password_hash)
+SELECT id, password_hash
+FROM users
+ON CONFLICT (user_id) DO NOTHING;
+
+INSERT INTO wallet_balance_baselines (
+  user_id,
+  available_balance,
+  frozen_balance,
+  total_income
+)
+SELECT
+  w.user_id,
+  w.available_balance,
+  w.frozen_balance,
+  COALESCE(u.total_income, 0)
+FROM wallets w
+JOIN users u ON u.id = w.user_id
+ON CONFLICT (user_id) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION private.hash_financial_token(p_token uuid)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path TO 'extensions', 'pg_catalog'
+AS $$
+  SELECT encode(extensions.digest(p_token::text, 'sha256'), 'hex');
+$$;
+
+CREATE OR REPLACE FUNCTION private.verify_bcrypt_password(
+  p_password text,
+  p_hash text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path TO 'extensions', 'pg_catalog'
+AS $$
+DECLARE
+  v_hash text;
+BEGIN
+  IF p_password IS NULL OR p_hash IS NULL THEN
+    RETURN false;
+  END IF;
+
+  v_hash := CASE
+    WHEN left(p_hash, 4) IN ('$2b$', '$2y$') THEN '$2a$' || substring(p_hash FROM 5)
+    ELSE p_hash
+  END;
+
+  RETURN v_hash = extensions.crypt(p_password, v_hash);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION private.get_financial_admin_context(p_token uuid)
+RETURNS TABLE(admin_id uuid, admin_role text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT a.id, a.role
+  FROM admin_financial_sessions s
+  JOIN admins a ON a.id = s.admin_id
+  WHERE s.token_hash = private.hash_financial_token(p_token)
+    AND s.revoked_at IS NULL
+    AND s.expires_at > now()
+    AND a.is_active = true
+    AND a.role IN ('super_admin', 'secondary_admin')
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Financial administrator session is invalid or expired.';
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION private.get_financial_employee_id(
+  p_user_id uuid,
+  p_token uuid,
+  p_tab_id text
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_user_id uuid;
+BEGIN
+  SELECT u.id
+  INTO v_user_id
+  FROM employee_financial_sessions s
+  JOIN users u ON u.id = s.user_id
+  WHERE s.user_id = p_user_id
+    AND s.token_hash = private.hash_financial_token(p_token)
+    AND s.revoked_at IS NULL
+    AND s.expires_at > now()
+    AND (s.tab_id IS NULL OR s.tab_id = p_tab_id)
+    AND u.is_active = true
+  LIMIT 1;
+
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Financial employee session is invalid or expired.';
+  END IF;
+
+  RETURN v_user_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION private.assert_admin_can_manage_user(
+  p_admin_id uuid,
+  p_admin_role text,
+  p_user_id uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+BEGIN
+  IF p_admin_role = 'super_admin' THEN
+    IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN
+      RAISE EXCEPTION 'Employee account was not found.';
+    END IF;
+    RETURN;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM users
+    WHERE id = p_user_id
+      AND created_by = p_admin_id
+  ) THEN
+    RAISE EXCEPTION 'You do not have permission to manage this employee wallet.';
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION private.begin_financial_operation(
+  p_operation_id uuid,
+  p_operation_type text,
+  p_actor_type text,
+  p_actor_id uuid,
+  p_request_data jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_catalog', 'pg_temp'
+AS $$
+DECLARE
+  v_operation financial_operations%ROWTYPE;
+BEGIN
+  IF p_operation_id IS NULL THEN
+    RAISE EXCEPTION 'A financial operation ID is required.';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_operation_id::text, 0));
+
+  SELECT *
+  INTO v_operation
+  FROM financial_operations
+  WHERE operation_id = p_operation_id;
+
+  IF FOUND THEN
+    IF v_operation.operation_type <> p_operation_type
+      OR v_operation.actor_type <> p_actor_type
+      OR v_operation.actor_id IS DISTINCT FROM p_actor_id
+      OR v_operation.request_data IS DISTINCT FROM p_request_data THEN
+      RAISE EXCEPTION 'The financial operation ID is already in use.';
+    END IF;
+    RETURN v_operation.result;
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION private.save_financial_operation(
+  p_operation_id uuid,
+  p_operation_type text,
+  p_actor_type text,
+  p_actor_id uuid,
+  p_request_data jsonb,
+  p_result jsonb
+)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+  INSERT INTO financial_operations (
+    operation_id,
+    operation_type,
+    actor_type,
+    actor_id,
+    request_data,
+    result
+  ) VALUES (
+    p_operation_id,
+    p_operation_type,
+    p_actor_type,
+    p_actor_id,
+    p_request_data,
+    p_result
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION create_admin_financial_session(
+  p_username text,
+  p_password text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_admin admins%ROWTYPE;
+  v_attempt financial_login_attempts%ROWTYPE;
+  v_password_hash text;
+  v_token uuid;
+BEGIN
+  IF p_username IS NULL OR length(trim(p_username)) = 0 OR p_password IS NULL OR length(p_password) = 0 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid credentials');
+  END IF;
+
+  SELECT *
+  INTO v_attempt
+  FROM financial_login_attempts
+  WHERE account_type = 'admin'
+    AND username = trim(p_username)
+  FOR UPDATE;
+
+  IF FOUND AND v_attempt.locked_until IS NOT NULL AND v_attempt.locked_until > now() THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Account is temporarily locked.',
+      'locked_until', v_attempt.locked_until
+    );
+  END IF;
+
+  SELECT a.*
+  INTO v_admin
+  FROM admins a
+  JOIN financial_admin_credentials credentials ON credentials.admin_id = a.id
+  WHERE a.username = trim(p_username)
+    AND a.is_active = true
+    AND a.role IN ('super_admin', 'secondary_admin', 'emergency_admin')
+  LIMIT 1;
+
+  IF FOUND THEN
+    SELECT password_hash INTO v_password_hash
+    FROM financial_admin_credentials
+    WHERE admin_id = v_admin.id;
+  END IF;
+
+  IF v_admin.id IS NULL OR NOT private.verify_bcrypt_password(p_password, v_password_hash) THEN
+    INSERT INTO financial_login_attempts AS attempts (
+      account_type,
+      username,
+      failed_attempts,
+      locked_until,
+      last_attempt_at
+    ) VALUES (
+      'admin',
+      trim(p_username),
+      1,
+      NULL,
+      now()
+    )
+    ON CONFLICT (account_type, username) DO UPDATE
+    SET failed_attempts = attempts.failed_attempts + 1,
+        locked_until = CASE
+          WHEN attempts.failed_attempts + 1 >= 5 THEN now() + interval '15 minutes'
+          ELSE NULL
+        END,
+        last_attempt_at = now();
+
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid credentials');
+  END IF;
+
+  DELETE FROM financial_login_attempts
+  WHERE account_type = 'admin'
+    AND username = trim(p_username);
+
+  v_token := gen_random_uuid();
+  INSERT INTO admin_financial_sessions (admin_id, token_hash, expires_at)
+  VALUES (
+    v_admin.id,
+    private.hash_financial_token(v_token),
+    now() + interval '12 hours'
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'session_token', v_token,
+    'user', to_jsonb(v_admin) - 'password_hash'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION create_employee_financial_session(
+  p_username text,
+  p_password text,
+  p_tab_id text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_user users%ROWTYPE;
+  v_attempt financial_login_attempts%ROWTYPE;
+  v_password_hash text;
+  v_token uuid;
+  v_session_marker uuid;
+BEGIN
+  IF p_username IS NULL OR length(trim(p_username)) = 0 OR p_password IS NULL OR length(p_password) = 0
+    OR p_tab_id IS NULL OR length(trim(p_tab_id)) = 0 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid credentials');
+  END IF;
+
+  SELECT *
+  INTO v_attempt
+  FROM financial_login_attempts
+  WHERE account_type = 'employee'
+    AND username = trim(p_username)
+  FOR UPDATE;
+
+  IF FOUND AND v_attempt.locked_until IS NOT NULL AND v_attempt.locked_until > now() THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Account is temporarily locked.',
+      'locked_until', v_attempt.locked_until
+    );
+  END IF;
+
+  SELECT u.*
+  INTO v_user
+  FROM users u
+  JOIN financial_employee_credentials credentials ON credentials.user_id = u.id
+  WHERE u.username = trim(p_username)
+    AND u.is_active = true
+  LIMIT 1;
+
+  IF FOUND THEN
+    SELECT password_hash INTO v_password_hash
+    FROM financial_employee_credentials
+    WHERE user_id = v_user.id;
+  END IF;
+
+  IF v_user.id IS NULL OR NOT private.verify_bcrypt_password(p_password, v_password_hash) THEN
+    INSERT INTO financial_login_attempts AS attempts (
+      account_type,
+      username,
+      failed_attempts,
+      locked_until,
+      last_attempt_at
+    ) VALUES (
+      'employee',
+      trim(p_username),
+      1,
+      NULL,
+      now()
+    )
+    ON CONFLICT (account_type, username) DO UPDATE
+    SET failed_attempts = attempts.failed_attempts + 1,
+        locked_until = CASE
+          WHEN attempts.failed_attempts + 1 >= 5 THEN now() + interval '15 minutes'
+          ELSE NULL
+        END,
+        last_attempt_at = now();
+
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid credentials');
+  END IF;
+
+  DELETE FROM financial_login_attempts
+  WHERE account_type = 'employee'
+    AND username = trim(p_username);
+
+  v_token := gen_random_uuid();
+  v_session_marker := gen_random_uuid();
+
+  UPDATE employee_financial_sessions
+  SET revoked_at = now()
+  WHERE user_id = v_user.id
+    AND revoked_at IS NULL;
+
+  INSERT INTO employee_financial_sessions (
+    user_id,
+    token_hash,
+    tab_id,
+    session_marker,
+    expires_at
+  ) VALUES (
+    v_user.id,
+    private.hash_financial_token(v_token),
+    p_tab_id,
+    v_session_marker,
+    now() + interval '24 hours'
+  );
+
+  UPDATE users
+  SET current_session_token = v_session_marker,
+      current_tab_id = p_tab_id,
+      session_created_at = now()
+  WHERE id = v_user.id
+  RETURNING * INTO v_user;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'session_token', v_token,
+    'session_marker', v_session_marker,
+    'user', to_jsonb(v_user) - 'password_hash'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION validate_employee_session(
+  p_user_id uuid,
+  p_session_token uuid,
+  p_tab_id text DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM employee_financial_sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.user_id = p_user_id
+      AND s.token_hash = private.hash_financial_token(p_session_token)
+      AND s.revoked_at IS NULL
+      AND s.expires_at > now()
+      AND (p_tab_id IS NULL OR s.tab_id = p_tab_id)
+      AND u.is_active = true
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION revoke_financial_session(p_token uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_revoked boolean := false;
+  v_employee_id uuid;
+  v_session_marker uuid;
+BEGIN
+  UPDATE admin_financial_sessions
+  SET revoked_at = now()
+  WHERE token_hash = private.hash_financial_token(p_token)
+    AND revoked_at IS NULL;
+  v_revoked := FOUND;
+
+  UPDATE employee_financial_sessions
+  SET revoked_at = now()
+  WHERE token_hash = private.hash_financial_token(p_token)
+    AND revoked_at IS NULL
+  RETURNING user_id, session_marker INTO v_employee_id, v_session_marker;
+
+  IF v_employee_id IS NOT NULL THEN
+    UPDATE users
+    SET current_session_token = NULL,
+        current_tab_id = NULL,
+        session_created_at = NULL
+    WHERE id = v_employee_id
+      AND current_session_token = v_session_marker;
+    v_revoked := true;
+  END IF;
+
+  RETURN v_revoked;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_create_employee_account(
+  p_admin_session_token uuid,
+  p_username text,
+  p_password text,
+  p_employee_id text,
+  p_created_by uuid,
+  p_remarks text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_user users%ROWTYPE;
+  v_password_hash text;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  IF length(trim(p_username)) = 0 OR length(p_password) < 6 OR length(trim(p_employee_id)) = 0 THEN
+    RAISE EXCEPTION 'Invalid employee account details.';
+  END IF;
+  IF v_admin_role = 'secondary_admin' AND p_created_by <> v_admin_id THEN
+    RAISE EXCEPTION 'You cannot create an employee for another administrator.';
+  END IF;
+  IF v_admin_role = 'super_admin' AND NOT EXISTS (
+    SELECT 1 FROM admins
+    WHERE id = p_created_by
+      AND is_active = true
+      AND role IN ('super_admin', 'secondary_admin')
+  ) THEN
+    RAISE EXCEPTION 'The selected administrator is not available.';
+  END IF;
+
+  v_password_hash := extensions.crypt(p_password, extensions.gen_salt('bf', 10));
+  INSERT INTO users (
+    username,
+    password_hash,
+    employee_id,
+    created_by,
+    remarks
+  ) VALUES (
+    trim(p_username),
+    v_password_hash,
+    trim(p_employee_id),
+    p_created_by,
+    trim(COALESCE(p_remarks, ''))
+  )
+  RETURNING * INTO v_user;
+
+  INSERT INTO financial_employee_credentials (user_id, password_hash)
+  VALUES (v_user.id, v_password_hash);
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'user', to_jsonb(v_user) - 'password_hash'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_create_secondary_account(
+  p_admin_session_token uuid,
+  p_username text,
+  p_password text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_secondary admins%ROWTYPE;
+  v_password_hash text;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  IF v_admin_role <> 'super_admin' THEN
+    RAISE EXCEPTION 'Only a super administrator can create secondary administrators.';
+  END IF;
+  IF length(trim(p_username)) = 0 OR length(p_password) < 6 THEN
+    RAISE EXCEPTION 'Invalid administrator account details.';
+  END IF;
+
+  v_password_hash := extensions.crypt(p_password, extensions.gen_salt('bf', 10));
+  INSERT INTO admins (username, password_hash, role, parent_id)
+  VALUES (trim(p_username), v_password_hash, 'secondary_admin', v_admin_id)
+  RETURNING * INTO v_secondary;
+
+  INSERT INTO financial_admin_credentials (admin_id, password_hash)
+  VALUES (v_secondary.id, v_password_hash);
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'user', to_jsonb(v_secondary) - 'password_hash'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_reset_employee_password(
+  p_admin_session_token uuid,
+  p_user_id uuid,
+  p_new_password text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_password_hash text;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  PERFORM private.assert_admin_can_manage_user(v_admin_id, v_admin_role, p_user_id);
+  IF length(p_new_password) < 6 THEN
+    RAISE EXCEPTION 'Password must be at least 6 characters.';
+  END IF;
+
+  v_password_hash := extensions.crypt(p_new_password, extensions.gen_salt('bf', 10));
+  UPDATE users
+  SET password_hash = v_password_hash,
+      current_session_token = NULL,
+      current_tab_id = NULL,
+      session_created_at = NULL
+  WHERE id = p_user_id;
+
+  UPDATE financial_employee_credentials
+  SET password_hash = v_password_hash,
+      updated_at = now()
+  WHERE user_id = p_user_id;
+
+  UPDATE employee_financial_sessions
+  SET revoked_at = now()
+  WHERE user_id = p_user_id
+    AND revoked_at IS NULL;
+
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_update_secondary_account(
+  p_admin_session_token uuid,
+  p_target_admin_id uuid,
+  p_username text,
+  p_new_password text DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_password_hash text;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  IF v_admin_role <> 'super_admin' OR NOT EXISTS (
+    SELECT 1 FROM admins
+    WHERE id = p_target_admin_id
+      AND role = 'secondary_admin'
+  ) THEN
+    RAISE EXCEPTION 'Secondary administrator account is not available.';
+  END IF;
+  IF length(trim(p_username)) = 0 THEN
+    RAISE EXCEPTION 'Username is required.';
+  END IF;
+
+  UPDATE admins
+  SET username = trim(p_username),
+      updated_at = now()
+  WHERE id = p_target_admin_id;
+
+  IF p_new_password IS NOT NULL AND p_new_password <> '' THEN
+    IF length(p_new_password) < 6 THEN
+      RAISE EXCEPTION 'Password must be at least 6 characters.';
+    END IF;
+
+    v_password_hash := extensions.crypt(p_new_password, extensions.gen_salt('bf', 10));
+    UPDATE admins
+    SET password_hash = v_password_hash,
+        updated_at = now()
+    WHERE id = p_target_admin_id;
+
+    UPDATE financial_admin_credentials
+    SET password_hash = v_password_hash,
+        updated_at = now()
+    WHERE admin_id = p_target_admin_id;
+
+    UPDATE admin_financial_sessions
+    SET revoked_at = now()
+    WHERE admin_id = p_target_admin_id
+      AND revoked_at IS NULL;
+  END IF;
+
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION change_admin_password_atomic(
+  p_admin_session_token uuid,
+  p_current_password text,
+  p_new_password text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_password_hash text;
+  v_new_password_hash text;
+BEGIN
+  SELECT s.admin_id, credentials.password_hash
+  INTO v_admin_id, v_password_hash
+  FROM admin_financial_sessions s
+  JOIN financial_admin_credentials credentials ON credentials.admin_id = s.admin_id
+  JOIN admins a ON a.id = s.admin_id
+  WHERE s.token_hash = private.hash_financial_token(p_admin_session_token)
+    AND s.revoked_at IS NULL
+    AND s.expires_at > now()
+    AND a.is_active = true;
+
+  IF v_admin_id IS NULL OR NOT private.verify_bcrypt_password(p_current_password, v_password_hash) THEN
+    RAISE EXCEPTION 'Current password is incorrect.';
+  END IF;
+  IF length(p_new_password) < 6 THEN
+    RAISE EXCEPTION 'Password must be at least 6 characters.';
+  END IF;
+
+  v_new_password_hash := extensions.crypt(p_new_password, extensions.gen_salt('bf', 10));
+  UPDATE admins SET password_hash = v_new_password_hash, updated_at = now() WHERE id = v_admin_id;
+  UPDATE financial_admin_credentials
+  SET password_hash = v_new_password_hash, updated_at = now()
+  WHERE admin_id = v_admin_id;
+
+  UPDATE admin_financial_sessions
+  SET revoked_at = now()
+  WHERE admin_id = v_admin_id
+    AND token_hash <> private.hash_financial_token(p_admin_session_token)
+    AND revoked_at IS NULL;
+
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION change_admin_username_atomic(
+  p_admin_session_token uuid,
+  p_current_password text,
+  p_new_username text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_password_hash text;
+  v_admin admins%ROWTYPE;
+BEGIN
+  SELECT s.admin_id, credentials.password_hash
+  INTO v_admin_id, v_password_hash
+  FROM admin_financial_sessions s
+  JOIN financial_admin_credentials credentials ON credentials.admin_id = s.admin_id
+  JOIN admins a ON a.id = s.admin_id
+  WHERE s.token_hash = private.hash_financial_token(p_admin_session_token)
+    AND s.revoked_at IS NULL
+    AND s.expires_at > now()
+    AND a.is_active = true;
+
+  IF v_admin_id IS NULL OR NOT private.verify_bcrypt_password(p_current_password, v_password_hash) THEN
+    RAISE EXCEPTION 'Current password is incorrect.';
+  END IF;
+  IF length(trim(p_new_username)) < 3 OR trim(p_new_username) !~ '^[A-Za-z0-9_]+$' THEN
+    RAISE EXCEPTION 'Username must contain at least three letters, numbers, or underscores.';
+  END IF;
+
+  UPDATE admins
+  SET username = trim(p_new_username),
+      updated_at = now()
+  WHERE id = v_admin_id
+  RETURNING * INTO v_admin;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'user', to_jsonb(v_admin) - 'password_hash'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION change_employee_password_atomic(
+  p_user_id uuid,
+  p_session_token uuid,
+  p_tab_id text,
+  p_current_password text,
+  p_new_password text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'extensions', 'pg_temp'
+AS $$
+DECLARE
+  v_actor_id uuid;
+  v_password_hash text;
+  v_new_password_hash text;
+BEGIN
+  v_actor_id := private.get_financial_employee_id(p_user_id, p_session_token, p_tab_id);
+  SELECT password_hash
+  INTO v_password_hash
+  FROM financial_employee_credentials
+  WHERE user_id = v_actor_id;
+
+  IF NOT private.verify_bcrypt_password(p_current_password, v_password_hash) THEN
+    RAISE EXCEPTION 'Current password is incorrect.';
+  END IF;
+  IF length(p_new_password) < 6 THEN
+    RAISE EXCEPTION 'Password must be at least 6 characters.';
+  END IF;
+
+  v_new_password_hash := extensions.crypt(p_new_password, extensions.gen_salt('bf', 10));
+  UPDATE users SET password_hash = v_new_password_hash, updated_at = now() WHERE id = v_actor_id;
+  UPDATE financial_employee_credentials
+  SET password_hash = v_new_password_hash, updated_at = now()
+  WHERE user_id = v_actor_id;
+
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_update_employee_account(
+  p_admin_session_token uuid,
+  p_user_id uuid,
+  p_updates jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_user users%ROWTYPE;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+  PERFORM private.assert_admin_can_manage_user(v_admin_id, v_admin_role, p_user_id);
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_object_keys(p_updates) AS key
+    WHERE key NOT IN (
+      'username',
+      'employee_id',
+      'is_verified',
+      'is_active',
+      'remarks',
+      'tags',
+      'is_pinned',
+      'created_at'
+    )
+  ) THEN
+    RAISE EXCEPTION 'The employee update contains a protected field.';
+  END IF;
+
+  UPDATE users
+  SET username = CASE WHEN p_updates ? 'username' THEN trim(p_updates->>'username') ELSE username END,
+      employee_id = CASE WHEN p_updates ? 'employee_id' THEN trim(p_updates->>'employee_id') ELSE employee_id END,
+      is_verified = CASE WHEN p_updates ? 'is_verified' THEN (p_updates->>'is_verified')::boolean ELSE is_verified END,
+      is_active = CASE WHEN p_updates ? 'is_active' THEN (p_updates->>'is_active')::boolean ELSE is_active END,
+      remarks = CASE WHEN p_updates ? 'remarks' THEN COALESCE(p_updates->>'remarks', '') ELSE remarks END,
+      tags = CASE
+        WHEN p_updates ? 'tags' THEN ARRAY(SELECT jsonb_array_elements_text(p_updates->'tags'))
+        ELSE tags
+      END,
+      is_pinned = CASE WHEN p_updates ? 'is_pinned' THEN (p_updates->>'is_pinned')::boolean ELSE is_pinned END,
+      created_at = CASE WHEN p_updates ? 'created_at' THEN (p_updates->>'created_at')::timestamptz ELSE created_at END,
+      updated_at = now()
+  WHERE id = p_user_id
+  RETURNING * INTO v_user;
+
+  RETURN to_jsonb(v_user) - 'password_hash';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_delete_employee_account(
+  p_admin_session_token uuid,
+  p_user_id uuid
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+  PERFORM private.assert_admin_can_manage_user(v_admin_id, v_admin_role, p_user_id);
+
+  PERFORM 1
+  FROM orders
+  WHERE user_id = p_user_id
+  ORDER BY id
+  FOR UPDATE;
+
+  PERFORM 1
+  FROM wallets
+  WHERE user_id = p_user_id
+  FOR UPDATE;
+
+  DELETE FROM users WHERE id = p_user_id;
+  RETURN FOUND;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_delete_secondary_account(
+  p_admin_session_token uuid,
+  p_target_admin_id uuid
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  IF v_admin_role <> 'super_admin' THEN
+    RAISE EXCEPTION 'Only a super administrator can delete secondary administrators.';
+  END IF;
+
+  PERFORM 1
+  FROM orders o
+  JOIN users u ON u.id = o.user_id
+  WHERE u.created_by = p_target_admin_id
+  ORDER BY o.id
+  FOR UPDATE OF o;
+
+  PERFORM 1
+  FROM wallets w
+  JOIN users u ON u.id = w.user_id
+  WHERE u.created_by = p_target_admin_id
+  ORDER BY w.user_id
+  FOR UPDATE OF w;
+
+  DELETE FROM admins
+  WHERE id = p_target_admin_id
+    AND role = 'secondary_admin';
+  RETURN FOUND;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_update_admin_account(
+  p_admin_session_token uuid,
+  p_target_admin_id uuid,
+  p_updates jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_target_role text;
+  v_admin admins%ROWTYPE;
+BEGIN
+  SELECT s.admin_id, a.role
+  INTO v_admin_id, v_admin_role
+  FROM admin_financial_sessions s
+  JOIN admins a ON a.id = s.admin_id
+  WHERE s.token_hash = private.hash_financial_token(p_admin_session_token)
+    AND s.revoked_at IS NULL
+    AND s.expires_at > now()
+    AND a.is_active = true;
+
+  IF v_admin_id IS NULL THEN
+    RAISE EXCEPTION 'Administrator session is invalid or expired.';
+  END IF;
+
+  SELECT role INTO v_target_role
+  FROM admins
+  WHERE id = p_target_admin_id;
+
+  IF v_target_role IS NULL OR (
+    p_target_admin_id <> v_admin_id
+    AND NOT (v_admin_role = 'super_admin' AND v_target_role = 'secondary_admin')
+  ) THEN
+    RAISE EXCEPTION 'You do not have permission to update this administrator.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_object_keys(p_updates) AS key
+    WHERE key NOT IN ('username', 'is_active', 'is_pinned')
+  ) THEN
+    RAISE EXCEPTION 'The administrator update contains a protected field.';
+  END IF;
+  IF p_updates ? 'is_active' AND p_target_admin_id = v_admin_id THEN
+    RAISE EXCEPTION 'Administrators cannot deactivate their own account.';
+  END IF;
+
+  UPDATE admins
+  SET username = CASE WHEN p_updates ? 'username' THEN trim(p_updates->>'username') ELSE username END,
+      is_active = CASE WHEN p_updates ? 'is_active' THEN (p_updates->>'is_active')::boolean ELSE is_active END,
+      is_pinned = CASE WHEN p_updates ? 'is_pinned' THEN (p_updates->>'is_pinned')::boolean ELSE is_pinned END,
+      updated_at = now()
+  WHERE id = p_target_admin_id
+  RETURNING * INTO v_admin;
+
+  RETURN to_jsonb(v_admin) - 'password_hash';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION enqueue_wallet_reconciliation(p_user_id uuid)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+  INSERT INTO wallet_reconciliation_queue (
+    user_id,
+    requested_at,
+    next_attempt_at,
+    attempts,
+    last_error
+  ) VALUES (
+    p_user_id,
+    now(),
+    now(),
+    0,
+    NULL
+  )
+  ON CONFLICT (user_id) DO UPDATE
+  SET requested_at = EXCLUDED.requested_at,
+      next_attempt_at = LEAST(wallet_reconciliation_queue.next_attempt_at, now()),
+      attempts = 0,
+      last_error = NULL;
+$$;
+
+CREATE OR REPLACE FUNCTION track_wallet_transaction_in_ledger()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+  v_operation_id uuid := COALESCE(NEW.operation_id, gen_random_uuid());
+  v_available_delta numeric := 0;
+  v_income_delta numeric := 0;
+BEGIN
+  IF NEW.type IN ('commission', 'tip', 'manual_adjustment') THEN
+    v_available_delta := NEW.amount;
+  ELSE
+    RETURN NEW;
+  END IF;
+
+  IF NEW.type IN ('commission', 'tip') THEN
+    v_income_delta := NEW.amount;
+  END IF;
+
+  INSERT INTO wallet_ledger_entries (
+    user_id,
+    operation_id,
+    source_type,
+    source_id,
+    event_type,
+    available_delta,
+    frozen_delta,
+    income_delta
+  ) VALUES (
+    NEW.user_id,
+    v_operation_id,
+    'wallet_transaction',
+    NEW.id,
+    NEW.type,
+    v_available_delta,
+    0,
+    v_income_delta
+  )
+  ON CONFLICT DO NOTHING;
+
+  PERFORM enqueue_wallet_reconciliation(NEW.user_id);
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION reverse_deleted_wallet_transaction_in_ledger()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+  v_operation_id uuid := gen_random_uuid();
+  v_available_delta numeric := 0;
+  v_income_delta numeric := 0;
+BEGIN
+  IF OLD.type IN ('commission', 'tip', 'manual_adjustment') THEN
+    v_available_delta := -OLD.amount;
+  ELSE
+    RETURN OLD;
+  END IF;
+
+  IF OLD.type IN ('commission', 'tip') THEN
+    v_income_delta := -OLD.amount;
+  END IF;
+
+  INSERT INTO wallet_ledger_entries (
+    user_id,
+    operation_id,
+    source_type,
+    source_id,
+    event_type,
+    available_delta,
+    frozen_delta,
+    income_delta
+  ) VALUES (
+    OLD.user_id,
+    v_operation_id,
+    'wallet_transaction',
+    OLD.id,
+    'reversal:' || OLD.type,
+    v_available_delta,
+    0,
+    v_income_delta
+  );
+
+  PERFORM enqueue_wallet_reconciliation(OLD.user_id);
+  RETURN OLD;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION track_withdrawal_in_ledger()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+  v_operation_id uuid := COALESCE(NEW.last_operation_id, gen_random_uuid());
+  v_available_delta numeric := 0;
+  v_frozen_delta numeric := 0;
+  v_event_type text;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.status <> 'pending' THEN
+      RETURN NEW;
+    END IF;
+    v_available_delta := -NEW.amount;
+    v_frozen_delta := NEW.amount;
+    v_event_type := 'withdrawal_pending';
+  ELSE
+    IF OLD.status = NEW.status THEN
+      RETURN NEW;
+    END IF;
+
+    v_event_type := 'withdrawal_' || OLD.status || '_to_' || NEW.status;
+
+    IF OLD.status = 'pending' AND NEW.status = 'approved' THEN
+      v_frozen_delta := -NEW.amount;
+    ELSIF OLD.status = 'pending' AND NEW.status IN ('rejected', 'cancelled') THEN
+      v_available_delta := NEW.amount;
+      v_frozen_delta := -NEW.amount;
+    ELSIF OLD.status IN ('rejected', 'cancelled') AND NEW.status = 'approved' THEN
+      v_available_delta := -NEW.amount;
+    ELSIF OLD.status = 'approved' AND NEW.status IN ('rejected', 'cancelled') THEN
+      v_available_delta := NEW.amount;
+    ELSIF OLD.status IN ('rejected', 'cancelled') AND NEW.status = 'pending' THEN
+      v_available_delta := -NEW.amount;
+      v_frozen_delta := NEW.amount;
+    ELSIF OLD.status = 'approved' AND NEW.status = 'pending' THEN
+      v_frozen_delta := NEW.amount;
+    ELSE
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  INSERT INTO wallet_ledger_entries (
+    user_id,
+    operation_id,
+    source_type,
+    source_id,
+    event_type,
+    available_delta,
+    frozen_delta,
+    income_delta
+  ) VALUES (
+    NEW.user_id,
+    v_operation_id,
+    'withdrawal',
+    NEW.id,
+    v_event_type,
+    v_available_delta,
+    v_frozen_delta,
+    0
+  )
+  ON CONFLICT DO NOTHING;
+
+  PERFORM enqueue_wallet_reconciliation(NEW.user_id);
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION enqueue_changed_wallet()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO wallet_balance_baselines (
+      user_id,
+      available_balance,
+      frozen_balance,
+      total_income
+    )
+    SELECT NEW.user_id, NEW.available_balance, NEW.frozen_balance, COALESCE(u.total_income, 0)
+    FROM users u
+    WHERE u.id = NEW.user_id
+    ON CONFLICT (user_id) DO NOTHING;
+  END IF;
+
+  PERFORM enqueue_wallet_reconciliation(NEW.user_id);
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trigger_track_wallet_transaction_ledger ON wallet_transactions;
+CREATE TRIGGER trigger_track_wallet_transaction_ledger
+  AFTER INSERT ON wallet_transactions
+  FOR EACH ROW
+  EXECUTE FUNCTION track_wallet_transaction_in_ledger();
+
+DROP TRIGGER IF EXISTS trigger_reverse_deleted_wallet_transaction_ledger ON wallet_transactions;
+CREATE TRIGGER trigger_reverse_deleted_wallet_transaction_ledger
+  AFTER DELETE ON wallet_transactions
+  FOR EACH ROW
+  EXECUTE FUNCTION reverse_deleted_wallet_transaction_in_ledger();
+
+DROP TRIGGER IF EXISTS trigger_track_withdrawal_ledger ON withdrawals;
+CREATE TRIGGER trigger_track_withdrawal_ledger
+  AFTER INSERT OR UPDATE OF status ON withdrawals
+  FOR EACH ROW
+  EXECUTE FUNCTION track_withdrawal_in_ledger();
+
+DROP TRIGGER IF EXISTS trigger_enqueue_changed_wallet ON wallets;
+CREATE TRIGGER trigger_enqueue_changed_wallet
+  AFTER INSERT OR UPDATE OF available_balance, frozen_balance ON wallets
+  FOR EACH ROW
+  EXECUTE FUNCTION enqueue_changed_wallet();
+
+CREATE OR REPLACE FUNCTION request_employee_withdrawal(
+  p_user_id uuid,
+  p_session_token uuid,
+  p_tab_id text,
+  p_operation_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_actor_id uuid;
+  v_cached jsonb;
+  v_wallet wallets%ROWTYPE;
+  v_withdrawal_id uuid;
+  v_result jsonb;
+BEGIN
+  v_actor_id := private.get_financial_employee_id(p_user_id, p_session_token, p_tab_id);
+  v_cached := private.begin_financial_operation(
+    p_operation_id,
+    'request_withdrawal',
+    'employee',
+    v_actor_id,
+    jsonb_build_object('user_id', p_user_id)
+  );
+  IF v_cached IS NOT NULL THEN
+    RETURN v_cached;
+  END IF;
+
+  SELECT *
+  INTO v_wallet
+  FROM wallets
+  WHERE user_id = v_actor_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_wallet.available_balance <= 0 THEN
+    RAISE EXCEPTION 'Insufficient available balance.';
+  END IF;
+
+  IF NOT check_withdrawal_eligibility(v_actor_id) THEN
+    RAISE EXCEPTION 'Withdrawal eligibility requirements are not met.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM withdrawals
+    WHERE user_id = v_actor_id
+      AND status = 'pending'
+  ) THEN
+    RAISE EXCEPTION 'A pending withdrawal already exists.';
+  END IF;
+
+  INSERT INTO withdrawals (
+    user_id,
+    amount,
+    status,
+    last_operation_id
+  ) VALUES (
+    v_actor_id,
+    v_wallet.available_balance,
+    'pending',
+    p_operation_id
+  )
+  RETURNING id INTO v_withdrawal_id;
+
+  UPDATE wallets
+  SET available_balance = 0,
+      frozen_balance = frozen_balance + v_wallet.available_balance,
+      updated_at = now()
+  WHERE user_id = v_actor_id;
+
+  v_result := jsonb_build_object(
+    'success', true,
+    'withdrawal_id', v_withdrawal_id,
+    'amount', v_wallet.available_balance,
+    'available_balance', 0,
+    'frozen_balance', v_wallet.frozen_balance + v_wallet.available_balance
+  );
+
+  PERFORM private.save_financial_operation(
+    p_operation_id,
+    'request_withdrawal',
+    'employee',
+    v_actor_id,
+    jsonb_build_object('user_id', p_user_id),
+    v_result
+  );
+  RETURN v_result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION cancel_employee_withdrawal(
+  p_user_id uuid,
+  p_session_token uuid,
+  p_tab_id text,
+  p_withdrawal_id uuid,
+  p_operation_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_actor_id uuid;
+  v_cached jsonb;
+  v_wallet wallets%ROWTYPE;
+  v_withdrawal withdrawals%ROWTYPE;
+  v_result jsonb;
+BEGIN
+  v_actor_id := private.get_financial_employee_id(p_user_id, p_session_token, p_tab_id);
+  v_cached := private.begin_financial_operation(
+    p_operation_id,
+    'cancel_withdrawal',
+    'employee',
+    v_actor_id,
+    jsonb_build_object('user_id', p_user_id, 'withdrawal_id', p_withdrawal_id)
+  );
+  IF v_cached IS NOT NULL THEN
+    RETURN v_cached;
+  END IF;
+
+  SELECT *
+  INTO v_wallet
+  FROM wallets
+  WHERE user_id = v_actor_id
+  FOR UPDATE;
+
+  SELECT *
+  INTO v_withdrawal
+  FROM withdrawals
+  WHERE id = p_withdrawal_id
+    AND user_id = v_actor_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Withdrawal request was not found.';
+  END IF;
+  IF v_withdrawal.status <> 'pending' THEN
+    RAISE EXCEPTION 'This withdrawal has already been processed.';
+  END IF;
+  IF v_wallet.frozen_balance < v_withdrawal.amount THEN
+    RAISE EXCEPTION 'Frozen balance does not cover this withdrawal.';
+  END IF;
+
+  UPDATE withdrawals
+  SET status = 'cancelled',
+      audit_remark = 'Cancelled by user',
+      audited_by = NULL,
+      audited_at = now(),
+      last_operation_id = p_operation_id
+  WHERE id = p_withdrawal_id;
+
+  UPDATE wallets
+  SET available_balance = available_balance + v_withdrawal.amount,
+      frozen_balance = frozen_balance - v_withdrawal.amount,
+      updated_at = now()
+  WHERE user_id = v_actor_id;
+
+  v_result := jsonb_build_object(
+    'success', true,
+    'withdrawal_id', p_withdrawal_id,
+    'available_balance', v_wallet.available_balance + v_withdrawal.amount,
+    'frozen_balance', v_wallet.frozen_balance - v_withdrawal.amount
+  );
+
+  PERFORM private.save_financial_operation(
+    p_operation_id,
+    'cancel_withdrawal',
+    'employee',
+    v_actor_id,
+    jsonb_build_object('user_id', p_user_id, 'withdrawal_id', p_withdrawal_id),
+    v_result
+  );
+  RETURN v_result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION review_withdrawal_atomic(
+  p_admin_session_token uuid,
+  p_withdrawal_id uuid,
+  p_status text,
+  p_remark text,
+  p_operation_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_user_id uuid;
+  v_cached jsonb;
+  v_wallet wallets%ROWTYPE;
+  v_withdrawal withdrawals%ROWTYPE;
+  v_result jsonb;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  IF p_status NOT IN ('approved', 'rejected') THEN
+    RAISE EXCEPTION 'Unsupported withdrawal decision.';
+  END IF;
+  IF trim(COALESCE(p_remark, '')) = '' THEN
+    RAISE EXCEPTION 'An audit remark is required.';
+  END IF;
+
+  SELECT user_id INTO v_user_id
+  FROM withdrawals
+  WHERE id = p_withdrawal_id;
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Withdrawal request was not found.';
+  END IF;
+
+  PERFORM private.assert_admin_can_manage_user(v_admin_id, v_admin_role, v_user_id);
+  v_cached := private.begin_financial_operation(
+    p_operation_id,
+    'review_withdrawal',
+    'admin',
+    v_admin_id,
+    jsonb_build_object(
+      'withdrawal_id', p_withdrawal_id,
+      'status', p_status,
+      'remark', trim(p_remark)
+    )
+  );
+  IF v_cached IS NOT NULL THEN
+    RETURN v_cached;
+  END IF;
+
+  SELECT * INTO v_wallet
+  FROM wallets
+  WHERE user_id = v_user_id
+  FOR UPDATE;
+
+  SELECT * INTO v_withdrawal
+  FROM withdrawals
+  WHERE id = p_withdrawal_id
+  FOR UPDATE;
+
+  IF v_withdrawal.status <> 'pending' THEN
+    RAISE EXCEPTION 'This withdrawal has already been processed.';
+  END IF;
+  IF v_wallet.frozen_balance < v_withdrawal.amount THEN
+    RAISE EXCEPTION 'Frozen balance does not cover this withdrawal.';
+  END IF;
+
+  UPDATE withdrawals
+  SET status = p_status,
+      audit_remark = trim(p_remark),
+      audited_by = v_admin_id,
+      audited_at = now(),
+      last_operation_id = p_operation_id
+  WHERE id = p_withdrawal_id;
+
+  IF p_status = 'approved' THEN
+    INSERT INTO wallet_transactions (
+      user_id,
+      type,
+      amount,
+      balance_before,
+      balance_after,
+      reference_id,
+      remarks,
+      created_by,
+      operation_id
+    ) VALUES (
+      v_user_id,
+      'withdrawal_approved',
+      -v_withdrawal.amount,
+      v_wallet.frozen_balance,
+      v_wallet.frozen_balance - v_withdrawal.amount,
+      p_withdrawal_id,
+      '提現已批准：' || trim(p_remark),
+      v_admin_id,
+      p_operation_id
+    );
+
+    UPDATE wallets
+    SET frozen_balance = frozen_balance - v_withdrawal.amount,
+        updated_at = now()
+    WHERE user_id = v_user_id;
+  ELSE
+    UPDATE wallets
+    SET available_balance = available_balance + v_withdrawal.amount,
+        frozen_balance = frozen_balance - v_withdrawal.amount,
+        updated_at = now()
+    WHERE user_id = v_user_id;
+  END IF;
+
+  v_result := jsonb_build_object(
+    'success', true,
+    'withdrawal_id', p_withdrawal_id,
+    'status', p_status
+  );
+
+  PERFORM private.save_financial_operation(
+    p_operation_id,
+    'review_withdrawal',
+    'admin',
+    v_admin_id,
+    jsonb_build_object(
+      'withdrawal_id', p_withdrawal_id,
+      'status', p_status,
+      'remark', trim(p_remark)
+    ),
+    v_result
+  );
+  RETURN v_result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION correct_withdrawal_status_atomic(
+  p_admin_session_token uuid,
+  p_withdrawal_id uuid,
+  p_status text,
+  p_remark text,
+  p_operation_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_user_id uuid;
+  v_cached jsonb;
+  v_wallet wallets%ROWTYPE;
+  v_withdrawal withdrawals%ROWTYPE;
+  v_pending_amount numeric := 0;
+  v_target_delta numeric := 0;
+  v_result jsonb;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  IF p_status NOT IN ('approved', 'rejected') THEN
+    RAISE EXCEPTION 'Unsupported corrected withdrawal status.';
+  END IF;
+
+  SELECT user_id INTO v_user_id
+  FROM withdrawals
+  WHERE id = p_withdrawal_id;
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Withdrawal request was not found.';
+  END IF;
+
+  PERFORM private.assert_admin_can_manage_user(v_admin_id, v_admin_role, v_user_id);
+  v_cached := private.begin_financial_operation(
+    p_operation_id,
+    'correct_withdrawal_status',
+    'admin',
+    v_admin_id,
+    jsonb_build_object(
+      'withdrawal_id', p_withdrawal_id,
+      'status', p_status,
+      'remark', trim(COALESCE(p_remark, ''))
+    )
+  );
+  IF v_cached IS NOT NULL THEN
+    RETURN v_cached;
+  END IF;
+
+  SELECT * INTO v_wallet
+  FROM wallets
+  WHERE user_id = v_user_id
+  FOR UPDATE;
+
+  PERFORM 1
+  FROM withdrawals
+  WHERE user_id = v_user_id
+  ORDER BY id
+  FOR UPDATE;
+
+  SELECT * INTO v_withdrawal
+  FROM withdrawals
+  WHERE id = p_withdrawal_id;
+
+  IF v_withdrawal.status = 'pending' THEN
+    RAISE EXCEPTION 'Pending withdrawals must use the review action.';
+  END IF;
+
+  IF v_withdrawal.status <> p_status THEN
+    SELECT COALESCE(sum(amount), 0)
+    INTO v_pending_amount
+    FROM withdrawals
+    WHERE user_id = v_user_id
+      AND id <> p_withdrawal_id
+      AND status = 'pending';
+
+    IF v_withdrawal.status = 'approved' AND p_status = 'rejected' THEN
+      v_target_delta := v_withdrawal.amount;
+    ELSIF v_withdrawal.status IN ('rejected', 'cancelled') AND p_status = 'approved' THEN
+      v_target_delta := -v_withdrawal.amount;
+    END IF;
+
+    IF v_wallet.frozen_balance < v_pending_amount THEN
+      RAISE EXCEPTION 'Frozen balance does not cover pending withdrawals.';
+    END IF;
+    IF v_wallet.available_balance + v_pending_amount + v_target_delta < 0 THEN
+      RAISE EXCEPTION 'Available balance is insufficient for this correction.';
+    END IF;
+
+    UPDATE withdrawals
+    SET status = 'cancelled',
+        audit_remark = 'Withdrawal accounting adjustment, please resubmit your application',
+        audited_by = v_admin_id,
+        audited_at = now(),
+        last_operation_id = p_operation_id
+    WHERE user_id = v_user_id
+      AND id <> p_withdrawal_id
+      AND status = 'pending';
+
+    UPDATE wallets
+    SET available_balance = available_balance + v_pending_amount + v_target_delta,
+        frozen_balance = frozen_balance - v_pending_amount,
+        updated_at = now()
+    WHERE user_id = v_user_id;
+
+    IF v_target_delta <> 0 THEN
+      INSERT INTO wallet_transactions (
+        user_id,
+        type,
+        amount,
+        balance_before,
+        balance_after,
+        reference_id,
+        remarks,
+        created_by,
+        operation_id
+      ) VALUES (
+        v_user_id,
+        'withdrawal_correction',
+        v_target_delta,
+        v_wallet.available_balance + v_pending_amount,
+        v_wallet.available_balance + v_pending_amount + v_target_delta,
+        p_withdrawal_id,
+        'Withdrawal status correction: ' || v_withdrawal.status || ' to ' || p_status,
+        v_admin_id,
+        p_operation_id
+      );
+    END IF;
+  END IF;
+
+  UPDATE withdrawals
+  SET status = p_status,
+      audit_remark = NULLIF(trim(COALESCE(p_remark, '')), ''),
+      audited_by = v_admin_id,
+      audited_at = now(),
+      last_operation_id = p_operation_id
+  WHERE id = p_withdrawal_id;
+
+  v_result := jsonb_build_object(
+    'success', true,
+    'withdrawal_id', p_withdrawal_id,
+    'old_status', v_withdrawal.status,
+    'new_status', p_status,
+    'cancelled_pending_amount', v_pending_amount,
+    'available_adjustment', v_pending_amount + v_target_delta
+  );
+
+  PERFORM private.save_financial_operation(
+    p_operation_id,
+    'correct_withdrawal_status',
+    'admin',
+    v_admin_id,
+    jsonb_build_object(
+      'withdrawal_id', p_withdrawal_id,
+      'status', p_status,
+      'remark', trim(COALESCE(p_remark, ''))
+    ),
+    v_result
+  );
+  RETURN v_result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION admin_adjust_wallet_balance_atomic(
+  p_admin_session_token uuid,
+  p_user_id uuid,
+  p_amount numeric,
+  p_remarks text,
+  p_operation_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_cached jsonb;
+  v_wallet wallets%ROWTYPE;
+  v_transaction_id uuid;
+  v_result jsonb;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  PERFORM private.assert_admin_can_manage_user(v_admin_id, v_admin_role, p_user_id);
+  IF p_amount IS NULL OR p_amount = 0 OR p_amount::text IN ('NaN', 'Infinity', '-Infinity') THEN
+    RAISE EXCEPTION 'Adjustment amount must be a finite non-zero number.';
+  END IF;
+  IF trim(COALESCE(p_remarks, '')) = '' THEN
+    RAISE EXCEPTION 'Adjustment remarks are required.';
+  END IF;
+
+  v_cached := private.begin_financial_operation(
+    p_operation_id,
+    'admin_adjust_wallet',
+    'admin',
+    v_admin_id,
+    jsonb_build_object(
+      'user_id', p_user_id,
+      'amount', p_amount,
+      'remarks', trim(p_remarks)
+    )
+  );
+  IF v_cached IS NOT NULL THEN
+    RETURN v_cached;
+  END IF;
+
+  SELECT * INTO v_wallet
+  FROM wallets
+  WHERE user_id = p_user_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Employee wallet was not found.';
+  END IF;
+  IF v_wallet.available_balance + p_amount < 0 THEN
+    RAISE EXCEPTION 'Insufficient available balance.';
+  END IF;
+
+  INSERT INTO wallet_transactions (
+    user_id,
+    type,
+    amount,
+    balance_before,
+    balance_after,
+    remarks,
+    created_by,
+    operation_id
+  ) VALUES (
+    p_user_id,
+    'manual_adjustment',
+    p_amount,
+    v_wallet.available_balance,
+    v_wallet.available_balance + p_amount,
+    trim(p_remarks),
+    v_admin_id,
+    p_operation_id
+  )
+  RETURNING id INTO v_transaction_id;
+
+  UPDATE wallets
+  SET available_balance = available_balance + p_amount,
+      updated_at = now()
+  WHERE user_id = p_user_id;
+
+  v_result := jsonb_build_object(
+    'success', true,
+    'transaction_id', v_transaction_id,
+    'balance_before', v_wallet.available_balance,
+    'balance_after', v_wallet.available_balance + p_amount
+  );
+
+  PERFORM private.save_financial_operation(
+    p_operation_id,
+    'admin_adjust_wallet',
+    'admin',
+    v_admin_id,
+    jsonb_build_object(
+      'user_id', p_user_id,
+      'amount', p_amount,
+      'remarks', trim(p_remarks)
+    ),
+    v_result
+  );
+  RETURN v_result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION send_customer_service_tip_atomic(
+  p_admin_session_token uuid,
+  p_customer_id uuid,
+  p_employee_id uuid,
+  p_amount numeric,
+  p_source_type text,
+  p_operation_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'private', 'pg_temp'
+AS $$
+DECLARE
+  v_admin_id uuid;
+  v_admin_role text;
+  v_cached jsonb;
+  v_wallet wallets%ROWTYPE;
+  v_customer_admin_id uuid;
+  v_message_id uuid;
+  v_transaction_id uuid;
+  v_result jsonb;
+BEGIN
+  SELECT admin_id, admin_role
+  INTO v_admin_id, v_admin_role
+  FROM private.get_financial_admin_context(p_admin_session_token);
+
+  PERFORM private.assert_admin_can_manage_user(v_admin_id, v_admin_role, p_employee_id);
+  IF p_amount IS NULL OR p_amount <= 0 OR p_amount::text IN ('NaN', 'Infinity', '-Infinity') THEN
+    RAISE EXCEPTION 'Tip amount must be a finite positive number.';
+  END IF;
+  IF p_source_type NOT IN ('aaa_service', 'ccc_service') THEN
+    RAISE EXCEPTION 'Unsupported customer service source.';
+  END IF;
+
+  SELECT admin_id INTO v_customer_admin_id
+  FROM simulated_customers
+  WHERE id = p_customer_id;
+  IF v_customer_admin_id IS NULL THEN
+    RAISE EXCEPTION 'Customer was not found.';
+  END IF;
+  IF v_admin_role <> 'super_admin' AND v_customer_admin_id <> v_admin_id THEN
+    RAISE EXCEPTION 'You do not have permission to send a tip for this customer.';
+  END IF;
+
+  v_cached := private.begin_financial_operation(
+    p_operation_id,
+    'customer_service_tip',
+    'admin',
+    v_admin_id,
+    jsonb_build_object(
+      'customer_id', p_customer_id,
+      'employee_id', p_employee_id,
+      'amount', p_amount,
+      'source_type', p_source_type
+    )
+  );
+  IF v_cached IS NOT NULL THEN
+    RETURN v_cached;
+  END IF;
+
+  SELECT * INTO v_wallet
+  FROM wallets
+  WHERE user_id = p_employee_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Employee wallet was not found.';
+  END IF;
+
+  INSERT INTO customer_employee_conversations (
+    customer_id,
+    employee_id,
+    sender_type,
+    message_type,
+    message_content,
+    rating_data,
+    is_read,
+    source_type
+  ) VALUES (
+    p_customer_id,
+    p_employee_id,
+    'customer',
+    'tip',
+    'Tip: ' || to_char(p_amount, 'FM999999999999990.00'),
+    jsonb_build_object('tip_amount', p_amount),
+    false,
+    p_source_type
+  )
+  RETURNING id INTO v_message_id;
+
+  INSERT INTO wallet_transactions (
+    user_id,
+    type,
+    amount,
+    balance_before,
+    balance_after,
+    reference_id,
+    remarks,
+    created_by,
+    operation_id
+  ) VALUES (
+    p_employee_id,
+    'tip',
+    p_amount,
+    v_wallet.available_balance,
+    v_wallet.available_balance + p_amount,
+    v_message_id,
+    'Customer service tip',
+    v_admin_id,
+    p_operation_id
+  )
+  RETURNING id INTO v_transaction_id;
+
+  UPDATE wallets
+  SET available_balance = available_balance + p_amount,
+      updated_at = now()
+  WHERE user_id = p_employee_id;
+
+  UPDATE users
+  SET total_income = COALESCE(total_income, 0) + p_amount
+  WHERE id = p_employee_id;
+
+  v_result := jsonb_build_object(
+    'success', true,
+    'message_id', v_message_id,
+    'transaction_id', v_transaction_id,
+    'balance_before', v_wallet.available_balance,
+    'balance_after', v_wallet.available_balance + p_amount
+  );
+
+  PERFORM private.save_financial_operation(
+    p_operation_id,
+    'customer_service_tip',
+    'admin',
+    v_admin_id,
+    jsonb_build_object(
+      'customer_id', p_customer_id,
+      'employee_id', p_employee_id,
+      'amount', p_amount,
+      'source_type', p_source_type
+    ),
+    v_result
+  );
+  RETURN v_result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION reconcile_wallet_from_ledger(p_user_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+  v_wallet wallets%ROWTYPE;
+  v_baseline wallet_balance_baselines%ROWTYPE;
+  v_income_before numeric;
+  v_available_delta numeric;
+  v_frozen_delta numeric;
+  v_income_delta numeric;
+  v_last_ledger_id bigint;
+  v_pending_amount numeric;
+  v_expected_total numeric;
+  v_expected_available numeric;
+  v_expected_frozen numeric;
+  v_expected_income numeric;
+  v_repaired boolean;
+  v_reason text;
+BEGIN
+  SELECT * INTO v_wallet
+  FROM wallets
+  WHERE user_id = p_user_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    DELETE FROM wallet_reconciliation_queue WHERE user_id = p_user_id;
+    RETURN jsonb_build_object('success', true, 'skipped', true);
+  END IF;
+
+  SELECT COALESCE(total_income, 0)
+  INTO v_income_before
+  FROM users
+  WHERE id = p_user_id
+  FOR UPDATE;
+
+  SELECT * INTO v_baseline
+  FROM wallet_balance_baselines
+  WHERE user_id = p_user_id;
+
+  IF NOT FOUND THEN
+    SELECT COALESCE(max(id), 0)
+    INTO v_last_ledger_id
+    FROM wallet_ledger_entries
+    WHERE user_id = p_user_id;
+
+    INSERT INTO wallet_balance_baselines (
+      user_id,
+      available_balance,
+      frozen_balance,
+      total_income,
+      last_ledger_id
+    ) VALUES (
+      p_user_id,
+      v_wallet.available_balance,
+      v_wallet.frozen_balance,
+      v_income_before,
+      v_last_ledger_id
+    );
+
+    DELETE FROM wallet_reconciliation_queue WHERE user_id = p_user_id;
+    RETURN jsonb_build_object('success', true, 'skipped', true, 'baseline_created', true);
+  END IF;
+
+  SELECT
+    COALESCE(sum(available_delta), 0),
+    COALESCE(sum(frozen_delta), 0),
+    COALESCE(sum(income_delta), 0),
+    COALESCE(max(id), v_baseline.last_ledger_id)
+  INTO v_available_delta, v_frozen_delta, v_income_delta, v_last_ledger_id
+  FROM wallet_ledger_entries
+  WHERE user_id = p_user_id
+    AND id > v_baseline.last_ledger_id;
+
+  SELECT COALESCE(sum(amount), 0)
+  INTO v_pending_amount
+  FROM withdrawals
+  WHERE user_id = p_user_id
+    AND status = 'pending';
+
+  v_expected_total :=
+    v_baseline.available_balance
+    + v_baseline.frozen_balance
+    + v_available_delta
+    + v_frozen_delta;
+  v_expected_frozen := v_pending_amount;
+  v_expected_available := v_expected_total - v_expected_frozen;
+  v_expected_income := v_baseline.total_income + v_income_delta;
+
+  IF v_expected_available < 0 OR v_expected_frozen < 0 THEN
+    RAISE EXCEPTION 'Ledger reconciliation produced a negative wallet balance.';
+  END IF;
+
+  v_repaired :=
+    v_wallet.available_balance IS DISTINCT FROM v_expected_available
+    OR v_wallet.frozen_balance IS DISTINCT FROM v_expected_frozen
+    OR v_income_before IS DISTINCT FROM v_expected_income;
+
+  v_reason := CASE
+    WHEN v_wallet.frozen_balance IS DISTINCT FROM v_pending_amount
+      THEN 'Frozen balance did not match pending withdrawals.'
+    ELSE 'Wallet snapshot did not match the immutable ledger.'
+  END;
+
+  IF v_repaired THEN
+    UPDATE wallets
+    SET available_balance = v_expected_available,
+        frozen_balance = v_expected_frozen,
+        updated_at = now()
+    WHERE user_id = p_user_id;
+
+    UPDATE users
+    SET total_income = v_expected_income
+    WHERE id = p_user_id;
+
+    INSERT INTO wallet_reconciliation_audit (
+      user_id,
+      available_before,
+      available_after,
+      frozen_before,
+      frozen_after,
+      income_before,
+      income_after,
+      pending_amount,
+      ledger_total,
+      reason
+    ) VALUES (
+      p_user_id,
+      v_wallet.available_balance,
+      v_expected_available,
+      v_wallet.frozen_balance,
+      v_expected_frozen,
+      v_income_before,
+      v_expected_income,
+      v_pending_amount,
+      v_expected_total,
+      v_reason
+    );
+  END IF;
+
+  UPDATE wallet_balance_baselines
+  SET available_balance = v_expected_available,
+      frozen_balance = v_expected_frozen,
+      total_income = v_expected_income,
+      last_ledger_id = v_last_ledger_id,
+      established_at = now()
+  WHERE user_id = p_user_id;
+
+  DELETE FROM wallet_reconciliation_queue WHERE user_id = p_user_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'repaired', v_repaired,
+    'available_balance', v_expected_available,
+    'frozen_balance', v_expected_frozen,
+    'total_income', v_expected_income
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION process_wallet_reconciliation_queue(p_batch_size integer DEFAULT 50)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+  v_item record;
+  v_processed integer := 0;
+  v_failed integer := 0;
+BEGIN
+  FOR v_item IN
+    SELECT user_id
+    FROM wallet_reconciliation_queue
+    WHERE next_attempt_at <= now()
+    ORDER BY requested_at
+    LIMIT GREATEST(1, LEAST(p_batch_size, 500))
+  LOOP
+    BEGIN
+      PERFORM reconcile_wallet_from_ledger(v_item.user_id);
+      v_processed := v_processed + 1;
+    EXCEPTION WHEN OTHERS THEN
+      UPDATE wallet_reconciliation_queue
+      SET attempts = attempts + 1,
+          next_attempt_at = now() + make_interval(
+            mins => LEAST(60, GREATEST(1, (attempts + 1) * 5))
+          ),
+          last_error = SQLERRM
+      WHERE user_id = v_item.user_id;
+      v_failed := v_failed + 1;
+    END;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'processed', v_processed,
+    'failed', v_failed
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION enqueue_all_wallets_for_reconciliation()
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  INSERT INTO wallet_reconciliation_queue (
+    user_id,
+    requested_at,
+    next_attempt_at,
+    attempts,
+    last_error
+  )
+  SELECT user_id, now(), now(), 0, NULL
+  FROM wallets
+  ON CONFLICT (user_id) DO UPDATE
+  SET requested_at = EXCLUDED.requested_at,
+      next_attempt_at = now(),
+      attempts = 0,
+      last_error = NULL;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+DO $$
+DECLARE
+  v_job_id bigint;
+BEGIN
+  FOR v_job_id IN
+    SELECT jobid
+    FROM cron.job
+    WHERE jobname IN (
+      'process-wallet-reconciliation-queue',
+      'enqueue-daily-wallet-reconciliation'
+    )
+  LOOP
+    PERFORM cron.unschedule(v_job_id);
+  END LOOP;
+END;
+$$;
+
+SELECT cron.schedule(
+  'process-wallet-reconciliation-queue',
+  '* * * * *',
+  'SELECT public.process_wallet_reconciliation_queue(100);'
+);
+SELECT cron.schedule(
+  'enqueue-daily-wallet-reconciliation',
+  '17 3 * * *',
+  'SELECT public.enqueue_all_wallets_for_reconciliation();'
+);
+
+REVOKE ALL ON ALL TABLES IN SCHEMA private FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA private FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA private FROM PUBLIC, anon, authenticated;
+
+REVOKE ALL ON financial_admin_credentials FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON financial_employee_credentials FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON admin_financial_sessions FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON employee_financial_sessions FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON financial_login_attempts FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON financial_operations FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON wallet_balance_baselines FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON wallet_ledger_entries FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON wallet_reconciliation_queue FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON wallet_reconciliation_audit FROM PUBLIC, anon, authenticated;
+
+REVOKE EXECUTE ON FUNCTION create_admin_financial_session(text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION create_employee_financial_session(text, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION revoke_financial_session(uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION validate_employee_session(uuid, uuid, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_create_employee_account(uuid, text, text, text, uuid, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_create_secondary_account(uuid, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_reset_employee_password(uuid, uuid, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_update_secondary_account(uuid, uuid, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION change_admin_password_atomic(uuid, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION change_admin_username_atomic(uuid, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION change_employee_password_atomic(uuid, uuid, text, text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_update_employee_account(uuid, uuid, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_delete_employee_account(uuid, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_delete_secondary_account(uuid, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_update_admin_account(uuid, uuid, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION request_employee_withdrawal(uuid, uuid, text, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cancel_employee_withdrawal(uuid, uuid, text, uuid, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION review_withdrawal_atomic(uuid, uuid, text, text, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION correct_withdrawal_status_atomic(uuid, uuid, text, text, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION admin_adjust_wallet_balance_atomic(uuid, uuid, numeric, text, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION send_customer_service_tip_atomic(uuid, uuid, uuid, numeric, text, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION reconcile_wallet_from_ledger(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION process_wallet_reconciliation_queue(integer) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION enqueue_all_wallets_for_reconciliation() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION enqueue_wallet_reconciliation(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION track_wallet_transaction_in_ledger() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION reverse_deleted_wallet_transaction_in_ledger() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION track_withdrawal_in_ledger() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION enqueue_changed_wallet() FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION create_admin_financial_session(text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION create_employee_financial_session(text, text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION revoke_financial_session(uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION validate_employee_session(uuid, uuid, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_create_employee_account(uuid, text, text, text, uuid, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_create_secondary_account(uuid, text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_reset_employee_password(uuid, uuid, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_update_secondary_account(uuid, uuid, text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION change_admin_password_atomic(uuid, text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION change_admin_username_atomic(uuid, text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION change_employee_password_atomic(uuid, uuid, text, text, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_update_employee_account(uuid, uuid, jsonb) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_delete_employee_account(uuid, uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_delete_secondary_account(uuid, uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_update_admin_account(uuid, uuid, jsonb) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION request_employee_withdrawal(uuid, uuid, text, uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION cancel_employee_withdrawal(uuid, uuid, text, uuid, uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION review_withdrawal_atomic(uuid, uuid, text, text, uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION correct_withdrawal_status_atomic(uuid, uuid, text, text, uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION admin_adjust_wallet_balance_atomic(uuid, uuid, numeric, text, uuid) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION send_customer_service_tip_atomic(uuid, uuid, uuid, numeric, text, uuid) TO anon, authenticated;
+
+REVOKE INSERT, UPDATE, DELETE ON TABLE wallets FROM PUBLIC, anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE wallet_transactions FROM PUBLIC, anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE withdrawals FROM PUBLIC, anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE users FROM PUBLIC, anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE admins FROM PUBLIC, anon, authenticated;
+
+DROP POLICY IF EXISTS "Users can insert wallets" ON wallets;
+DROP POLICY IF EXISTS "Users can update wallets" ON wallets;
+DROP POLICY IF EXISTS "Users can insert transactions" ON wallet_transactions;
+DROP POLICY IF EXISTS "Users can insert withdrawals" ON withdrawals;
+DROP POLICY IF EXISTS "Users can update withdrawals" ON withdrawals;
+DROP POLICY IF EXISTS "Allow employee creation" ON users;
+DROP POLICY IF EXISTS "Allow employee deletion" ON users;
+DROP POLICY IF EXISTS "Employees can update own profile" ON users;
+DROP POLICY IF EXISTS "Super admins can create secondary admins" ON admins;
+DROP POLICY IF EXISTS "Super admins can delete secondary admins" ON admins;
+DROP POLICY IF EXISTS "Admins can update own info" ON admins;
+
+REVOKE SELECT ON TABLE users FROM PUBLIC, anon, authenticated;
+REVOKE SELECT ON TABLE admins FROM PUBLIC, anon, authenticated;
+
+GRANT SELECT (
+  id,
+  username,
+  employee_id,
+  is_verified,
+  is_active,
+  total_income,
+  first_success_order_date,
+  created_by,
+  remarks,
+  tags,
+  is_pinned,
+  current_session_token,
+  session_created_at,
+  last_heartbeat_at,
+  current_tab_id,
+  created_at,
+  updated_at
+) ON TABLE users TO anon, authenticated;
+
+GRANT SELECT (
+  id,
+  username,
+  role,
+  parent_id,
+  is_active,
+  is_pinned,
+  created_at,
+  updated_at
+) ON TABLE admins TO anon, authenticated;
+
+DO $$
+DECLARE
+  v_function record;
+BEGIN
+  FOR v_function IN
+    SELECT p.oid::regprocedure AS signature
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname IN (
+        'adjust_wallet_balance',
+        'process_customer_service_tip',
+        'process_pending_orders',
+        'safe_update_wallet_balance',
+        'auto_fix_commission_inconsistencies',
+        'auto_repair_commission_batch',
+        'daily_commission_integrity_check',
+        'validate_commission_integrity',
+        'set_employee_session',
+        'clear_employee_session',
+        'update_employee_heartbeat',
+        'recalculate_all_users_total_income',
+        'recalculate_user_total_income'
+      )
+  LOOP
+    EXECUTE format(
+      'REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, anon, authenticated',
+      v_function.signature
+    );
+  END LOOP;
+END;
+$$;
