@@ -2675,10 +2675,8 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </div>
                 ) : conversations.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center px-8 text-center">
-                    <div className="mb-5 flex h-[76px] w-[76px] items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-slate-200" aria-hidden="true">
-                      <div className="flex h-[56px] w-[56px] items-center justify-center rounded-full bg-blue-50">
-                        <MessageCircle className="h-7 w-7 text-blue-500" strokeWidth={1.75} />
-                      </div>
+                    <div className="mb-5 flex h-[64px] w-[64px] items-center justify-center rounded-full bg-blue-100/70" aria-hidden="true">
+                      <MessageCircle className="h-7 w-7 text-blue-500" strokeWidth={1.75} />
                     </div>
                     <p className="text-[15px] font-semibold leading-6 text-blue-900">{t.customerService.noConversations}</p>
                     <p className="mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.customerService.noConversationsDesc}</p>
