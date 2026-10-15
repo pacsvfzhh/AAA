@@ -1142,11 +1142,13 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                               </div>
                             </div>
                             <div className="min-w-0 flex-1">
-                              <span className={`mb-[4px] flex items-center gap-[6px] truncate pr-[24px] text-[11px] font-bold uppercase leading-[13px] tracking-[0.14em] ${toastIsReward ? 'text-amber-50' : 'text-emerald-100'}`}>
-                                <span className="h-[6px] w-[6px] flex-shrink-0 rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.9)]" aria-hidden="true"></span>
-                                <span className="truncate">{toastIsReward ? 'Performance Reward' : t.header.newMessage}</span>
-                              </span>
-                              <h3 className="mb-[4px] line-clamp-2 break-words pr-[24px] text-[15px] font-extrabold leading-[1.3] tracking-tight text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.25)] sm:text-[17px]">
+                              <div className="mb-[5px] flex items-center gap-[8px] pr-[24px]">
+                                <span className={`h-[18px] w-[4px] flex-shrink-0 rounded-full bg-gradient-to-b ${toastIsReward ? 'from-white to-amber-100/50' : 'from-white to-emerald-100/50'}`} aria-hidden="true"></span>
+                                <span className="truncate text-[17px] font-extrabold leading-[22px] tracking-[0.01em] text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.28)] sm:text-[19px] sm:leading-[24px]">
+                                  {toastIsReward ? 'Performance Reward' : t.header.newMessage}
+                                </span>
+                              </div>
+                              <h3 className="mb-[3px] line-clamp-2 break-words text-[13px] font-semibold leading-[1.35] text-white/95 sm:text-[14px]">
                                 {latestMessage.summaryCount
                                   ? t.header.newMessagesSummary.replace('{n}', String(latestMessage.summaryCount))
                                   : latestMessage.title}
@@ -1162,15 +1164,12 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                           {/* Footer */}
                           <div className={`flex items-center justify-between gap-[8px] px-[14px] py-[8px] sm:px-[16px] sm:py-[10px] ${toastIsReward ? 'bg-amber-900/25' : 'bg-emerald-950/30'}`}>
                             <div className="flex min-w-0 items-center gap-[8px]">
-                              <span
-                                role="img"
-                                aria-label={toastPriorityLabel}
-                                className={`flex h-[28px] w-[28px] flex-shrink-0 items-center justify-center rounded-full shadow-md ring-2 ring-white/60 ${toastPriorityStyle}`}
-                              >
-                                {latestMessage.priority === 'urgent' ? <AlertCircle className="h-[16px] w-[16px]" strokeWidth={2.5} aria-hidden="true" />
-                                  : latestMessage.priority === 'high' ? <Zap className="h-[16px] w-[16px]" strokeWidth={2.5} aria-hidden="true" />
-                                  : latestMessage.priority === 'normal' ? <Shield className="h-[16px] w-[16px]" strokeWidth={2.5} aria-hidden="true" />
-                                  : <Radio className="h-[16px] w-[16px]" strokeWidth={2.5} aria-hidden="true" />}
+                              <span className={`inline-flex h-[24px] flex-shrink-0 items-center gap-[5px] rounded-full px-[9px] text-[11px] font-bold leading-none shadow-md ring-1 ring-white/50 ${toastPriorityStyle}`}>
+                                {latestMessage.priority === 'urgent' ? <AlertCircle className="h-[13px] w-[13px]" strokeWidth={2.75} aria-hidden="true" />
+                                  : latestMessage.priority === 'high' ? <Zap className="h-[13px] w-[13px]" strokeWidth={2.75} aria-hidden="true" />
+                                  : latestMessage.priority === 'normal' ? <Shield className="h-[13px] w-[13px]" strokeWidth={2.75} aria-hidden="true" />
+                                  : <Radio className="h-[13px] w-[13px]" strokeWidth={2.75} aria-hidden="true" />}
+                                <span className="whitespace-nowrap">{toastPriorityLabel}</span>
                               </span>
                               {toastIsReward && (
                                 <span className="min-w-0 truncate">
