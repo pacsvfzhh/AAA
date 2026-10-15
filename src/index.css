@@ -2539,6 +2539,8 @@ button.employee-header-action {
 :root { --dispatch-reserve: 24px; }
 @media (max-height: 640px) { :root { --dispatch-reserve: 56px; } }
 
+.dispatch-work-panel { isolation: isolate; }
+
 @media (max-width: 599px) {
   .dispatch-work-panel {
     --dispatch-working-height: min(580px, max(340px, calc(100svh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - var(--dispatch-reserve, 24px))));
@@ -2548,6 +2550,7 @@ button.employee-header-action {
     height: var(--dispatch-idle-height);
     min-height: 0;
     contain: layout paint;
+    transform: translateZ(0);
   }
 
   .dispatch-work-panel[data-expanded="true"] {
@@ -3198,16 +3201,6 @@ button.employee-header-action {
   to { opacity: 0; transform: translateY(-8px); }
 }
 
-.dispatch-start-enter {
-  animation: dispatchStartEnter 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@keyframes dispatchStartEnter {
-  0% { opacity: 0; transform: translateY(10px); }
-  45% { opacity: 1; }
-  100% { opacity: 1; transform: none; }
-}
-
 button.dispatch-start-cta {
   box-sizing: border-box;
   height: 60px !important;
@@ -3311,8 +3304,7 @@ button.dispatch-start-cta:active:not(:disabled) {
 
 /* The veil already covers the swap; moving text underneath shows up as a shake as it lifts. */
 @media (max-width: 1023px) {
-  .dispatch-waiting-enter > *,
-  .dispatch-start-enter { animation: none; }
+  .dispatch-waiting-enter > * { animation: none; }
   .dispatch-start-exit { animation-name: dispatchStartFadeExit !important; }
   .dispatch-veil .dispatch-veil-stage { animation-name: dispatchStartOverlayIn; }
 }
@@ -3569,6 +3561,16 @@ button.dispatch-start-cta:active:not(:disabled) {
 .dispatch-veil-out {
   animation: dispatchVeilOut 760ms cubic-bezier(0.4, 0, 0.2, 1) 380ms both;
 }
+
+.dispatch-veil-stop.dispatch-veil-out {
+  animation: dispatchVeilOut var(--dispatch-stop-reveal-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.dispatch-veil-stop .dispatch-veil-sweep { display: none; }
+.dispatch-veil.dispatch-veil-stop .dispatch-veil-stage { animation: none; }
+.dispatch-veil-stop .dispatch-veil-blob,
+.dispatch-veil-stop .dispatch-veil-ship,
+.dispatch-veil-stop .dispatch-veil-wave { animation-play-state: paused; }
 
 @keyframes dispatchVeilIn {
   from { opacity: 0; }
@@ -4010,7 +4012,6 @@ button.dispatch-start-cta:active:not(:disabled) {
   .dispatch-veil-wave { animation: none; }
   .dispatch-decor-fade,
   .dispatch-waiting-exit,
-  .dispatch-start-enter,
   .dispatch-start-overlay,
   .dispatch-waiting-enter > * { animation: none; }
   .dispatch-start-exit,

@@ -132,6 +132,8 @@ const ACCEPT_REVEAL_HOLD_MS = 1100;
 const ACCEPT_REVEAL_OUT_MS = 900;
 // Desktop/tablet Start: the play icon spins and dissolves into specks before the standby content leaves.
 const START_CHARGE_MS = 900;
+const STOP_PANEL_RESIZE_MS = 1400;
+const STOP_VEIL_REVEAL_MS = 700;
 
 const ACCEPT_GHOST_BADGE =
   '<span class="dispatch-ghost-tint"></span><span class="dispatch-ghost-ring"></span><span class="dispatch-ghost-ring dispatch-ghost-ring-2"></span>' +
@@ -312,7 +314,6 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const [startExiting, setStartExiting] = useState(false);
   const [waitingEnterAnim, setWaitingEnterAnim] = useState(false);
   const [stopExiting, setStopExiting] = useState(false);
-  const [startEnterAnim, setStartEnterAnim] = useState(false);
   const [panelVeil, setPanelVeil] = useState<'in' | 'out' | null>(null);
   const [panelVeilKind, setPanelVeilKind] = useState<'start' | 'stop'>('start');
   const [startConnect, setStartConnect] = useState<'connecting' | 'connected' | 'failed' | null>(null);
@@ -327,7 +328,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     const timer = setTimeout(() => setStartPanelExpanded(true), START_CONNECT_VEIL_FADE_MS);
     return () => clearTimeout(timer);
   }, [startConnect]);
-  const panelResizing = startExiting || waitingEnterAnim || stopExiting || startEnterAnim || startConnect !== null;
+  const panelResizing = startExiting || waitingEnterAnim || stopExiting || startConnect !== null;
   const [panelVeilKey, setPanelVeilKey] = useState(0);
   const panelVeilTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealPanel = () => {
@@ -400,13 +401,15 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const acceptGhostHostRef = useRef<HTMLDivElement>(null);
   const standbySceneRef = useRef<SVGSVGElement>(null);
   const panelHeightRef = useRef<number | null>(null);
+  const panelResizeAnimationRef = useRef<Animation | null>(null);
   const mobilePanelExpanded = session.isWorking || Boolean(currentOrder) || startPanelExpanded || startConnect === 'connected';
 
   useLayoutEffect(() => {
     const panel = panelRef.current;
-    if (!panel || viewportWidth >= 600) return;
+    if (!panel) return;
     const rememberHeight = () => {
-      if (panel.offsetHeight > 0) panelHeightRef.current = panel.offsetHeight;
+      const height = parseFloat(getComputedStyle(panel).height);
+      if (height > 0) panelHeightRef.current = height;
     };
     rememberHeight();
     const observer = new ResizeObserver(rememberHeight);
@@ -416,19 +419,24 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
   useLayoutEffect(() => {
     const panel = panelRef.current;
-    if (!panel || viewportWidth >= 600) return;
+    if (!panel || (viewportWidth >= 600 && !stopExiting)) return;
     const previous = panelHeightRef.current;
-    const next = panel.offsetHeight;
-    if (next <= 0) return;
+    const next = parseFloat(getComputedStyle(panel).height);
+    if (!(next > 0)) return;
     panelHeightRef.current = next;
     if (!previous || Math.abs(previous - next) < 1 || !panelResizing || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-    const timing = { duration: 1000, easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)' };
+    const collapsing = stopExiting && next < previous;
+    const timing = {
+      duration: collapsing ? STOP_PANEL_RESIZE_MS : 1000,
+      easing: collapsing ? 'cubic-bezier(0.4, 0, 0.2, 1)' : 'cubic-bezier(0.25, 0.1, 0.25, 1)',
+    };
     const ratio = previous / next;
     const panelAnimation = panel.animate([
-      { transform: `scaleY(${ratio})`, transformOrigin: 'top center' },
-      { transform: 'scaleY(1)', transformOrigin: 'top center' },
+      { transform: `translateZ(0) scaleY(${ratio})`, transformOrigin: 'top center' },
+      { transform: 'translateZ(0) scaleY(1)', transformOrigin: 'top center' },
     ], timing);
+    panelResizeAnimationRef.current = panelAnimation;
     const animations = [panelAnimation];
 
     // Surfaces follow the panel's full height; only foreground content needs inverse scaling.
@@ -453,8 +461,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         panelHeightRef.current = previous + (next - previous) * progress;
       }
       animations.forEach(animation => animation.cancel());
+      if (panelResizeAnimationRef.current === panelAnimation) panelResizeAnimationRef.current = null;
     };
-  }, [mobilePanelExpanded, panelResizing, viewportWidth]);
+  }, [mobilePanelExpanded, panelResizing, stopExiting, viewportWidth]);
 
   useEffect(() => {
     const scene = standbySceneRef.current;
@@ -1788,7 +1797,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         setStopExiting(true);
         setPanelVeilKind('stop');
         setPanelVeil('in');
-        await new Promise(resolve => setTimeout(resolve, 320));
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        const coverAnimations = panelRef.current?.querySelector('.dispatch-veil')?.getAnimations() || [];
+        await Promise.all(coverAnimations.map(animation => animation.finished.catch(() => {})));
 
         if (!componentMountedRef.current || lifecycleGenerationRef.current !== stopGeneration) {
           if (componentMountedRef.current) {
@@ -1797,13 +1808,6 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           }
           return;
         }
-
-        revealPanel();
-        setStartEnterAnim(true);
-        setStopExiting(false);
-        setTimeout(() => {
-          if (componentMountedRef.current) setStartEnterAnim(false);
-        }, 1250);
 
         // Now update the session state to trigger UI change
         setCurrentOrder(null);
@@ -1823,6 +1827,17 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         if (onStatusChange) {
           onStatusChange(false, false);
         }
+
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        await panelResizeAnimationRef.current?.finished.catch(() => {});
+        if (!componentMountedRef.current || lifecycleGenerationRef.current !== stopGeneration) return;
+
+        setPanelVeil('out');
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        const revealAnimations = panelRef.current?.querySelector('.dispatch-veil')?.getAnimations() || [];
+        await Promise.all(revealAnimations.map(animation => animation.finished.catch(() => {})));
+        if (!componentMountedRef.current || lifecycleGenerationRef.current !== stopGeneration) return;
+        setPanelVeil(null);
       }
 
       // Reload today's orders in background (non-blocking for better UX)
@@ -2512,6 +2527,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
   const waitingPanelActive = session.isWorking && !currentOrder && !(isTransitioning && transitionType === 'start');
   const startButtonCharged = startCharging || (isTransitioning && transitionType === 'start' && startChoreo);
+  const startButtonBusy = isProcessing && transitionType !== 'end';
   const acceptRevealPhase = acceptReveal && currentOrder?.status === 'accepted' && acceptReveal.orderId === currentOrder.id ? acceptReveal.phase : null;
 
   useEffect(() => {
@@ -2879,6 +2895,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           <DispatchVeil
             key={panelVeilKey}
             phase={panelVeil}
+            revealDuration={panelVeilKind === 'stop' ? STOP_VEIL_REVEAL_MS : undefined}
             label={panelVeilKind === 'start' ? t.dispatch.startingWork : t.dispatch.endingSession}
             connect={panelVeilKind === 'start' && startConnect ? {
               state: startConnect,
@@ -2953,14 +2970,14 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           </>
         )}
         {/* Top accent border */}
-        <div className={`absolute top-0 left-0 right-0 rounded-t-2xl md:rounded-t-3xl transition-all duration-500 ${panelVeil ? 'opacity-0' : ''} ${
+        <div className={`absolute top-0 left-0 right-0 rounded-t-2xl md:rounded-t-3xl ${stopExiting ? 'transition-none' : 'transition-all duration-500'} ${panelVeil && !stopExiting ? 'opacity-0' : ''} ${
           waitingPanelActive ? 'dispatch-waiting-accent z-[2] h-1.5 bg-gradient-to-r from-blue-600 via-sky-400 to-blue-500 shadow-[0_3px_10px_rgba(37,99,235,0.3)]' : currentOrder?.status === 'pending' ? 'dispatch-waiting-accent dispatch-order-accent z-[2] h-1.5 bg-gradient-to-r from-cyan-400 via-sky-300 to-amber-400 shadow-[0_3px_12px_rgba(34,211,238,0.3)]' : currentOrder?.status === 'accepted' ? (hasTimeout ? 'dispatch-waiting-accent dispatch-progress-accent dispatch-progress-accent--alert z-20 h-1.5 bg-gradient-to-r from-rose-500 via-orange-400 to-rose-500 shadow-[0_3px_10px_rgba(244,63,94,0.35)]' : 'dispatch-waiting-accent dispatch-progress-accent z-20 h-1.5 bg-gradient-to-r from-blue-600 via-sky-400 to-indigo-500 shadow-[0_3px_10px_rgba(37,99,235,0.3)]') : 'h-1 bg-gradient-to-r from-[#12356d] via-blue-600 to-cyan-400'
         }`}></div>
 
         {/* Content */}
         <div className={`dispatch-panel-content relative z-10 ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col'}`}>
           <SmoothHeight
-            animate={panelResizing && viewportWidth >= 600}
+            animate={!stopExiting && panelResizing && viewportWidth >= 600 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches}
             duration={1000}
             outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${!currentOrder ? 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col' : ''}`}
             innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : !currentOrder ? 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col' : ''}
@@ -3534,7 +3551,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
             )}
             {/* DESKTOP LAYOUT */}
             <div className="hidden md:grid grid-cols-1 gap-4 md:gap-10">
-              <div className={`flex items-center justify-center ${startEnterAnim ? 'dispatch-start-enter' : ''}`}>
+              <div className="flex items-center justify-center">
               {(!session.isWorking || (isTransitioning && transitionType === 'start')) ? (
                 <button
                   onClick={handleStartWork}
@@ -3805,7 +3822,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               aria-hidden={waitingPanelActive ? true : undefined}
             >
               {/* Mobile Start View - Enriched */}
-                <div className={`flex min-h-0 flex-1 flex-col space-y-3 short:space-y-2 ${startEnterAnim ? 'dispatch-start-enter' : ''} ${isTransitioning && transitionType === 'start' ? 'dispatch-standby-leaving' : ''}`}>
+                <div className={`flex min-h-0 flex-1 flex-col space-y-3 short:space-y-2 ${isTransitioning && transitionType === 'start' ? 'dispatch-standby-leaving' : ''}`}>
                   {/* Standby visual area */}
                   <div className="relative -mx-4 flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 short:justify-start">
                     {/* Background gradient */}
@@ -3973,12 +3990,12 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     type="button"
                     onClick={handleStartWork}
                     disabled={isProcessing}
-                    className={`dispatch-start-cta relative flex w-full items-center justify-center gap-3 overflow-hidden rounded-2xl text-white ${isProcessing ? 'cursor-wait' : ''}`}
+                    className={`dispatch-start-cta relative flex w-full items-center justify-center gap-3 overflow-hidden rounded-2xl text-white ${startButtonBusy ? 'cursor-wait' : ''}`}
                     style={{ WebkitTapHighlightColor: 'transparent' }}
                   >
                     <span className="dispatch-start-cta-shine" aria-hidden="true" />
                     <span className="dispatch-start-cta-icon">
-                      {isProcessing ? (
+                      {startButtonBusy ? (
                         <span className="h-[18px] w-[18px] animate-spin rounded-full border-2 border-blue-200 border-t-blue-600 keep-animation" />
                       ) : (
                         <Play className="h-[18px] w-[18px] translate-x-[1px]" fill="currentColor" />
@@ -3986,8 +4003,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     </span>
                     {/* Both labels share one grid cell so the row width (and the centered icon) never changes */}
                     <span className="relative grid justify-items-center text-[17px] font-extrabold tracking-wide" style={{ textShadow: '0 1px 2px rgba(15,23,80,0.35)' }}>
-                      <span className={`col-start-1 row-start-1 ${isProcessing ? 'invisible' : ''}`} aria-hidden={isProcessing || undefined}>{t.dispatch.startProcessing}</span>
-                      <span className={`col-start-1 row-start-1 ${isProcessing ? '' : 'invisible'}`} aria-hidden={!isProcessing || undefined}>{t.dispatch.starting}</span>
+                      <span className={`col-start-1 row-start-1 ${startButtonBusy ? 'invisible' : ''}`} aria-hidden={startButtonBusy || undefined}>{t.dispatch.startProcessing}</span>
+                      <span className={`col-start-1 row-start-1 ${startButtonBusy ? '' : 'invisible'}`} aria-hidden={!startButtonBusy || undefined}>{t.dispatch.starting}</span>
                     </span>
                   </button>
                   </div>

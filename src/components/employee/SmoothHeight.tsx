@@ -26,7 +26,8 @@ export default function SmoothHeight({ animate, outerClassName = '', innerClassN
       return;
     }
     const measure = () => {
-      const next = inner.offsetHeight;
+      // CSS zoom scales viewport rectangles, not the height assigned back to layout.
+      const next = parseFloat(getComputedStyle(inner).height);
       if (next > 0) setHeight(next + verticalPadding(outer));
     };
     measure();

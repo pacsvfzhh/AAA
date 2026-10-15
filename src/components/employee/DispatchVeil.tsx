@@ -13,6 +13,7 @@ interface DispatchVeilProps {
   phase: 'in' | 'out';
   label: string;
   connect?: DispatchVeilConnect;
+  revealDuration?: number;
 }
 
 // From the veil mounting: the first step lands as the stage fades in (index.css); OrderDispatch decides when
@@ -107,7 +108,7 @@ function useConnectStep(state: DispatchVeilConnect['state'] | undefined) {
   return step;
 }
 
-export default function DispatchVeil({ phase, label, connect }: DispatchVeilProps) {
+export default function DispatchVeil({ phase, label, connect, revealDuration }: DispatchVeilProps) {
   const step = useConnectStep(connect?.state);
   const veilRef = useRef<HTMLDivElement>(null);
   const [stageHeight, setStageHeight] = useState<number | null>(null);
@@ -135,13 +136,14 @@ export default function DispatchVeil({ phase, label, connect }: DispatchVeilProp
     'dispatch-veil',
     phase === 'in' ? 'dispatch-veil-in' : 'dispatch-veil-out',
     connect ? 'dispatch-veil-connect' : '',
+    revealDuration !== undefined ? 'dispatch-veil-stop' : '',
     settled ? 'is-settled' : '',
     state === 'connected' ? 'is-connected' : '',
     introDone && phase === 'in' ? 'is-steady' : '',
   ].filter(Boolean).join(' ');
 
   return (
-    <div ref={veilRef} className={veilClass} aria-hidden="true">
+    <div ref={veilRef} className={veilClass} style={revealDuration !== undefined ? { '--dispatch-stop-reveal-duration': `${revealDuration}ms` } as CSSProperties : undefined} aria-hidden="true">
       <span className="dispatch-veil-blob dispatch-veil-blob-1" />
       <span className="dispatch-veil-blob dispatch-veil-blob-2" />
       <span className="dispatch-veil-blob dispatch-veil-blob-3" />
