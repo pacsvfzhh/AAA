@@ -478,21 +478,18 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   <div className="absolute bottom-[24%] right-9 h-10 w-10 -rotate-6 rounded-xl bg-blue-300/25"></div>
                   <div className="absolute -left-10 top-1/2 h-[18px] w-[190px] -rotate-[24deg] rounded-full bg-white/50"></div>
                 </div>
-                <div className="relative z-10 mb-5 h-[72px] w-[104px]" aria-hidden="true">
-                  <div className="absolute left-0 top-0 flex h-[40px] w-[76px] items-center gap-[7px] rounded-2xl bg-blue-200/90 px-2.5">
-                    <span className="h-[18px] w-[18px] flex-shrink-0 rounded-full bg-white/80"></span>
-                    <span className="flex flex-1 flex-col gap-[5px]">
-                      <span className="h-[3px] w-full rounded-full bg-white/80"></span>
-                      <span className="h-[3px] w-2/3 rounded-full bg-white/80"></span>
-                    </span>
-                  </div>
-                  <div className="absolute bottom-0 right-0 flex h-[40px] w-[76px] items-center gap-[7px] rounded-2xl bg-blue-500 px-2.5 shadow-sm shadow-blue-500/20">
-                    <span className="h-[18px] w-[18px] flex-shrink-0 rounded-full bg-white/80"></span>
-                    <span className="flex flex-1 flex-col gap-[5px]">
-                      <span className="h-[3px] w-full rounded-full bg-white/80"></span>
-                      <span className="h-[3px] w-1/2 rounded-full bg-white/80"></span>
-                    </span>
-                  </div>
+                <div className="relative z-10 mb-5 h-[72px] w-[120px]" aria-hidden="true">
+                  <span className="absolute left-[56px] top-0 h-[6px] w-[8px] rounded-full bg-blue-600"></span>
+                  <span className="absolute left-[40px] top-[5px] h-[40px] w-[40px] rounded-t-full bg-blue-500">
+                    <span className="absolute left-[8px] top-[8px] h-[18px] w-[4px] rounded-full bg-white/45"></span>
+                  </span>
+                  <span className="absolute left-[32px] top-[44px] h-[9px] w-[56px] rounded-full bg-blue-600"></span>
+                  <span className="absolute left-[55px] top-[57px] h-[10px] w-[10px] rounded-full bg-blue-500"></span>
+                  <span className="absolute left-[94px] top-[14px] h-[24px] w-[9px] rounded-r-full border-2 border-l-0 border-blue-400/80"></span>
+                  <span className="absolute left-[105px] top-[8px] h-[36px] w-[11px] rounded-r-full border-2 border-l-0 border-blue-300/70"></span>
+                  <span className="absolute left-[17px] top-[14px] h-[24px] w-[9px] rounded-l-full border-2 border-r-0 border-blue-400/80"></span>
+                  <span className="absolute left-[4px] top-[8px] h-[36px] w-[11px] rounded-l-full border-2 border-r-0 border-blue-300/70"></span>
+                  <span className="absolute left-[70px] top-[2px] h-[14px] w-[14px] rounded-full bg-rose-400"></span>
                 </div>
                 <p className="relative z-10 text-[14px] font-semibold leading-6 text-blue-900">{t.messages.noMessages}</p>
                 <p className="relative z-10 mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.messages.emptyDesc}</p>
