@@ -2664,8 +2664,29 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       )}
 
       {/* Notification System - portaled so the fixed stack never becomes a space-y sibling that adds margin above the panel */}
-      {notifications.length > 0 && createPortal(
+      {(notifications.length > 0 || (session.isWorking && dispatchPause)) && createPortal(
         <div className="dispatch-notice-stack pointer-events-none fixed inset-x-3 z-[60] flex flex-col gap-2.5 sm:inset-x-auto sm:right-4 sm:w-[380px]">
+          {session.isWorking && dispatchPause && (() => {
+            const tone = dispatchPause.type === 'error' ? NOTICE_TONES.error : NOTICE_TONES.warning;
+            const Icon = tone.icon;
+            // Chinese and Japanese sentences end in a full-width stop and are not followed by a space
+            const pauseMessage = [dispatchPause.type === 'error' ? t.dispatch.pausedUnavailable : t.dispatch.pausedNoOrders, t.dispatch.pausedRetry].map(text => language === 'zh' || language === 'ja' ? text : ` ${text}`).join('').trim();
+            return (
+              <div
+                role="status"
+                className={`dispatch-notice pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-[20px] bg-gradient-to-br via-white to-white py-3.5 pl-3.5 pr-4 shadow-[0_2px_6px_-2px_rgba(15,23,42,0.08),0_22px_44px_-20px_rgba(15,23,42,0.35)] ring-1 ${tone.surface}`}
+              >
+                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-lg ${tone.badge}`} aria-hidden="true">
+                  <Icon className="h-5 w-5" strokeWidth={2.25} />
+                </span>
+                <div className="min-w-0 flex-1 pt-0.5">
+                  <h4 className="text-balance text-[15px] font-bold leading-snug text-slate-900">{t.dispatch.pausedTitle.replace(/[。.]$/, '')}</h4>
+                  <p className="mt-1 text-[13px] leading-relaxed text-slate-600">{pauseMessage}</p>
+                </div>
+                <span className={`absolute inset-x-0 bottom-0 h-[3px] opacity-60 ${tone.bar}`} aria-hidden="true" />
+              </div>
+            );
+          })()}
           {notifications.map((notif) => {
             const tone = NOTICE_TONES[notif.type];
             const Icon = tone.icon;
@@ -2780,12 +2801,6 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         document.body
       )}
 
-      {session.isWorking && dispatchPause && (
-        <div role="status" className={`rounded-xl border px-4 py-3 text-sm font-medium ${dispatchPause.type === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-          {/* Chinese and Japanese sentences end in a full-width stop and are not followed by a space */}
-          <strong>{t.dispatch.pausedTitle}</strong>{[dispatchPause.type === 'error' ? t.dispatch.pausedUnavailable : t.dispatch.pausedNoOrders, t.dispatch.pausedRetry].map(text => language === 'zh' || language === 'ja' ? text : ` ${text}`).join('')}
-        </div>
-      )}
 
       {/* Work Control Panel - Premium Blue/White Design */}
       <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]' : 'h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
