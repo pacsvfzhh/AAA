@@ -2973,17 +2973,23 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
               </div>
 
               <div
+                className="relative min-h-0 flex-1 overflow-hidden"
+                style={{
+                  background: selectedCustomer?.is_super
+                    ? 'linear-gradient(160deg, #fffbeb 0%, #fef3c7 30%, #fff7ed 60%, #fffbeb 100%)'
+                    : 'linear-gradient(160deg, #f0f4f8 0%, #e8eef6 30%, #eef2ff 60%, #f0f4f8 100%)'
+                }}
+              >
+              <PanelColorBlocks tone={selectedCustomer?.is_super ? 'gold' : 'blue'} />
+              <div
                 ref={messagesContainerCallbackRef}
-                className="chat-messages-container relative flex-1 flex flex-col-reverse"
+                className="chat-messages-container relative h-full flex flex-col-reverse"
                 style={{
                   scrollbarWidth: 'thin',
                   scrollbarColor: 'rgba(148, 163, 184, 0.4) transparent',
                   WebkitOverflowScrolling: 'touch',
                   overflowY: 'auto',
                   overflowX: 'hidden',
-                  background: selectedCustomer?.is_super
-                    ? 'linear-gradient(160deg, #fffbeb 0%, #fef3c7 30%, #fff7ed 60%, #fffbeb 100%)'
-                    : 'linear-gradient(160deg, #f0f4f8 0%, #e8eef6 30%, #eef2ff 60%, #f0f4f8 100%)'
                 }}
               >
                {loadingMessages && (
@@ -3123,6 +3129,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </>
                 )}
                </div>
+              </div>
               </div>
 
               <form onSubmit={handleSendMessage} className="customer-service-composer relative border-t border-gray-200 bg-white p-3 md:p-4">
