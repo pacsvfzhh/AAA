@@ -890,7 +890,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     : t.messages.priorityLow;
   const toastPriorityStyle = latestMessage?.priority === 'urgent' ? 'bg-rose-500 text-white'
     : latestMessage?.priority === 'high' ? 'bg-yellow-300 text-amber-900'
-    : latestMessage?.priority === 'normal' ? (toastIsReward ? 'bg-white text-amber-700' : 'bg-white text-emerald-700')
+    : latestMessage?.priority === 'normal' ? (toastIsReward ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')
     : 'bg-sky-100 text-sky-700';
 
   return (
@@ -1144,7 +1144,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                             <div className="min-w-0 flex-1">
                               <div className="mb-[5px] flex items-center gap-[8px] pr-[24px]">
                                 <span className={`h-[18px] w-[4px] flex-shrink-0 rounded-full bg-gradient-to-b ${toastIsReward ? 'from-white to-amber-100/50' : 'from-white to-emerald-100/50'}`} aria-hidden="true"></span>
-                                <span className="truncate text-[17px] font-extrabold leading-[22px] tracking-[0.01em] text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.28)] sm:text-[19px] sm:leading-[24px]">
+                                <span className="truncate text-[15px] font-extrabold leading-[20px] tracking-[0.01em] text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.28)] sm:text-[16px] sm:leading-[22px]">
                                   {toastIsReward ? 'Performance Reward' : t.header.newMessage}
                                 </span>
                               </div>
