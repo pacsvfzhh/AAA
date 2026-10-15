@@ -1106,13 +1106,13 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                         style={{ right: toastPos?.arrow ?? 28 }}
                       ></div>
 
-                      <div className={`relative overflow-hidden rounded-[18px] border shadow-2xl ring-1 ${toastIsReward ? 'border-amber-300/30 bg-gradient-to-br from-amber-500 via-yellow-500 to-orange-500 ring-amber-300/50' : 'border-emerald-500/20 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-600 ring-emerald-400/40'}`}>
+                      <div className={`relative overflow-hidden rounded-[16px] border shadow-2xl ring-1 ${toastIsReward ? 'border-amber-300/30 bg-gradient-to-br from-amber-500 via-yellow-500 to-orange-500 ring-amber-300/50' : 'border-emerald-500/20 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-600 ring-emerald-400/40'}`}>
                         <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-                          <div className={`absolute -right-8 -top-8 h-[104px] w-[104px] rounded-full ${toastIsReward ? 'bg-yellow-300/30' : 'bg-cyan-300/25'}`}></div>
-                          <div className={`absolute -bottom-8 -left-8 h-[88px] w-[88px] rounded-full ${toastIsReward ? 'bg-orange-400/30' : 'bg-teal-300/30'}`}></div>
-                          <div className={`absolute -right-10 top-[46%] h-[22px] w-[150px] -rotate-[28deg] rounded-full ${toastIsReward ? 'bg-white/15' : 'bg-white/10'}`}></div>
-                          <div className="absolute left-[44%] top-[14px] h-[10px] w-[10px] rotate-45 rounded-[2px] bg-white/30"></div>
-                          <div className={`absolute bottom-[58px] right-[52px] h-[8px] w-[8px] rounded-full ${toastIsReward ? 'bg-amber-100/60' : 'bg-cyan-200/60'}`}></div>
+                          <div className={`absolute -right-8 -top-8 h-[88px] w-[88px] rounded-full ${toastIsReward ? 'bg-yellow-300/30' : 'bg-cyan-300/25'}`}></div>
+                          <div className={`absolute -bottom-8 -left-8 h-[72px] w-[72px] rounded-full ${toastIsReward ? 'bg-orange-400/30' : 'bg-teal-300/30'}`}></div>
+                          <div className={`absolute -right-10 top-[44%] h-[18px] w-[130px] -rotate-[28deg] rounded-full ${toastIsReward ? 'bg-white/15' : 'bg-white/10'}`}></div>
+                          <div className="absolute left-[44%] top-[10px] h-[8px] w-[8px] rotate-45 rounded-[2px] bg-white/30"></div>
+                          <div className={`absolute right-[58px] top-[16px] h-[6px] w-[6px] rounded-full ${toastIsReward ? 'bg-amber-100/60' : 'bg-cyan-200/60'}`}></div>
                         </div>
 
                         {/* Top accent line */}
@@ -1124,61 +1124,54 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                           className="relative cursor-pointer touch-manipulation"
                           style={{ WebkitTapHighlightColor: 'transparent' }}
                         >
-                          <div className="px-[12px] pt-[12px] sm:px-[16px] sm:pt-[14px]">
-                            {/* Header row */}
-                            <div className="mb-[10px] flex items-center gap-[10px] sm:gap-[12px]">
-                              <div className="relative flex-shrink-0">
-                                <div className="flex h-[36px] w-[36px] items-center justify-center rounded-xl border border-white/20 bg-white/15 shadow-inner ring-1 ring-white/10">
-                                  {toastIsReward ? <Gift className="h-[18px] w-[18px] text-white" strokeWidth={2.2} /> : <Bell className="h-[18px] w-[18px] text-white" strokeWidth={2.2} />}
-                                </div>
-                                <div className="absolute -right-1.5 -top-1.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-white px-[3px] shadow-md">
-                                  <span className={`text-[10px] font-black leading-none ${toastIsReward ? 'text-amber-600' : 'text-emerald-600'}`}>{latestMessage.summaryCount ? (latestMessage.summaryCount > 99 ? '99+' : latestMessage.summaryCount) : 1}</span>
-                                </div>
+                          <div className="flex items-center gap-[10px] px-[12px] py-[8px] sm:gap-[12px] sm:px-[16px] sm:py-[10px]">
+                            <div className="relative flex-shrink-0">
+                              <div className="flex h-[34px] w-[34px] items-center justify-center rounded-xl border border-white/20 bg-white/15 shadow-inner ring-1 ring-white/10 sm:h-[36px] sm:w-[36px]">
+                                {toastIsReward ? <Gift className="h-[18px] w-[18px] text-white" strokeWidth={2.2} /> : <Bell className="h-[18px] w-[18px] text-white" strokeWidth={2.2} />}
                               </div>
-                              <div className="min-w-0 flex-1">
-                                <span className={`mb-[2px] block text-[11px] font-bold uppercase tracking-[0.12em] ${toastIsReward ? 'text-amber-50' : 'text-emerald-100'}`}>{toastIsReward ? 'Performance Reward' : t.header.newMessage}</span>
-                                <h3 className="truncate text-[13px] font-bold leading-tight text-white sm:text-[14px]">
-                                  {latestMessage.summaryCount
-                                    ? t.header.newMessagesSummary.replace('{n}', String(latestMessage.summaryCount))
-                                    : latestMessage.title}
-                                </h3>
+                              <div className="absolute -right-1.5 -top-1.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-white px-[3px] shadow-md">
+                                <span className={`text-[10px] font-black leading-none ${toastIsReward ? 'text-amber-600' : 'text-emerald-600'}`}>{latestMessage.summaryCount ? (latestMessage.summaryCount > 99 ? '99+' : latestMessage.summaryCount) : 1}</span>
                               </div>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); dismissMessageToast(); }}
-                                aria-label={t.common.close}
-                                className={`emp-close-btn flex h-[36px] w-[36px] flex-shrink-0 items-center justify-center rounded-full !min-h-0 !min-w-0 !p-0 text-white ring-1 ring-white/40 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
-                                  toastIsReward ? 'bg-amber-900/25 hover:bg-amber-900/40' : 'bg-emerald-950/30 hover:bg-emerald-950/45'
-                                }`}
-                                style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
-                              >
-                                <X className="h-[18px] w-[18px]" strokeWidth={2.75} aria-hidden="true" />
-                              </button>
                             </div>
-
-                            {toastIsReward && (
-                              <div className="mb-[10px] ml-[46px] flex items-center justify-between gap-[12px] rounded-lg border border-white/20 bg-white/15 px-[12px] py-[8px] sm:ml-[48px]">
-                                <span className="min-w-0 text-[11px] font-bold uppercase leading-tight tracking-wider text-white/85">{t.messages.rewardWalletLabel}</span>
-                                <span className="shrink-0 whitespace-nowrap text-[14px] font-black text-white">+{Number(latestMessage.rewardAmount || 0).toFixed(2)} {latestMessage.rewardCurrency}</span>
-                              </div>
-                            )}
-
-                            {/* Body */}
-                            <div className="mb-[12px] ml-[46px] rounded-lg border border-white/10 bg-white/10 p-[8px] backdrop-blur-sm sm:ml-[48px] sm:p-[10px]">
-                              <p className="line-clamp-2 text-[12px] leading-[1.5] text-white/90 sm:text-[13px]">
+                            <div className="min-w-0 flex-1">
+                              <span className={`block truncate text-[11px] font-bold uppercase leading-[14px] tracking-[0.12em] ${toastIsReward ? 'text-amber-50' : 'text-emerald-100'}`}>{toastIsReward ? 'Performance Reward' : t.header.newMessage}</span>
+                              <h3 className="truncate text-[13px] font-bold leading-[18px] text-white sm:text-[14px]">
+                                {latestMessage.summaryCount
+                                  ? t.header.newMessagesSummary.replace('{n}', String(latestMessage.summaryCount))
+                                  : latestMessage.title}
+                              </h3>
+                              <p className="line-clamp-1 text-[12px] leading-[16px] text-white/90 sm:line-clamp-2 sm:text-[13px] sm:leading-[18px]">
                                 {latestMessage.summaryCount
                                   ? t.header.newMessagesSummaryHint
                                   : latestMessage.content.replace(/<[^>]*>/g, '').slice(0, 80)}
                               </p>
                             </div>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); dismissMessageToast(); }}
+                              aria-label={t.common.close}
+                              className={`emp-close-btn flex h-[36px] w-[36px] flex-shrink-0 items-center justify-center rounded-full !min-h-0 !min-w-0 !p-0 text-white ring-1 ring-white/40 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                                toastIsReward ? 'bg-amber-900/25 hover:bg-amber-900/40' : 'bg-emerald-950/30 hover:bg-emerald-950/45'
+                              }`}
+                              style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                            >
+                              <X className="h-[18px] w-[18px]" strokeWidth={2.75} aria-hidden="true" />
+                            </button>
                           </div>
 
                           {/* Footer */}
-                          <div className={`flex items-center justify-between gap-[8px] px-[12px] py-[8px] sm:px-[16px] sm:py-[10px] ${toastIsReward ? 'bg-amber-900/25' : 'bg-emerald-950/30'}`}>
-                            <span className="min-w-0 truncate text-[11px] font-semibold text-white/90 sm:text-[12px]">
-                              {latestMessage.priority === 'urgent' ? t.header.urgent :
-                               latestMessage.priority === 'high' ? t.header.highPriority : t.header.normal}
-                            </span>
-                            <div className={`flex h-[32px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[10px] bg-white px-[14px] shadow-md transition-all hover:scale-105 active:scale-95 sm:h-[36px] ${toastIsReward ? 'text-amber-700' : 'text-emerald-700'}`}>
+                          <div className={`flex items-center justify-between gap-[8px] px-[12px] py-[6px] sm:px-[16px] sm:py-[8px] ${toastIsReward ? 'bg-amber-900/25' : 'bg-emerald-950/30'}`}>
+                            {toastIsReward ? (
+                              <span className="min-w-0 truncate">
+                                <span className="mr-[8px] hidden text-[11px] font-bold uppercase tracking-wider text-white/85 sm:inline">{t.messages.rewardWalletLabel}</span>
+                                <span className="whitespace-nowrap text-[13px] font-black text-white sm:text-[14px]">+{Number(latestMessage.rewardAmount || 0).toFixed(2)} {latestMessage.rewardCurrency}</span>
+                              </span>
+                            ) : (
+                              <span className="min-w-0 truncate text-[11px] font-semibold text-white/90 sm:text-[12px]">
+                                {latestMessage.priority === 'urgent' ? t.header.urgent :
+                                 latestMessage.priority === 'high' ? t.header.highPriority : t.header.normal}
+                              </span>
+                            )}
+                            <div className={`flex h-[28px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[9px] bg-white px-[12px] shadow-md transition-all hover:scale-105 active:scale-95 sm:h-[32px] sm:rounded-[10px] sm:px-[14px] ${toastIsReward ? 'text-amber-700' : 'text-emerald-700'}`}>
                               <span className="text-[12px] font-bold sm:text-[13px]">{t.header.view}</span>
                               <svg className="h-[11px] w-[11px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3} aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                             </div>
