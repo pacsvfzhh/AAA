@@ -431,8 +431,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     ], timing);
     const animations = [panelAnimation];
 
-    // Inverse scales keep text and artwork undistorted while the panel's clip expands.
-    for (const child of Array.from(panel.children) as HTMLElement[]) {
+    // Surfaces follow the panel's full height; only foreground content needs inverse scaling.
+    const foreground = panel.querySelectorAll<HTMLElement>(':scope > .dispatch-panel-content, :scope > .dispatch-idle-band, :scope > .dispatch-veil > .dispatch-veil-content');
+    for (const child of foreground) {
       const top = child.offsetTop;
       const frames = Array.from({ length: 61 }, (_, i) => {
         const inverse = 1 / (ratio + (1 - ratio) * i / 60);
@@ -458,12 +459,12 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   useEffect(() => {
     const scene = standbySceneRef.current;
     if (!scene) return;
-    if (isProcessing || session.isWorking || suppressAnimations) {
+    if (isProcessing || session.isWorking || panelResizing || suppressAnimations) {
       scene.pauseAnimations();
     } else {
       scene.unpauseAnimations();
     }
-  }, [isProcessing, session.isWorking, suppressAnimations, currentOrder]);
+  }, [isProcessing, session.isWorking, panelResizing, suppressAnimations, currentOrder]);
 
   const lastActivityRef = useRef<Date>(new Date());
   const pageHiddenAtRef = useRef<number | null>(null);
@@ -1780,6 +1781,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       } else {
         // Wait for animation to complete before updating UI state
         await animationPromise;
+        if (panelVeilTimerRef.current) clearTimeout(panelVeilTimerRef.current);
+        setPanelVeilKey(key => key + 1);
+        setStartConnect(null);
+        setWaitingEnterAnim(false);
         setStopExiting(true);
         setPanelVeilKind('stop');
         setPanelVeil('in');

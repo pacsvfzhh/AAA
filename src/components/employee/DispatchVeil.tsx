@@ -115,9 +115,9 @@ export default function DispatchVeil({ phase, label, connect }: DispatchVeilProp
 
   const [introDone, setIntroDone] = useState(false);
 
-  // Tablet/desktop panels grow from standby to waiting height under the veil; pin the stage so the ship doesn't drift.
+  // Keep the artwork fixed while the separate veil surface follows the panel's changing height.
   useLayoutEffect(() => {
-    if (connectMode && veilRef.current) setStageHeight(veilRef.current.clientHeight);
+    if (veilRef.current) setStageHeight(veilRef.current.clientHeight);
   }, [connectMode]);
 
   // CSS animations restart when the tab is shown again; after the intro, hold the end state instead of replaying it.
@@ -147,50 +147,52 @@ export default function DispatchVeil({ phase, label, connect }: DispatchVeilProp
       <span className="dispatch-veil-blob dispatch-veil-blob-3" />
       <span className="dispatch-veil-sweep" />
 
-      <div className="dispatch-veil-stage" style={stageHeight ? { bottom: 'auto', height: stageHeight } : undefined}>
-        {connect ? (
-          <div className="dispatch-veil-hull">
-            <span className="dispatch-veil-radar"><span /><span /><span /></span>
-            <span className="dispatch-veil-radar-done" />
+      <div className="dispatch-veil-content" style={stageHeight ? { bottom: 'auto', height: stageHeight } : undefined}>
+        <div className="dispatch-veil-stage">
+          {connect ? (
+            <div className="dispatch-veil-hull">
+              <span className="dispatch-veil-radar"><span /><span /><span /></span>
+              <span className="dispatch-veil-radar-done" />
+              <DispatchShip idPrefix="dispatch-veil" waterline className="dispatch-veil-ship" />
+            </div>
+          ) : (
             <DispatchShip idPrefix="dispatch-veil" waterline className="dispatch-veil-ship" />
-          </div>
-        ) : (
-          <DispatchShip idPrefix="dispatch-veil" waterline className="dispatch-veil-ship" />
-        )}
-        <DispatchWaves intensity={1.2} />
-        <div className="dispatch-veil-caption">
-          <span className="dispatch-veil-label">{label}</span>
-          <span className="dispatch-veil-track">
-            {connect ? (
-              <span
-                className={`dispatch-veil-fill ${state === 'connected' ? 'is-connected' : state === 'failed' ? 'is-failed' : ''}`}
-                data-step={step}
-                style={{ '--veil-progress': progress } as CSSProperties}
-              />
-            ) : (
-              <span className="dispatch-veil-bar" />
-            )}
-          </span>
-          {connect && (
-            // All lines share one grid cell, so the stage keeps its height (and position) as the text changes.
-            <span className="dispatch-veil-status">
-              {[...connect.steps, connect.connectedLabel, connect.failedLabel].map((text, i) => (
-                <span
-                  key={i}
-                  className={`dispatch-veil-status-line ${i === activeLine ? 'is-active' : i < activeLine ? 'is-past' : ''} ${i === 3 ? 'is-connected' : i === 4 ? 'is-failed' : ''}`}
-                >
-                  {i < 3 ? (
-                    <span className="dispatch-veil-status-dot" />
-                  ) : (
-                    <span className="dispatch-veil-status-icon">
-                      {i === 3 ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : <X className="h-2.5 w-2.5" strokeWidth={3.5} />}
-                    </span>
-                  )}
-                  <span>{i < 3 ? `${text}…` : text}</span>
-                </span>
-              ))}
-            </span>
           )}
+          <DispatchWaves intensity={1.2} />
+          <div className="dispatch-veil-caption">
+            <span className="dispatch-veil-label">{label}</span>
+            <span className="dispatch-veil-track">
+              {connect ? (
+                <span
+                  className={`dispatch-veil-fill ${state === 'connected' ? 'is-connected' : state === 'failed' ? 'is-failed' : ''}`}
+                  data-step={step}
+                  style={{ '--veil-progress': progress } as CSSProperties}
+                />
+              ) : (
+                <span className="dispatch-veil-bar" />
+              )}
+            </span>
+            {connect && (
+              // All lines share one grid cell, so the stage keeps its height (and position) as the text changes.
+              <span className="dispatch-veil-status">
+                {[...connect.steps, connect.connectedLabel, connect.failedLabel].map((text, i) => (
+                  <span
+                    key={i}
+                    className={`dispatch-veil-status-line ${i === activeLine ? 'is-active' : i < activeLine ? 'is-past' : ''} ${i === 3 ? 'is-connected' : i === 4 ? 'is-failed' : ''}`}
+                  >
+                    {i < 3 ? (
+                      <span className="dispatch-veil-status-dot" />
+                    ) : (
+                      <span className="dispatch-veil-status-icon">
+                        {i === 3 ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : <X className="h-2.5 w-2.5" strokeWidth={3.5} />}
+                      </span>
+                    )}
+                    <span>{i < 3 ? `${text}…` : text}</span>
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>

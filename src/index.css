@@ -3608,6 +3608,11 @@ button.dispatch-start-cta:active:not(:disabled) {
   to { transform: translateY(-10px) rotate(calc(var(--veil-rot) + 8deg)); }
 }
 
+.dispatch-veil-content {
+  position: absolute;
+  inset: 0;
+}
+
 .dispatch-veil-stage {
   position: absolute;
   inset: 0;
@@ -3975,6 +3980,10 @@ button.dispatch-start-cta:active:not(:disabled) {
 .dispatch-panel-resizing .dispatch-waiting-flow::before,
 .dispatch-panel-resizing .dispatch-waiting-glow,
 .dispatch-panel-resizing.dispatch-waiting-surface-animated::after,
+.dispatch-panel-resizing .dispatch-panel-ship,
+.dispatch-panel-resizing .dispatch-panel-sea .dispatch-veil-wave,
+.dispatch-panel-resizing .dispatch-waiting-accent::before,
+.dispatch-panel-resizing .dispatch-waiting-accent::after,
 .dispatch-panel-resizing .dispatch-panel-wave,
 .dispatch-panel-resizing [class*="dispatch-gull"] {
   animation-play-state: paused !important;
