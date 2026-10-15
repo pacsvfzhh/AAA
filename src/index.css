@@ -3612,11 +3612,12 @@ button.dispatch-start-cta:active:not(:disabled) {
   height: 100%;
 }
 
-/* Phones: flatten the crests about each layer's baseline and slow the drift so the sea reads as calm. */
+/* Phones: the ship is small here, so the sea is lower and calmer (back layer hidden, crests flattened about each baseline, slower drift) and the waterline sits near the keel, leaving the hull above water. */
 @media (max-width: 767px) {
-  .dispatch-veil .dispatch-veil-sea { --wave-slow: 1.5; }
-  .dispatch-veil .dispatch-veil-wave { scale: 1 0.5; }
-  .dispatch-veil .dispatch-veil-wave-back { transform-origin: 0 40%; }
+  .dispatch-veil .dispatch-veil-sea { --wave-slow: 1.5; height: 26px; }
+  .dispatch-veil .dispatch-veil-wave { scale: 1 0.7; }
+  .dispatch-veil .dispatch-veil-wave-back { display: none; }
+  .dispatch-veil .dispatch-veil-ship { translate: 0 calc(14.3% + 4px); }
   .dispatch-veil .dispatch-veil-wave-mid { transform-origin: 0 55%; }
   .dispatch-veil .dispatch-veil-wave-front { transform-origin: 0 70%; }
 }
