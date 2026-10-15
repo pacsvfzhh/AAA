@@ -25,8 +25,30 @@ const STANDBY_YARD_STACKS = [
   x: stack.x,
   y: 88 - 13 * k,
   tone: (stack.tone + k) % 4,
-  assigned: stack.x === 300 && k === 1,
 })));
+
+// One crane cycle (fractions of CRANE_CYCLE_S): lower, latch, lift, carry, lower, release, raise empty, return empty.
+// The dropped container is shipped out and a new one arrives at the pickup slot while the empty trolley returns.
+const CRANE_CYCLE_S = 16;
+const CRANE_EASE = '0.4 0 0.2 1';
+const CRANE_PICKUP_DX = -34;
+const CRANE_DROP_DX = 34;
+const CRANE_LOWER_DY = 29.5;
+const craneTrack = (times: number[], values: number[], axis?: 'x' | 'y') => ({
+  keyTimes: times.join(';'),
+  keySplines: Array(times.length - 1).fill(CRANE_EASE).join(';'),
+  values: values.map(v => (axis === 'x' ? `${v} 0` : axis === 'y' ? `0 ${v}` : `${v}`)).join(';'),
+});
+const CRANE_TROLLEY_X = craneTrack([0, 0.26, 0.5, 0.74, 0.94, 1], [CRANE_PICKUP_DX, CRANE_PICKUP_DX, CRANE_DROP_DX, CRANE_DROP_DX, CRANE_PICKUP_DX, CRANE_PICKUP_DX], 'x');
+const CRANE_HOIST_TIMES = [0, 0.1, 0.16, 0.26, 0.5, 0.6, 0.66, 0.74, 1];
+const CRANE_HOIST_DY = [0, CRANE_LOWER_DY, CRANE_LOWER_DY, 0, 0, CRANE_LOWER_DY, CRANE_LOWER_DY, 0, 0];
+const CRANE_HOIST_Y = craneTrack(CRANE_HOIST_TIMES, CRANE_HOIST_DY, 'y');
+const CRANE_CABLE_Y2 = craneTrack(CRANE_HOIST_TIMES, CRANE_HOIST_DY.map(dy => 52 + dy));
+const CRANE_BOX_X = craneTrack([0, 0.26, 0.5, 0.88, 0.881, 1], [CRANE_PICKUP_DX, CRANE_PICKUP_DX, CRANE_DROP_DX, CRANE_DROP_DX, CRANE_PICKUP_DX, CRANE_PICKUP_DX], 'x');
+const CRANE_BOX_Y = craneTrack([0, 0.16, 0.26, 0.5, 0.6, 0.88, 0.881, 1], [CRANE_LOWER_DY, CRANE_LOWER_DY, 0, 0, CRANE_LOWER_DY, CRANE_LOWER_DY, CRANE_LOWER_DY, CRANE_LOWER_DY], 'y');
+const CRANE_GIRDER_LATTICE = `M84 38${Array.from({ length: 22 }, (_, i) => ` L${(84 + 8.8 * (i + 1)).toFixed(1)} ${i % 2 === 0 ? 28 : 38}`).join('')}`;
+const CRANE_LEG_LATTICE = [94, 244].map(x => [38, 57, 76].map((y, i) => `M${x} ${y}L${x + 22} ${[57, 76, 96][i]}M${x + 22} ${y}L${x} ${[57, 76, 96][i]}`).join('')).join('');
+const CRANE_BOX_OPACITY = craneTrack([0, 0.78, 0.86, 0.9, 0.98, 1], [1, 1, 0, 0, 1, 1]);
 
 
 interface DispatchAssignment {
@@ -3685,30 +3707,98 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                                 width="24"
                                 height="12"
                                 rx="1"
-                                className={box.assigned ? undefined : `shs-box shs-box-${box.tone}`}
-                                fill={box.assigned ? '#60a5fa' : undefined}
-                                fillOpacity={box.assigned ? 0.8 : undefined}
+                                className={`shs-box shs-box-${box.tone}`}
                               />
                             ))}
                           </g>
 
-                          <g stroke="#bfdbfe" strokeWidth="1.6" strokeLinecap="round">
-                            <path d="M118 100L128 38L138 100M222 100L232 38L242 100" />
-                            <path d="M124.1 62H131.9M120.9 82H135.1M228.1 62H235.9M224.9 82H239.1" strokeWidth="1.2" />
-                          </g>
-                          <path d="M104 38H256" stroke="#93c5fd" strokeWidth="3" strokeLinecap="round" />
-                          <rect x="102" y="31" width="13" height="9" rx="1.5" fill="#dbeafe" stroke="#bfdbfe" strokeWidth="1" />
-                          <path d="M0 100H360" stroke="#bfdbfe" strokeOpacity="0.9" strokeWidth="0.9" />
+                          <path d="M84 99H278" stroke="#93c5fd" strokeWidth="1.2" />
+                          <path d="M84 101.5H278" stroke="#bfdbfe" strokeWidth="1.6" strokeDasharray="1 3" />
+                          <rect x="134" y="88" width="24" height="12" rx="1" stroke="#93c5fd" strokeOpacity="0.7" strokeWidth="0.8" strokeDasharray="2 2" />
+                          <rect x="202" y="88" width="24" height="12" rx="1" stroke="#93c5fd" strokeOpacity="0.7" strokeWidth="0.8" strokeDasharray="2 2" />
 
-                          <g>
+                          <g strokeLinecap="round">
+                            <path d={CRANE_LEG_LATTICE} stroke="#bfdbfe" strokeWidth="0.9" />
+                            <path d="M94 38V96M116 38V96M244 38V96M266 38V96" stroke="#7aa8ee" strokeWidth="2.4" />
+                            <path d="M94 57H116M94 76H116M244 57H266M244 76H266" stroke="#93c5fd" strokeWidth="1.3" />
+                            <path d="M105 10L94 28M105 10L116 28M255 10L244 28M255 10L266 28M105 10V28M255 10V28" stroke="#93c5fd" strokeWidth="1.3" />
+                            <path d="M105 10L84 28M105 10L150 28M255 10L210 28M255 10L278 28" stroke="#93c5fd" strokeOpacity="0.85" strokeWidth="0.9" />
+                          </g>
+                          <rect x="90" y="95.5" width="30" height="3.5" rx="1.2" fill="#93c5fd" />
+                          <rect x="240" y="95.5" width="30" height="3.5" rx="1.2" fill="#93c5fd" />
+                          <g fill="#60a5fa" stroke="#dbeafe" strokeWidth="0.6">
+                            <circle cx="95" cy="99.2" r="1.8" /><circle cx="101" cy="99.2" r="1.8" /><circle cx="109" cy="99.2" r="1.8" /><circle cx="115" cy="99.2" r="1.8" />
+                            <circle cx="245" cy="99.2" r="1.8" /><circle cx="251" cy="99.2" r="1.8" /><circle cx="259" cy="99.2" r="1.8" /><circle cx="265" cy="99.2" r="1.8" />
+                          </g>
+
+                          <g strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M84 28H278M84 38H278" stroke="#7aa8ee" strokeWidth="2" />
+                            <path d={CRANE_GIRDER_LATTICE} stroke="#bfdbfe" strokeWidth="0.9" />
+                            <path d="M84 28V38M278 28V38" stroke="#7aa8ee" strokeWidth="2" />
+                          </g>
+                          <rect x="86" y="17" width="20" height="11" rx="1.5" fill="#dbeafe" stroke="#93c5fd" strokeWidth="0.9" />
+                          <rect x="89" y="20" width="6" height="4" rx="0.8" fill="#fff" fillOpacity="0.85" />
+                          <path d="M98.5 20H103M98.5 23H103" stroke="#93c5fd" strokeWidth="0.9" strokeLinecap="round" />
+                          <path d="M122 38V39.5M129 38V39.5" stroke="#93c5fd" strokeWidth="1" />
+                          <rect x="119" y="39.5" width="13" height="9" rx="1.5" fill="#dbeafe" stroke="#93c5fd" strokeWidth="0.9" />
+                          <rect x="121.5" y="41.5" width="8" height="4.5" rx="0.8" fill="#fff" fillOpacity="0.85" />
+                          <path d="M244 38V39.5M266 38V39.5" stroke="#93c5fd" strokeWidth="0.9" />
+                          <g fill="#fca5a5">
+                            <circle cx="105" cy="8.5" r="1.5">
+                              {!suppressAnimations && <animate attributeName="opacity" values="1;0.2;1" dur="2.4s" repeatCount="indefinite" />}
+                            </circle>
+                            <circle cx="255" cy="8.5" r="1.5">
+                              {!suppressAnimations && <animate attributeName="opacity" values="0.2;1;0.2" dur="2.4s" repeatCount="indefinite" />}
+                            </circle>
+                          </g>
+
+                          <g transform={`translate(${CRANE_PICKUP_DX} 0)`}>
                             {!suppressAnimations && (
-                              <animateTransform attributeName="transform" type="translate" values="-52 0;52 0;-52 0" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.45 0 0.55 1;0.45 0 0.55 1" dur="12s" repeatCount="indefinite" />
+                              <animateTransform attributeName="transform" type="translate" calcMode="spline" dur={`${CRANE_CYCLE_S}s`} repeatCount="indefinite" keyTimes={CRANE_TROLLEY_X.keyTimes} keySplines={CRANE_TROLLEY_X.keySplines} values={CRANE_TROLLEY_X.values} />
                             )}
-                            <rect x="174" y="35" width="12" height="6" rx="1.5" fill="#60a5fa" />
-                            <path d="M180 41V56" stroke="#93c5fd" strokeWidth="1" />
-                            <rect x="170" y="56" width="20" height="2.5" rx="1" fill="#93c5fd" />
-                            <rect x="168" y="58.5" width="24" height="12" rx="1" fill="#2563eb" fillOpacity="0.88" />
-                            <path d="M173 59.5V69.5M177.5 59.5V69.5M182 59.5V69.5M186.5 59.5V69.5" stroke="#fff" strokeOpacity="0.3" strokeWidth="0.9" />
+                            <rect x="168" y="36" width="24" height="8" rx="1.5" fill="#3b82f6" />
+                            <rect x="173" y="30" width="14" height="6" rx="1" fill="#2563eb" />
+                            <path d="M176 31.5V34.5M180 31.5V34.5M184 31.5V34.5" stroke="#bfdbfe" strokeOpacity="0.7" strokeWidth="0.9" />
+                            <circle cx="171.5" cy="37" r="1.6" fill="#dbeafe" />
+                            <circle cx="188.5" cy="37" r="1.6" fill="#dbeafe" />
+                            <line x1="173" y1="44" x2="173" y2="52" stroke="#60a5fa" strokeWidth="0.9">
+                              {!suppressAnimations && (
+                                <animate attributeName="y2" calcMode="spline" dur={`${CRANE_CYCLE_S}s`} repeatCount="indefinite" keyTimes={CRANE_CABLE_Y2.keyTimes} keySplines={CRANE_CABLE_Y2.keySplines} values={CRANE_CABLE_Y2.values} />
+                              )}
+                            </line>
+                            <line x1="187" y1="44" x2="187" y2="52" stroke="#60a5fa" strokeWidth="0.9">
+                              {!suppressAnimations && (
+                                <animate attributeName="y2" calcMode="spline" dur={`${CRANE_CYCLE_S}s`} repeatCount="indefinite" keyTimes={CRANE_CABLE_Y2.keyTimes} keySplines={CRANE_CABLE_Y2.keySplines} values={CRANE_CABLE_Y2.values} />
+                              )}
+                            </line>
+                            <g>
+                              {!suppressAnimations && (
+                                <animateTransform attributeName="transform" type="translate" calcMode="spline" dur={`${CRANE_CYCLE_S}s`} repeatCount="indefinite" keyTimes={CRANE_HOIST_Y.keyTimes} keySplines={CRANE_HOIST_Y.keySplines} values={CRANE_HOIST_Y.values} />
+                              )}
+                              <rect x="170" y="52" width="20" height="4" rx="1" fill="#3b82f6" />
+                              <rect x="166" y="56" width="28" height="3" rx="0.8" fill="#60a5fa" />
+                              <path d="M166 59L164 62.5H166.5ZM194 59L196 62.5H193.5Z" fill="#3b82f6" />
+                              <rect x="168" y="59" width="2" height="1.5" fill="#1d4ed8" />
+                              <rect x="190" y="59" width="2" height="1.5" fill="#1d4ed8" />
+                            </g>
+                          </g>
+
+                          <g transform={`translate(${CRANE_PICKUP_DX} 0)`}>
+                            {!suppressAnimations && (
+                              <animateTransform attributeName="transform" type="translate" calcMode="spline" dur={`${CRANE_CYCLE_S}s`} repeatCount="indefinite" keyTimes={CRANE_BOX_X.keyTimes} keySplines={CRANE_BOX_X.keySplines} values={CRANE_BOX_X.values} />
+                            )}
+                            <g transform={`translate(0 ${CRANE_LOWER_DY})`}>
+                              {!suppressAnimations && (
+                                <animateTransform attributeName="transform" type="translate" calcMode="spline" dur={`${CRANE_CYCLE_S}s`} repeatCount="indefinite" keyTimes={CRANE_BOX_Y.keyTimes} keySplines={CRANE_BOX_Y.keySplines} values={CRANE_BOX_Y.values} />
+                              )}
+                              <g>
+                                {!suppressAnimations && (
+                                  <animate attributeName="opacity" calcMode="spline" dur={`${CRANE_CYCLE_S}s`} repeatCount="indefinite" keyTimes={CRANE_BOX_OPACITY.keyTimes} keySplines={CRANE_BOX_OPACITY.keySplines} values={CRANE_BOX_OPACITY.values} />
+                                )}
+                                <rect x="168" y="58.5" width="24" height="12" rx="1" fill="#2563eb" fillOpacity="0.9" stroke="#1d4ed8" strokeWidth="0.6" />
+                                <path d="M173 59.5V69.5M177.5 59.5V69.5M182 59.5V69.5M186.5 59.5V69.5" stroke="#fff" strokeOpacity="0.3" strokeWidth="0.9" />
+                              </g>
+                            </g>
                           </g>
                         </svg>
                         <DispatchWaves wavelengths={[320, 220, 320]} speeds={[18, 26, 34]} className="order-panel-sea" />
