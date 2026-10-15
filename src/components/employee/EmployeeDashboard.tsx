@@ -1114,9 +1114,9 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                           className="relative cursor-pointer touch-manipulation"
                           style={{ WebkitTapHighlightColor: 'transparent' }}
                         >
-                          <div className="flex items-center gap-[10px] px-[12px] py-[8px] sm:gap-[12px] sm:px-[16px] sm:py-[10px]">
+                          <div className="flex items-center gap-[12px] px-[14px] py-[12px] sm:gap-[14px] sm:px-[16px] sm:py-[14px]">
                             <div className="relative flex-shrink-0">
-                              <div className="flex h-[34px] w-[34px] items-center justify-center rounded-xl border border-white/20 bg-white/15 shadow-inner ring-1 ring-white/10 sm:h-[36px] sm:w-[36px]">
+                              <div className="flex h-[36px] w-[36px] items-center justify-center rounded-xl border border-white/20 bg-white/15 shadow-inner ring-1 ring-white/10 sm:h-[40px] sm:w-[40px]">
                                 {toastIsReward ? <Gift className="h-[18px] w-[18px] text-white" strokeWidth={2.2} /> : <Bell className="h-[18px] w-[18px] text-white" strokeWidth={2.2} />}
                               </div>
                               <div className="absolute -right-1.5 -top-1.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-white px-[3px] shadow-md">
@@ -1124,13 +1124,13 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                               </div>
                             </div>
                             <div className="min-w-0 flex-1">
-                              <span className={`block truncate text-[11px] font-bold uppercase leading-[13px] tracking-[0.12em] ${toastIsReward ? 'text-amber-50' : 'text-emerald-100'}`}>{toastIsReward ? 'Performance Reward' : t.header.newMessage}</span>
-                              <h3 className="truncate text-[12px] font-bold leading-[16px] text-white sm:text-[13px] sm:leading-[18px]">
+                              <span className={`mb-[3px] block truncate text-[11px] font-bold uppercase leading-[13px] tracking-[0.12em] ${toastIsReward ? 'text-amber-50' : 'text-emerald-100'}`}>{toastIsReward ? 'Performance Reward' : t.header.newMessage}</span>
+                              <h3 className="mb-[3px] truncate text-[12px] font-bold leading-[17px] text-white sm:text-[13px] sm:leading-[19px]">
                                 {latestMessage.summaryCount
                                   ? t.header.newMessagesSummary.replace('{n}', String(latestMessage.summaryCount))
                                   : latestMessage.title}
                               </h3>
-                              <p className="line-clamp-1 text-[11px] leading-[15px] text-white/90 sm:line-clamp-2 sm:text-[12px] sm:leading-[16px]">
+                              <p className="line-clamp-1 text-[11px] leading-[16px] text-white/90 sm:line-clamp-2 sm:text-[12px] sm:leading-[17px]">
                                 {latestMessage.summaryCount
                                   ? t.header.newMessagesSummaryHint
                                   : latestMessage.content.replace(/<[^>]*>/g, '').slice(0, 80)}
@@ -1149,7 +1149,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                           </div>
 
                           {/* Footer */}
-                          <div className={`flex items-center justify-between gap-[8px] px-[12px] py-[6px] sm:px-[16px] sm:py-[8px] ${toastIsReward ? 'bg-amber-900/25' : 'bg-emerald-950/30'}`}>
+                          <div className={`flex items-center justify-between gap-[8px] px-[14px] py-[8px] sm:px-[16px] sm:py-[10px] ${toastIsReward ? 'bg-amber-900/25' : 'bg-emerald-950/30'}`}>
                             {toastIsReward ? (
                               <span className="min-w-0 truncate">
                                 <span className="mr-[8px] hidden text-[11px] font-bold uppercase tracking-wider text-white/85 sm:inline">{t.messages.rewardWalletLabel}</span>
@@ -1161,7 +1161,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                                  latestMessage.priority === 'high' ? t.header.highPriority : t.header.normal}
                               </span>
                             )}
-                            <div className={`flex h-[26px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[9px] bg-white px-[12px] shadow-md transition-all hover:scale-105 active:scale-95 sm:h-[30px] sm:rounded-[10px] sm:px-[14px] ${toastIsReward ? 'text-amber-700' : 'text-emerald-700'}`}>
+                            <div className={`flex h-[28px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[9px] bg-white px-[12px] shadow-md transition-all hover:scale-105 active:scale-95 sm:h-[32px] sm:rounded-[10px] sm:px-[14px] ${toastIsReward ? 'text-amber-700' : 'text-emerald-700'}`}>
                               <span className="text-[11px] font-bold sm:text-[12px]">{t.header.view}</span>
                               <svg className="h-[11px] w-[11px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3} aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                             </div>
