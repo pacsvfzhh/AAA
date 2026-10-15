@@ -208,22 +208,22 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
       const withdrawal = record.data as Withdrawal;
       switch (withdrawal.status) {
         case 'pending':
-          return <Clock className="w-5 h-5 text-amber-500" />;
+          return <Clock className="w-5 h-5 text-white" />;
         case 'approved':
-          return <CheckCircle className="w-5 h-5 text-emerald-500" />;
+          return <CheckCircle className="w-5 h-5 text-white" />;
         case 'rejected':
-          return <XCircle className="w-5 h-5 text-red-500" />;
+          return <XCircle className="w-5 h-5 text-white" />;
         case 'cancelled':
-          return <XCircle className="w-5 h-5 text-gray-400" />;
+          return <XCircle className="w-5 h-5 text-white" />;
         default:
-          return <Clock className="w-5 h-5 text-gray-400" />;
+          return <Clock className="w-5 h-5 text-white" />;
       }
     } else {
       const transaction = record.data as WalletTransaction;
       if (parseFloat(transaction.amount.toString()) > 0) {
-        return <TrendingUp className="w-5 h-5 text-emerald-500" />;
+        return <TrendingUp className="w-5 h-5 text-white" />;
       } else {
-        return <TrendingDown className="w-5 h-5 text-red-500" />;
+        return <TrendingDown className="w-5 h-5 text-white" />;
       }
     }
   };
@@ -253,54 +253,71 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
     }
   };
 
-  const getCardStyle = (record: CombinedRecord) => {
-    if (record.type === 'withdrawal') {
-      const withdrawal = record.data as Withdrawal;
-      switch (withdrawal.status) {
-        case 'pending':
-          return 'bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200 hover:border-amber-300 hover:shadow-amber-100/50';
-        case 'approved':
-          return 'bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-200 hover:border-emerald-300 hover:shadow-emerald-100/50';
-        case 'rejected':
-          return 'bg-gradient-to-r from-red-50 to-rose-50 border-red-200 hover:border-red-300 hover:shadow-red-100/50';
-        case 'cancelled':
-          return 'bg-gradient-to-r from-gray-50 to-slate-50 border-gray-200 hover:border-gray-300 hover:shadow-gray-100/50';
-        default:
-          return 'bg-white border-gray-200 hover:border-gray-300';
-      }
-    } else {
-      const transaction = record.data as WalletTransaction;
-      if (parseFloat(transaction.amount.toString()) > 0) {
-        return 'bg-gradient-to-r from-emerald-50 to-cyan-50 border-emerald-200 hover:border-emerald-300 hover:shadow-emerald-100/50';
-      } else {
-        return 'bg-gradient-to-r from-red-50 to-orange-50 border-red-200 hover:border-red-300 hover:shadow-red-100/50';
-      }
-    }
-  };
+  const RECORD_THEMES = {
+    amber: {
+      card: 'border-amber-200 bg-gradient-to-br from-white via-amber-50 to-orange-100/70 shadow-[0_8px_20px_-12px_rgba(245,158,11,0.55)] hover:border-amber-300',
+      bar: 'from-amber-400 to-orange-500',
+      icon: 'from-amber-400 to-orange-500 shadow-amber-300/60',
+      amount: 'text-amber-950',
+      time: 'text-amber-800/60',
+      chevron: 'bg-amber-100 text-amber-600 ring-1 ring-amber-200/80 hover:bg-amber-200/70',
+      pattern: 'border-amber-500',
+      divider: 'border-amber-200/70',
+      detailBg: 'bg-gradient-to-b from-amber-50/70 to-orange-50/40',
+      tile: 'rounded-xl bg-white/80 p-2.5 ring-1 ring-amber-200/60 sm:p-3',
+      tileLabel: 'text-amber-700/60',
+    },
+    emerald: {
+      card: 'border-emerald-200 bg-gradient-to-br from-white via-emerald-50 to-teal-100/70 shadow-[0_8px_20px_-12px_rgba(16,185,129,0.55)] hover:border-emerald-300',
+      bar: 'from-emerald-400 to-teal-500',
+      icon: 'from-emerald-400 to-teal-500 shadow-emerald-300/60',
+      amount: 'text-emerald-950',
+      time: 'text-emerald-800/60',
+      chevron: 'bg-emerald-100 text-emerald-600 ring-1 ring-emerald-200/80 hover:bg-emerald-200/70',
+      pattern: 'border-emerald-500',
+      divider: 'border-emerald-200/70',
+      detailBg: 'bg-gradient-to-b from-emerald-50/70 to-teal-50/40',
+      tile: 'rounded-xl bg-white/80 p-2.5 ring-1 ring-emerald-200/60 sm:p-3',
+      tileLabel: 'text-emerald-700/60',
+    },
+    rose: {
+      card: 'border-rose-200 bg-gradient-to-br from-white via-rose-50 to-orange-100/60 shadow-[0_8px_20px_-12px_rgba(244,63,94,0.5)] hover:border-rose-300',
+      bar: 'from-rose-400 to-orange-400',
+      icon: 'from-rose-500 to-orange-500 shadow-rose-300/60',
+      amount: 'text-rose-950',
+      time: 'text-rose-800/60',
+      chevron: 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/80 hover:bg-rose-200/70',
+      pattern: 'border-rose-500',
+      divider: 'border-rose-200/70',
+      detailBg: 'bg-gradient-to-b from-rose-50/70 to-orange-50/40',
+      tile: 'rounded-xl bg-white/80 p-2.5 ring-1 ring-rose-200/60 sm:p-3',
+      tileLabel: 'text-rose-700/60',
+    },
+    slate: {
+      card: 'border-slate-200 bg-gradient-to-br from-white via-slate-50 to-slate-100 shadow-[0_8px_20px_-12px_rgba(100,116,139,0.45)] hover:border-slate-300',
+      bar: 'from-slate-300 to-slate-400',
+      icon: 'from-slate-400 to-slate-500 shadow-slate-300/60',
+      amount: 'text-slate-800',
+      time: 'text-slate-500',
+      chevron: 'bg-slate-100 text-slate-500 ring-1 ring-slate-200/80 hover:bg-slate-200/70',
+      pattern: 'border-slate-400',
+      divider: 'border-slate-200/80',
+      detailBg: 'bg-gradient-to-b from-slate-50/80 to-slate-100/50',
+      tile: 'rounded-xl bg-white/80 p-2.5 ring-1 ring-slate-200/70 sm:p-3',
+      tileLabel: 'text-slate-500',
+    },
+  } as const;
 
-  const getCardAccentBar = (record: CombinedRecord) => {
+  const getRecordTheme = (record: CombinedRecord) => {
     if (record.type === 'withdrawal') {
-      const withdrawal = record.data as Withdrawal;
-      switch (withdrawal.status) {
-        case 'pending':
-          return 'bg-gradient-to-b from-amber-400 to-orange-400';
-        case 'approved':
-          return 'bg-gradient-to-b from-emerald-400 to-teal-400';
-        case 'rejected':
-          return 'bg-gradient-to-b from-red-400 to-rose-400';
-        case 'cancelled':
-          return 'bg-gradient-to-b from-gray-300 to-gray-400';
-        default:
-          return 'bg-gradient-to-b from-gray-300 to-gray-400';
-      }
-    } else {
-      const transaction = record.data as WalletTransaction;
-      if (parseFloat(transaction.amount.toString()) > 0) {
-        return 'bg-gradient-to-b from-emerald-400 to-cyan-400';
-      } else {
-        return 'bg-gradient-to-b from-red-400 to-orange-400';
+      switch ((record.data as Withdrawal).status) {
+        case 'pending': return RECORD_THEMES.amber;
+        case 'approved': return RECORD_THEMES.emerald;
+        case 'rejected': return RECORD_THEMES.rose;
+        default: return RECORD_THEMES.slate;
       }
     }
+    return parseFloat((record.data as WalletTransaction).amount.toString()) > 0 ? RECORD_THEMES.emerald : RECORD_THEMES.rose;
   };
 
   const getStatusLabel = (record: CombinedRecord) => {
@@ -441,33 +458,39 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
             <div className="space-y-2.5 sm:space-y-3">
               {visibleRecords.map((record) => {
                 const isExpanded = expandedId === record.id;
+                const theme = getRecordTheme(record);
                 return (
                   <div
                     key={record.id}
-                    className={`rounded-xl border overflow-hidden hover:shadow-md transition-all duration-200 ${getCardStyle(record)}`}
+                    className={`relative overflow-hidden rounded-2xl border transition-all duration-200 hover:-translate-y-px ${theme.card}`}
                   >
                     {/* Left accent bar + content */}
-                    <div className="flex">
-                      <div className={`w-1 sm:w-1.5 flex-shrink-0 ${getCardAccentBar(record)}`}></div>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 w-36 overflow-hidden opacity-[0.07]" aria-hidden="true">
+                      <div className={`absolute right-3 top-3 h-16 w-16 rotate-12 rounded-2xl border-2 ${theme.pattern}`}></div>
+                      <div className={`absolute bottom-2 right-10 h-10 w-10 -rotate-6 rounded-lg border-2 ${theme.pattern}`}></div>
+                      <div className={`absolute right-2 top-1/2 h-6 w-6 rounded-full border-2 ${theme.pattern}`}></div>
+                    </div>
+                    <div className="relative flex">
+                      <div className={`w-1.5 flex-shrink-0 bg-gradient-to-b sm:w-2 ${theme.bar}`}></div>
                       <div className="flex-1 min-w-0 [overflow-wrap:anywhere]">
                         <button
                           onClick={() => setExpandedId(isExpanded ? null : record.id)}
                           className="w-full p-3 sm:p-4 flex items-center justify-between text-left"
                         >
                           <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 flex-1 min-w-0">
-                            <div className="flex-shrink-0 mt-0.5 sm:mt-0 w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white shadow-sm flex items-center justify-center">
+                            <div className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br shadow-md sm:h-10 sm:w-10 ${theme.icon}`}>
                               {getStatusIcon(record)}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 mb-0.5">
-                                <span className="text-lg sm:text-xl font-bold text-gray-900">
+                                <span className={`text-lg font-bold tracking-tight sm:text-xl ${theme.amount}`}>
                                   ${parseFloat(record.amount.toString()).toFixed(2)}
                                 </span>
                                 <span className={`px-2 py-0.5 rounded-md border text-[11px] sm:text-xs font-semibold w-fit ${getStatusBadgeStyle(record)}`}>
                                   {getStatusLabel(record)}
                                 </span>
                               </div>
-                              <div className="text-[11px] sm:text-xs text-gray-500">
+                              <div className={`text-[11px] sm:text-xs ${theme.time}`}>
                                 {new Date(record.created_at).toLocaleString(dateLocale, {
                                   year: 'numeric',
                                   month: 'short',
@@ -478,11 +501,11 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                               </div>
                             </div>
                           </div>
-                          <div className="flex-shrink-0 w-7 h-7 rounded-full bg-white/80 shadow-sm flex items-center justify-center">
+                          <div className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-all duration-200 ${isExpanded ? `bg-gradient-to-br text-white shadow-md ${theme.icon}` : theme.chevron}`}>
                             {isExpanded ? (
-                              <ChevronUp className="w-4 h-4 text-gray-500" />
+                              <ChevronUp className="w-4 h-4" />
                             ) : (
-                              <ChevronDown className="w-4 h-4 text-gray-500" />
+                              <ChevronDown className="w-4 h-4" />
                             )}
                           </div>
                         </button>
@@ -490,22 +513,22 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                         {isExpanded && record.type === 'withdrawal' && (() => {
                           const withdrawal = record.data as Withdrawal;
                           return (
-                            <div className="px-3 sm:px-4 pb-3 sm:pb-4 pt-0 space-y-2 sm:space-y-3 border-t border-black/5">
+                            <div className={`space-y-2 border-t px-3 pb-3 pt-0 sm:space-y-3 sm:px-4 sm:pb-4 ${theme.divider} ${theme.detailBg}`}>
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 pt-3 sm:pt-4">
-                                <div className="bg-white/70 rounded-lg p-2.5 sm:p-3">
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.amount}</div>
+                                <div className={theme.tile}>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.amount}</div>
                                   <div className="text-base sm:text-lg font-bold text-gray-900">
                                     ${parseFloat(withdrawal.amount.toString()).toFixed(2)}
                                   </div>
                                 </div>
-                                <div className="bg-white/70 rounded-lg p-2.5 sm:p-3">
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.status}</div>
+                                <div className={theme.tile}>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.status}</div>
                                   <div className={`inline-flex px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md border text-[11px] sm:text-xs font-semibold ${getStatusBadgeStyle(record)}`}>
                                     {getStatusLabel(record)}
                                   </div>
                                 </div>
-                                <div className="bg-white/70 rounded-lg p-2.5 sm:p-3">
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.date}</div>
+                                <div className={theme.tile}>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.date}</div>
                                   <div className="text-xs sm:text-sm text-gray-700">
                                     {new Date(withdrawal.created_at).toLocaleString(dateLocale, {
                                       year: 'numeric',
@@ -517,7 +540,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                                   </div>
                                 </div>
                                 {withdrawal.audited_at && (
-                                  <div className="bg-white/70 rounded-lg p-2.5 sm:p-3">
+                                  <div className={theme.tile}>
                                     <div className={`text-[11px] sm:text-xs mb-1 ${
                                       withdrawal.status === 'approved' ? 'text-emerald-600' :
                                       withdrawal.status === 'rejected' ? 'text-red-600' :
@@ -546,7 +569,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                               </div>
 
                               {withdrawal.status === 'approved' && (
-                                <div className="bg-white border border-emerald-200 rounded-lg p-3 sm:p-4">
+                                <div className="bg-gradient-to-br from-emerald-100/80 to-teal-50 border border-emerald-200 rounded-xl shadow-sm shadow-emerald-100 p-3 sm:p-4">
                                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-0 mb-2">
                                     <div className="flex items-center gap-2 text-emerald-700">
                                       <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -576,7 +599,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                               )}
 
                               {withdrawal.status === 'rejected' && (
-                                <div className="bg-white border border-red-200 rounded-lg p-3 sm:p-4">
+                                <div className="bg-gradient-to-br from-rose-100/80 to-orange-50 border border-red-200 rounded-xl shadow-sm shadow-rose-100 p-3 sm:p-4">
                                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-0 mb-2">
                                     <div className="flex items-center gap-2 text-red-700">
                                       <XCircle className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -608,7 +631,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
 
                               {withdrawal.status === 'pending' && (
                                 <div className="space-y-2 sm:space-y-3">
-                                  <div className="bg-white border border-amber-200 rounded-lg p-3 sm:p-4">
+                                  <div className="bg-gradient-to-br from-amber-100/80 to-orange-50 border border-amber-200 rounded-xl shadow-sm shadow-amber-100 p-3 sm:p-4">
                                     <div className="flex items-center gap-2 text-amber-700 mb-2">
                                       <Clock className="w-4 h-4 sm:w-5 sm:h-5" />
                                       <span className="text-sm sm:text-base font-semibold">{t.withdrawals.underReview}</span>
@@ -620,7 +643,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                                   <button
                                     onClick={() => handleCancelWithdrawal(withdrawal.id)}
                                     disabled={cancelling === withdrawal.id}
-                                    className="w-full bg-white hover:bg-red-50 border border-red-200 hover:border-red-300 text-red-600 hover:text-red-700 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                    className="w-full bg-gradient-to-r from-rose-500 to-red-500 hover:from-rose-600 hover:to-red-600 text-white shadow-md shadow-rose-300/50 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                   >
                                     <XCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                                     {cancelling === withdrawal.id ? t.withdrawals.cancelling : t.withdrawals.cancelWithdrawal}
@@ -629,7 +652,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                               )}
 
                               {withdrawal.status === 'cancelled' && (
-                                <div className="bg-white border border-gray-200 rounded-lg p-3 sm:p-4">
+                                <div className="bg-gradient-to-br from-slate-100 to-white border border-slate-200 rounded-xl shadow-sm shadow-slate-100 p-3 sm:p-4">
                                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-0 mb-2">
                                     <div className="flex items-center gap-2 text-gray-600">
                                       <XCircle className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -648,7 +671,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                                   </div>
                                   {withdrawal.audit_remark ? (
                                     <div>
-                                      <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.reason}</div>
+                                      <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.reason}</div>
                                       <div className="text-xs sm:text-sm text-gray-600">{withdrawal.audit_remark === 'Cancelled by user' ? t.withdrawals.cancelledByUser : withdrawal.audit_remark}</div>
                                     </div>
                                   ) : (
@@ -666,35 +689,35 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                           const transaction = record.data as WalletTransaction;
                           const isAdd = parseFloat(transaction.amount.toString()) > 0;
                           return (
-                            <div className="px-3 sm:px-4 pb-3 sm:pb-4 pt-0 space-y-2 sm:space-y-3 border-t border-black/5">
+                            <div className={`space-y-2 border-t px-3 pb-3 pt-0 sm:space-y-3 sm:px-4 sm:pb-4 ${theme.divider} ${theme.detailBg}`}>
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 pt-3 sm:pt-4">
-                                <div className="bg-white/70 rounded-lg p-2.5 sm:p-3">
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.transactionType}</div>
+                                <div className={theme.tile}>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.transactionType}</div>
                                   <div className={`inline-flex items-center gap-1 sm:gap-1.5 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md border text-[11px] sm:text-xs font-semibold ${getStatusBadgeStyle(record)}`}>
                                     {isAdd ? <TrendingUp className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> : <TrendingDown className="w-3 h-3 sm:w-3.5 sm:h-3.5" />}
                                     {isAdd ? t.withdrawals.balanceAdded : t.withdrawals.balanceDeducted}
                                   </div>
                                 </div>
-                                <div className="bg-white/70 rounded-lg p-2.5 sm:p-3">
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.amount}</div>
+                                <div className={theme.tile}>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.amount}</div>
                                   <div className={`text-base sm:text-lg font-bold ${isAdd ? 'text-emerald-600' : 'text-red-600'}`}>
                                     {isAdd ? '+' : ''}${Math.abs(parseFloat(transaction.amount.toString())).toFixed(2)}
                                   </div>
                                 </div>
-                                <div className="bg-white/70 rounded-lg p-2.5 sm:p-3">
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.balanceBefore}</div>
+                                <div className={theme.tile}>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.balanceBefore}</div>
                                   <div className="text-xs sm:text-sm text-gray-700">
                                     ${parseFloat(transaction.balance_before.toString()).toFixed(2)}
                                   </div>
                                 </div>
-                                <div className="bg-white/70 rounded-lg p-2.5 sm:p-3">
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.balanceAfter}</div>
+                                <div className={theme.tile}>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.balanceAfter}</div>
                                   <div className="text-xs sm:text-sm text-gray-700">
                                     ${parseFloat(transaction.balance_after.toString()).toFixed(2)}
                                   </div>
                                 </div>
-                                <div className="col-span-1 sm:col-span-2 bg-white/70 rounded-lg p-2.5 sm:p-3">
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.transactionTime}</div>
+                                <div className={`col-span-1 sm:col-span-2 ${theme.tile}`}>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.transactionTime}</div>
                                   <div className="text-xs sm:text-sm text-gray-700">
                                     {new Date(transaction.created_at).toLocaleString(dateLocale, {
                                       year: 'numeric',
@@ -708,14 +731,14 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                               </div>
 
                               {transaction.remarks && (
-                                <div className={`bg-white border ${isAdd ? 'border-emerald-200' : 'border-red-200'} rounded-lg p-3 sm:p-4`}>
+                                <div className={`border rounded-xl shadow-sm p-3 sm:p-4 ${isAdd ? 'border-emerald-200 bg-gradient-to-br from-emerald-100/80 to-teal-50 shadow-emerald-100' : 'border-red-200 bg-gradient-to-br from-rose-100/80 to-orange-50 shadow-rose-100'}`}>
                                   <div className="flex items-center gap-2 mb-2">
                                     <DollarSign className={`w-4 h-4 sm:w-5 sm:h-5 ${isAdd ? 'text-emerald-600' : 'text-red-600'}`} />
                                     <span className={`text-sm sm:text-base font-semibold ${isAdd ? 'text-emerald-700' : 'text-red-700'}`}>
                                       {t.withdrawals.financialAdjustment}
                                     </span>
                                   </div>
-                                  <div className="text-[11px] sm:text-xs text-gray-400 mb-1">{t.withdrawals.remarks}</div>
+                                  <div className={`mb-1 text-[11px] sm:text-xs ${theme.tileLabel}`}>{t.withdrawals.remarks}</div>
                                   <div className={`text-xs sm:text-sm ${isAdd ? 'text-emerald-700' : 'text-red-700'}`}>
                                     {transaction.remarks}
                                   </div>
@@ -723,7 +746,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
                               )}
 
                               {!transaction.remarks && (
-                                <div className={`bg-white border ${isAdd ? 'border-emerald-200' : 'border-red-200'} rounded-lg p-3 sm:p-4`}>
+                                <div className={`border rounded-xl shadow-sm p-3 sm:p-4 ${isAdd ? 'border-emerald-200 bg-gradient-to-br from-emerald-100/80 to-teal-50 shadow-emerald-100' : 'border-red-200 bg-gradient-to-br from-rose-100/80 to-orange-50 shadow-rose-100'}`}>
                                   <div className="flex items-center gap-2">
                                     <DollarSign className={`w-4 h-4 sm:w-5 sm:h-5 ${isAdd ? 'text-emerald-600' : 'text-red-600'}`} />
                                     <p className={`text-xs sm:text-sm ${isAdd ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -767,7 +790,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
         <div className="relative border-t border-gray-200 px-4 py-4 bg-white" style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}>
           <button
             onClick={handleClose}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3.5 px-4 rounded-xl text-sm font-semibold transition-colors min-h-[48px] active:scale-95 touch-manipulation flex items-center justify-center gap-2"
+            className="w-full bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white shadow-lg shadow-blue-500/25 py-3.5 px-4 rounded-xl text-sm font-semibold transition-all min-h-[48px] active:scale-95 touch-manipulation flex items-center justify-center gap-2"
           >
             <X className="w-4 h-4" />
             {t.common.close}
@@ -780,7 +803,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
         <div className="relative border-t border-gray-200 px-4 sm:px-6 py-4 sm:py-5 bg-white">
           <button
             onClick={handleClose}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 sm:py-2.5 rounded-lg font-semibold transition-colors min-h-[44px] active:scale-[0.98] text-sm sm:text-base"
+            className="w-full bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white shadow-lg shadow-blue-500/25 py-3 sm:py-2.5 rounded-xl font-semibold transition-all min-h-[44px] active:scale-[0.98] text-sm sm:text-base"
           >
             {t.common.close}
           </button>
