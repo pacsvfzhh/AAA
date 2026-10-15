@@ -2542,10 +2542,12 @@ button.employee-header-action {
 @media (max-width: 599px) {
   .dispatch-work-panel {
     --dispatch-working-height: min(580px, max(340px, calc(100svh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - var(--dispatch-reserve, 24px))));
+    --dispatch-idle-height: min(480px, var(--dispatch-working-height));
     display: flex;
     flex-direction: column;
-    height: min(480px, var(--dispatch-working-height));
+    height: var(--dispatch-idle-height);
     min-height: 0;
+    contain: layout paint;
   }
 
   .dispatch-work-panel[data-expanded="true"] {
@@ -2553,7 +2555,19 @@ button.employee-header-action {
   }
 
   .dispatch-work-panel.dispatch-panel-resizing {
-    transition: height 1000ms cubic-bezier(0.45, 0, 0.2, 1), border-color 700ms, box-shadow 700ms;
+    transition: none;
+  }
+
+  .dispatch-work-panel[data-connecting="true"] > .dispatch-panel-content {
+    flex: none;
+    height: calc(var(--dispatch-idle-height) - 2.5rem - 4px);
+  }
+
+  .dispatch-work-panel .dispatch-veil-connect {
+    bottom: auto;
+    height: calc(var(--dispatch-working-height) - 4px);
+    contain: layout paint;
+    transform: translateZ(0);
   }
 }
 
@@ -3955,6 +3969,9 @@ button.dispatch-start-cta:active:not(:disabled) {
   to { transform: scale(1); }
 }
 
+.dispatch-panel-resizing :is(.shs-ship, .shs-body, .shs-box, .shs-sheen, .idle-chip, .start-btn-particle, .dispatch-start-cta-shine),
+.dispatch-panel-resizing .dispatch-start-cta-wrap::before,
+.dispatch-panel-resizing .dispatch-start-cta-icon::after,
 .dispatch-panel-resizing .dispatch-waiting-flow::before,
 .dispatch-panel-resizing .dispatch-waiting-glow,
 .dispatch-panel-resizing.dispatch-waiting-surface-animated::after,

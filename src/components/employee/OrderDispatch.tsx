@@ -316,7 +316,17 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const [panelVeil, setPanelVeil] = useState<'in' | 'out' | null>(null);
   const [panelVeilKind, setPanelVeilKind] = useState<'start' | 'stop'>('start');
   const [startConnect, setStartConnect] = useState<'connecting' | 'connected' | 'failed' | null>(null);
+  const [startPanelExpanded, setStartPanelExpanded] = useState(false);
   const [startChoreo, setStartChoreo] = useState(false);
+
+  useEffect(() => {
+    if (startConnect !== 'connecting') {
+      setStartPanelExpanded(false);
+      return;
+    }
+    const timer = setTimeout(() => setStartPanelExpanded(true), START_CONNECT_VEIL_FADE_MS);
+    return () => clearTimeout(timer);
+  }, [startConnect]);
   const panelResizing = startExiting || waitingEnterAnim || stopExiting || startEnterAnim || startConnect !== null;
   const [panelVeilKey, setPanelVeilKey] = useState(0);
   const panelVeilTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -388,6 +398,72 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const acceptRevealTimersRef = useRef<NodeJS.Timeout[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
   const acceptGhostHostRef = useRef<HTMLDivElement>(null);
+  const standbySceneRef = useRef<SVGSVGElement>(null);
+  const panelHeightRef = useRef<number | null>(null);
+  const mobilePanelExpanded = session.isWorking || Boolean(currentOrder) || startPanelExpanded || startConnect === 'connected';
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || viewportWidth >= 600) return;
+    const rememberHeight = () => {
+      if (panel.offsetHeight > 0) panelHeightRef.current = panel.offsetHeight;
+    };
+    rememberHeight();
+    const observer = new ResizeObserver(rememberHeight);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [viewportWidth]);
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || viewportWidth >= 600) return;
+    const previous = panelHeightRef.current;
+    const next = panel.offsetHeight;
+    if (next <= 0) return;
+    panelHeightRef.current = next;
+    if (!previous || Math.abs(previous - next) < 1 || !panelResizing || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const timing = { duration: 1000, easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)' };
+    const ratio = previous / next;
+    const panelAnimation = panel.animate([
+      { transform: `scaleY(${ratio})`, transformOrigin: 'top center' },
+      { transform: 'scaleY(1)', transformOrigin: 'top center' },
+    ], timing);
+    const animations = [panelAnimation];
+
+    // Inverse scales keep text and artwork undistorted while the panel's clip expands.
+    for (const child of Array.from(panel.children) as HTMLElement[]) {
+      const top = child.offsetTop;
+      const frames = Array.from({ length: 61 }, (_, i) => {
+        const inverse = 1 / (ratio + (1 - ratio) * i / 60);
+        return { offset: i / 60, transform: `translateY(${top * (inverse - 1)}px) scaleY(${inverse})`, transformOrigin: 'top center' };
+      });
+      animations.push(child.animate(frames, timing));
+    }
+    for (let sibling = panel.nextElementSibling; sibling; sibling = sibling.nextElementSibling) {
+      animations.push(sibling.animate([
+        { transform: `translateY(${previous - next}px)` },
+        { transform: 'translateY(0)' },
+      ], timing));
+    }
+    return () => {
+      if (panelAnimation.playState === 'running') {
+        const progress = panelAnimation.effect?.getComputedTiming().progress ?? 1;
+        panelHeightRef.current = previous + (next - previous) * progress;
+      }
+      animations.forEach(animation => animation.cancel());
+    };
+  }, [mobilePanelExpanded, panelResizing, viewportWidth]);
+
+  useEffect(() => {
+    const scene = standbySceneRef.current;
+    if (!scene) return;
+    if (isProcessing || session.isWorking || suppressAnimations) {
+      scene.pauseAnimations();
+    } else {
+      scene.unpauseAnimations();
+    }
+  }, [isProcessing, session.isWorking, suppressAnimations, currentOrder]);
 
   const lastActivityRef = useRef<Date>(new Date());
   const pageHiddenAtRef = useRef<number | null>(null);
@@ -2781,7 +2857,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
 
       {/* Work Control Panel - Premium Blue/White Design */}
-      <div ref={panelRef} data-expanded={session.isWorking || Boolean(currentOrder) || startConnect === 'connecting' || startConnect === 'connected'} className={`dispatch-work-panel relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]' : 'p-5 md:p-10'} overflow-hidden ${
+      <div ref={panelRef} data-expanded={mobilePanelExpanded} data-connecting={startConnect !== null && !session.isWorking} className={`dispatch-work-panel relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]' : 'p-5 md:p-10'} overflow-hidden ${
         currentOrder?.status === 'pending'
           ? 'bg-[linear-gradient(125deg,#164c9b_0%,#2370bd_55%,#167da9_100%)] border-2 border-blue-400/50 shadow-[0_22px_60px_-16px_rgba(12,43,112,0.32)]'
           : `border-2 border-blue-200/90 shadow-[0_16px_48px_-18px_rgba(37,99,235,0.2),0_6px_20px_-10px_rgba(37,99,235,0.12)] transition-[border-color,box-shadow] duration-700 ${
@@ -2877,7 +2953,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         }`}></div>
 
         {/* Content */}
-        <div className={`relative z-10 ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col'}`}>
+        <div className={`dispatch-panel-content relative z-10 ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col'}`}>
           <SmoothHeight
             animate={panelResizing && viewportWidth >= 600}
             duration={1000}
@@ -3733,7 +3809,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     <div className="relative z-10 w-full">
                       {/* Quay scene: a container crane takes an order container from the yard and loads it onto the ship, on the panel's own wave line */}
                       <div className="dispatch-standby-item relative -mx-4 mb-3 short:mb-1" style={{ '--leave-order': 4, WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)', maskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)' } as CSSProperties} aria-hidden="true">
-                        <svg viewBox="0 0 360 120" className="block h-auto w-full short:max-md:h-[68px]" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <svg ref={standbySceneRef} viewBox="0 0 360 120" className="block h-auto w-full short:max-md:h-[68px]" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <g>
                             {STANDBY_YARD_STACKS.map(box => (
                               <rect key={box.key} x={box.x} y={box.y} width="24" height="12" rx="1" className={`shs-box shs-box-${box.tone}`} />
