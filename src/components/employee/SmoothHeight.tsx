@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 interface SmoothHeightProps {
   animate: boolean;
   holdMax?: boolean;
+  minHeightFloor?: string;
   outerClassName?: string;
   innerClassName?: string;
   duration?: number;
@@ -17,7 +18,7 @@ const verticalPadding = (el: HTMLElement) => {
 // outerClassName may add padding (e.g. to cover content that bleeds into the parent's padding);
 // the animated height includes it so nothing gets clipped.
 // holdMax keeps the tallest height seen (reset on width change) so the box never shrinks between states.
-export default function SmoothHeight({ animate, holdMax = false, outerClassName = '', innerClassName = '', duration = 650, children }: SmoothHeightProps) {
+export default function SmoothHeight({ animate, holdMax = false, minHeightFloor, outerClassName = '', innerClassName = '', duration = 650, children }: SmoothHeightProps) {
   const outerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState<number | null>(null);
@@ -92,7 +93,7 @@ export default function SmoothHeight({ animate, holdMax = false, outerClassName 
   }, [holdMax]);
 
   const style = {
-    ...(minHeight !== null ? { minHeight } : null),
+    ...(holdMax && minHeightFloor ? { minHeight: minHeight !== null ? `max(${minHeight}px, ${minHeightFloor})` : minHeightFloor } : minHeight !== null ? { minHeight } : null),
     ...(height !== null ? {
       height: minHeight !== null ? Math.max(height, minHeight) : height,
       overflow: 'hidden' as const,
@@ -104,7 +105,7 @@ export default function SmoothHeight({ animate, holdMax = false, outerClassName 
     <div
       ref={outerRef}
       className={outerClassName}
-      style={minHeight !== null || height !== null ? style : undefined}
+      style={minHeight !== null || height !== null || (holdMax && minHeightFloor) ? style : undefined}
     >
       <div ref={innerRef} className={innerClassName}>{children}</div>
     </div>

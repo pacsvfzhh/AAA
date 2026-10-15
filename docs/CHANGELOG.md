@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · 手机端 Order Processing / 等待派单 / New Order / In Progress 统一尺寸
+- 需求：这四个面板在手机上必须是同一个尺寸，互相关联；上一条把 New Order 改成「可撑高」后，换机型时尺寸对不上。
+- 改动：①手机上这四个面板共用同一个基准高度：480px 与「屏幕高度 − 顶栏 − 底部导航 − 24px」中较小的一个，最低 380px（iPhone SE 约 418px，普通手机 480px）。②待机和等待派单面板至少有这个高度，内容少时按钮留在底部，不再留空白；内容更高（如长文案）时按内容撑高。③New Order 和 In Progress 使用 Order Processing 面板实际的高度，换机型时先回到同一个基准高度，回到待机后再重新对齐；所以换机型后四个面板仍然一样大。New Order 内容比面板高时才会撑高，不会被裁掉。
+- 文件：`src/components/employee/OrderDispatch.tsx`、`src/components/employee/SmoothHeight.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；没有浏览器，未实测。
+
 ## 2026-10-16 · 切换机型后 New Order 面板显示出错
 - 需求：在预览里切换机型尺寸时，New Order 面板显示出错。
 - 原因：New Order 面板用的是之前在别的机型上量到的高度，换机型后这个高度不再合适，内容被裁切或留出大片空白。

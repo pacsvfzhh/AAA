@@ -2788,7 +2788,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       )}
 
       {/* Work Control Panel - Premium Blue/White Design */}
-      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]' : 'h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
+      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(480px,max(380px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]' : 'h-[min(480px,max(380px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
         currentOrder?.status === 'pending'
           ? 'bg-[linear-gradient(125deg,#164c9b_0%,#2370bd_55%,#167da9_100%)] border-2 border-blue-400/50 shadow-[0_22px_60px_-16px_rgba(12,43,112,0.32)]'
           : `border-2 border-blue-200/90 shadow-[0_16px_48px_-18px_rgba(37,99,235,0.2),0_6px_20px_-10px_rgba(37,99,235,0.12)] transition-[border-color,box-shadow] duration-700 ${
@@ -2798,7 +2798,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               ? 'bg-gradient-to-br from-white via-blue-50/80 to-white'
               : 'min-h-[420px] short:max-md:min-h-0 md:min-h-0 bg-white'
           }`
-      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { [currentOrder?.status === 'pending' ? 'minHeight' : 'height']: `min(${idlePanelHeight}px, max(300px, calc(100dvh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - 24px)))` } : undefined}>
+      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { [currentOrder?.status === 'pending' ? 'minHeight' : 'height']: `${idlePanelHeight}px` } : undefined}>
         <div ref={acceptGhostHostRef} data-accept-ghost-host className="pointer-events-none absolute -inset-[2px] z-40 overflow-hidden rounded-2xl md:rounded-3xl" aria-hidden="true" />
         {(acceptRevealPhase === 'cover' || acceptRevealPhase === 'out') && <span role="status" className="sr-only">{t.dispatch.orderAccepted}</span>}
         {panelVeil && (
@@ -2888,9 +2888,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           <SmoothHeight
             animate={panelResizing && !(!currentOrder && viewportWidth < 768)}
             holdMax={!currentOrder && viewportWidth < 768}
+            minHeightFloor="min(480px, max(380px, calc(100dvh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - 24px)))"
             duration={1000}
-            outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''}`}
-            innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : waitingPanelActive ? 'max-md:flex max-md:flex-1 max-md:flex-col' : ''}
+            outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${!currentOrder ? 'max-md:flex max-md:flex-col' : ''}`}
+            innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : !currentOrder ? 'max-md:flex max-md:flex-1 max-md:flex-col' : ''}
           >
           <div className={`overflow-hidden max-md:shrink-0 ${
             currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'hidden' : ''
@@ -3390,7 +3391,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               </div>
             </div>
           ) : (
-            <div className={`max-md:grid ${waitingPanelActive ? 'max-md:flex-1' : ''}`}>
+            <div className="max-md:grid max-md:flex-1">
             {(waitingPanelActive || !session.isWorking || (isTransitioning && transitionType === 'start')) && (
               <div
                 className={`max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''} ${waitingPanelActive ? (waitingEnterAnim ? 'dispatch-waiting-enter' : stopExiting ? 'dispatch-waiting-exit' : '') : 'invisible dispatch-parked md:hidden'}`}
