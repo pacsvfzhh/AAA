@@ -937,9 +937,11 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                 </div>
               </section>
 
-              <aside className="confirm-amount relative order-first flex flex-col justify-between overflow-hidden bg-gradient-to-br from-[#12356d] via-[#1b4b8f] to-blue-600 px-4 py-3 text-white sm:px-7 sm:py-4 lg:order-last lg:justify-center lg:px-6 lg:py-5">
+              <aside className="confirm-amount relative order-first flex flex-col justify-between overflow-hidden bg-gradient-to-br from-[#12356d] via-[#1b4b8f] to-blue-600 px-4 py-3.5 text-white sm:px-7 sm:py-5 lg:order-last lg:justify-center lg:px-6 lg:py-5">
                 <span className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rotate-[18deg] rounded-[30%] bg-white/10" aria-hidden="true" />
-                <svg className="pointer-events-none absolute -bottom-1 right-3 h-12 w-20 text-white/15 sm:h-14 sm:w-24 lg:h-20 lg:w-36" viewBox="0 0 120 64" fill="none" aria-hidden="true">
+                <span className="pointer-events-none absolute -bottom-12 left-1/3 h-24 w-24 rounded-full bg-cyan-300/10" aria-hidden="true" />
+                <span className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-cyan-300/70 via-white/30 to-transparent lg:hidden" aria-hidden="true" />
+                <svg className="pointer-events-none absolute -bottom-1 right-3 h-14 w-24 text-white/15 sm:h-16 sm:w-28 lg:h-20 lg:w-36" viewBox="0 0 120 64" fill="none" aria-hidden="true">
                   <g stroke="currentColor" strokeWidth="1.5">
                     <rect x="4" y="34" width="54" height="26" rx="2" />
                     <rect x="60" y="34" width="54" height="26" rx="2" />
@@ -948,11 +950,16 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                   </g>
                 </svg>
                 <div className="relative">
-                  <p className="flex items-center gap-2 text-sm font-semibold tracking-wide text-blue-50 sm:text-base">
-                    <span className="rounded bg-white/15 px-1.5 py-px font-mono text-[10px] font-bold tracking-normal text-white">05</span>
-                    {t.orderSubmission.totalAmount}
-                  </p>
-                  <div className="mt-1.5 flex flex-nowrap items-baseline gap-x-2 lg:mt-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-2 text-base font-semibold tracking-wide text-blue-50 sm:text-lg">
+                      <span className="rounded bg-white/15 px-1.5 py-px font-mono text-[10px] font-bold tracking-normal text-white">05</span>
+                      {t.orderSubmission.totalAmount}
+                    </p>
+                    {selectedProductType?.name ? (
+                      <span className="max-w-[45%] truncate rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-medium text-blue-100 ring-1 ring-white/20 lg:hidden">{selectedProductType.name}</span>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 flex flex-nowrap items-baseline gap-x-2 lg:mt-3">
                     <span className="text-[30px] font-semibold leading-none tracking-tight tabular-nums sm:text-4xl">
                       {parseFloat(formData.productValue).toFixed(2)}
                     </span>
@@ -960,7 +967,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                   </div>
                   <p className="mt-2 hidden truncate text-xs text-blue-100/80 lg:block">{selectedProductType?.name}</p>
                 </div>
-                <div className="relative mt-3 hidden items-center gap-3 border-t border-white/15 pt-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-100/90 lg:flex">
+                <div className="relative mt-3 flex items-center gap-3 border-t border-white/15 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-100/90 sm:pt-3 sm:text-[11px] lg:mt-5">
                   <span className="inline-flex items-center gap-1.5">
                     <Lock className="h-3 w-3" strokeWidth={2.5} aria-hidden="true" />
                     {t.orderSubmission.encrypted}
