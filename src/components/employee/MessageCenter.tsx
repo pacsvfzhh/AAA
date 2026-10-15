@@ -255,7 +255,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
             titleColor: 'text-amber-950',
           }
         : {
-            card: 'bg-gradient-to-br from-amber-50/55 via-yellow-50/45 to-orange-50/40 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
+            card: 'bg-gradient-to-br from-amber-50/70 via-yellow-50/55 to-orange-50/45 ring-1 ring-amber-200/70 shadow-sm shadow-amber-200/30',
             iconBg: 'bg-amber-50',
             iconText: 'text-amber-500',
             accent: 'from-amber-300/70 via-yellow-200/70 to-orange-200/70',
@@ -299,9 +299,21 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     }
 
     // Read messages keep a softer version of the priority color.
+    if (priority === 'urgent') {
+      return {
+        card: 'bg-gradient-to-br from-rose-50/70 via-white/85 to-orange-50/50 ring-1 ring-rose-200/70 shadow-sm shadow-rose-200/30',
+        iconBg: 'bg-rose-50',
+        iconText: 'text-rose-400',
+        accent: 'from-rose-300/70 via-red-200/70 to-orange-200/70',
+        patternColor: 'border-rose-100',
+        dotColor: 'bg-rose-300',
+        titleColor: 'text-rose-700',
+      };
+    }
+
     if (priority === 'high') {
       return {
-        card: 'bg-gradient-to-br from-emerald-50/55 via-white/85 to-green-50/45 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
+        card: 'bg-gradient-to-br from-emerald-50/70 via-white/85 to-green-50/50 ring-1 ring-emerald-200/70 shadow-sm shadow-emerald-200/30',
         iconBg: 'bg-emerald-50',
         iconText: 'text-emerald-400',
         accent: 'from-emerald-300/70 via-green-200/70 to-teal-200/70',
@@ -312,7 +324,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     }
 
     return {
-      card: 'bg-gradient-to-br from-blue-50/55 via-white/85 to-sky-50/45 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
+      card: 'bg-gradient-to-br from-blue-50/70 via-white/85 to-sky-50/50 ring-1 ring-blue-200/70 shadow-sm shadow-blue-200/30',
       iconBg: 'bg-blue-50',
       iconText: 'text-blue-400',
       accent: 'from-blue-300/70 via-sky-200/70 to-cyan-200/70',
@@ -321,6 +333,12 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
       titleColor: 'text-blue-700',
     };
   };
+
+  const getReadBorder = (priority: string, isReward: boolean) =>
+    isReward ? 'border-amber-200/80'
+      : priority === 'urgent' ? 'border-rose-200/80'
+      : priority === 'high' ? 'border-emerald-200/80'
+      : 'border-blue-200/80';
 
   const unreadCount = unreadMessages.length;
   const detailTone = selectedMessage ? getNotificationDetailTone(selectedMessage.messages.priority, selectedMessage.messages.notification_category) : 'normal';
@@ -501,7 +519,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                     className="group relative cursor-pointer msg-force-transition active:scale-[0.98]"
                   >
                     {/* Card */}
-                    <div className={`relative rounded-2xl overflow-hidden msg-force-transition hover:-translate-y-0.5 hover:shadow-xl ${isUnread ? 'shadow-[0_10px_30px_rgba(37,99,235,0.28)] brightness-[1.03]' : 'border border-slate-200/85 opacity-[0.86] saturate-[0.8] hover:opacity-100 hover:saturate-100'} ${style.card}`}>
+                    <div className={`relative rounded-2xl overflow-hidden msg-force-transition hover:-translate-y-0.5 hover:shadow-xl ${isUnread ? 'shadow-[0_10px_30px_rgba(37,99,235,0.28)] brightness-[1.03]' : `border opacity-[0.9] saturate-[0.9] hover:opacity-100 hover:saturate-100 ${getReadBorder(msg.messages.priority, isReward)}`} ${style.card}`}>
                       {/* Accent: unread cards get a left + top L-shaped gradient line, read cards a thin left bar */}
                       {isUnread ? (
                         <div
