@@ -1,0 +1,2168 @@
+diff --git a/src/components/admin/AdminDashboard.tsx b/src/components/admin/AdminDashboard.tsx
+index 14c0fb8e..cd9d17d1 100644
+--- a/src/components/admin/AdminDashboard.tsx
++++ b/src/components/admin/AdminDashboard.tsx
+@@ -1552,7 +1552,7 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
+                 )}
+                 {loadedTabs.has('history') && (
+                   <div className={activeTab === 'history' ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden' : 'hidden'}>
+-                    <HistoryDataManagement />
++                    <HistoryDataManagement isActive={activeTab === 'history'} />
+                   </div>
+                 )}
+               </>
+diff --git a/src/components/admin/CccServiceManagement.tsx b/src/components/admin/CccServiceManagement.tsx
+index 61958a3e..484bac2b 100644
+--- a/src/components/admin/CccServiceManagement.tsx
++++ b/src/components/admin/CccServiceManagement.tsx
+@@ -9,11 +9,11 @@ import { formatSupabaseError, supabase } from '../../lib/supabase';
+ import { getCachedAdminWorkspaceData, getCachedConversationSummaries, invalidateAdminWorkspaceDataCache, invalidateConversationSummariesCache, prefetchAdminGroups, prefetchAdminWorkspaceData, prefetchConversationSummaries } from '../../lib/serviceWorkspaceCache';
+ import { stripTailwindStyles, sanitizeChatMessage } from '../../lib/sanitizeHTML';
+ import { processContentImages } from '../../lib/imageOptimizer';
+-import { cleanupContentImages } from '../../lib/storageCleanup';
+ import AdminGroupPicker, { type AdminGroup } from './AdminGroupPicker';
+ import EmployeeMetadataPopover from './EmployeeMetadataPopover';
+ import type { Database } from '../../types/database';
+ import { createFinancialOperationId, getAdminFinancialSessionToken } from '../../lib/auth';
++import { mutateAuditedContent } from '../../lib/contentAudit';
+ import { uploadStorageObjectWithProgress } from '../../lib/storageUpload';
+ 
+ function extractImageOnlyUrl(content: string): string | null {
+@@ -1940,18 +1940,13 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
+       const optimizedContent = (templateForm.content_type === 'richtext' || templateForm.content_type === 'rich_card')
+         ? await processContentImages(content, folder)
+         : content.trim();
+-      const { error } = await supabase
+-        .from('cs_message_templates')
+-        .update({
+-          name: templateForm.name.trim(),
+-          title: templateForm.content_type === 'rich_card' && templateForm.title.trim() ? templateForm.title.trim() : null,
+-          subtitle: templateForm.content_type === 'rich_card' && templateForm.subtitle.trim() ? templateForm.subtitle.trim() : null,
+-          content: optimizedContent,
+-          content_type: templateForm.content_type,
+-          updated_at: new Date().toISOString(),
+-        })
+-        .eq('id', editingTemplate.id);
+-      if (error) throw error;
++      await mutateAuditedContent('template_edit', [editingTemplate.id], {
++        name: templateForm.name.trim(),
++        title: templateForm.content_type === 'rich_card' && templateForm.title.trim() ? templateForm.title.trim() : null,
++        subtitle: templateForm.content_type === 'rich_card' && templateForm.subtitle.trim() ? templateForm.subtitle.trim() : null,
++        content: optimizedContent,
++        content_type: templateForm.content_type,
++      });
+       setEditingTemplate(null);
+       setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: 'richtext' });
+       if (templateEditorRef.current) templateEditorRef.current.innerHTML = '';
+@@ -1967,16 +1962,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
+ 
+   const handleDeleteTemplate = async (id: string) => {
+     try {
+-      const tpl = messageTemplates.find(t => t.id === id);
+-      if (tpl?.content) {
+-        await cleanupContentImages(tpl.content).catch(() => {});
+-      }
+-      await supabase.from('rich_card_contents').delete().eq('source_template_id', id).then(() => {});
+-      const { error } = await supabase
+-        .from('cs_message_templates')
+-        .delete()
+-        .eq('id', id);
+-      if (error) throw error;
++      await mutateAuditedContent('template_delete', [id]);
+       setNotification({ type: 'success', text: '範本已刪除！' });
+       loadTemplates();
+     } catch (error: unknown) {
+@@ -2522,54 +2508,10 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
+     setConfirmDialog({
+       show: true,
+       title: '刪除經理',
+-      message: `確定要刪除經理「${customerToDelete?.customer_name || '此經理'}」嗎？所有對話歷史將永久刪除。`,
++      message: `確定要移除經理「${customerToDelete?.customer_name || '此經理'}」嗎？所有對話會從原頁移除，原文保留在超管監察紀錄。`,
+       onConfirm: async () => {
+         try {
+-          const { data: convos } = await supabase
+-            .from('customer_employee_conversations')
+-            .select('id, image_url, rich_card_content_id')
+-            .eq('customer_id', customerId);
+-
+-          if (convos?.length) {
+-            const imageUrls = convos
+-              .filter(c => c.image_url)
+-              .map(c => c.image_url as string);
+-            if (imageUrls.length) {
+-              const paths = imageUrls
+-                .map(url => {
+-                  const marker = '/storage/v1/object/public/chat-images/';
+-                  const idx = url.indexOf(marker);
+-                  return idx >= 0 ? url.slice(idx + marker.length) : null;
+-                })
+-                .filter((p): p is string => !!p);
+-              if (paths.length) {
+-                await supabase.storage.from('chat-images').remove(paths).catch(() => {});
+-              }
+-            }
+-            const rcIds = convos
+-              .filter(c => c.rich_card_content_id)
+-              .map(c => c.rich_card_content_id as string);
+-            if (rcIds.length) {
+-              const { data: rcRows } = await supabase
+-                .from('rich_card_contents')
+-                .select('id, html_content')
+-                .in('id', rcIds);
+-              if (rcRows?.length) {
+-                for (const rc of rcRows) {
+-                  await cleanupContentImages(rc.html_content).catch(() => {});
+-                }
+-              }
+-            }
+-          }
+-
+-          await supabase.from('rich_card_contents').delete().eq('customer_id', customerId).then(() => {});
+-
+-          const { error } = await supabase
+-            .from('simulated_customers')
+-            .delete()
+-            .eq('id', customerId);
+-
+-          if (error) throw error;
++          await mutateAuditedContent('customer_delete', [customerId]);
+ 
+           invalidateAdminWorkspaceDataCache(selectedAdminId || adminId, 'manager');
+           setNotification({ type: 'success', text: '經理已成功刪除！' });
+@@ -3014,45 +2956,15 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
+     }
+   };
+ 
+-  const extractStoragePath = (publicUrl: string): string | null => {
+-    try {
+-      const marker = '/object/public/chat-images/';
+-      const idx = publicUrl.indexOf(marker);
+-      if (idx !== -1) return publicUrl.substring(idx + marker.length);
+-      return null;
+-    } catch { return null; }
+-  };
+-
+-  const cleanupStorageImage = async (imageUrl: string) => {
+-    const path = extractStoragePath(imageUrl);
+-    if (!path) return;
+-    try {
+-      await supabase.storage.from('chat-images').remove([path]);
+-    } catch {
+-      return;
+-    }
+-  };
+-
+   const handleDeleteMessage = (messageId: string) => {
+     setConfirmDialog({
+       show: true,
+       title: '刪除訊息',
+-      message: '確定要刪除此訊息嗎？',
++      message: '從原頁移除此訊息並保留超管監察紀錄？',
+       onConfirm: async () => {
+         try {
+-          const { data, error } = await supabase
+-            .from('customer_employee_conversations')
+-            .delete()
+-            .eq('id', messageId)
+-            .select();
+-
+-          if (error) throw error;
+-
+-          if (data?.[0]?.message_type === 'image' && data[0].image_url) {
+-            await cleanupStorageImage(data[0].image_url);
+-          }
+-
+-          setNotification({ type: 'success', text: '訊息已成功刪除' });
++          await mutateAuditedContent('chat_delete', [messageId]);
++          setNotification({ type: 'success', text: '訊息已從原頁移除，原文已留證' });
+           loadMessages();
+           loadConversationHistory();
+         } catch (error: unknown) {
+@@ -3089,25 +3001,12 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
+     }
+     setReplacingImageMsgId(msgId);
+     try {
+-      const { data: oldMsg } = await supabase
+-        .from('customer_employee_conversations')
+-        .select('image_url')
+-        .eq('id', msgId)
+-        .maybeSingle();
+-      const oldImageUrl = oldMsg?.image_url;
+-
+       const fileExt = file.name.split('.').pop();
+       const fileName = `chat-replace-${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
+       const { data, error: uploadError } = await supabase.storage.from('chat-images').upload(fileName, file);
+       if (uploadError) throw uploadError;
+       const { data: { publicUrl } } = supabase.storage.from('chat-images').getPublicUrl(data.path);
+-      const { error: updateError } = await supabase
+-        .from('customer_employee_conversations')
+-        .update({ image_url: publicUrl })
+-        .eq('id', msgId);
+-      if (updateError) throw updateError;
+-
+-      if (oldImageUrl) await cleanupStorageImage(oldImageUrl);
++      await mutateAuditedContent('chat_edit', [msgId], { image_url: publicUrl });
+ 
+       setNotification({ type: 'success', text: '圖片已成功替換' });
+       preserveScrollUntilRef.current = Date.now() + 2000;
+@@ -3129,12 +3028,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
+     if (!textOnly.trim() && !hasImages) return;
+ 
+     try {
+-      const { error } = await supabase
+-        .from('customer_employee_conversations')
+-        .update({ message_content: newContent })
+-        .eq('id', editingMessageId);
+-
+-      if (error) throw error;
++      await mutateAuditedContent('chat_edit', [editingMessageId], { message_content: newContent });
+ 
+       setEditingMessageId(null);
+       setEditingContent('');
+@@ -3286,29 +3180,11 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
+     setConfirmDialog({
+       show: true,
+       title: '刪除對話',
+-      message: `確定要刪除與 ${selectedEmployee.username} 的完整對話嗎？此操作無法復原。`,
++      message: `確定要從原頁移除與 ${selectedEmployee.username} 的完整對話嗎？所有訊息原文將保留在超管監察紀錄。`,
+       onConfirm: async () => {
+         try {
+-          console.log('Deleting conversation:', {
+-            customerId: selectedCustomer.id,
+-            employeeId: selectedEmployee.id
+-          });
+-
+-          const { data, error } = await supabase
+-            .from('customer_employee_conversations')
+-            .delete()
+-            .eq('customer_id', selectedCustomer.id)
+-            .eq('employee_id', selectedEmployee.id)
+-            .select();
+-
+-          console.log('Delete conversation response:', { data, error });
+-
+-          if (error) {
+-            console.error('Delete conversation error:', formatSupabaseError(error));
+-            throw error;
+-          }
+-
+-          setNotification({ type: 'success', text: `對話已刪除（已移除 ${data?.length || 0} 則訊息）` });
++          const result = await mutateAuditedContent('conversation_delete', [selectedCustomer.id], {}, selectedEmployee.id);
++          setNotification({ type: 'success', text: `對話已從原頁移除（${result.changed_count} 則訊息已留證）` });
+           conversationMessagesCacheRef.current.delete(`${selectedCustomer.id}:${selectedEmployee.id}`);
+           setMessages([]);
+           loadConversationHistory();
+diff --git a/src/components/admin/ContentAuditPanel.tsx b/src/components/admin/ContentAuditPanel.tsx
+new file mode 100644
+index 00000000..d645b757
+--- /dev/null
++++ b/src/components/admin/ContentAuditPanel.tsx
+@@ -0,0 +1,547 @@
++import { useEffect, useRef, useState } from 'react';
++import type { FormEvent } from 'react';
++import {
++  AlertTriangle, ArrowLeft, ChevronLeft, ChevronRight, Clock3, Database,
++  FileText, Image as ImageIcon, LockKeyhole, RefreshCw, Search, ShieldCheck, Trash2,
++} from 'lucide-react';
++import { getAdminFinancialSessionToken } from '../../lib/auth';
++import { clearAuditedContent, loadAuditedImage } from '../../lib/contentAudit';
++import { formatSupabaseError, supabase } from '../../lib/supabase';
++
++type AuditType = 'notification' | 'aaa_service' | 'ccc_service';
++type AuditAction = 'edit' | 'delete' | 'conversation_delete' | 'customer_delete' | 'source_edit' | 'source_delete';
++
++interface AuditEvent {
++  id: string;
++  operation_id: string;
++  entity_type: AuditType;
++  entity_id: string;
++  action: AuditAction;
++  owner_admin_id: string;
++  actor_admin_id: string;
++  actor_username: string;
++  actor_role: string;
++  customer_id: string | null;
++  employee_id: string | null;
++  occurred_at: string;
++  summary: string;
++  cleared_at: string | null;
++  clear_started_at: string | null;
++}
++
++interface AuditDetail extends Omit<AuditEvent, 'summary'> {
++  before_data: unknown;
++  after_data: unknown;
++  media_refs: Record<string, string> | null;
++  clear_reason: string | null;
++  cleared_by: string | null;
++  cleared_username: string | null;
++  timeline: Array<Pick<AuditEvent, 'id' | 'action' | 'occurred_at' | 'cleared_at'>>;
++}
++
++interface AuditFilters {
++  type: '' | AuditType;
++  actor: string;
++  action: '' | AuditAction;
++  search: string;
++  from: string;
++  to: string;
++}
++
++const PAGE_SIZE = 30;
++const emptyFilters: AuditFilters = { type: '', actor: '', action: '', search: '', from: '', to: '' };
++const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++const typeLabels: Record<AuditType, string> = {
++  notification: '手動通知', aaa_service: 'AAA 客服', ccc_service: 'CCC 客服',
++};
++const actionLabels: Record<AuditAction, string> = {
++  edit: '編輯', delete: '刪除', conversation_delete: '刪除對話', customer_delete: '刪除客戶',
++  source_edit: '編輯來源', source_delete: '刪除來源',
++};
++const inputClass = 'mt-1.5 w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus-visible:border-cyan-400 focus-visible:ring-2 focus-visible:ring-cyan-400/30';
++const buttonFocus = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950';
++
++function formatAuditTime(value: string | null): string {
++  if (!value) return '—';
++  const date = new Date(value);
++  if (Number.isNaN(date.getTime())) return '—';
++  return `${new Intl.DateTimeFormat('zh-TW', {
++    timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
++    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
++  }).format(date)} (UTC+8)`;
++}
++
++function localDayStart(date: string, nextDay = false): string {
++  const start = new Date(`${date}T00:00:00+08:00`);
++  if (nextDay) start.setTime(start.getTime() + 24 * 60 * 60 * 1000);
++  return start.toISOString();
++}
++
++function Snapshot({ title, data, cleared }: { title: string; data: unknown; cleared: boolean }) {
++  const snapshot = data && typeof data === 'object' && !Array.isArray(data)
++    ? data as Record<string, unknown> : null;
++  const message = snapshot?.message && typeof snapshot.message === 'object' && !Array.isArray(snapshot.message)
++    ? snapshot.message as Record<string, unknown> : null;
++  const fields = [
++    ['標題', message?.title], ['內容（純文字／HTML 原始碼）', message?.content ?? message?.message_content],
++    ['渲染內容原始碼（不執行）', snapshot?.rendered_html],
++  ].filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0);
++
++  return (
++    <section className="min-w-0 rounded-xl border border-slate-700 bg-slate-950/60 p-3">
++      <h4 className="mb-2 text-xs font-bold text-cyan-200">{title}</h4>
++      {data == null ? (
++        <p className="text-xs text-slate-400">{cleared ? '此版本的證據內容已清除。' : '此操作沒有對應的內容快照。'}</p>
++      ) : (
++        <div className="space-y-3">
++          {fields.map(([label, text]) => (
++            <div key={label}>
++              <p className="mb-1 text-[11px] font-semibold text-slate-400">{label}</p>
++              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-slate-800 bg-slate-900 p-2 text-xs leading-5 text-slate-200">{text}</pre>
++            </div>
++          ))}
++          <details>
++            <summary className="cursor-pointer text-xs font-semibold text-cyan-300">查看完整 JSON 快照（純文字）</summary>
++            <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-slate-800 bg-slate-900 p-2 text-xs leading-5 text-slate-200">{JSON.stringify(data, null, 2)}</pre>
++          </details>
++        </div>
++      )}
++    </section>
++  );
++}
++
++function EvidenceImage({ eventId, source, path }: { eventId: string; source: string; path: string }) {
++  const [objectUrl, setObjectUrl] = useState<string | null>(null);
++  const [loading, setLoading] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++  const objectUrlRef = useRef<string | null>(null);
++  const activeRef = useRef(true);
++
++  useEffect(() => {
++    activeRef.current = true;
++    return () => {
++      activeRef.current = false;
++      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
++      objectUrlRef.current = null;
++    };
++  }, [eventId, path]);
++
++  const load = async () => {
++    if (loading || objectUrl) return;
++    setLoading(true);
++    setError(null);
++    try {
++      const url = await loadAuditedImage(eventId, path);
++      if (!activeRef.current) {
++        URL.revokeObjectURL(url);
++        return;
++      }
++      objectUrlRef.current = url;
++      setObjectUrl(url);
++    } catch (err) {
++      if (activeRef.current) setError(`載入封存圖片失敗：${formatSupabaseError(err)}`);
++    } finally {
++      if (activeRef.current) setLoading(false);
++    }
++  };
++
++  return (
++    <div className="min-w-0 rounded-lg border border-slate-700 bg-slate-950/60 p-3">
++      <p className="break-all text-[11px] text-slate-400">原始來源：{source}</p>
++      {objectUrl ? <img src={objectUrl} alt="安全載入的封存證據圖片" className="mt-2 max-h-64 max-w-full rounded-lg object-contain" /> : (
++        <button type="button" onClick={() => void load()} disabled={loading} className={`mt-2 inline-flex items-center gap-2 rounded-lg border border-cyan-400/35 bg-cyan-500/10 px-3 py-2 text-xs font-bold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-50 ${buttonFocus}`}>
++          <ImageIcon className="h-4 w-4" aria-hidden="true" />{loading ? '載入中…' : '安全載入封存圖片'}
++        </button>
++      )}
++      {error && <p role="alert" className="mt-2 text-xs text-rose-300">{error}</p>}
++    </div>
++  );
++}
++
++function MetadataRow({ label, value }: { label: string; value: string | null }) {
++  return <div className="min-w-0 rounded-lg border border-slate-700/70 bg-slate-950/40 p-2"><dt className="text-[11px] font-semibold text-slate-400">{label}</dt><dd className="mt-1 break-all text-xs text-slate-100">{value || '—'}</dd></div>;
++}
++
++export default function ContentAuditPanel({ onBack }: { onBack: () => void }) {
++  const [draft, setDraft] = useState<AuditFilters>(emptyFilters);
++  const [filters, setFilters] = useState<AuditFilters>(emptyFilters);
++  const [filterError, setFilterError] = useState<string | null>(null);
++  const [events, setEvents] = useState<AuditEvent[]>([]);
++  const [total, setTotal] = useState(0);
++  const [page, setPage] = useState(0);
++  const [refreshKey, setRefreshKey] = useState(0);
++  const [loading, setLoading] = useState(true);
++  const [selectedId, setSelectedId] = useState<string | null>(null);
++  const [detail, setDetail] = useState<AuditDetail | null>(null);
++  const [detailLoading, setDetailLoading] = useState(false);
++  const [detailKey, setDetailKey] = useState(0);
++  const [error, setError] = useState<string | null>(null);
++  const [expiry, setExpiry] = useState<string | null>(null);
++  const [now, setNow] = useState(Date.now());
++  const [windowBusy, setWindowBusy] = useState(false);
++  const [clearTarget, setClearTarget] = useState<AuditDetail | null>(null);
++  const [reason, setReason] = useState('');
++  const [clearing, setClearing] = useState(false);
++  const detailRef = useRef<HTMLDivElement>(null);
++  const expiryRef = useRef<string | null>(null);
++  const enablingRef = useRef(false);
++  const disposedRef = useRef(false);
++  const secondsLeft = expiry ? Math.max(0, Math.ceil((new Date(expiry).getTime() - now) / 1000)) : 0;
++  const purgeUnlocked = secondsLeft > 0;
++  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
++
++  // The dashboard keeps tabs mounted while hidden. The parent unmounts this panel on tab exit.
++  useEffect(() => {
++    disposedRef.current = false;
++    const revoke = async () => {
++      try {
++        const { error: rpcError } = await supabase.rpc('set_content_audit_purge_window', {
++          p_admin_session_token: getAdminFinancialSessionToken(), p_enabled: false,
++        });
++        if (rpcError) throw rpcError;
++      } catch (err) {
++        console.error('Could not revoke audit purge window:', formatSupabaseError(err));
++      }
++    };
++    return () => {
++      disposedRef.current = true;
++      if (expiryRef.current || enablingRef.current) void revoke();
++      expiryRef.current = null;
++    };
++  }, []);
++
++  useEffect(() => {
++    let cancelled = false;
++    setLoading(true);
++    setError(null);
++    setEvents([]);
++    setTotal(0);
++    const load = async () => {
++      try {
++        const { data, error: rpcError } = await supabase.rpc('list_content_audit_events', {
++          p_admin_session_token: getAdminFinancialSessionToken(),
++          p_type: filters.type || null,
++          p_actor: filters.actor || null,
++          p_action: filters.action || null,
++          p_search: filters.search || null,
++          p_from: filters.from ? localDayStart(filters.from) : null,
++          p_to: filters.to ? localDayStart(filters.to, true) : null,
++          p_page: page, p_page_size: PAGE_SIZE,
++        });
++        if (rpcError) throw rpcError;
++        if (!data || typeof data !== 'object' || !('items' in data) || !Array.isArray(data.items) || !('total' in data)) {
++          throw new Error('稽核清單格式不正確。');
++        }
++        if (!cancelled) {
++          setEvents(data.items as unknown as AuditEvent[]);
++          setTotal(Number(data.total) || 0);
++        }
++      } catch (err) {
++        if (!cancelled) setError(`載入稽核紀錄失敗：${formatSupabaseError(err)}`);
++      } finally {
++        if (!cancelled) setLoading(false);
++      }
++    };
++    void load();
++    return () => { cancelled = true; };
++  }, [filters, page, refreshKey]);
++
++  useEffect(() => {
++    if (!selectedId) return;
++    let cancelled = false;
++    setDetail(null);
++    setDetailLoading(true);
++    const load = async () => {
++      try {
++        const { data, error: rpcError } = await supabase.rpc('get_content_audit_event', {
++          p_admin_session_token: getAdminFinancialSessionToken(), p_event_id: selectedId,
++        });
++        if (rpcError) throw rpcError;
++        if (!data || typeof data !== 'object' || !('id' in data)) throw new Error('找不到此稽核事件。');
++        if (!cancelled) setDetail(data as unknown as AuditDetail);
++      } catch (err) {
++        if (!cancelled) setError(`載入稽核詳情失敗：${formatSupabaseError(err)}`);
++      } finally {
++        if (!cancelled) setDetailLoading(false);
++      }
++    };
++    void load();
++    return () => { cancelled = true; };
++  }, [selectedId, detailKey]);
++
++  useEffect(() => {
++    if (!expiry) return;
++    const updateNow = () => setNow(Date.now());
++    const timer = window.setInterval(updateNow, 1000);
++    window.addEventListener('focus', updateNow);
++    document.addEventListener('visibilitychange', updateNow);
++    return () => {
++      window.clearInterval(timer);
++      window.removeEventListener('focus', updateNow);
++      document.removeEventListener('visibilitychange', updateNow);
++    };
++  }, [expiry]);
++
++  useEffect(() => {
++    if (!expiry || secondsLeft > 0) return;
++    expiryRef.current = null;
++    setExpiry(null);
++    setClearTarget(null);
++    setWindowBusy(true);
++    // The backend independently enforces expiry; wait for the revoke before enabling again.
++    void (async () => {
++      try {
++        const { error: rpcError } = await supabase.rpc('set_content_audit_purge_window', {
++          p_admin_session_token: getAdminFinancialSessionToken(), p_enabled: false,
++        });
++        if (rpcError) throw rpcError;
++      } catch (err) {
++        console.error('Could not close expired audit purge window:', formatSupabaseError(err));
++      } finally {
++        if (!disposedRef.current) setWindowBusy(false);
++      }
++    })();
++  }, [expiry, secondsLeft]);
++
++  const lockWindow = async () => {
++    const { error: rpcError } = await supabase.rpc('set_content_audit_purge_window', {
++      p_admin_session_token: getAdminFinancialSessionToken(), p_enabled: false,
++    });
++    if (rpcError) throw rpcError;
++    expiryRef.current = null;
++    if (!disposedRef.current) {
++      setExpiry(null);
++      setClearTarget(null);
++    }
++  };
++
++  const handleBack = async () => {
++    if (windowBusy || clearing) return;
++    if (expiryRef.current || enablingRef.current) {
++      setWindowBusy(true);
++      try {
++        await lockWindow();
++      } catch (err) {
++        setError(`關閉清除模式失敗，請重試：${formatSupabaseError(err)}`);
++        setWindowBusy(false);
++        return;
++      }
++    }
++    onBack();
++  };
++
++  const toggleWindow = async () => {
++    if (windowBusy || clearing) return;
++    setWindowBusy(true);
++    setError(null);
++    try {
++      if (purgeUnlocked) {
++        await lockWindow();
++      } else {
++        enablingRef.current = true;
++        const { data, error: rpcError } = await supabase.rpc('set_content_audit_purge_window', {
++          p_admin_session_token: getAdminFinancialSessionToken(), p_enabled: true,
++        });
++        if (rpcError) throw rpcError;
++        if (typeof data !== 'string' || new Date(data).getTime() <= Date.now()) {
++          await lockWindow();
++          throw new Error('清除模式啟用時間無效。');
++        }
++        if (disposedRef.current) {
++          // An enable response may arrive after the tab was closed; revoke it again.
++          await lockWindow();
++          return;
++        }
++        expiryRef.current = data;
++        setExpiry(data);
++        setNow(Date.now());
++      }
++    } catch (err) {
++      if (!disposedRef.current) setError(`變更清除模式失敗：${formatSupabaseError(err)}`);
++    } finally {
++      enablingRef.current = false;
++      if (!disposedRef.current) setWindowBusy(false);
++    }
++  };
++
++  const applyFilters = (event: FormEvent<HTMLFormElement>) => {
++    event.preventDefault();
++    const next = { ...draft, actor: draft.actor.trim(), search: draft.search.trim() };
++    if (next.actor && !uuidPattern.test(next.actor)) {
++      setFilterError('操作者 ID 必須是有效的 UUID；若要搜尋名稱，請使用關鍵字。');
++      return;
++    }
++    if (next.from && next.to && next.from > next.to) {
++      setFilterError('結束日期不能早於開始日期。');
++      return;
++    }
++    setFilterError(null);
++    setFilters(next);
++    setPage(0);
++    setSelectedId(null);
++    setDetail(null);
++    setRefreshKey(key => key + 1);
++  };
++
++  const resetFilters = () => {
++    setDraft(emptyFilters);
++    setFilters(emptyFilters);
++    setFilterError(null);
++    setPage(0);
++    setSelectedId(null);
++    setDetail(null);
++    setRefreshKey(key => key + 1);
++  };
++
++  const selectType = (type: AuditFilters['type']) => {
++    const next = { ...filters, type };
++    setDraft(next);
++    setFilters(next);
++    setPage(0);
++    setSelectedId(null);
++    setDetail(null);
++  };
++
++  const selectEvent = (id: string) => {
++    setSelectedId(id);
++    // On narrow screens the detail is stacked after the cards.
++    if (window.innerWidth < 1280) window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
++  };
++
++  const handleClear = async () => {
++    const trimmed = reason.trim();
++    if (!clearTarget || clearTarget.id !== selectedId || !expiryRef.current || new Date(expiryRef.current).getTime() <= Date.now() || clearing || trimmed.length < 10 || trimmed.length > 500) return;
++    setClearing(true);
++    setError(null);
++    try {
++      await clearAuditedContent(clearTarget.id, trimmed);
++      if (disposedRef.current) return;
++      setClearTarget(null);
++      setReason('');
++      setRefreshKey(key => key + 1);
++      setDetailKey(key => key + 1);
++      // One confirmation authorizes one record only. Lock again after a successful clear.
++      try {
++        await lockWindow();
++      } catch (err) {
++        setError(`此筆證據已清除，但無法鎖定模式，請按「立即鎖定」重試：${formatSupabaseError(err)}`);
++      }
++    } catch (err) {
++      if (!disposedRef.current) {
++        setError(`清除證據失敗：${formatSupabaseError(err)}。若已開始清除，請重新啟用模式並重試此筆事件。`);
++        setRefreshKey(key => key + 1);
++        setDetailKey(key => key + 1);
++      }
++    } finally {
++      if (!disposedRef.current) setClearing(false);
++    }
++  };
++
++  const filterForm = () => (
++    <form onSubmit={applyFilters} className="space-y-3">
++      <label className="block text-xs font-semibold text-slate-300">資料類型
++        <select className={inputClass} value={draft.type} onChange={event => setDraft(previous => ({ ...previous, type: event.target.value as AuditFilters['type'] }))}>
++          <option value="">全部類型</option>{Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
++        </select>
++      </label>
++      <label className="block text-xs font-semibold text-slate-300">操作者 ID（非所屬管理員）
++        <input className={inputClass} value={draft.actor} onChange={event => setDraft(previous => ({ ...previous, actor: event.target.value }))} placeholder="操作者 UUID；名稱請用關鍵字" />
++      </label>
++      <label className="block text-xs font-semibold text-slate-300">操作類型
++        <select className={inputClass} value={draft.action} onChange={event => setDraft(previous => ({ ...previous, action: event.target.value as AuditFilters['action'] }))}>
++          <option value="">全部操作</option>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
++        </select>
++      </label>
++      <label className="block text-xs font-semibold text-slate-300">關鍵字／事件對象 ID
++        <span className="relative block"><Search className="pointer-events-none absolute left-3 top-4 h-4 w-4 text-slate-500" aria-hidden="true" /><input className={`${inputClass} pl-9`} value={draft.search} onChange={event => setDraft(previous => ({ ...previous, search: event.target.value }))} placeholder="名稱、內容、客戶或員工 ID" /></span>
++      </label>
++      <div className="grid grid-cols-2 gap-2">
++        <label className="min-w-0 text-xs font-semibold text-slate-300">開始日期（UTC+8）<input type="date" className={`${inputClass} min-w-0 [color-scheme:dark]`} value={draft.from} onChange={event => setDraft(previous => ({ ...previous, from: event.target.value }))} /></label>
++        <label className="min-w-0 text-xs font-semibold text-slate-300">結束日期（UTC+8）<input type="date" className={`${inputClass} min-w-0 [color-scheme:dark]`} value={draft.to} onChange={event => setDraft(previous => ({ ...previous, to: event.target.value }))} /></label>
++      </div>
++      {filterError && <p role="alert" className="text-xs text-rose-300">{filterError}</p>}
++      <div className="flex gap-2 pt-1">
++        <button type="submit" className={`flex-1 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-700 px-3 py-2 text-xs font-bold text-white hover:from-cyan-500 hover:to-blue-600 ${buttonFocus}`}>套用篩選</button>
++        <button type="button" onClick={resetFilters} className={`rounded-lg border border-slate-600 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 ${buttonFocus}`}>重設</button>
++      </div>
++    </form>
++  );
++
++  const media = detail && !detail.cleared_at && detail.media_refs && typeof detail.media_refs === 'object'
++    ? Object.entries(detail.media_refs).filter((entry): entry is [string, string] => typeof entry[1] === 'string') : [];
++
++  return (
++    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-slate-950 text-slate-100">
++      <header className="shrink-0 border-b border-cyan-300/20 bg-[radial-gradient(circle_at_82%_0%,rgba(6,182,212,0.18),transparent_34%),linear-gradient(90deg,#020617_0%,#0f172a_55%,#083344_100%)] px-3 py-3 shadow-[0_8px_24px_rgba(2,6,23,0.32)] sm:px-5">
++        <div className="flex flex-wrap items-center justify-between gap-3">
++          <div className="flex min-w-0 items-center gap-3">
++            <button type="button" onClick={() => void handleBack()} disabled={windowBusy || clearing} aria-label="返回歷史資料管理並鎖定清除模式" className={`flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-rose-400/40 bg-rose-500/15 px-2.5 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:opacity-50 ${buttonFocus}`}><ArrowLeft className="h-4 w-4" aria-hidden="true" />返回</button>
++            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-500/10 text-cyan-300"><ShieldCheck className="h-5 w-5" aria-hidden="true" /></span>
++            <div className="min-w-0"><h1 className="text-lg font-black text-white sm:text-xl">內容稽核總覽</h1><p className="text-[11px] text-slate-400">手動通知與客服對話異動 · 時間均為 UTC+8</p></div>
++          </div>
++          <button type="button" onClick={() => setRefreshKey(key => key + 1)} disabled={loading} className={`inline-flex h-9 items-center gap-2 rounded-xl border border-cyan-300/35 bg-cyan-500/10 px-3 text-xs font-bold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-50 ${buttonFocus}`}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />刷新清單</button>
++        </div>
++      </header>
++
++      {error && <div role="alert" className="flex shrink-0 items-start gap-2 border-b border-rose-500/30 bg-rose-950/50 px-4 py-2.5 text-xs text-rose-200"><AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" /><span className="min-w-0 break-words">{error}</span><button type="button" onClick={() => setError(null)} className="ml-auto shrink-0 underline">關閉</button></div>}
++
++      <div className="shrink-0 border-b border-slate-700 bg-slate-900 px-3 py-2 lg:hidden">
++        <details className="group max-h-[65vh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-950/60 p-3">
++          <summary className="cursor-pointer text-xs font-bold text-cyan-200">篩選事件 · 類型／操作者／操作／日期</summary>
++          <div className="mt-3">{filterForm()}</div>
++        </details>
++      </div>
++
++      <div className="grid min-h-0 flex-1 lg:grid-cols-[270px_minmax(0,1fr)]">
++        <aside className="hidden min-h-0 flex-col overflow-y-auto border-r border-slate-700/90 bg-[linear-gradient(180deg,#0b1220_0%,#0b1220_48%,#111827_100%)] p-3 lg:flex">
++          <div className="mb-3 flex items-center gap-2 border-b border-cyan-300/15 pb-3"><Database className="h-4 w-4 text-cyan-300" aria-hidden="true" /><h2 className="text-xs font-black text-white">稽核篩選</h2></div>
++          <div className="mb-4 space-y-1">{([['', '全部事件'], ...Object.entries(typeLabels)] as Array<[AuditFilters['type'], string]>).map(([type, label]) => (
++            <button key={type} type="button" onClick={() => selectType(type)} aria-pressed={filters.type === type} className={`w-full rounded-lg px-3 py-2 text-left text-xs font-bold ${filters.type === type ? 'bg-gradient-to-r from-cyan-700 to-blue-800 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'} ${buttonFocus}`}>{label}</button>
++          ))}</div>
++          {filterForm()}
++        </aside>
++
++        <main className="flex min-h-0 min-w-0 flex-col overflow-y-auto bg-slate-900 xl:overflow-hidden">
++          <section aria-label="證據清除模式" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-700 bg-slate-950/65 px-3 py-3 sm:px-4">
++            <div className="flex min-w-0 items-center gap-2"><LockKeyhole className={`h-4 w-4 shrink-0 ${purgeUnlocked ? 'text-amber-300' : 'text-emerald-300'}`} aria-hidden="true" /><div><p className="text-xs font-bold text-white">清除模式：{purgeUnlocked ? '限時開啟' : '已鎖定'}</p><p className="text-[11px] text-slate-400">{purgeUnlocked ? `剩餘 ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')} · 到期 ${formatAuditTime(expiry)}` : '僅超級管理員可啟用；五分鐘後自動鎖定'}</p></div></div>
++            <button type="button" onClick={() => void toggleWindow()} disabled={windowBusy || clearing} className={`rounded-lg border px-3 py-2 text-xs font-bold disabled:opacity-50 ${purgeUnlocked ? 'border-rose-400/40 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25' : 'border-amber-400/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'} ${buttonFocus}`}>{windowBusy ? '處理中…' : purgeUnlocked ? '立即鎖定' : '啟用五分鐘清除模式'}</button>
++          </section>
++          <div className="flex min-h-0 flex-1 flex-col xl:grid xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
++            <section aria-label="稽核事件清單" className="flex min-w-0 flex-none flex-col border-b border-slate-700 xl:min-h-0 xl:border-b-0 xl:border-r xl:overflow-y-auto">
++              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-700 bg-slate-950/50 px-4 py-3"><h2 className="text-sm font-black text-white">異動紀錄</h2><span className="text-xs text-cyan-200">共 {total.toLocaleString()} 筆</span></div>
++              <div className="space-y-2.5 p-3 sm:p-4 xl:min-h-0 xl:flex-1">
++                {loading ? <p role="status" className="py-12 text-center text-sm text-slate-400">載入稽核紀錄中…</p> : events.length === 0 ? <p className="py-12 text-center text-sm text-slate-400">沒有符合條件的稽核紀錄。</p> : events.map(item => (
++                  <button key={item.id} type="button" onClick={() => selectEvent(item.id)} aria-pressed={selectedId === item.id} className={`w-full min-w-0 rounded-xl border p-3 text-left transition-colors ${selectedId === item.id ? 'border-cyan-300/70 bg-cyan-600/20' : 'border-slate-700 bg-slate-950/60 hover:border-cyan-400/35 hover:bg-slate-800'} ${buttonFocus}`}>
++                    <span className="flex flex-wrap items-center justify-between gap-2"><span className="inline-flex items-center gap-2"><FileText className="h-4 w-4 text-cyan-300" aria-hidden="true" /><strong className="text-xs text-white">{typeLabels[item.entity_type] ?? item.entity_type}</strong><span className="rounded-md bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-100">{actionLabels[item.action] ?? item.action}</span></span>{item.cleared_at ? <span className="text-[10px] font-bold text-rose-300">證據已清除</span> : item.clear_started_at ? <span className="text-[10px] font-bold text-amber-300">清除未完成</span> : <span className="text-[10px] text-emerald-300">證據保留中</span>}</span>
++                    <span className="mt-2 block break-words text-xs leading-5 text-slate-300">{item.summary || '（無摘要）'}</span>
++                    <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400"><span>操作者：<strong className="text-slate-200">{item.actor_username}</strong></span><span>所屬管理員 ID：<span className="break-all text-slate-300">{item.owner_admin_id}</span></span></span>
++                    <span className="mt-2 block text-[11px] tabular-nums text-cyan-200"><Clock3 className="mr-1 inline h-3 w-3" aria-hidden="true" />{formatAuditTime(item.occurred_at)}</span>
++                  </button>
++                ))}
++              </div>
++              <div className="flex shrink-0 items-center justify-between gap-2 border-t border-slate-700 bg-slate-950/50 px-3 py-3 text-xs text-slate-300 sm:px-4">
++                <span>{total === 0 ? '0 筆' : `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} / ${total}`} · 第 {page + 1} / {pageCount} 頁</span>
++                <span className="flex gap-1"><button type="button" onClick={() => { setPage(value => value - 1); setSelectedId(null); setDetail(null); }} disabled={loading || page === 0} aria-label="上一頁" className={`rounded-lg border border-slate-600 p-1.5 hover:bg-slate-800 disabled:opacity-40 ${buttonFocus}`}><ChevronLeft className="h-4 w-4" /></button><button type="button" onClick={() => { setPage(value => value + 1); setSelectedId(null); setDetail(null); }} disabled={loading || page + 1 >= pageCount} aria-label="下一頁" className={`rounded-lg border border-slate-600 p-1.5 hover:bg-slate-800 disabled:opacity-40 ${buttonFocus}`}><ChevronRight className="h-4 w-4" /></button></span>
++              </div>
++            </section>
++
++            <section ref={detailRef} aria-label="稽核事件詳情" className="min-h-0 min-w-0 scroll-mt-2 xl:overflow-y-auto">
++              <div className="border-b border-slate-700 bg-slate-950/50 px-4 py-3"><h2 className="text-sm font-black text-white">事件詳情與版本歷程</h2></div>
++              {!selectedId ? <p className="px-4 py-12 text-center text-sm text-slate-400">選取一筆事件，查看異動前後的證據與版本歷程。</p> : detailLoading ? <p role="status" className="px-4 py-12 text-center text-sm text-slate-400">載入詳情中…</p> : !detail ? <p className="px-4 py-12 text-center text-sm text-slate-400">無法顯示此事件。請重新選取或刷新。</p> : (
++                <div className="min-w-0 space-y-4 p-3 sm:p-4">
++                  <div className="flex flex-wrap items-center justify-between gap-2"><span className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-2.5 py-1 text-xs font-bold text-cyan-100">{typeLabels[detail.entity_type] ?? detail.entity_type} · {actionLabels[detail.action] ?? detail.action}</span>{detail.cleared_at ? <span className="text-xs font-bold text-rose-300">證據已清除</span> : <button type="button" onClick={() => { setReason(''); setClearTarget(detail); }} disabled={!purgeUnlocked || clearing || windowBusy} className={`inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 bg-rose-500/15 px-3 py-2 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-40 ${buttonFocus}`}><Trash2 className="h-3.5 w-3.5" aria-hidden="true" />清除此筆證據</button>}</div>
++                  <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2"><MetadataRow label="事件 ID" value={detail.id} /><MetadataRow label="操作批次 ID" value={detail.operation_id} /><MetadataRow label="對象 ID" value={detail.entity_id} /><MetadataRow label="發生時間 (UTC+8)" value={formatAuditTime(detail.occurred_at)} /><MetadataRow label="操作者（實際執行異動）" value={`${detail.actor_username} · ${detail.actor_role} · ${detail.actor_admin_id}`} /><MetadataRow label="所屬管理員（資料擁有者）" value={detail.owner_admin_id} /><MetadataRow label="客戶 ID" value={detail.customer_id} /><MetadataRow label="員工 ID" value={detail.employee_id} /><MetadataRow label="清除開始 (UTC+8)" value={detail.clear_started_at ? formatAuditTime(detail.clear_started_at) : null} /><MetadataRow label="清除完成 (UTC+8)" value={detail.cleared_at ? formatAuditTime(detail.cleared_at) : null} />{detail.clear_reason && <MetadataRow label="清除原因" value={detail.clear_reason} />}{detail.cleared_by && <MetadataRow label="清除操作者" value={`${detail.cleared_username ?? '—'} · ${detail.cleared_by}`} />}</dl>
++                  <div className="grid min-w-0 gap-3"><Snapshot title="異動前" data={detail.before_data} cleared={Boolean(detail.cleared_at)} /><Snapshot title="異動後" data={detail.after_data} cleared={Boolean(detail.cleared_at)} /></div>
++                  {media.length > 0 && <section><h3 className="mb-2 flex items-center gap-2 text-xs font-bold text-white"><ImageIcon className="h-4 w-4 text-cyan-300" aria-hidden="true" />封存圖片 · {media.length} 張</h3><p className="mb-2 text-[11px] text-slate-400">圖片僅透過安全驗證請求取得，原始網址只作文字參考。</p><div className="space-y-2">{media.map(([source, path]) => <EvidenceImage key={`${detail.id}:${path}`} eventId={detail.id} source={source} path={path} />)}</div></section>}
++                  <section><h3 className="mb-2 text-xs font-bold text-white">同一對象的版本歷程</h3><div className="space-y-1.5">{(detail.timeline ?? []).map(version => <button key={version.id} type="button" onClick={() => selectEvent(version.id)} aria-pressed={version.id === detail.id} className={`flex w-full flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-xs ${version.id === detail.id ? 'border-cyan-400/50 bg-cyan-500/15 text-white' : 'border-slate-700 bg-slate-950/50 text-slate-300 hover:bg-slate-800'} ${buttonFocus}`}><span>{actionLabels[version.action] ?? version.action}{version.cleared_at ? ' · 已清除' : ''}</span><span className="tabular-nums">{formatAuditTime(version.occurred_at)}</span></button>)}</div></section>
++                </div>
++              )}
++            </section>
++          </div>
++        </main>
++      </div>
++
++      {clearTarget && purgeUnlocked && <div role="presentation" className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/85 p-3 backdrop-blur-sm sm:p-5"><div role="dialog" aria-modal="true" aria-labelledby="audit-clear-title" className="w-full max-w-lg rounded-2xl border border-rose-400/40 bg-slate-900 p-5 shadow-2xl"><div className="flex items-center gap-2 text-rose-200"><AlertTriangle className="h-5 w-5" aria-hidden="true" /><h2 id="audit-clear-title" className="text-base font-black">確認清除此筆稽核證據</h2></div><p className="mt-3 break-all text-xs text-slate-300">事件 ID：{clearTarget.id}</p><p className="mt-2 text-xs leading-5 text-rose-200">此操作只會清除此筆事件的快照與專屬封存圖片，無法復原。稽核事件的身分、時間與清除原因仍會保留。每次只確認一筆。</p><label className="mt-4 block text-xs font-bold text-slate-200">清除原因（10–500 字）<textarea autoFocus rows={3} maxLength={500} value={reason} onChange={event => setReason(event.target.value)} placeholder="請說明清除此筆證據的原因" className={`${inputClass} resize-y`} /></label>{error && <p role="alert" className="mt-2 text-xs text-rose-300">{error}</p>}<p className="mt-1 text-[11px] text-slate-400">目前 {reason.trim().length} 字 · 模式剩餘 {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, '0')}</p><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setClearTarget(null)} disabled={clearing} className={`rounded-lg border border-slate-600 px-4 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-50 ${buttonFocus}`}>取消</button><button type="button" onClick={() => void handleClear()} disabled={clearing || reason.trim().length < 10 || reason.trim().length > 500 || !purgeUnlocked} className={`rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40 ${buttonFocus}`}>{clearing ? '清除中…' : '確認清除此筆'}</button></div></div></div>}
++    </div>
++  );
++}
+diff --git a/src/components/admin/CustomerAutoMessages.tsx b/src/components/admin/CustomerAutoMessages.tsx
+index 376796b9..17bffea8 100644
+--- a/src/components/admin/CustomerAutoMessages.tsx
++++ b/src/components/admin/CustomerAutoMessages.tsx
+@@ -4,7 +4,7 @@ import { Plus, Trash2, Zap, MessageSquarePlus, Megaphone, BookOpen, X, Bold, Und
+ import TiptapEditor, { TiptapEditorRef } from './TiptapEditor';
+ import { supabase } from '../../lib/supabase';
+ import { processContentImages } from '../../lib/imageOptimizer';
+-import { cleanupContentImages } from '../../lib/storageCleanup';
++import { mutateAuditedContent } from '../../lib/contentAudit';
+ 
+ export interface AutoMessage {
+   id: string;
+@@ -202,7 +202,7 @@ export default function CustomerAutoMessages({
+         sort_order: sortOrder, is_enabled: true,
+       };
+       if (editingMsg) {
+-        await supabase.from('customer_auto_messages').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', editingMsg.id);
++        await mutateAuditedContent('auto_edit', [editingMsg.id], payload);
+       } else {
+         await supabase.from('customer_auto_messages').insert(payload);
+       }
+@@ -243,7 +243,7 @@ export default function CustomerAutoMessages({
+         sort_order: sortOrder, is_enabled: true,
+       };
+       if (editingMsg) {
+-        await supabase.from('customer_auto_messages').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', editingMsg.id);
++        await mutateAuditedContent('auto_edit', [editingMsg.id], payload);
+       } else {
+         await supabase.from('customer_auto_messages').insert(payload);
+       }
+@@ -264,16 +264,11 @@ export default function CustomerAutoMessages({
+   };
+ 
+   const handleDelete = async (id: string) => {
+-    const msg = visibleMessages.find(m => m.id === id);
+-    if (msg?.content) {
+-      await cleanupContentImages(msg.content).catch(() => {});
+-    }
+     if (!customerId) {
+       onDraftMessagesChange?.(draftMessages.filter(message => message.id !== id));
+       return;
+     }
+-    await supabase.from('rich_card_contents').delete().eq('source_auto_message_id', id).then(() => {});
+-    await supabase.from('customer_auto_messages').delete().eq('id', id);
++    await mutateAuditedContent('auto_delete', [id]);
+     loadAutoMessages();
+   };
+ 
+diff --git a/src/components/admin/CustomerServiceManagement.tsx b/src/components/admin/CustomerServiceManagement.tsx
+index af354080..13a2a566 100644
+--- a/src/components/admin/CustomerServiceManagement.tsx
++++ b/src/components/admin/CustomerServiceManagement.tsx
+@@ -9,6 +9,7 @@ import CustomerAvatarPicker, { CustomerAvatarDisplay } from './CustomerAvatarPic
+ import EmployeeMetadataPopover from './EmployeeMetadataPopover';
+ import type { Database } from '../../types/database';
+ import { createFinancialOperationId, getAdminFinancialSessionToken } from '../../lib/auth';
++import { mutateAuditedContent } from '../../lib/contentAudit';
+ import { uploadStorageObjectWithProgress } from '../../lib/storageUpload';
+ 
+ function extractImageOnlyUrl(content: string): string | null {
+@@ -1651,16 +1652,11 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
+     const content = getTemplateContent();
+     if (isTemplateContentEmpty()) return;
+     try {
+-      const { error } = await supabase
+-        .from('cs_message_templates')
+-        .update({
+-          name: templateForm.name.trim(),
+-          content: templateForm.content_type === 'richtext' ? content : content.trim(),
+-          content_type: templateForm.content_type,
+-          updated_at: new Date().toISOString(),
+-        })
+-        .eq('id', editingTemplate.id);
+-      if (error) throw error;
++      await mutateAuditedContent('template_edit', [editingTemplate.id], {
++        name: templateForm.name.trim(),
++        content: templateForm.content_type === 'richtext' ? content : content.trim(),
++        content_type: templateForm.content_type,
++      });
+       setEditingTemplate(null);
+       setTemplateForm({ name: '', content: '', content_type: 'richtext' });
+       if (templateEditorRef.current) templateEditorRef.current.innerHTML = '';
+@@ -1673,11 +1669,7 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
+ 
+   const handleDeleteTemplate = async (id: string) => {
+     try {
+-      const { error } = await supabase
+-        .from('cs_message_templates')
+-        .delete()
+-        .eq('id', id);
+-      if (error) throw error;
++      await mutateAuditedContent('template_delete', [id]);
+       setNotification({ type: 'success', text: '範本已刪除！' });
+       loadTemplates();
+     } catch (error: unknown) {
+@@ -2141,15 +2133,10 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
+     setConfirmDialog({
+       show: true,
+       title: '刪除客戶',
+-      message: `確定要刪除客戶「${customerToDelete?.customer_name || '此客戶'}」嗎？所有對話歷史將永久刪除。`,
++      message: `確定要移除客戶「${customerToDelete?.customer_name || '此客戶'}」嗎？所有對話會從原頁移除，改刪原文保留在超管監察紀錄。`,
+       onConfirm: async () => {
+         try {
+-          const { error } = await supabase
+-            .from('simulated_customers')
+-            .delete()
+-            .eq('id', customerId);
+-
+-          if (error) throw error;
++          await mutateAuditedContent('customer_delete', [customerId]);
+ 
+           invalidateAdminWorkspaceDataCache(selectedAdminId || adminId, 'customer');
+           setNotification({ type: 'success', text: '客戶已成功刪除！' });
+@@ -2584,24 +2571,11 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
+     setConfirmDialog({
+       show: true,
+       title: '刪除訊息',
+-      message: '確定要刪除此訊息嗎？',
++      message: '從原頁移除此訊息並保留超管監察紀錄？',
+       onConfirm: async () => {
+         try {
+-          console.log('Attempting to delete message:', messageId);
+-          const { data, error } = await supabase
+-            .from('customer_employee_conversations')
+-            .delete()
+-            .eq('id', messageId)
+-            .select();
+-
+-          console.log('Delete response:', { data, error });
+-
+-          if (error) {
+-            console.error('Delete error:', formatSupabaseError(error));
+-            throw error;
+-          }
+-
+-          setNotification({ type: 'success', text: '訊息已成功刪除' });
++          await mutateAuditedContent('chat_delete', [messageId]);
++          setNotification({ type: 'success', text: '訊息已從原頁移除，原文已留證' });
+           loadMessages();
+           loadConversationHistory();
+         } catch (error: unknown) {
+@@ -2629,22 +2603,6 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
+     }, 50);
+   };
+ 
+-  const extractStoragePath = (publicUrl: string): string | null => {
+-    const marker = '/object/public/chat-images/';
+-    const idx = publicUrl.indexOf(marker);
+-    return idx === -1 ? null : publicUrl.substring(idx + marker.length);
+-  };
+-
+-  const cleanupStorageImage = async (imageUrl: string) => {
+-    const path = extractStoragePath(imageUrl);
+-    if (!path) return;
+-    try {
+-      await supabase.storage.from('chat-images').remove([path]);
+-    } catch {
+-      return;
+-    }
+-  };
+-
+   const handleReplaceImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+     const file = e.target.files?.[0];
+     const msgId = replacingImageMsgIdRef.current;
+@@ -2660,24 +2618,12 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
+ 
+     setReplacingImageMsgId(msgId);
+     try {
+-      const { data: oldMsg } = await supabase
+-        .from('customer_employee_conversations')
+-        .select('image_url')
+-        .eq('id', msgId)
+-        .maybeSingle();
+-      const oldImageUrl = oldMsg?.image_url;
+       const fileExt = file.name.split('.').pop();
+       const fileName = `chat-replace-${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
+       const { data, error: uploadError } = await supabase.storage.from('chat-images').upload(fileName, file);
+       if (uploadError) throw uploadError;
+       const { data: { publicUrl } } = supabase.storage.from('chat-images').getPublicUrl(data.path);
+-      const { error: updateError } = await supabase
+-        .from('customer_employee_conversations')
+-        .update({ image_url: publicUrl })
+-        .eq('id', msgId);
+-      if (updateError) throw updateError;
+-
+-      if (oldImageUrl) await cleanupStorageImage(oldImageUrl);
++      await mutateAuditedContent('chat_edit', [msgId], { image_url: publicUrl });
+       setNotification({ type: 'success', text: '圖片已成功替換' });
+       preserveScrollUntilRef.current = Date.now() + 2000;
+       loadMessages();
+@@ -2698,12 +2644,7 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
+     if (!textOnly.trim() && !hasImages) return;
+ 
+     try {
+-      const { error } = await supabase
+-        .from('customer_employee_conversations')
+-        .update({ message_content: newContent })
+-        .eq('id', editingMessageId);
+-
+-      if (error) throw error;
++      await mutateAuditedContent('chat_edit', [editingMessageId], { message_content: newContent });
+ 
+       setEditingMessageId(null);
+       setEditingContent('');
+@@ -2816,29 +2757,11 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
+     setConfirmDialog({
+       show: true,
+       title: '刪除對話',
+-      message: `確定要刪除與 ${selectedEmployee.username} 的完整對話嗎？此操作無法復原。`,
++      message: `確定要從原頁移除與 ${selectedEmployee.username} 的完整對話嗎？所有訊息原文將保留在超管監察紀錄。`,
+       onConfirm: async () => {
+         try {
+-          console.log('Deleting conversation:', {
+-            customerId: selectedCustomer.id,
+-            employeeId: selectedEmployee.id
+-          });
+-
+-          const { data, error } = await supabase
+-            .from('customer_employee_conversations')
+-            .delete()
+-            .eq('customer_id', selectedCustomer.id)
+-            .eq('employee_id', selectedEmployee.id)
+-            .select();
+-
+-          console.log('Delete conversation response:', { data, error });
+-
+-          if (error) {
+-            console.error('Delete conversation error:', formatSupabaseError(error));
+-            throw error;
+-          }
+-
+-          setNotification({ type: 'success', text: `對話已刪除（已移除 ${data?.length || 0} 則訊息）` });
++          const result = await mutateAuditedContent('conversation_delete', [selectedCustomer.id], {}, selectedEmployee.id);
++          setNotification({ type: 'success', text: `對話已從原頁移除（${result.changed_count} 則訊息已留證）` });
+           conversationMessagesCacheRef.current.delete(`${selectedCustomer.id}:${selectedEmployee.id}`);
+           setMessages([]);
+           loadConversationHistory();
+diff --git a/src/components/admin/EmployeeManagement.tsx b/src/components/admin/EmployeeManagement.tsx
+index 8becb69a..4e055220 100644
+--- a/src/components/admin/EmployeeManagement.tsx
++++ b/src/components/admin/EmployeeManagement.tsx
+@@ -5,6 +5,7 @@ import { UserPlus, Search, MoreVertical, CheckCircle, XCircle, Key, ChevronDown,
+ import { formatSupabaseError, isFinancialAdminSessionError, isSupabaseAbortError, supabase } from '../../lib/supabase';
+ import { Employee, Admin, NotificationAutomationPlan, NotificationAutomationPlanAssignment } from '../../types';
+ import { createFinancialOperationId, getAdminFinancialSessionToken, logout } from '../../lib/auth';
++import { mutateAuditedContent } from '../../lib/contentAudit';
+ import EmployeeDetailModal from './EmployeeDetailModal';
+ import LoginDeviceSummary from './LoginDeviceSummary';
+ 
+@@ -1728,12 +1729,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
+     setIsDeleting(true);
+     setDeleteError(null);
+     try {
+-      const { data, error } = await supabase.rpc('admin_delete_employee_account', {
+-        p_admin_session_token: getAdminFinancialSessionToken(),
+-        p_user_id: employee.id,
+-      });
+-      if (error) throw new Error(formatSupabaseError(error) || '發生資料庫錯誤');
+-      if (!data) throw new Error('無法刪除員工。');
++      const result = await mutateAuditedContent('employee_delete', [employee.id]);
++      if (!result.success) throw new Error('無法刪除員工。');
+       setEmployeeGroups(prev => prev.map(g => ({
+         ...g,
+         employees: g.employees.filter(emp => emp.id !== employee.id)
+@@ -5517,7 +5514,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
+                   </div>
+                   <div className="min-w-0">
+                     <p className="text-sm font-bold text-white">確定要永久刪除這個員工帳戶嗎？</p>
+-                    <p className="mt-1 text-xs leading-5 text-rose-200/80">此操作無法復原，以下資料將一併永久移除：</p>
++                    <p className="mt-1 text-xs leading-5 text-rose-200/80">帳戶無法復原；受影響的 AAA／CCC 聊天原文會保留在超管監察紀錄。其他資料依原有刪除規則處理：</p>
+                   </div>
+                 </div>
+                 <ul className="mt-4 grid gap-2 border-t border-rose-300/15 pt-3 text-xs text-slate-300 sm:grid-cols-2">
+diff --git a/src/components/admin/HistoryDataManagement.tsx b/src/components/admin/HistoryDataManagement.tsx
+index dee5f4a2..5f64b343 100644
+--- a/src/components/admin/HistoryDataManagement.tsx
++++ b/src/components/admin/HistoryDataManagement.tsx
+@@ -5,6 +5,7 @@ import { formatSupabaseError, isFinancialAdminSessionError, isSupabaseTransientE
+ import type { Database as DatabaseSchema } from '../../types/database';
+ import { getAdminFinancialSessionToken } from '../../lib/auth';
+ import { safeToLocaleString } from '../../lib/safeUtils';
++import ContentAuditPanel from './ContentAuditPanel';
+ 
+ type CleanupSchedule = DatabaseSchema['public']['Functions']['admin_get_history_cleanup_schedule']['Returns'][number];
+ 
+@@ -70,7 +71,9 @@ const hourOptions = Array.from({ length: 24 }, (_, hour) => String(hour).padStar
+ const minuteOptions = Array.from({ length: 12 }, (_, step) => String(step * 5).padStart(2, '0'));
+ const quickTimes = ['00:00', '02:00', '02:30', '03:00', '06:00'];
+ 
+-export default function HistoryDataManagement() {
++export default function HistoryDataManagement({ isActive }: { isActive: boolean }) {
++  const [showAudit, setShowAudit] = useState(false);
++  const auditActivations = useRef<number[]>([]);
+   const [configs, setConfigs] = useState<CleanupConfig[]>([]);
+   const [loading, setLoading] = useState(true);
+   const [refreshing, setRefreshing] = useState(false);
+@@ -97,6 +100,22 @@ export default function HistoryDataManagement() {
+     return () => { scheduleRequestId.current += 1; };
+   }, []);
+ 
++  useEffect(() => {
++    if (!isActive) {
++      setShowAudit(false);
++      auditActivations.current = [];
++    }
++  }, [isActive]);
++
++  const handleAuditActivation = () => {
++    const now = Date.now();
++    auditActivations.current = [...auditActivations.current.filter(time => now - time <= 1100), now];
++    if (auditActivations.current.length >= 3) {
++      auditActivations.current = [];
++      setShowAudit(true);
++    }
++  };
++
+   const isTimePickerOpen = timePicker !== null;
+ 
+   useEffect(() => {
+@@ -408,6 +427,10 @@ export default function HistoryDataManagement() {
+     return acc;
+   }, {} as Record<string, CleanupConfig[]>);
+ 
++  if (showAudit && isActive) {
++    return <ContentAuditPanel onBack={() => setShowAudit(false)} />;
++  }
++
+   if (loading) {
+     return (
+       <div className="flex min-h-0 flex-1 items-center justify-center bg-white text-slate-600">
+@@ -424,9 +447,15 @@ export default function HistoryDataManagement() {
+         <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-20 h-44 w-60 rounded-full bg-cyan-400/10 blur-3xl" />
+         <div className="relative flex items-center justify-between gap-4">
+           <div className="flex min-w-0 items-center gap-3">
+-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 via-cyan-500 to-teal-500 text-white shadow-[0_10px_24px_-12px_rgba(34,211,238,0.8)] ring-1 ring-cyan-200/60">
++            <button
++              type="button"
++              onClick={handleAuditActivation}
++              aria-label="開啟內容稽核總覽：一秒內連續按三次"
++              title="一秒內連續按三次開啟內容稽核總覽"
++              className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 via-cyan-500 to-teal-500 text-white shadow-[0_10px_24px_-12px_rgba(34,211,238,0.8)] ring-1 ring-cyan-200/60 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
++            >
+               <Database className="h-5 w-5" aria-hidden="true" />
+-            </div>
++            </button>
+             <div className="min-w-0">
+               <h2 className="text-lg font-extrabold tracking-tight text-white">歷史資料管理</h2>
+               <p className="mt-0.5 text-xs leading-5 text-slate-200">各類資料可分別設定保留天數和每日執行時間（UTC）；自動清理可逐項開關。</p>
+diff --git a/src/components/admin/MessageManagement.tsx b/src/components/admin/MessageManagement.tsx
+index 3d5a4d1c..6811f014 100644
+--- a/src/components/admin/MessageManagement.tsx
++++ b/src/components/admin/MessageManagement.tsx
+@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
+ import { createPortal } from 'react-dom';
+ import { formatSupabaseError, isSupabaseAbortError, supabase } from '../../lib/supabase';
+ import { getAdminFinancialSessionToken } from '../../lib/auth';
++import { mutateAuditedContent } from '../../lib/contentAudit';
+ import { useCurrencyUnit } from '../../lib/useCurrencyUnit';
+ import EmployeeNotificationDetailPanel from '../employee/EmployeeNotificationDetailPanel';
+ import TiptapEditor, { type TiptapEditorRef } from './TiptapEditor';
+@@ -997,15 +998,13 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
+     setDeleting(true);
+     try {
+       const messageIdsArray = Array.from(selectedMessageIds);
+-      const { data, error } = await supabase.rpc('delete_messages', {
+-        message_ids: messageIdsArray,
+-        requesting_admin_id: admin.id
+-      });
+-      if (error) throw error;
+-
+-      const result = data as { success: boolean; deleted_count: number; failed_count: number };
+-      if (result.success) {
+-        setNotification({ type: 'success', message: `已成功刪除 ${result.deleted_count} 則訊息` });
++      let deletedCount = 0;
++      for (let index = 0; index < messageIdsArray.length; index += 50) {
++        const result = await mutateAuditedContent('notification_delete', messageIdsArray.slice(index, index + 50));
++        deletedCount += result.changed_count;
++      }
++      if (deletedCount > 0) {
++        setNotification({ type: 'success', message: `已從原頁移除 ${deletedCount} 則訊息，手動通知已保留監察紀錄` });
+         await loadSentMessages();
+         setShowDeleteConfirm(false);
+         setDeleteMode(null);
+@@ -1026,15 +1025,13 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
+ 
+     setDeleting(true);
+     try {
+-      const { data, error } = await supabase.rpc('delete_messages', {
+-        message_ids: manualMessageIds,
+-        requesting_admin_id: admin.id,
+-      });
+-      if (error) throw error;
+-
+-      const result = data as { success: boolean; deleted_count: number; failed_count: number };
+-      if (result.success) {
+-        setNotification({ type: 'success', message: `已成功刪除 ${result.deleted_count} 則訊息` });
++      let deletedCount = 0;
++      for (let index = 0; index < manualMessageIds.length; index += 50) {
++        const result = await mutateAuditedContent('notification_delete', manualMessageIds.slice(index, index + 50));
++        deletedCount += result.changed_count;
++      }
++      if (deletedCount > 0) {
++        setNotification({ type: 'success', message: `已從原頁移除 ${deletedCount} 則訊息，手動通知已保留監察紀錄` });
+         await loadSentMessages();
+         setShowDeleteConfirm(false);
+         setDeleteMode(null);
+@@ -1069,15 +1066,10 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
+ 
+     setSaving(true);
+     try {
+-      const { error } = await supabase.rpc('update_admin_message_content_with_session', {
+-        p_admin_session_token: getAdminFinancialSessionToken(),
+-        p_message_id: selectedMessageDetail.id,
+-        p_title: editForm.title.trim(),
+-        p_content: htmlContent,
++      await mutateAuditedContent('notification_edit', [selectedMessageDetail.id], {
++        title: editForm.title.trim(), content: htmlContent,
+       });
+ 
+-      if (error) throw error;
+-
+       setSelectedMessageDetail({ ...selectedMessageDetail, title: editForm.title.trim(), content: htmlContent });
+       setEditingMessage(false);
+       setNotification({ type: 'success', message: '訊息已成功更新' });
+@@ -2729,7 +2721,7 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
+                 </div>
+                 <div>
+                   <h3 className="text-lg font-bold text-white">確認刪除</h3>
+-                  <p className="text-sm text-slate-400">此操作無法復原</p>
++                  <p className="text-sm text-slate-400">從原頁移除，手動通知原文仍保留在超管監察紀錄</p>
+                 </div>
+               </div>
+               <div className="bg-slate-800/50 rounded-lg p-4 mb-6">
+diff --git a/src/lib/contentAudit.ts b/src/lib/contentAudit.ts
+new file mode 100644
+index 00000000..09ced67b
+--- /dev/null
++++ b/src/lib/contentAudit.ts
+@@ -0,0 +1,37 @@
++import { getAdminFinancialSessionToken } from './auth';
++import { formatSupabaseError, supabase } from './supabase';
++
++type AuditAction =
++  | 'notification_edit' | 'notification_delete'
++  | 'chat_edit' | 'chat_delete' | 'conversation_delete' | 'customer_delete' | 'employee_delete'
++  | 'template_edit' | 'template_delete' | 'auto_edit' | 'auto_delete';
++
++export async function mutateAuditedContent(
++  action: AuditAction,
++  targetIds: string[],
++  payload: Record<string, unknown> = {},
++  employeeId?: string,
++): Promise<{ success: boolean; changed_count: number }> {
++  const { data, error } = await supabase.functions.invoke('content-audit', {
++    body: { action, targetIds, payload, employeeId, sessionToken: getAdminFinancialSessionToken() },
++  });
++  if (error || data?.error) throw new Error(data?.error || formatSupabaseError(error));
++  return data;
++}
++
++export async function clearAuditedContent(eventId: string, reason: string): Promise<void> {
++  const { data, error } = await supabase.functions.invoke('content-audit', {
++    body: { action: 'clear', eventId, reason, sessionToken: getAdminFinancialSessionToken() },
++  });
++  if (error || data?.error) throw new Error(data?.error || formatSupabaseError(error));
++}
++
++export async function loadAuditedImage(eventId: string, path: string): Promise<string> {
++  const { data, error } = await supabase.functions.invoke('content-audit', {
++    body: { action: 'media', eventId, path, sessionToken: getAdminFinancialSessionToken() },
++  });
++  if (error || !(data instanceof Blob) || !/^image\/(png|jpeg|webp|gif)$/.test(data.type)) {
++    throw new Error(formatSupabaseError(error || new Error('The evidence image is unavailable.')));
++  }
++  return URL.createObjectURL(data);
++}
+diff --git a/src/types/database.ts b/src/types/database.ts
+index 77d8057f..1cc46acf 100644
+--- a/src/types/database.ts
++++ b/src/types/database.ts
+@@ -797,6 +797,7 @@ export interface Database {
+           reward_amount: number | null;
+           reward_currency: string | null;
+           automation_execution_id: string | null;
++          audit_origin: 'manual_admin' | 'automation' | 'unverified';
+           expires_at: string | null;
+           created_at: string;
+         };
+@@ -813,6 +814,7 @@ export interface Database {
+           reward_amount?: number | null;
+           reward_currency?: string | null;
+           automation_execution_id?: string | null;
++          audit_origin?: 'manual_admin' | 'automation' | 'unverified';
+           expires_at?: string | null;
+           created_at?: string | null;
+         };
+@@ -829,6 +831,7 @@ export interface Database {
+           reward_amount?: number | null;
+           reward_currency?: string | null;
+           automation_execution_id?: string | null;
++          audit_origin?: 'manual_admin' | 'automation' | 'unverified';
+           expires_at?: string | null;
+           created_at?: string | null;
+         };
+@@ -2340,6 +2343,28 @@ export interface Database {
+       };
+     };
+     Functions: {
++      list_content_audit_events: {
++        Args: {
++          p_admin_session_token: string;
++          p_type?: string | null;
++          p_actor?: string | null;
++          p_action?: string | null;
++          p_search?: string | null;
++          p_from?: string | null;
++          p_to?: string | null;
++          p_page?: number;
++          p_page_size?: number;
++        };
++        Returns: { total: number; items: Array<Record<string, unknown>> };
++      };
++      get_content_audit_event: {
++        Args: { p_admin_session_token: string; p_event_id: string };
++        Returns: Record<string, unknown> | null;
++      };
++      set_content_audit_purge_window: {
++        Args: { p_admin_session_token: string; p_enabled: boolean };
++        Returns: string | null;
++      };
+       create_admin_financial_session: {
+         Args: { p_password: string; p_username: string };
+         Returns: {
+diff --git a/supabase/functions/content-audit/index.ts b/supabase/functions/content-audit/index.ts
+new file mode 100644
+index 00000000..5b01c6b4
+--- /dev/null
++++ b/supabase/functions/content-audit/index.ts
+@@ -0,0 +1,155 @@
++import { createClient } from 'npm:@supabase/supabase-js@2';
++
++const url = Deno.env.get('SUPABASE_URL')!;
++const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
++const db = createClient(url, serviceKey, { auth: { persistSession: false } });
++const evidenceBucket = 'content-audit-evidence';
++const buckets = new Set(['chat-images', 'template-images', 'announcement-images', 'super-customer-avatars']);
++const cors = {
++  'Access-Control-Allow-Origin': '*',
++  'Access-Control-Allow-Methods': 'POST, OPTIONS',
++  'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
++  'Cache-Control': 'no-store',
++};
++
++type Change = {
++  action: string;
++  sessionToken: string;
++  targetIds: string[];
++  employeeId?: string;
++  payload?: Record<string, unknown>;
++};
++
++function response(body: unknown, status = 200) {
++  return new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
++}
++
++function mediaUrls(snapshot: unknown): string[] {
++  const found = new Set<string>();
++  function visit(node: unknown) {
++    if (!node || typeof node !== 'object') return;
++    if (Array.isArray(node)) { node.forEach(visit); return; }
++    const record = node as Record<string, unknown>;
++    for (const [key, value] of Object.entries(record)) {
++      if (key === 'message' || key === 'messages' || key === 'source' || key === 'customers') {
++        visit(value);
++      } else if (['content', 'message_content', 'image_url', 'rendered_html', 'custom_avatar_url'].includes(key) && typeof value === 'string') {
++        const matches = value.matchAll(/https?:\/\/[^\s"'<>)}]+\/storage\/v1\/object\/public\/[^\s"'<>)}]+/g);
++        for (const match of matches) found.add(match[0].replace(/&amp;/g, '&'));
++        for (const match of value.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)) {
++          if (/^https?:\/\//i.test(match[1])) found.add(match[1].replace(/&amp;/g, '&'));
++          else if (!/^data:image\//i.test(match[1])) throw new Error('An image cannot be preserved from its source.');
++        }
++      }
++    }
++  }
++  visit(snapshot);
++  if (found.size > 150) throw new Error('Too many attachments to preserve in one operation.');
++  return [...found];
++}
++
++function storagePath(originalUrl: string) {
++  const input = new URL(originalUrl);
++  const expected = new URL(url);
++  if (input.origin !== expected.origin || input.search || input.hash) throw new Error('An attachment is outside the managed storage.');
++  const prefix = '/storage/v1/object/public/';
++  if (!input.pathname.startsWith(prefix)) throw new Error('An attachment is outside the managed storage.');
++  const path = decodeURIComponent(input.pathname.slice(prefix.length));
++  const split = path.indexOf('/');
++  const bucket = path.slice(0, split);
++  const objectPath = path.slice(split + 1);
++  if (!buckets.has(bucket) || !objectPath || objectPath.split('/').some(segment => !segment || segment === '..' || segment === '.')) {
++    throw new Error('An attachment has an invalid storage path.');
++  }
++  return { bucket, objectPath };
++}
++
++async function mutate(body: Change) {
++  const { data: prepared, error: prepareError } = await db.rpc('prepare_content_audit_change', {
++    p_admin_session_token: body.sessionToken,
++    p_action: body.action,
++    p_target_ids: body.targetIds,
++    p_employee_id: body.employeeId ?? null,
++  });
++  if (prepareError) throw prepareError;
++  const urls = mediaUrls(prepared.snapshots);
++  const operationId = crypto.randomUUID();
++  const copied: string[] = [];
++  const manifest: Record<string, string> = {};
++  try {
++    for (const [index, original] of urls.entries()) {
++      const { bucket, objectPath } = storagePath(original);
++      const { data: blob, error: downloadError } = await db.storage.from(bucket).download(objectPath);
++      if (downloadError || !blob) throw new Error('Unable to preserve an original attachment; content was not changed.');
++      const privatePath = `${operationId}/${index}`;
++      const { error: uploadError } = await db.storage.from(evidenceBucket).upload(privatePath, blob, {
++        contentType: blob.type || 'application/octet-stream', upsert: false,
++      });
++      if (uploadError) throw new Error('Unable to preserve an original attachment; content was not changed.');
++      copied.push(privatePath);
++      manifest[original] = privatePath;
++    }
++    const { data, error } = await db.rpc('commit_content_audit_change', {
++      p_admin_session_token: body.sessionToken,
++      p_action: body.action,
++      p_target_ids: body.targetIds,
++      p_employee_id: body.employeeId ?? null,
++      p_expected_hash: prepared.hash,
++      p_payload: body.payload ?? {},
++      p_operation_id: operationId,
++      p_media: manifest,
++    });
++    if (error) throw error;
++    return response(data);
++  } catch (error) {
++    if (copied.length) await db.storage.from(evidenceBucket).remove(copied);
++    throw error;
++  }
++}
++
++Deno.serve(async (request) => {
++  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
++  if (request.method !== 'POST') return response({ error: 'Method not allowed.' }, 405);
++  try {
++    const body = await request.json();
++    const token = body.sessionToken;
++    if (typeof token !== 'string' || !/^[\da-f-]{36}$/i.test(token)) return response({ error: 'Administrator session is required.' }, 401);
++    if (body.action === 'media') {
++      if (typeof body.eventId !== 'string' || typeof body.path !== 'string') return response({ error: 'Invalid evidence request.' }, 400);
++      const { data: event, error } = await db.rpc('get_content_audit_event', {
++        p_admin_session_token: token, p_event_id: body.eventId,
++      });
++      if (error || !event || event.cleared_at || !Object.values(event.media_refs || {}).includes(body.path)) {
++        return response({ error: 'Evidence is not available.' }, 403);
++      }
++      const { data: blob, error: downloadError } = await db.storage.from(evidenceBucket).download(body.path);
++      if (downloadError || !blob) return response({ error: 'Evidence attachment is unavailable.' }, 404);
++      return new Response(blob, {
++        headers: { ...cors, 'Content-Type': blob.type || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' },
++      });
++    }
++    if (body.action === 'clear') {
++      if (typeof body.eventId !== 'string' || typeof body.reason !== 'string') return response({ error: 'Invalid clear request.' }, 400);
++      const { data: started, error: beginError } = await db.rpc('begin_content_audit_clear', {
++        p_admin_session_token: token, p_event_id: body.eventId, p_reason: body.reason,
++      });
++      if (beginError) throw beginError;
++      const paths = started.paths_to_remove as string[];
++      if (paths.length) {
++        const { error: removeError } = await db.storage.from(evidenceBucket).remove(paths);
++        if (removeError) throw new Error('Evidence media cleanup is incomplete. Retry while purge mode is enabled.');
++      }
++      const { data, error } = await db.rpc('finish_content_audit_clear', {
++        p_admin_session_token: token, p_event_id: body.eventId,
++      });
++      if (error) throw error;
++      return response(data);
++    }
++    if (!Array.isArray(body.targetIds) || !body.targetIds.length || !body.targetIds.every((id: unknown) => typeof id === 'string' && /^[\da-f-]{36}$/i.test(id))) {
++      return response({ error: 'Invalid record IDs.' }, 400);
++    }
++    return await mutate(body as Change);
++  } catch (error) {
++    return response({ error: error instanceof Error ? error.message : 'Operation failed.' }, 400);
++  }
++});
+diff --git a/supabase/migrations/20261002000000_protect_manual_notifications_and_service_chats.sql b/supabase/migrations/20261002000000_protect_manual_notifications_and_service_chats.sql
+new file mode 100644
+index 00000000..2d9b8d67
+--- /dev/null
++++ b/supabase/migrations/20261002000000_protect_manual_notifications_and_service_chats.sql
+@@ -0,0 +1,660 @@
++CREATE TABLE private.content_audit_events (
++  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
++  operation_id uuid NOT NULL,
++  entity_type text NOT NULL CHECK (entity_type IN ('notification', 'aaa_service', 'ccc_service')),
++  entity_id uuid NOT NULL,
++  action text NOT NULL CHECK (action IN ('edit', 'delete', 'conversation_delete', 'customer_delete', 'employee_delete', 'source_edit', 'source_delete')),
++  owner_admin_id uuid NOT NULL,
++  actor_admin_id uuid NOT NULL,
++  actor_username text NOT NULL,
++  actor_role text NOT NULL,
++  customer_id uuid,
++  employee_id uuid,
++  occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
++  before_data jsonb,
++  after_data jsonb,
++  media_refs jsonb NOT NULL DEFAULT '{}'::jsonb,
++  clear_reason text,
++  clear_started_at timestamptz,
++  cleared_at timestamptz,
++  cleared_by uuid,
++  cleared_username text
++);
++CREATE INDEX content_audit_events_time_idx ON private.content_audit_events (occurred_at DESC, id DESC);
++CREATE INDEX content_audit_events_actor_idx ON private.content_audit_events (actor_admin_id, occurred_at DESC);
++CREATE INDEX content_audit_events_owner_idx ON private.content_audit_events (owner_admin_id, occurred_at DESC);
++CREATE INDEX content_audit_events_entity_idx ON private.content_audit_events (entity_type, entity_id, occurred_at DESC);
++CREATE INDEX content_audit_events_operation_idx ON private.content_audit_events (operation_id);
++REVOKE ALL ON private.content_audit_events FROM PUBLIC, anon, authenticated;
++
++CREATE TABLE private.content_audit_recipient_versions (
++  message_id uuid NOT NULL,
++  recipient_id uuid NOT NULL,
++  recipient_data jsonb NOT NULL,
++  PRIMARY KEY (message_id, recipient_id)
++);
++REVOKE ALL ON private.content_audit_recipient_versions FROM PUBLIC, anon, authenticated;
++INSERT INTO private.content_audit_recipient_versions(message_id, recipient_id, recipient_data)
++SELECT r.message_id, r.recipient_id, to_jsonb(r) FROM public.message_recipients r
++JOIN public.messages m ON m.id = r.message_id WHERE m.automation_execution_id IS NULL;
++
++CREATE FUNCTION private.remember_content_audit_recipient()
++RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE v_recipient public.message_recipients%ROWTYPE;
++BEGIN
++  IF TG_OP = 'DELETE' THEN v_recipient := OLD; ELSE v_recipient := NEW; END IF;
++  IF EXISTS (SELECT 1 FROM public.messages WHERE id = v_recipient.message_id
++    AND automation_execution_id IS NULL) THEN
++    INSERT INTO private.content_audit_recipient_versions(message_id, recipient_id, recipient_data)
++    VALUES (v_recipient.message_id, v_recipient.recipient_id, to_jsonb(v_recipient))
++    ON CONFLICT (message_id, recipient_id) DO UPDATE SET recipient_data = excluded.recipient_data;
++  END IF;
++  RETURN v_recipient;
++END;
++$$;
++CREATE TRIGGER remember_content_audit_recipient AFTER INSERT OR UPDATE OR DELETE
++ON public.message_recipients FOR EACH ROW EXECUTE FUNCTION private.remember_content_audit_recipient();
++
++CREATE TABLE private.content_audit_purge_windows (
++  admin_id uuid PRIMARY KEY,
++  token_hash text NOT NULL,
++  expires_at timestamptz NOT NULL
++);
++REVOKE ALL ON private.content_audit_purge_windows FROM PUBLIC, anon, authenticated;
++
++ALTER TABLE public.messages ADD COLUMN audit_origin text NOT NULL DEFAULT 'manual_admin'
++  CHECK (audit_origin IN ('manual_admin', 'automation', 'unverified'));
++UPDATE public.messages SET audit_origin = 'automation' WHERE automation_execution_id IS NOT NULL;
++UPDATE public.messages AS m SET audit_origin = 'unverified'
++WHERE m.automation_execution_id IS NULL
++  AND NOT EXISTS (
++    SELECT 1 FROM public.financial_operations AS operation
++    WHERE operation.operation_type = 'admin_message_send'
++      AND operation.result ->> 'message_id' = m.id::text
++  );
++
++CREATE FUNCTION private.classify_notification_origin()
++RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++BEGIN
++  IF NEW.automation_execution_id IS NOT NULL THEN
++    NEW.audit_origin := 'automation';
++  ELSIF NEW.audit_origin = 'automation' THEN
++    RAISE EXCEPTION 'An automatic notification requires an execution ID.';
++  END IF;
++  RETURN NEW;
++END;
++$$;
++CREATE TRIGGER classify_notification_origin BEFORE INSERT OR UPDATE OF automation_execution_id, audit_origin
++ON public.messages FOR EACH ROW EXECUTE FUNCTION private.classify_notification_origin();
++
++CREATE FUNCTION private.content_audit_chat_snapshot(p_message public.customer_employee_conversations)
++RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++  SELECT jsonb_build_object(
++    'message', to_jsonb(p_message),
++    'rendered_html', CASE WHEN p_message.message_type = 'rich_card' THEN
++      COALESCE(template.content, auto_message.content, card.html_content, p_message.message_content)
++      ELSE NULL END,
++    'customer_name', customer.customer_name,
++    'employee_name', employee.username
++  )
++  FROM public.simulated_customers customer
++  LEFT JOIN public.users employee ON employee.id = p_message.employee_id
++  LEFT JOIN public.cs_message_templates template ON template.id = p_message.source_template_id
++  LEFT JOIN public.customer_auto_messages auto_message ON auto_message.id = p_message.source_auto_message_id
++  LEFT JOIN public.rich_card_contents card ON card.id = p_message.rich_card_content_id
++  WHERE customer.id = p_message.customer_id;
++$$;
++
++CREATE FUNCTION private.content_audit_media_for(p_snapshot jsonb)
++RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++  SELECT COALESCE(jsonb_object_agg(source_url, private_path), '{}'::jsonb)
++  FROM jsonb_each_text(COALESCE(NULLIF(current_setting('content_audit.media', true), ''), '{}')::jsonb) AS media(source_url, private_path)
++  WHERE strpos(p_snapshot::text, source_url) > 0;
++$$;
++
++CREATE FUNCTION private.capture_content_audit_change()
++RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE
++  v_actor uuid;
++  v_admin public.admins%ROWTYPE;
++  v_before jsonb;
++  v_after jsonb;
++  v_owner uuid;
++  v_customer uuid;
++  v_employee uuid;
++  v_kind text;
++  v_action text;
++BEGIN
++  IF TG_OP = 'UPDATE' THEN
++    IF TG_TABLE_NAME = 'messages' THEN
++      IF OLD.title IS NOT DISTINCT FROM NEW.title AND OLD.content IS NOT DISTINCT FROM NEW.content THEN RETURN NEW; END IF;
++    ELSIF (OLD.message_content, OLD.message_type, OLD.image_url, OLD.rating_data, OLD.title, OLD.subtitle,
++           OLD.rich_card_content_id, OLD.source_template_id, OLD.source_auto_message_id)
++      IS NOT DISTINCT FROM
++          (NEW.message_content, NEW.message_type, NEW.image_url, NEW.rating_data, NEW.title, NEW.subtitle,
++           NEW.rich_card_content_id, NEW.source_template_id, NEW.source_auto_message_id) THEN RETURN NEW; END IF;
++  END IF;
++
++  IF TG_TABLE_NAME = 'messages' AND OLD.automation_execution_id IS NOT NULL THEN RETURN COALESCE(NEW, OLD); END IF;
++  v_actor := NULLIF(current_setting('content_audit.actor', true), '')::uuid;
++  SELECT * INTO v_admin FROM public.admins WHERE id = v_actor AND is_active = true;
++  IF v_admin.id IS NULL THEN RAISE EXCEPTION 'Content change requires a verified administrator session.'; END IF;
++  IF NULLIF(current_setting('content_audit.operation', true), '') IS NULL THEN RAISE EXCEPTION 'Content audit operation is missing.'; END IF;
++
++  IF TG_TABLE_NAME = 'messages' THEN
++    v_kind := 'notification';
++    v_owner := OLD.sender_id;
++    v_before := jsonb_build_object('message', to_jsonb(OLD), 'recipients',
++      (SELECT COALESCE(jsonb_agg(r.recipient_data ORDER BY r.recipient_id), '[]'::jsonb)
++       FROM private.content_audit_recipient_versions r WHERE r.message_id = OLD.id));
++    IF TG_OP = 'UPDATE' THEN v_after := jsonb_build_object('message', to_jsonb(NEW)); END IF;
++  ELSE
++    v_kind := OLD.source_type;
++    v_customer := OLD.customer_id;
++    v_employee := OLD.employee_id;
++    SELECT admin_id INTO v_owner FROM public.simulated_customers WHERE id = OLD.customer_id;
++    v_before := private.content_audit_chat_snapshot(OLD);
++    IF TG_OP = 'UPDATE' THEN v_after := private.content_audit_chat_snapshot(NEW); END IF;
++  END IF;
++
++  IF v_owner IS NULL THEN RAISE EXCEPTION 'Content audit owner is missing.'; END IF;
++  v_action := CASE WHEN TG_OP = 'UPDATE' THEN 'edit'
++    ELSE COALESCE(NULLIF(current_setting('content_audit.action', true), ''), 'delete') END;
++  INSERT INTO private.content_audit_events (
++    operation_id, entity_type, entity_id, action, owner_admin_id, actor_admin_id,
++    actor_username, actor_role, customer_id, employee_id, before_data, after_data, media_refs
++  ) VALUES (
++    current_setting('content_audit.operation')::uuid, v_kind, OLD.id, v_action, v_owner,
++    v_actor, v_admin.username, v_admin.role, v_customer, v_employee, v_before, v_after,
++    private.content_audit_media_for(v_before)
++  );
++  RETURN COALESCE(NEW, OLD);
++END;
++$$;
++CREATE TRIGGER audit_notification_change BEFORE UPDATE OR DELETE ON public.messages
++FOR EACH ROW EXECUTE FUNCTION private.capture_content_audit_change();
++CREATE TRIGGER audit_chat_change BEFORE UPDATE OR DELETE ON public.customer_employee_conversations
++FOR EACH ROW EXECUTE FUNCTION private.capture_content_audit_change();
++
++CREATE FUNCTION private.capture_content_audit_source_change()
++RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE
++  v_row public.customer_employee_conversations%ROWTYPE;
++  v_actor uuid;
++  v_admin public.admins%ROWTYPE;
++  v_owner uuid;
++  v_before jsonb;
++  v_after jsonb;
++  v_old_html text;
++  v_new_html text;
++BEGIN
++  IF TG_OP = 'UPDATE' THEN
++    IF TG_TABLE_NAME = 'rich_card_contents' THEN
++      IF OLD.html_content IS NOT DISTINCT FROM NEW.html_content THEN RETURN NEW; END IF;
++    ELSE
++      IF OLD.content IS NOT DISTINCT FROM NEW.content THEN RETURN NEW; END IF;
++    END IF;
++  END IF;
++  FOR v_row IN SELECT * FROM public.customer_employee_conversations
++    WHERE message_type = 'rich_card' AND (
++      (TG_TABLE_NAME = 'cs_message_templates' AND source_template_id = OLD.id) OR
++      (TG_TABLE_NAME = 'customer_auto_messages' AND source_auto_message_id = OLD.id) OR
++      (TG_TABLE_NAME = 'rich_card_contents' AND rich_card_content_id = OLD.id
++       AND source_template_id IS NULL AND source_auto_message_id IS NULL))
++    ORDER BY id
++  LOOP
++    v_actor := NULLIF(current_setting('content_audit.actor', true), '')::uuid;
++    SELECT * INTO v_admin FROM public.admins WHERE id = v_actor AND is_active = true;
++    IF v_admin.id IS NULL OR NULLIF(current_setting('content_audit.operation', true), '') IS NULL THEN
++      RAISE EXCEPTION 'Changing referenced chat content requires a verified audit operation.';
++    END IF;
++    SELECT admin_id INTO v_owner FROM public.simulated_customers WHERE id = v_row.customer_id;
++    IF TG_TABLE_NAME = 'rich_card_contents' THEN
++      v_old_html := OLD.html_content;
++      v_new_html := CASE WHEN TG_OP = 'UPDATE' THEN NEW.html_content ELSE NULL END;
++    ELSE
++      v_old_html := OLD.content;
++      v_new_html := CASE WHEN TG_OP = 'UPDATE' THEN NEW.content ELSE NULL END;
++    END IF;
++    v_before := private.content_audit_chat_snapshot(v_row) || jsonb_build_object('rendered_html', v_old_html, 'source', to_jsonb(OLD));
++    v_after := private.content_audit_chat_snapshot(v_row) || jsonb_build_object('rendered_html', v_new_html,
++      'source', CASE WHEN TG_OP = 'UPDATE' THEN to_jsonb(NEW) ELSE NULL END);
++    INSERT INTO private.content_audit_events (
++      operation_id, entity_type, entity_id, action, owner_admin_id, actor_admin_id,
++      actor_username, actor_role, customer_id, employee_id, before_data, after_data, media_refs
++    ) VALUES (
++      current_setting('content_audit.operation')::uuid, v_row.source_type, v_row.id,
++      CASE WHEN TG_OP = 'UPDATE' THEN 'source_edit' ELSE 'source_delete' END,
++      v_owner, v_actor, v_admin.username, v_admin.role, v_row.customer_id, v_row.employee_id,
++      v_before, v_after, private.content_audit_media_for(v_before)
++    );
++  END LOOP;
++  RETURN CASE WHEN TG_OP = 'UPDATE' THEN NEW ELSE OLD END;
++END;
++$$;
++CREATE TRIGGER audit_template_source BEFORE UPDATE OF content OR DELETE ON public.cs_message_templates
++FOR EACH ROW EXECUTE FUNCTION private.capture_content_audit_source_change();
++CREATE TRIGGER audit_auto_source BEFORE UPDATE OF content OR DELETE ON public.customer_auto_messages
++FOR EACH ROW EXECUTE FUNCTION private.capture_content_audit_source_change();
++CREATE TRIGGER audit_card_source BEFORE UPDATE OF html_content OR DELETE ON public.rich_card_contents
++FOR EACH ROW EXECUTE FUNCTION private.capture_content_audit_source_change();
++
++CREATE FUNCTION public.prepare_content_audit_change(
++  p_admin_session_token uuid, p_action text, p_target_ids uuid[], p_employee_id uuid DEFAULT NULL
++) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE
++  v_admin uuid;
++  v_role text;
++  v_count integer;
++  v_snapshots jsonb;
++  v_target uuid;
++BEGIN
++  SELECT admin_id, admin_role INTO v_admin, v_role FROM private.get_financial_admin_context(p_admin_session_token);
++  v_count := cardinality(p_target_ids);
++  IF v_count IS NULL OR v_count NOT BETWEEN 1 AND 500 OR v_count <> (SELECT count(DISTINCT x) FROM unnest(p_target_ids) x) THEN
++    RAISE EXCEPTION 'Select between 1 and 500 distinct records.';
++  END IF;
++  IF p_action = 'notification_delete' THEN
++    SELECT count(*), jsonb_agg(jsonb_build_object('message', to_jsonb(m), 'recipients',
++      (SELECT COALESCE(jsonb_agg(r.recipient_data ORDER BY r.recipient_id), '[]'::jsonb)
++       FROM private.content_audit_recipient_versions r WHERE r.message_id = m.id)) ORDER BY m.id)
++    INTO v_count, v_snapshots FROM public.messages m WHERE m.id = ANY(p_target_ids)
++      AND (m.sender_id = v_admin OR v_role = 'super_admin');
++  ELSIF p_action = 'notification_edit' THEN
++    SELECT count(*), jsonb_agg(jsonb_build_object('message', to_jsonb(m), 'recipients',
++      (SELECT COALESCE(jsonb_agg(r.recipient_data ORDER BY r.recipient_id), '[]'::jsonb)
++       FROM private.content_audit_recipient_versions r WHERE r.message_id = m.id)) ORDER BY m.id)
++    INTO v_count, v_snapshots FROM public.messages m WHERE m.id = ANY(p_target_ids)
++      AND m.automation_execution_id IS NULL AND (m.sender_id = v_admin OR v_role = 'super_admin');
++  ELSIF p_action IN ('chat_edit', 'chat_delete', 'conversation_delete', 'customer_delete') THEN
++    IF p_action = 'customer_delete' THEN
++      SELECT count(*) INTO v_count FROM public.simulated_customers c
++      WHERE c.id = ANY(p_target_ids) AND (c.admin_id = v_admin OR v_role = 'super_admin');
++    ELSIF p_action = 'conversation_delete' THEN
++      SELECT count(*) INTO v_count FROM public.simulated_customers c
++      JOIN public.users u ON u.id = p_employee_id
++      WHERE c.id = ANY(p_target_ids) AND (c.admin_id = v_admin OR v_role = 'super_admin')
++        AND (u.created_by = c.admin_id OR (v_role = 'super_admin' AND c.admin_id = v_admin AND u.created_by IS NOT NULL));
++    ELSE
++      SELECT count(*) INTO v_count FROM public.customer_employee_conversations m
++      JOIN public.simulated_customers c ON c.id = m.customer_id
++      WHERE m.id = ANY(p_target_ids) AND (c.admin_id = v_admin OR v_role = 'super_admin');
++    END IF;
++    IF v_count <> cardinality(p_target_ids) THEN RAISE EXCEPTION 'Chat record is not accessible.'; END IF;
++    SELECT COALESCE(jsonb_agg(private.content_audit_chat_snapshot(m) ORDER BY m.id), '[]'::jsonb)
++    INTO v_snapshots FROM public.customer_employee_conversations m
++    JOIN public.simulated_customers c ON c.id = m.customer_id
++    WHERE (p_action IN ('chat_edit', 'chat_delete') AND m.id = ANY(p_target_ids))
++       OR (p_action = 'conversation_delete' AND m.customer_id = p_target_ids[1] AND m.employee_id = p_employee_id)
++       OR (p_action = 'customer_delete' AND m.customer_id = p_target_ids[1]);
++    IF p_action = 'customer_delete' THEN
++      v_snapshots := jsonb_build_object('customers', (SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM public.simulated_customers c WHERE c.id = ANY(p_target_ids)), 'messages', v_snapshots);
++    END IF;
++  ELSIF p_action = 'employee_delete' THEN
++    PERFORM private.assert_admin_can_manage_user(v_admin, v_role, p_target_ids[1]);
++    SELECT jsonb_build_object('employee', jsonb_build_object('id', u.id, 'username', u.username, 'employee_id', u.employee_id),
++      'messages', (SELECT COALESCE(jsonb_agg(private.content_audit_chat_snapshot(m) ORDER BY m.id), '[]'::jsonb)
++       FROM public.customer_employee_conversations m WHERE m.employee_id = u.id))
++    INTO v_snapshots FROM public.users u WHERE u.id = p_target_ids[1];
++    v_count := CASE WHEN v_snapshots IS NULL THEN 0 ELSE 1 END;
++  ELSIF p_action IN ('template_edit', 'template_delete', 'auto_edit', 'auto_delete') THEN
++    v_target := p_target_ids[1];
++    IF cardinality(p_target_ids) <> 1 THEN RAISE EXCEPTION 'Select one content source.'; END IF;
++    IF p_action LIKE 'template_%' THEN
++      SELECT count(*), to_jsonb(t) INTO v_count, v_snapshots FROM public.cs_message_templates t
++      WHERE t.id = v_target AND (t.admin_id = v_admin::text OR v_role = 'super_admin') GROUP BY t.id;
++      SELECT jsonb_build_object('source', v_snapshots, 'messages',
++        COALESCE(jsonb_agg(private.content_audit_chat_snapshot(m) ORDER BY m.id), '[]'::jsonb))
++      INTO v_snapshots FROM public.customer_employee_conversations m WHERE m.source_template_id = v_target AND m.message_type = 'rich_card';
++    ELSE
++      SELECT count(*), to_jsonb(a) INTO v_count, v_snapshots FROM public.customer_auto_messages a
++      JOIN public.simulated_customers c ON c.id = a.customer_id
++      WHERE a.id = v_target AND (c.admin_id = v_admin OR v_role = 'super_admin') GROUP BY a.id;
++      SELECT jsonb_build_object('source', v_snapshots, 'messages',
++        COALESCE(jsonb_agg(private.content_audit_chat_snapshot(m) ORDER BY m.id), '[]'::jsonb))
++      INTO v_snapshots FROM public.customer_employee_conversations m WHERE m.source_auto_message_id = v_target AND m.message_type = 'rich_card';
++    END IF;
++  ELSE
++    RAISE EXCEPTION 'Unsupported audit operation.';
++  END IF;
++  IF v_count <> cardinality(p_target_ids) THEN RAISE EXCEPTION 'Record is not accessible or has changed.'; END IF;
++  RETURN jsonb_build_object('snapshots', v_snapshots, 'hash', md5(v_snapshots::text));
++END;
++$$;
++
++CREATE FUNCTION public.commit_content_audit_change(
++  p_admin_session_token uuid, p_action text, p_target_ids uuid[], p_employee_id uuid,
++  p_expected_hash text, p_payload jsonb, p_operation_id uuid, p_media jsonb DEFAULT '{}'::jsonb
++) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE
++  v_admin uuid;
++  v_role text;
++  v_prepared jsonb;
++  v_changed integer;
++  v_media record;
++  v_frozen_id uuid;
++  v_source_content text;
++BEGIN
++  SELECT admin_id, admin_role INTO v_admin, v_role FROM private.get_financial_admin_context(p_admin_session_token);
++  IF p_operation_id IS NULL OR jsonb_typeof(p_media) <> 'object' THEN RAISE EXCEPTION 'Invalid audit operation.'; END IF;
++  PERFORM pg_advisory_xact_lock(hashtext(p_action || array_to_string(p_target_ids, ',')));
++  IF p_action IN ('notification_edit', 'notification_delete') THEN
++    PERFORM 1 FROM public.messages WHERE id = ANY(p_target_ids) FOR UPDATE;
++  ELSIF p_action IN ('chat_edit', 'chat_delete') THEN
++    PERFORM 1 FROM public.customer_employee_conversations WHERE id = ANY(p_target_ids) FOR UPDATE;
++  ELSIF p_action IN ('conversation_delete', 'customer_delete') THEN
++    PERFORM 1 FROM public.simulated_customers WHERE id = ANY(p_target_ids) FOR UPDATE;
++    PERFORM 1 FROM public.customer_employee_conversations WHERE customer_id = ANY(p_target_ids) FOR UPDATE;
++  ELSIF p_action = 'employee_delete' THEN
++    PERFORM 1 FROM public.users WHERE id = p_target_ids[1] FOR UPDATE;
++    PERFORM 1 FROM public.customer_employee_conversations WHERE employee_id = p_target_ids[1] FOR UPDATE;
++  ELSIF p_action IN ('template_edit', 'template_delete') THEN
++    PERFORM 1 FROM public.cs_message_templates WHERE id = p_target_ids[1] FOR UPDATE;
++    PERFORM 1 FROM public.customer_employee_conversations WHERE source_template_id = p_target_ids[1] FOR UPDATE;
++  ELSIF p_action IN ('auto_edit', 'auto_delete') THEN
++    PERFORM 1 FROM public.customer_auto_messages WHERE id = p_target_ids[1] FOR UPDATE;
++    PERFORM 1 FROM public.customer_employee_conversations WHERE source_auto_message_id = p_target_ids[1] FOR UPDATE;
++  END IF;
++  v_prepared := public.prepare_content_audit_change(p_admin_session_token, p_action, p_target_ids, p_employee_id);
++  IF v_prepared ->> 'hash' IS DISTINCT FROM p_expected_hash THEN RAISE EXCEPTION 'Content changed; refresh and try again.'; END IF;
++  IF p_action IN ('notification_edit', 'chat_edit', 'chat_delete', 'conversation_delete', 'customer_delete', 'employee_delete', 'template_edit', 'template_delete', 'auto_edit', 'auto_delete')
++    AND cardinality(p_target_ids) <> 1 THEN RAISE EXCEPTION 'Select one record.'; END IF;
++  FOR v_media IN SELECT key, value FROM jsonb_each_text(p_media) LOOP
++    IF strpos((v_prepared -> 'snapshots')::text, v_media.key) = 0
++      OR v_media.value !~ ('^' || p_operation_id::text || '/[0-9]+$') OR NOT EXISTS (
++      SELECT 1 FROM storage.objects WHERE bucket_id = 'content-audit-evidence' AND name = v_media.value
++    ) THEN RAISE EXCEPTION 'An evidence attachment is missing.'; END IF;
++  END LOOP;
++  PERFORM set_config('content_audit.actor', v_admin::text, true);
++  PERFORM set_config('content_audit.operation', p_operation_id::text, true);
++  PERFORM set_config('content_audit.media', p_media::text, true);
++  PERFORM set_config('content_audit.action',
++    CASE p_action WHEN 'conversation_delete' THEN 'conversation_delete' WHEN 'customer_delete' THEN 'customer_delete'
++      WHEN 'employee_delete' THEN 'employee_delete' ELSE 'delete' END, true);
++
++  IF p_action = 'notification_edit' THEN
++    IF char_length(trim(COALESCE(p_payload ->> 'title', ''))) NOT BETWEEN 1 AND 200
++      OR char_length(trim(COALESCE(p_payload ->> 'content', ''))) NOT BETWEEN 1 AND 100000 THEN
++      RAISE EXCEPTION 'Notification title or content is invalid.';
++    END IF;
++    UPDATE public.messages SET title = trim(p_payload ->> 'title'), content = p_payload ->> 'content'
++    WHERE id = p_target_ids[1];
++  ELSIF p_action = 'notification_delete' THEN
++    DELETE FROM public.messages WHERE id = ANY(p_target_ids);
++  ELSIF p_action = 'chat_edit' THEN
++    IF NOT (p_payload ? 'message_content' OR p_payload ? 'image_url')
++      OR (p_payload ? 'message_content' AND char_length(COALESCE(p_payload ->> 'message_content', '')) NOT BETWEEN 1 AND 100000)
++      OR (p_payload ? 'image_url' AND (p_payload ->> 'image_url' IS NULL OR length(p_payload ->> 'image_url') > 2048)) THEN
++      RAISE EXCEPTION 'Chat content is invalid.';
++    END IF;
++    UPDATE public.customer_employee_conversations
++    SET message_content = COALESCE(p_payload ->> 'message_content', message_content),
++        image_url = CASE WHEN p_payload ? 'image_url' THEN p_payload ->> 'image_url' ELSE image_url END
++    WHERE id = p_target_ids[1];
++  ELSIF p_action = 'chat_delete' THEN
++    DELETE FROM public.customer_employee_conversations WHERE id = p_target_ids[1];
++  ELSIF p_action = 'conversation_delete' THEN
++    DELETE FROM public.customer_employee_conversations WHERE customer_id = p_target_ids[1] AND employee_id = p_employee_id;
++  ELSIF p_action = 'customer_delete' THEN
++    DELETE FROM public.customer_employee_conversations WHERE customer_id = p_target_ids[1];
++    DELETE FROM public.simulated_customers WHERE id = p_target_ids[1];
++  ELSIF p_action = 'employee_delete' THEN
++    DELETE FROM public.customer_employee_conversations WHERE employee_id = p_target_ids[1];
++    PERFORM public.admin_delete_employee_account(p_admin_session_token, p_target_ids[1]);
++  ELSIF p_action = 'template_edit' THEN
++    UPDATE public.cs_message_templates
++      SET name = COALESCE(p_payload ->> 'name', name), title = CASE WHEN p_payload ? 'title' THEN p_payload ->> 'title' ELSE title END,
++          subtitle = CASE WHEN p_payload ? 'subtitle' THEN p_payload ->> 'subtitle' ELSE subtitle END,
++          content = COALESCE(p_payload ->> 'content', content), content_type = COALESCE(p_payload ->> 'content_type', content_type), updated_at = now()
++      WHERE id = p_target_ids[1];
++  ELSIF p_action = 'template_delete' THEN
++    SELECT content INTO v_source_content FROM public.cs_message_templates WHERE id = p_target_ids[1];
++    IF EXISTS (SELECT 1 FROM public.customer_employee_conversations
++      WHERE source_template_id = p_target_ids[1] AND message_type = 'rich_card') THEN
++      INSERT INTO public.rich_card_contents(html_content) VALUES (v_source_content) RETURNING id INTO v_frozen_id;
++      UPDATE public.customer_employee_conversations
++      SET source_template_id = NULL, rich_card_content_id = v_frozen_id
++      WHERE source_template_id = p_target_ids[1] AND message_type = 'rich_card';
++    END IF;
++    DELETE FROM public.cs_message_templates WHERE id = p_target_ids[1];
++  ELSIF p_action = 'auto_edit' THEN
++    UPDATE public.customer_auto_messages
++      SET name = COALESCE(p_payload ->> 'name', name), title = CASE WHEN p_payload ? 'title' THEN p_payload ->> 'title' ELSE title END,
++          subtitle = CASE WHEN p_payload ? 'subtitle' THEN p_payload ->> 'subtitle' ELSE subtitle END,
++          content = COALESCE(p_payload ->> 'content', content),
++          content_type = COALESCE(p_payload ->> 'content_type', content_type),
++          message_type = COALESCE(p_payload ->> 'message_type', message_type),
++          sort_order = COALESCE((p_payload ->> 'sort_order')::integer, sort_order), updated_at = now()
++      WHERE id = p_target_ids[1];
++  ELSIF p_action = 'auto_delete' THEN
++    SELECT content INTO v_source_content FROM public.customer_auto_messages WHERE id = p_target_ids[1];
++    IF EXISTS (SELECT 1 FROM public.customer_employee_conversations
++      WHERE source_auto_message_id = p_target_ids[1] AND message_type = 'rich_card') THEN
++      INSERT INTO public.rich_card_contents(html_content) VALUES (v_source_content) RETURNING id INTO v_frozen_id;
++      UPDATE public.customer_employee_conversations
++      SET source_auto_message_id = NULL, rich_card_content_id = v_frozen_id
++      WHERE source_auto_message_id = p_target_ids[1] AND message_type = 'rich_card';
++    END IF;
++    DELETE FROM public.customer_auto_messages WHERE id = p_target_ids[1];
++  END IF;
++  GET DIAGNOSTICS v_changed = ROW_COUNT;
++  PERFORM set_config('content_audit.actor', '', true);
++  PERFORM set_config('content_audit.operation', '', true);
++  PERFORM set_config('content_audit.media', '{}', true);
++  PERFORM set_config('content_audit.action', '', true);
++  RETURN jsonb_build_object('success', true, 'changed_count', v_changed);
++END;
++$$;
++
++CREATE FUNCTION public.list_content_audit_events(
++  p_admin_session_token uuid, p_type text DEFAULT NULL, p_actor uuid DEFAULT NULL,
++  p_action text DEFAULT NULL, p_search text DEFAULT NULL, p_from timestamptz DEFAULT NULL,
++  p_to timestamptz DEFAULT NULL, p_page integer DEFAULT 0, p_page_size integer DEFAULT 30
++) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE
++  v_role text;
++  v_result jsonb;
++BEGIN
++  SELECT admin_role INTO v_role FROM private.get_financial_admin_context(p_admin_session_token);
++  IF v_role <> 'super_admin' THEN RAISE EXCEPTION 'Super administrator permission is required.'; END IF;
++  IF p_page NOT BETWEEN 0 AND 100000 OR p_page_size NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'Invalid page size.'; END IF;
++  SELECT jsonb_build_object('total', count(*), 'items', COALESCE((
++    SELECT jsonb_agg(to_jsonb(page) ORDER BY page.occurred_at DESC, page.id DESC)
++    FROM (SELECT id, operation_id, entity_type, entity_id, action, owner_admin_id, actor_admin_id,
++          actor_username, actor_role, customer_id, employee_id, occurred_at, cleared_at, clear_started_at,
++          left(COALESCE(before_data -> 'message' ->> 'title', before_data -> 'message' ->> 'message_content', ''), 160) AS summary
++      FROM private.content_audit_events filtered
++      WHERE (p_type IS NULL OR filtered.entity_type = p_type)
++        AND (p_actor IS NULL OR filtered.actor_admin_id = p_actor)
++        AND (p_action IS NULL OR filtered.action = p_action)
++        AND (p_from IS NULL OR filtered.occurred_at >= p_from)
++        AND (p_to IS NULL OR filtered.occurred_at < p_to)
++        AND (p_search IS NULL OR filtered.actor_username ILIKE '%' || p_search || '%'
++          OR filtered.entity_id::text = p_search OR filtered.customer_id::text = p_search
++          OR filtered.employee_id::text = p_search OR filtered.before_data::text ILIKE '%' || p_search || '%')
++      ORDER BY occurred_at DESC, id DESC LIMIT p_page_size OFFSET p_page * p_page_size) page
++  ), '[]'::jsonb)) INTO v_result
++  FROM private.content_audit_events filtered
++  WHERE (p_type IS NULL OR filtered.entity_type = p_type)
++    AND (p_actor IS NULL OR filtered.actor_admin_id = p_actor)
++    AND (p_action IS NULL OR filtered.action = p_action)
++    AND (p_from IS NULL OR filtered.occurred_at >= p_from)
++    AND (p_to IS NULL OR filtered.occurred_at < p_to)
++    AND (p_search IS NULL OR filtered.actor_username ILIKE '%' || p_search || '%'
++      OR filtered.entity_id::text = p_search OR filtered.customer_id::text = p_search
++      OR filtered.employee_id::text = p_search OR filtered.before_data::text ILIKE '%' || p_search || '%');
++  RETURN v_result;
++END;
++$$;
++
++CREATE FUNCTION public.get_content_audit_event(p_admin_session_token uuid, p_event_id uuid)
++RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE v_role text; v_result jsonb;
++BEGIN
++  SELECT admin_role INTO v_role FROM private.get_financial_admin_context(p_admin_session_token);
++  IF v_role <> 'super_admin' THEN RAISE EXCEPTION 'Super administrator permission is required.'; END IF;
++  SELECT to_jsonb(e) || jsonb_build_object('timeline', (
++    SELECT COALESCE(jsonb_agg(jsonb_build_object('id', version.id, 'action', version.action,
++      'occurred_at', version.occurred_at, 'cleared_at', version.cleared_at) ORDER BY version.occurred_at, version.id), '[]'::jsonb)
++    FROM private.content_audit_events version
++    WHERE version.entity_type = e.entity_type AND version.entity_id = e.entity_id
++  )) INTO v_result FROM private.content_audit_events e WHERE e.id = p_event_id;
++  RETURN v_result;
++END;
++$$;
++
++CREATE FUNCTION public.set_content_audit_purge_window(p_admin_session_token uuid, p_enabled boolean)
++RETURNS timestamptz LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE v_admin uuid; v_role text; v_expiry timestamptz;
++BEGIN
++  SELECT admin_id, admin_role INTO v_admin, v_role FROM private.get_financial_admin_context(p_admin_session_token);
++  IF v_role <> 'super_admin' THEN RAISE EXCEPTION 'Super administrator permission is required.'; END IF;
++  IF p_enabled THEN
++    v_expiry := clock_timestamp() + interval '5 minutes';
++    INSERT INTO private.content_audit_purge_windows(admin_id, token_hash, expires_at)
++    VALUES (v_admin, private.hash_financial_token(p_admin_session_token), v_expiry)
++    ON CONFLICT (admin_id) DO UPDATE SET token_hash = excluded.token_hash, expires_at = excluded.expires_at;
++  ELSE
++    DELETE FROM private.content_audit_purge_windows WHERE admin_id = v_admin;
++  END IF;
++  RETURN v_expiry;
++END;
++$$;
++
++CREATE FUNCTION private.assert_content_audit_purge(p_token uuid)
++RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE v_admin uuid; v_role text;
++BEGIN
++  SELECT admin_id, admin_role INTO v_admin, v_role FROM private.get_financial_admin_context(p_token);
++  IF v_role <> 'super_admin' OR NOT EXISTS (
++    SELECT 1 FROM private.content_audit_purge_windows
++    WHERE admin_id = v_admin AND token_hash = private.hash_financial_token(p_token) AND expires_at > clock_timestamp()
++  ) THEN RAISE EXCEPTION 'Super administrator purge mode is locked or expired.'; END IF;
++  RETURN v_admin;
++END;
++$$;
++
++CREATE FUNCTION public.begin_content_audit_clear(p_admin_session_token uuid, p_event_id uuid, p_reason text)
++RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE v_admin uuid; v_event private.content_audit_events%ROWTYPE; v_paths jsonb;
++BEGIN
++  v_admin := private.assert_content_audit_purge(p_admin_session_token);
++  IF length(trim(COALESCE(p_reason, ''))) NOT BETWEEN 10 AND 500 THEN RAISE EXCEPTION 'Enter a reason between 10 and 500 characters.'; END IF;
++  SELECT * INTO v_event FROM private.content_audit_events WHERE id = p_event_id FOR UPDATE;
++  IF v_event.id IS NULL OR v_event.cleared_at IS NOT NULL THEN RAISE EXCEPTION 'Evidence is not available.'; END IF;
++  UPDATE private.content_audit_events SET clear_reason = trim(p_reason), clear_started_at = clock_timestamp(), cleared_by = v_admin,
++    cleared_username = (SELECT username FROM public.admins WHERE id = v_admin) WHERE id = p_event_id;
++  SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb) INTO v_paths
++  FROM jsonb_each_text(v_event.media_refs) media
++  WHERE NOT EXISTS (
++    SELECT 1 FROM private.content_audit_events other
++    WHERE other.id <> p_event_id AND other.cleared_at IS NULL AND other.media_refs @> jsonb_build_object(media.key, media.value)
++  );
++  RETURN jsonb_build_object('paths_to_remove', v_paths);
++END;
++$$;
++
++CREATE FUNCTION public.finish_content_audit_clear(p_admin_session_token uuid, p_event_id uuid)
++RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++DECLARE v_admin uuid; v_event private.content_audit_events%ROWTYPE;
++BEGIN
++  v_admin := private.assert_content_audit_purge(p_admin_session_token);
++  PERFORM pg_advisory_xact_lock(hashtext('content-audit-purge-media'));
++  SELECT * INTO v_event FROM private.content_audit_events WHERE id = p_event_id FOR UPDATE;
++  IF v_event.cleared_at IS NOT NULL THEN RETURN jsonb_build_object('success', true); END IF;
++  IF v_event.id IS NULL OR v_event.cleared_by IS DISTINCT FROM v_admin OR v_event.clear_started_at IS NULL THEN
++    RAISE EXCEPTION 'Start the evidence clear again.';
++  END IF;
++  IF EXISTS (
++    SELECT 1 FROM jsonb_each_text(v_event.media_refs) media
++    JOIN storage.objects object ON object.bucket_id = 'content-audit-evidence' AND object.name = media.value
++    WHERE NOT EXISTS (SELECT 1 FROM private.content_audit_events other
++      WHERE other.id <> p_event_id AND other.cleared_at IS NULL AND other.media_refs @> jsonb_build_object(media.key, media.value))
++  ) THEN RAISE EXCEPTION 'Evidence media cleanup is incomplete.'; END IF;
++  UPDATE private.content_audit_events SET before_data = NULL, after_data = NULL, media_refs = '{}'::jsonb,
++    cleared_at = clock_timestamp() WHERE id = p_event_id;
++  IF v_event.entity_type = 'notification'
++    AND NOT EXISTS (SELECT 1 FROM public.messages WHERE id = v_event.entity_id)
++    AND NOT EXISTS (SELECT 1 FROM private.content_audit_events
++      WHERE entity_type = 'notification' AND entity_id = v_event.entity_id AND cleared_at IS NULL) THEN
++    DELETE FROM private.content_audit_recipient_versions WHERE message_id = v_event.entity_id;
++  END IF;
++  RETURN jsonb_build_object('success', true);
++END;
++$$;
++
++INSERT INTO storage.buckets (id, name, public) VALUES ('content-audit-evidence', 'content-audit-evidence', false)
++ON CONFLICT (id) DO NOTHING;
++DROP POLICY IF EXISTS "Anyone can update chat images" ON storage.objects;
++DROP POLICY IF EXISTS "Anyone can delete chat images" ON storage.objects;
++DROP POLICY IF EXISTS "Anyone can update announcement images" ON storage.objects;
++DROP POLICY IF EXISTS "Anyone can delete announcement images" ON storage.objects;
++DROP POLICY IF EXISTS "Public can delete from announcement-images" ON storage.objects;
++DROP POLICY IF EXISTS "Public can update announcement-images" ON storage.objects;
++DROP POLICY IF EXISTS "Anyone can update template images" ON storage.objects;
++DROP POLICY IF EXISTS "Anyone can delete template images" ON storage.objects;
++
++CREATE OR REPLACE FUNCTION public.cleanup_expired_messages()
++RETURNS void LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++BEGIN
++  DELETE FROM public.messages WHERE automation_execution_id IS NOT NULL AND expires_at < now();
++END;
++$$;
++CREATE OR REPLACE FUNCTION public.cleanup_old_messages()
++RETURNS void LANGUAGE plpgsql SECURITY DEFINER
++SET search_path = pg_catalog, public, private, pg_temp AS $$
++BEGIN
++  DELETE FROM public.messages WHERE automation_execution_id IS NOT NULL AND created_at < now() - interval '30 days';
++END;
++$$;
++
++REVOKE UPDATE, DELETE ON public.messages FROM anon, authenticated;
++REVOKE UPDATE (title, content) ON public.messages FROM anon, authenticated;
++REVOKE UPDATE, DELETE ON public.customer_employee_conversations FROM anon, authenticated;
++GRANT UPDATE (is_read, read_at) ON public.customer_employee_conversations TO anon, authenticated;
++REVOKE DELETE ON public.simulated_customers FROM anon, authenticated;
++REVOKE UPDATE, DELETE ON public.cs_message_templates FROM anon, authenticated;
++GRANT UPDATE (name, sort_order, is_pinned, updated_at) ON public.cs_message_templates TO anon, authenticated;
++REVOKE UPDATE, DELETE ON public.customer_auto_messages FROM anon, authenticated;
++GRANT UPDATE (name, sort_order, is_enabled, updated_at) ON public.customer_auto_messages TO anon, authenticated;
++REVOKE UPDATE, DELETE ON public.rich_card_contents FROM anon, authenticated;
++REVOKE UPDATE ON public.simulated_customers FROM anon, authenticated;
++GRANT UPDATE (badge_type, customer_avatar, customer_id, customer_name, custom_avatar_url,
++  employee_always_visible, employee_pin_top, is_active, is_super, super_customer_title,
++  target_employee_id, target_employee_ids, vip_label, auto_messages_enabled, is_pinned,
++  remarks, updated_at) ON public.simulated_customers TO anon, authenticated;
++
++REVOKE ALL ON FUNCTION public.update_admin_message_content_with_session(uuid, uuid, text, text) FROM PUBLIC, anon, authenticated;
++REVOKE ALL ON FUNCTION public.delete_messages(uuid[], uuid) FROM PUBLIC, anon, authenticated;
++REVOKE ALL ON FUNCTION public.delete_all_messages_for_admin(uuid, uuid) FROM PUBLIC, anon, authenticated;
++REVOKE ALL ON FUNCTION public.admin_delete_employee_account(uuid, uuid) FROM PUBLIC, anon, authenticated;
++REVOKE ALL ON FUNCTION public.prepare_content_audit_change(uuid, text, uuid[], uuid) FROM PUBLIC, anon, authenticated;
++REVOKE ALL ON FUNCTION public.commit_content_audit_change(uuid, text, uuid[], uuid, text, jsonb, uuid, jsonb) FROM PUBLIC, anon, authenticated;
++GRANT EXECUTE ON FUNCTION public.prepare_content_audit_change(uuid, text, uuid[], uuid) TO service_role;
++GRANT EXECUTE ON FUNCTION public.commit_content_audit_change(uuid, text, uuid[], uuid, text, jsonb, uuid, jsonb) TO service_role;
++REVOKE ALL ON FUNCTION public.list_content_audit_events(uuid, text, uuid, text, text, timestamptz, timestamptz, integer, integer) FROM PUBLIC;
++REVOKE ALL ON FUNCTION public.get_content_audit_event(uuid, uuid) FROM PUBLIC;
++REVOKE ALL ON FUNCTION public.set_content_audit_purge_window(uuid, boolean) FROM PUBLIC;
++REVOKE ALL ON FUNCTION public.begin_content_audit_clear(uuid, uuid, text) FROM PUBLIC;
++REVOKE ALL ON FUNCTION public.finish_content_audit_clear(uuid, uuid) FROM PUBLIC;
++GRANT EXECUTE ON FUNCTION public.list_content_audit_events(uuid, text, uuid, text, text, timestamptz, timestamptz, integer, integer) TO anon, authenticated;
++GRANT EXECUTE ON FUNCTION public.get_content_audit_event(uuid, uuid) TO anon, authenticated;
++GRANT EXECUTE ON FUNCTION public.set_content_audit_purge_window(uuid, boolean) TO anon, authenticated;
++GRANT EXECUTE ON FUNCTION public.begin_content_audit_clear(uuid, uuid, text) TO service_role;
++GRANT EXECUTE ON FUNCTION public.finish_content_audit_clear(uuid, uuid) TO service_role;
++NOTIFY pgrst, 'reload schema';
