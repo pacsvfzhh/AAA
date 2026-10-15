@@ -1384,7 +1384,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
             <div className="emp-tab-pane sm:max-lg:pb-[100px]" style={{ display: activeTab === 'announcements' ? 'block' : 'none' }}>
               {isTabMounted('announcements') && <Suspense fallback={<PageLoader />}>{announcementsPage}</Suspense>}
             </div>
-            <div style={{ display: activeTab === 'dispatch' ? 'block' : 'none' }} className="emp-tab-pane pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px]">
+            <div style={{ display: activeTab === 'dispatch' ? 'block' : 'none' }} className="emp-tab-pane pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px] short:max-md:!pb-3">
               {isTabMounted('dispatch') && <Suspense fallback={<PageLoader />}>{dispatchPage}</Suspense>}
             </div>
             <div className="emp-tab-pane space-y-4 sm:space-y-6 pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px]" style={{ display: activeTab === 'orders' ? 'block' : 'none' }}>

@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · 小屏手机（如 iPhone SE 320×568）：派单面板适配
+- 需求：小屏手机上 Order Processing（待机）、等待派单、New Order、In Progress 面板显示不完整，需要滚动。
+- 改动：仅在手机宽度小于 600px 且屏幕高度不超过 640px 时生效：①待机面板压缩——隐藏底部两张说明小卡片、收紧上下留白；②等待派单面板压缩——标题、计时器（数字 48px → 36px）、各处间距、End Session 按钮（52px → 46px）都缩小，船和海浪随之下移；③New Order 和 In Progress 面板高度不再固定 420px，而是不超过「屏幕高度 − 顶栏 − 底部导航 − 24px」（至少 300px），订单内容超出时仍在内容框里滚动；④派单页底部留白从 84px 降到 12px（页面底部已经为导航栏预留了空间）。普通手机、平板和桌面不变。
+- 文件：`src/components/employee/OrderDispatch.tsx`、`src/components/employee/EmployeeDashboard.tsx`、`src/index.css`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；没有浏览器，无法在 320×568 下实测，面板能否完全放下是按各部分高度估算的。
+
 ## 2026-10-16 · 手机端 In Progress：订单内容文字稍微加大
 - 需求：手机端 In Progress 面板里 ORDER DETAILS 下方内容框的文字稍微加大。
 - 改动：订单内容文字从 13px 加大到 14px；宽度小于 360px 的小屏原来被压到 12px，现在是 12.5px。桌面不变。

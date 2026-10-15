@@ -2780,17 +2780,17 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       )}
 
       {/* Work Control Panel - Premium Blue/White Design */}
-      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex h-[420px] flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]' : 'p-5 md:p-10'} overflow-hidden ${
+      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))] flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]' : 'p-5 md:p-10'} overflow-hidden ${
         currentOrder?.status === 'pending'
           ? 'bg-[linear-gradient(125deg,#164c9b_0%,#2370bd_55%,#167da9_100%)] border-2 border-blue-400/50 shadow-[0_22px_60px_-16px_rgba(12,43,112,0.32)]'
           : `border-2 border-blue-200/90 shadow-[0_16px_48px_-18px_rgba(37,99,235,0.2),0_6px_20px_-10px_rgba(37,99,235,0.12)] transition-[border-color,box-shadow] duration-700 ${
             waitingPanelActive
-              ? `min-h-[420px] md:min-h-0 dispatch-waiting-surface ${liteMotion ? 'dispatch-waiting-lite' : 'dispatch-waiting-surface-animated'}`
+              ? `min-h-[420px] short:max-md:min-h-0 md:min-h-0 dispatch-waiting-surface ${liteMotion ? 'dispatch-waiting-lite' : 'dispatch-waiting-surface-animated'}`
               : session.isWorking
               ? 'bg-gradient-to-br from-white via-blue-50/80 to-white'
-              : 'min-h-[420px] md:min-h-0 bg-white'
+              : 'min-h-[420px] short:max-md:min-h-0 md:min-h-0 bg-white'
           }`
-      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { height: idlePanelHeight } : undefined}>
+      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { height: `min(${idlePanelHeight}px, max(300px, calc(100dvh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - 24px)))` } : undefined}>
         <div ref={acceptGhostHostRef} data-accept-ghost-host className="pointer-events-none absolute -inset-[2px] z-40 overflow-hidden rounded-2xl md:rounded-3xl" aria-hidden="true" />
         {(acceptRevealPhase === 'cover' || acceptRevealPhase === 'out') && <span role="status" className="sr-only">{t.dispatch.orderAccepted}</span>}
         {panelVeil && (
@@ -2919,12 +2919,12 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
             </div>
           ) : (
             /* DESKTOP & MOBILE: Blue/White premium layout */
-            <div className={`flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 ${waitingPanelActive ? 'mb-0 border-b border-white/65 pb-[calc(1.25rem-1px)] md:mb-6 md:pb-6' : 'mb-5 md:mb-10'}`}>
+            <div className={`flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 ${waitingPanelActive ? 'mb-0 border-b border-white/65 pb-[calc(1.25rem-1px)] short:max-md:pb-[calc(0.75rem-1px)] md:mb-6 md:pb-6' : 'mb-5 short:max-md:mb-3 md:mb-10'}`}>
               {/* Mobile: Full-width status banner */}
               <div className="w-full md:w-auto">
                 <div className="flex items-center gap-3 md:gap-4">
                   {/* Icon - Distinct from title */}
-                  <div className={`relative p-3.5 md:p-4 rounded-2xl border transition-[background-color,border-color,box-shadow] duration-500 ${
+                  <div className={`relative p-3.5 short:max-md:p-2.5 md:p-4 rounded-2xl border transition-[background-color,border-color,box-shadow] duration-500 ${
                     waitingPanelActive
                       ? 'bg-gradient-to-br from-blue-500 to-sky-500 border-blue-400/50 shadow-lg shadow-blue-500/20'
                       : session.isWorking
@@ -3388,26 +3388,26 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                 className={`max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''} ${waitingPanelActive ? (waitingEnterAnim ? 'dispatch-waiting-enter' : stopExiting ? 'dispatch-waiting-exit' : '') : 'invisible dispatch-parked md:hidden'}`}
                 aria-hidden={waitingPanelActive ? undefined : true}
               >
-                <div className="relative min-h-[240px] overflow-visible py-7 max-md:flex max-md:flex-1 max-md:flex-col max-md:justify-center md:overflow-hidden md:py-10">
+                <div className="relative min-h-[240px] overflow-visible py-7 short:max-md:min-h-0 short:max-md:py-3 max-md:flex max-md:flex-1 max-md:flex-col max-md:justify-center md:overflow-hidden md:py-10">
                   <div className="absolute -top-4 right-0 z-20 flex items-center gap-1.5 rounded-full border border-blue-200/80 bg-white/85 px-3 py-2 text-xs font-bold text-blue-800 shadow-[0_6px_20px_-10px_rgba(37,99,235,0.5)] backdrop-blur-sm md:hidden">
                     <span className="h-2 w-2 shrink-0 rounded-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.4)]" />
                     <span>{t.dispatch.autoDispatch}</span>
                   </div>
                   <div className="relative z-10 text-center">
                     {/* Long titles (e.g. French on 360px phones) move the chip to its own line instead of breaking it */}
-                    <div className="mb-7 flex flex-wrap items-center justify-center gap-x-2 gap-y-1.5 md:mb-6">
+                    <div className="mb-7 flex flex-wrap items-center justify-center gap-x-2 gap-y-1.5 short:max-md:mb-3 md:mb-6">
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="h-2 w-2 shrink-0 rounded-full bg-orange-400 shadow-[0_0_12px_rgba(251,146,60,0.38)] animate-pulse" />
                         <p className="min-w-0 text-balance text-xs font-bold uppercase tracking-[0.16em] text-blue-800 md:text-sm md:tracking-[0.2em]">{t.dispatch.waitingForOrders}</p>
                       </span>
                       <span className="shrink-0 whitespace-nowrap rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider text-cyan-700">{t.dispatch.live}</span>
                     </div>
-                    <div className="mx-auto mb-7 w-fit max-w-full md:mb-6">
+                    <div className="mx-auto mb-7 w-fit max-w-full short:max-md:mb-3 md:mb-6">
                       <div className="flex items-start justify-center gap-2.5 md:gap-5">
                         <div className="text-center">
-                          <div className="dispatch-timer-surface rounded-2xl px-3 py-2 md:rounded-3xl md:px-6 md:py-2.5">
+                          <div className="dispatch-timer-surface rounded-2xl px-3 py-2 short:max-md:py-1 md:rounded-3xl md:px-6 md:py-2.5">
                             <span className="dispatch-timer-surface-bg" aria-hidden="true" />
-                            <div className="dispatch-waiting-digits text-5xl font-black tabular-nums leading-none tracking-tight md:text-7xl lg:text-8xl">
+                            <div className="dispatch-waiting-digits text-5xl font-black tabular-nums leading-none tracking-tight short:max-md:text-4xl md:text-7xl lg:text-8xl">
                               <span className="dispatch-digits-base"><span key={Math.floor(waitingTime / 60)} className="dispatch-timer-tick">{String(Math.floor(waitingTime / 60)).padStart(2, '0')}</span></span>
                               <span className="dispatch-digits-sheen" aria-hidden="true"><span className="dispatch-digits-sheen-track"><span key={Math.floor(waitingTime / 60)} className="dispatch-timer-tick">{String(Math.floor(waitingTime / 60)).padStart(2, '0')}</span></span></span>
                             </div>
@@ -3420,9 +3420,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                           <span className="h-2 w-2 rounded-full bg-orange-400 shadow-[0_0_10px_rgba(251,146,60,0.36)] animate-pulse md:h-2.5 md:w-2.5" />
                         </div>
                         <div className="text-center">
-                          <div className="dispatch-timer-surface dispatch-timer-surface-cyan rounded-2xl px-3 py-2 md:rounded-3xl md:px-6 md:py-2.5">
+                          <div className="dispatch-timer-surface dispatch-timer-surface-cyan rounded-2xl px-3 py-2 short:max-md:py-1 md:rounded-3xl md:px-6 md:py-2.5">
                             <span className="dispatch-timer-surface-bg" aria-hidden="true" />
-                            <div className="dispatch-waiting-digits text-5xl font-black tabular-nums leading-none tracking-tight md:text-7xl lg:text-8xl">
+                            <div className="dispatch-waiting-digits text-5xl font-black tabular-nums leading-none tracking-tight short:max-md:text-4xl md:text-7xl lg:text-8xl">
                               <span className="dispatch-digits-base"><span key={waitingTime % 60} className="dispatch-timer-tick">{String(waitingTime % 60).padStart(2, '0')}</span></span>
                               <span className="dispatch-digits-sheen" aria-hidden="true"><span className="dispatch-digits-sheen-track"><span key={waitingTime % 60} className="dispatch-timer-tick">{String(waitingTime % 60).padStart(2, '0')}</span></span></span>
                             </div>
@@ -3431,15 +3431,15 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                         </div>
                       </div>
                     </div>
-                    <p className="text-balance text-xs font-medium text-slate-600 max-md:min-h-8 md:text-sm">{dispatchPause ? (dispatchPause.type === 'error' ? t.dispatch.pausedUnavailable : t.dispatch.pausedNoOrders) : nextOrderTime ? t.dispatch.readyToAcceptOrders : t.dispatch.preparingQueue}</p>
+                    <p className="text-balance text-xs font-medium text-slate-600 max-md:min-h-8 short:max-md:min-h-0 md:text-sm">{dispatchPause ? (dispatchPause.type === 'error' ? t.dispatch.pausedUnavailable : t.dispatch.pausedNoOrders) : nextOrderTime ? t.dispatch.readyToAcceptOrders : t.dispatch.preparingQueue}</p>
                   </div>
                 </div>
-                <div className="-mx-5 -mb-5 flex items-center justify-center border-t border-white/70 px-4 py-3 max-md:pb-6 md:-mx-10 md:-mb-10 md:px-10 md:py-6">
+                <div className="-mx-5 -mb-5 flex items-center justify-center border-t border-white/70 px-4 py-3 max-md:pb-6 short:max-md:py-2 short:max-md:pb-3 md:-mx-10 md:-mb-10 md:px-10 md:py-6">
                   <button
                     type="button"
                     onClick={() => void handleStopWork(false).catch(() => undefined)}
                     disabled={isProcessing}
-                    className={`group flex min-h-[52px] w-full max-w-[460px] items-center justify-center gap-3 rounded-2xl border border-orange-200/80 bg-gradient-to-r from-[#ef8835] via-[#e8692a] to-[#d74a37] px-5 py-2 text-white shadow-[0_14px_32px_-12px_rgba(83,35,21,0.7),inset_0_1px_0_rgba(255,255,255,0.32)] transition-all duration-200 hover:from-[#f59a4b] hover:via-[#ee7b39] hover:to-[#e05a47] hover:shadow-[0_18px_36px_-12px_rgba(83,35,21,0.75)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 focus-visible:ring-offset-2 focus-visible:ring-offset-blue-600 active:scale-[0.98] disabled:cursor-wait disabled:opacity-70 md:min-h-[68px] md:gap-4 md:px-8 md:py-3.5 ${isTransitioning && transitionType === 'end' ? 'scale-95 opacity-70' : ''}`}
+                    className={`group flex min-h-[52px] short:max-md:min-h-[46px] w-full max-w-[460px] items-center justify-center gap-3 rounded-2xl border border-orange-200/80 bg-gradient-to-r from-[#ef8835] via-[#e8692a] to-[#d74a37] px-5 py-2 text-white shadow-[0_14px_32px_-12px_rgba(83,35,21,0.7),inset_0_1px_0_rgba(255,255,255,0.32)] transition-all duration-200 hover:from-[#f59a4b] hover:via-[#ee7b39] hover:to-[#e05a47] hover:shadow-[0_18px_36px_-12px_rgba(83,35,21,0.75)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 focus-visible:ring-offset-2 focus-visible:ring-offset-blue-600 active:scale-[0.98] disabled:cursor-wait disabled:opacity-70 md:min-h-[68px] md:gap-4 md:px-8 md:py-3.5 ${isTransitioning && transitionType === 'end' ? 'scale-95 opacity-70' : ''}`}
                     style={{ WebkitTapHighlightColor: 'transparent', textShadow: '0 1px 2px rgba(90, 30, 11, 0.75)' }}
                   >
                     {isProcessing ? (
@@ -3720,20 +3720,20 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
             {/* MOBILE-ONLY COMPACT LAYOUT */}
             <div
-              className={`md:hidden flex min-h-[320px] flex-col max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'invisible dispatch-parked' : ''}`}
+              className={`md:hidden flex min-h-[320px] short:min-h-0 flex-col max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'invisible dispatch-parked' : ''}`}
               aria-hidden={waitingPanelActive ? true : undefined}
             >
               {/* Mobile Start View - Enriched */}
                 {/* The cell is as tall as the parked waiting view; shorter languages centre the visual and keep Start at the bottom */}
                 <div className={`flex flex-1 flex-col space-y-3 ${startEnterAnim ? 'dispatch-start-enter' : ''} ${isTransitioning && transitionType === 'start' ? 'dispatch-standby-leaving' : ''}`}>
                   {/* Standby visual area */}
-                  <div className="relative -mx-4 flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-6">
+                  <div className="relative -mx-4 flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-6 short:py-2">
                     {/* Background gradient */}
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 90% 52% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
                     <div className="relative z-10 w-full">
                       {/* Quay scene: a container crane takes an order container from the yard and loads it onto the ship, on the panel's own wave line */}
-                      <div className="dispatch-standby-item relative -mx-4 mb-3" style={{ '--leave-order': 4, WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)', maskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)' } as CSSProperties} aria-hidden="true">
+                      <div className="dispatch-standby-item relative -mx-4 mb-3 short:mb-1" style={{ '--leave-order': 4, WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)', maskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)' } as CSSProperties} aria-hidden="true">
                         <svg viewBox="0 0 360 120" className="block h-auto w-full" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <g>
                             {STANDBY_YARD_STACKS.map(box => (
@@ -3845,7 +3845,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                       </div>
 
                       {/* Standby status */}
-                      <div className="text-center mb-3">
+                      <div className="text-center mb-3 short:mb-2">
                         <div className="dispatch-standby-item flex justify-center mb-1" style={{ '--leave-order': 3 } as CSSProperties}>
                           {/* The dot hangs outside the word so the word itself is centred */}
                           <span className="relative text-xs font-bold text-slate-600 uppercase tracking-wider">
@@ -3864,7 +3864,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                       </div>
 
                       {/* Info cards */}
-                      <div className="dispatch-standby-item grid grid-cols-2 gap-2 px-1" style={{ '--leave-order': 0 } as CSSProperties}>
+                      <div className="dispatch-standby-item grid grid-cols-2 gap-2 px-1 short:hidden" style={{ '--leave-order': 0 } as CSSProperties}>
                         <div className="bg-white/80 border border-blue-100 rounded-lg px-2.5 py-2 shadow-sm">
                           <div className="flex items-center gap-1.5 mb-1">
                             <div className="w-4 h-4 rounded-md bg-blue-50 flex items-center justify-center">

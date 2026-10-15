@@ -2535,6 +2535,12 @@ button.employee-header-action {
   }
 }
 
+/* Short phones (iPhone SE): the End Session row is shorter, so the ship and sea sit lower with it. */
+@media (max-width: 599px) and (max-height: 640px) {
+  .dispatch-veil-sea.dispatch-panel-sea { bottom: 68px; }
+  .dispatch-panel-ship { bottom: 79px; }
+}
+
 .order-panel-ship {
   position: absolute;
   right: 14px;
