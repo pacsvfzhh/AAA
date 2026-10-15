@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { TrendingUp, Calendar, CheckCircle, XCircle, DollarSign, ListChecks, BarChart3, Gift, ChevronLeft, ChevronRight } from 'lucide-react';
+import { TrendingUp, Calendar, CalendarDays, CheckCircle, XCircle, DollarSign, ListChecks, BarChart3, Gift, ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useLanguage } from '../../lib/i18n/context';
 import PageLoader from './PageLoader';
+import PanelColorBlocks from './PanelColorBlocks';
+import PanelEmptyIcon from './PanelEmptyIcon';
 
 interface DailyStatisticsProps {
   employeeId: string;
@@ -383,14 +385,13 @@ export default function DailyStatistics({ employeeId }: DailyStatisticsProps) {
             )}
           </div>
 
-          <div className="p-4 md:p-0">
+          <div className="relative isolate p-4 md:p-0" style={{ background: 'linear-gradient(145deg, #ffffff 0%, #f0f7ff 25%, #e6f2fe 50%, #f5faff 75%, #ffffff 100%)' }}>
+          <PanelColorBlocks className="-z-10" />
           {dailyStats.length === 0 ? (
             <div className="text-center py-12 lg:py-16">
-              <div className="inline-flex items-center justify-center w-16 h-16 lg:w-20 lg:h-20 rounded-full bg-gray-50 mb-4">
-                <Calendar className="w-8 h-8 lg:w-10 lg:h-10 text-gray-400" />
-              </div>
-              <p className="text-sm lg:text-base text-gray-500 font-medium">{t.statistics.noData}</p>
-              <p className="text-xs lg:text-sm text-gray-400 mt-1">{t.statistics.noDataHint}</p>
+              <PanelEmptyIcon icon={CalendarDays} badge={BarChart3} />
+              <p className="text-sm font-semibold text-blue-900 lg:text-base">{t.statistics.noData}</p>
+              <p className="mt-1 text-xs text-blue-800/60 lg:text-sm">{t.statistics.noDataHint}</p>
             </div>
           ) : (
             <>

@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
-import { RefreshCw, Clock, CheckCircle, XCircle, DollarSign, Package, Percent, Gift, ChevronLeft, ChevronRight } from 'lucide-react';
+import { RefreshCw, Clock, CheckCircle, XCircle, DollarSign, Package, Percent, Gift, ChevronLeft, ChevronRight, ReceiptText } from 'lucide-react';
 import { supabase, formatSupabaseError, isSupabaseTransientError } from '../../lib/supabase';
 import { getTodayStartUTC } from '../../lib/dateUtils';
 import { Order } from '../../types';
 import { useDeviceOptimization } from '../../lib/useDeviceOptimization';
 import { useLanguage } from '../../lib/i18n/context';
 import PageLoader from './PageLoader';
+import PanelColorBlocks from './PanelColorBlocks';
+import PanelEmptyIcon from './PanelEmptyIcon';
 
 interface OrderListProps {
   employeeId: string;
@@ -287,7 +289,8 @@ export default function OrderList({ employeeId }: OrderListProps) {
           )}
         </div>
 
-        <div className="p-3 sm:p-5">
+        <div className="relative isolate p-3 sm:p-5">
+          <PanelColorBlocks className="-z-10" />
           {/* Stats Grid */}
           <div className="grid grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 mb-4 sm:mb-5">
             {/* Total */}
@@ -373,11 +376,9 @@ export default function OrderList({ employeeId }: OrderListProps) {
           {/* Order List */}
           {todayOrders.length === 0 && todayTips.length === 0 ? (
             <div className="text-center py-12 sm:py-16">
-              <div className="w-14 h-14 sm:w-16 sm:h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-blue-50 to-sky-50 border border-blue-100 flex items-center justify-center">
-                <Package className="w-6 h-6 sm:w-7 sm:h-7 text-blue-300" />
-              </div>
-              <p className="text-sm sm:text-base font-medium text-gray-500 mb-1">{t.orderList.noOrdersToday}</p>
-              <p className="text-xs sm:text-sm text-gray-400">{t.orderList.startSubmitting}</p>
+              <PanelEmptyIcon icon={ReceiptText} badge={Package} />
+              <p className="mb-1 text-sm font-semibold text-blue-900 sm:text-base">{t.orderList.noOrdersToday}</p>
+              <p className="text-xs text-blue-800/60 sm:text-sm">{t.orderList.startSubmitting}</p>
             </div>
           ) : (
             <div

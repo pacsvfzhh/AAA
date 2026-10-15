@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import { AUTH_STORAGE_KEY, getStoredAuth } from '../../lib/auth';
 import { formatSupabaseError, isSupabaseTransientError, supabase } from '../../lib/supabase';
 import { getTodayStartUTC } from '../../lib/dateUtils';
-import { Play, Square, CheckCircle, XCircle, Clock, Package, TrendingUp, AlertTriangle, AlertCircle, Zap, Timer, FileText, ShieldAlert, ChevronLeft, ChevronRight, Send, Info, X, Ship } from 'lucide-react';
+import { Play, Square, CheckCircle, XCircle, Clock, Package, TrendingUp, AlertTriangle, AlertCircle, Zap, Timer, FileText, ShieldAlert, ChevronLeft, ChevronRight, Send, Info, X, Ship, ClipboardList } from 'lucide-react';
+import PanelColorBlocks from './PanelColorBlocks';
+import PanelEmptyIcon from './PanelEmptyIcon';
 import { useDeviceOptimization } from '../../lib/useDeviceOptimization';
 import { useResponsive } from '../../lib/useResponsive';
 import { useLanguage } from '../../lib/i18n/context';
@@ -4159,20 +4161,17 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         </div>
 
         {todayOrders.length === 0 ? (
-          <div className="relative px-8 py-16 text-center">
-            <div className="flex flex-col items-center justify-center space-y-4">
-              <div className="relative">
-                <div className="absolute inset-0 bg-blue-200/50 rounded-full blur-xl animate-pulse"></div>
-                <div className="relative w-16 h-16 bg-gradient-to-br from-blue-50 to-sky-50 rounded-2xl flex items-center justify-center border border-blue-100 ring-1 ring-blue-100/50">
-                  <Package className="w-8 h-8 text-blue-300" />
-                </div>
-              </div>
-              <div className="text-slate-600 font-medium text-base">{t.dispatch.noAssignmentsReceived}</div>
-              <div className="text-xs text-blue-400">{t.dispatch.startToReceive}</div>
+          <div className="relative isolate px-8 py-16 text-center">
+            <PanelColorBlocks className="-z-10" />
+            <div className="flex flex-col items-center justify-center">
+              <PanelEmptyIcon icon={ClipboardList} badge={Package} />
+              <div className="text-base font-semibold text-blue-900">{t.dispatch.noAssignmentsReceived}</div>
+              <div className="mt-1 text-[13px] text-blue-800/60">{t.dispatch.startToReceive}</div>
             </div>
           </div>
         ) : (
-          <div className="relative">
+          <div className="relative isolate">
+            <PanelColorBlocks className="-z-10" />
             <div
               className="lg:overflow-y-auto overflow-x-hidden scrollbar-hide"
               style={{

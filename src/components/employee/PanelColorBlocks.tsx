@@ -27,10 +27,10 @@ const TONES = {
 
 export type PanelColorTone = keyof typeof TONES;
 
-export default function PanelColorBlocks({ tone = 'blue' }: { tone?: PanelColorTone }) {
+export default function PanelColorBlocks({ tone = 'blue', className = '' }: { tone?: PanelColorTone; className?: string }) {
   const colors = TONES[tone];
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+    <div className={`pointer-events-none absolute inset-0 overflow-hidden ${className}`} aria-hidden="true">
       <div className={`absolute -right-16 -top-16 h-56 w-56 rounded-full ${colors.topCircle}`}></div>
       <div className={`absolute -bottom-20 -left-16 h-64 w-64 rounded-full ${colors.bottomCircle}`}></div>
       <div className={`absolute left-7 top-[26%] h-14 w-14 rotate-12 rounded-2xl ${colors.square}`}></div>
