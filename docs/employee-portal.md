@@ -42,6 +42,7 @@
 - 等待面板动画（`src/index.css` 的 `dispatch-*`）：持续动画只改 `transform`/`opacity`——渐变漂移、内光晕、计时卡片、数字扫光、开始按钮光晕、海鸥翅膀都做成独立图层。不要对大面积元素动画 `background-position`、`box-shadow`、`filter` 或 SVG 内部属性，也不要给含动画子元素的容器加 `filter`，否则手机每帧整块重绘。网格里互为占位的隐藏面板加 `.dispatch-parked`（停掉其中全部动画）。装饰层（呼吸光环 `.dispatch-panel-wave`、四角弧线、海鸥、小船、海浪）整体是 `z-[2]`，在面板顶部白色渐变（`.dispatch-waiting-surface::after`，z-index 1）之上、内容（z-10）之下；光环放回白色渐变下面会被冲淡。进入等待面板 1.5 秒后测两段各 2 秒帧率，都低于 45fps（低端机、iOS 低电量模式锁 30fps）就切到静态版 `.dispatch-waiting-lite`；手机、平板、电脑都适用，不按设备类型或 UA 判断，因为 UA 档位会把所有 iPhone 判为低端。注意：没有显卡的测试环境（如无头浏览器）里，平板/电脑尺寸帧率低，会切到静态版，测动画版性能时要先排除这一点。
 
 ## 提交订单 `OrderSubmission.tsx`
+- Product Type 选择框在选中后显示清除按钮（X）；清除后恢复未选择状态并关闭下拉菜单，不影响其他表单内容，焦点回到选择框。
 - 订单号 9 位、交易号 11 位；`get_employee_dispatch_submit_wait_secure` 取得有效的 assignment。
 - 用 `valid_order_data` 校验，`used_order_data` 防止重复使用；插入 `orders(status='processing', assignment_id)` 后调用 `mark_dispatch_assignment_submitted_secure`；标记失败会删除刚插入的订单和使用记录。
 - `orders.status` 为 `processing` / `success` / `failure`（和派单状态是两回事）。pg_cron 每分钟 `process_pending_orders()` 处理已 processing 满 3 分钟的订单（每批 200）。

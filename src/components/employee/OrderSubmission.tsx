@@ -32,6 +32,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedProductType, setSelectedProductType] = useState<ProductType | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const productTypeButtonRef = useRef<HTMLButtonElement>(null);
 
   const [formData, setFormData] = useState({
     userNumber: '',
@@ -290,6 +291,14 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
     setFormData({ ...formData, productTypeId: type.id });
     setSearchQuery('');
     setShowDropdown(false);
+  };
+
+  const handleProductTypeClear = () => {
+    setSelectedProductType(null);
+    setFormData(prev => ({ ...prev, productTypeId: '' }));
+    setSearchQuery('');
+    setShowDropdown(false);
+    productTypeButtonRef.current?.focus();
   };
 
   const showValidationError = (message: string) => {
@@ -650,17 +659,29 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
             <div className="relative">
               <button
                 type="button"
+                ref={productTypeButtonRef}
                 onClick={() => setShowDropdown(!showDropdown)}
                 aria-expanded={showDropdown}
                 className={`${FIELD_INPUT} flex items-center justify-between text-left ${
                   showDropdown ? '!border-blue-500 shadow-[0_0_0_3px_rgba(37,99,235,0.12)]' : ''
                 } ${selectedProductType ? '!text-blue-700 font-semibold' : '!text-slate-400'}`}
               >
-                <span className="truncate">
+                <span className={`truncate ${selectedProductType ? 'pr-10' : ''}`}>
                   {selectedProductType ? selectedProductType.name : t.orderSubmission.selectProduct}
                 </span>
                 <ChevronDown className={`w-4 h-4 sm:w-5 sm:h-5 text-slate-400 transition-transform duration-300 flex-shrink-0 ${showDropdown ? 'rotate-180 text-blue-600' : ''}`} />
               </button>
+              {selectedProductType && (
+                <button
+                  type="button"
+                  onClick={handleProductTypeClear}
+                  aria-label={t.orderSubmission.clearProductType}
+                  title={t.orderSubmission.clearProductType}
+                  className="absolute right-8 sm:right-10 top-1/2 flex !h-[28px] !w-[28px] !min-h-[28px] !min-w-[28px] -translate-y-1/2 items-center justify-center rounded-full bg-blue-50 !p-0 text-blue-600 transition-colors hover:bg-blue-100 hover:text-blue-700 active:bg-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                >
+                  <X className="h-4 w-4" strokeWidth={2.5} aria-hidden="true" />
+                </button>
+              )}
 
               {showDropdown && (
                 <div

@@ -204,6 +204,7 @@ const en = {
     title: 'Submit Order',
     userNumber: 'User Number',
     productType: 'Product Type',
+    clearProductType: 'Clear product type',
     productValue: 'Product Value',
     productNumber: 'Product Number',
     transactionId: 'Transaction ID',
