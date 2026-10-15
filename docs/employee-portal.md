@@ -63,6 +63,7 @@
 ## 通知与公告（已读规则）
 - 通知中心 `MessageCenter.tsx`：用 `get_employee_notification_messages` 拉列表；**只有选中某条通知、显示详情时**才调用 `mark_employee_notification_read`，只打开列表不算已读。打开时锁定背景滚动（隐藏页面滚动、根节点设为 inert、手机端固定 body）。
 - 实时弹出卡片：投递完成时传 `p_mark_read: false`；点击卡片会打开通知中心并选中该条 → 标为已读；关闭或超时则不标记。
+- 弹出卡片的位置与样式（2026-10-15，`EmployeeDashboard.tsx`）：卡片用 portal 挂到 `body`、`fixed` 定位，`useLayoutEffect` 按铃铛的实际位置算出 `top`/`right`/箭头偏移（右边缘对齐铃铛，但左边至少留 12px），所以窄屏手机上不会超出屏幕左侧；宽度 `min(100vw − 24px, 340px)`。z-index 由 `.employee-header-toast` 控制（平时 10021，打开弹窗时降到 9000，与页头一致）。尺寸全部用 px；关闭按钮 36px 圆形，圆底与底部操作栏同色（普通通知 `emerald-950/30`，绩效奖励 `amber-900/25`），X 为白色；所有屏宽显示装饰色块，底部是深色底带（优先级标签 + 「查看」按钮）。
 - 登录弹窗 `LoginPopupMessages.tsx`：`has_pending_employee_login_notifications` → claim → 显示时调用 `complete_notification_delivery(p_mark_read: true)`，弹出即算已读。
 - 自动化通知同样适用以上规则。
 - 错过的实时通知不会丢：页面可见且在线时（每 30 秒、切回页面或恢复联网时；实时连接断开也照常执行，失败按 30 秒起倍增、最长 5 分钟重试），`claim_next_realtime_notification_delivery` 会补弹所有未投递、未过期的实时通知；`realtime_with_login_fallback` 的通知在下次登录时由登录弹窗先显示。

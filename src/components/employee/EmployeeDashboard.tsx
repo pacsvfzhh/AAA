@@ -89,6 +89,9 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   const [showWithdrawalHistory, setShowWithdrawalHistory] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const employeeHeaderRef = useRef<HTMLElement>(null);
+  const bellWrapRef = useRef<HTMLDivElement>(null);
+  const toastCardRef = useRef<HTMLDivElement>(null);
+  const [toastPos, setToastPos] = useState<{ top: number; right: number; arrow: number } | null>(null);
   const employeeNavRef = useRef<HTMLElement>(null);
   const { companyName } = useCompanyName(employee.created_by);
   const { isMobile, isTablet } = useResponsive();
@@ -861,12 +864,36 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     return () => window.clearTimeout(timer);
   }, [latestMessage, showMessageToast]);
 
+  useLayoutEffect(() => {
+    if (!showMessageToast || !latestMessage) {
+      setToastPos(null);
+      return;
+    }
+    const update = () => {
+      const bell = bellWrapRef.current?.getBoundingClientRect();
+      const card = toastCardRef.current;
+      if (!bell || !card) return;
+      const viewportWidth = document.documentElement.clientWidth;
+      const width = card.offsetWidth;
+      const right = Math.max(12, Math.min(viewportWidth - bell.right, viewportWidth - width - 12));
+      const bellCenter = bell.left + bell.width / 2;
+      const arrow = Math.min(Math.max(viewportWidth - right - bellCenter - 6, 16), width - 28);
+      const top = bell.bottom + 10;
+      setToastPos(previous => previous && previous.top === top && previous.right === right && previous.arrow === arrow ? previous : { top, right, arrow });
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [latestMessage, showMessageToast]);
+
   useEffect(() => {
     deliveredRecipientIdsRef.current.clear();
     setMessageToastQueue([]);
     setShowMessageToast(false);
     setLatestMessage(null);
   }, [employee.id]);
+
+  const toastIsReward = latestMessage?.notificationCategory === 'performance_reward';
 
   return (
     <div className={`min-h-screen relative nav-root-padding employee-shell`} style={{ background: '#f8fafc' }}>
@@ -1013,7 +1040,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
               </div>
               <div className={`flex flex-shrink-0 items-center ${isMobile ? 'gap-1.5' : isTablet ? 'gap-2' : 'gap-3'}`}>
                 {/* Message Center Button */}
-                <div className="relative">
+                <div className="relative" ref={bellWrapRef}>
                   <button
                     onClick={() => {
                       dismissMessageToast();
@@ -1061,91 +1088,110 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                   )}
                   </button>
 
-                  {/* New Message Toast Popup - Mobile Optimized */}
-                  {showMessageToast && latestMessage && (
-                    <div className="absolute top-full right-0 mt-2 w-[min(calc(100vw-2rem),320px)] z-50 animate-slide-in-down" style={{ maxWidth: 'min(calc(100vw - 2rem), 320px)' }}>
+                  {/* New message toast: portaled and measured against the bell so it never hangs off the screen edge */}
+                  {showMessageToast && latestMessage && createPortal(
+                    <div
+                      ref={toastCardRef}
+                      className="employee-header-toast fixed animate-slide-in-down"
+                      style={{
+                        top: toastPos?.top ?? 'calc(var(--employee-header-height, 64px) + 8px)',
+                        right: toastPos?.right ?? 12,
+                        width: 'min(calc(100vw - 24px), 340px)',
+                        WebkitTextSizeAdjust: '100%',
+                      }}
+                    >
                       {/* Arrow */}
-                      <div className={`absolute -top-[6px] right-3 h-3 w-3 rotate-45 border border-b-0 border-r-0 ${latestMessage.notificationCategory === 'performance_reward' ? 'border-amber-300/40 bg-amber-500' : 'border-emerald-400/30 bg-emerald-600'}`}></div>
+                      <div
+                        className={`absolute -top-[6px] h-3 w-3 rotate-45 border border-b-0 border-r-0 ${toastIsReward ? 'border-amber-300/40 bg-amber-500' : 'border-emerald-400/30 bg-emerald-600'}`}
+                        style={{ right: toastPos?.arrow ?? 28 }}
+                      ></div>
 
-                      <div className={`relative overflow-hidden rounded-2xl border shadow-2xl ring-1 ${latestMessage.notificationCategory === 'performance_reward' ? 'border-amber-300/30 bg-gradient-to-br from-amber-500 via-yellow-500 to-orange-500 ring-amber-300/50' : 'border-emerald-500/20 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-600 ring-emerald-400/40'}`} style={{ WebkitTextSizeAdjust: '100%' }}>
-                        {/* Decorative patterns - hidden on very narrow screens */}
-                        <div className="hidden sm:block absolute top-0 right-0 w-20 h-20 rounded-full bg-teal-300 opacity-15 -translate-y-8 translate-x-6"></div>
-                        <div className="hidden sm:block absolute bottom-0 left-0 w-14 h-14 rounded-full bg-emerald-300 opacity-10 translate-y-5 -translate-x-5"></div>
-                        <div className="hidden sm:block absolute top-1/2 right-8 w-6 h-6 rotate-45 bg-white opacity-[0.07]"></div>
-                        <div className="hidden sm:block absolute bottom-6 right-16 w-4 h-4 rounded-full bg-cyan-200 opacity-15"></div>
+                      <div className={`relative overflow-hidden rounded-[18px] border shadow-2xl ring-1 ${toastIsReward ? 'border-amber-300/30 bg-gradient-to-br from-amber-500 via-yellow-500 to-orange-500 ring-amber-300/50' : 'border-emerald-500/20 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-600 ring-emerald-400/40'}`}>
+                        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+                          <div className={`absolute -right-8 -top-8 h-[104px] w-[104px] rounded-full ${toastIsReward ? 'bg-yellow-300/30' : 'bg-cyan-300/25'}`}></div>
+                          <div className={`absolute -bottom-8 -left-8 h-[88px] w-[88px] rounded-full ${toastIsReward ? 'bg-orange-400/30' : 'bg-teal-300/30'}`}></div>
+                          <div className={`absolute -right-10 top-[46%] h-[22px] w-[150px] -rotate-[28deg] rounded-full ${toastIsReward ? 'bg-white/15' : 'bg-white/10'}`}></div>
+                          <div className="absolute left-[44%] top-[14px] h-[10px] w-[10px] rotate-45 rounded-[2px] bg-white/30"></div>
+                          <div className={`absolute bottom-[58px] right-[52px] h-[8px] w-[8px] rounded-full ${toastIsReward ? 'bg-amber-100/60' : 'bg-cyan-200/60'}`}></div>
+                        </div>
 
                         {/* Top accent line */}
-                        <div className="h-[2px]" style={{ background: 'linear-gradient(90deg, transparent, #6ee7b7, #a7f3d0, #6ee7b7, transparent)' }} />
+                        <div className="relative h-[2px]" style={{ background: 'linear-gradient(90deg, transparent, #6ee7b7, #a7f3d0, #6ee7b7, transparent)' }} />
 
                         {/* Content */}
                         <div
                           onClick={() => { setMessageToOpen(latestMessage.summaryCount ? null : latestMessage.notification); dismissMessageToast(); setShowMessageCenter(true); setHasNewMessage(false); }}
-                          className="relative px-3 sm:px-4 pt-3 sm:pt-3.5 pb-3 sm:pb-3.5 cursor-pointer touch-manipulation"
+                          className="relative cursor-pointer touch-manipulation"
                           style={{ WebkitTapHighlightColor: 'transparent' }}
                         >
-                          {/* Header row */}
-                          <div className="flex items-center gap-2 sm:gap-2.5 mb-2 sm:mb-2.5">
-                            <div className="relative flex-shrink-0">
-                              <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-white/15 border border-white/20 ring-1 ring-white/10 shadow-inner">
-                                {latestMessage.notificationCategory === 'performance_reward' ? <Gift className="h-4.5 w-4.5 text-white" strokeWidth={2.2} /> : <Bell className="w-4.5 h-4.5 text-white" strokeWidth={2.2} />}
+                          <div className="px-[12px] pt-[12px] sm:px-[16px] sm:pt-[14px]">
+                            {/* Header row */}
+                            <div className="mb-[10px] flex items-center gap-[10px] sm:gap-[12px]">
+                              <div className="relative flex-shrink-0">
+                                <div className="flex h-[36px] w-[36px] items-center justify-center rounded-xl border border-white/20 bg-white/15 shadow-inner ring-1 ring-white/10">
+                                  {toastIsReward ? <Gift className="h-[18px] w-[18px] text-white" strokeWidth={2.2} /> : <Bell className="h-[18px] w-[18px] text-white" strokeWidth={2.2} />}
+                                </div>
+                                <div className="absolute -right-1.5 -top-1.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-white px-[3px] shadow-md">
+                                  <span className={`text-[10px] font-black leading-none ${toastIsReward ? 'text-amber-600' : 'text-emerald-600'}`}>{latestMessage.summaryCount ? (latestMessage.summaryCount > 99 ? '99+' : latestMessage.summaryCount) : 1}</span>
+                                </div>
                               </div>
-                              <div className="absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] px-[3px] rounded-full flex items-center justify-center bg-white shadow-md">
-                                <span className="text-[10px] font-black leading-none text-emerald-600">{latestMessage.summaryCount ? (latestMessage.summaryCount > 99 ? '99+' : latestMessage.summaryCount) : 1}</span>
+                              <div className="min-w-0 flex-1">
+                                <span className={`mb-[2px] block text-[11px] font-bold uppercase tracking-[0.12em] ${toastIsReward ? 'text-amber-50' : 'text-emerald-100'}`}>{toastIsReward ? 'Performance Reward' : t.header.newMessage}</span>
+                                <h3 className="truncate text-[13px] font-bold leading-tight text-white sm:text-[14px]">
+                                  {latestMessage.summaryCount
+                                    ? t.header.newMessagesSummary.replace('{n}', String(latestMessage.summaryCount))
+                                    : latestMessage.title}
+                                </h3>
                               </div>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); dismissMessageToast(); }}
+                                aria-label={t.common.close}
+                                className={`emp-close-btn flex h-[36px] w-[36px] flex-shrink-0 items-center justify-center rounded-full !min-h-0 !min-w-0 !p-0 text-white ring-1 ring-white/40 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                                  toastIsReward ? 'bg-amber-900/25 hover:bg-amber-900/40' : 'bg-emerald-950/30 hover:bg-emerald-950/45'
+                                }`}
+                                style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                              >
+                                <X className="h-[18px] w-[18px]" strokeWidth={2.75} aria-hidden="true" />
+                              </button>
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <span className={`mb-0.5 block text-[11px] font-bold uppercase tracking-[0.12em] ${latestMessage.notificationCategory === 'performance_reward' ? 'text-amber-50' : 'text-emerald-200'}`}>{latestMessage.notificationCategory === 'performance_reward' ? 'Performance Reward' : t.header.newMessage}</span>
-                              <h3 className="font-bold text-[13px] leading-tight truncate text-white">
+
+                            {toastIsReward && (
+                              <div className="mb-[10px] ml-[46px] flex items-center justify-between gap-[12px] rounded-lg border border-white/20 bg-white/15 px-[12px] py-[8px] sm:ml-[48px]">
+                                <span className="min-w-0 text-[11px] font-bold uppercase leading-tight tracking-wider text-white/85">{t.messages.rewardWalletLabel}</span>
+                                <span className="shrink-0 whitespace-nowrap text-[14px] font-black text-white">+{Number(latestMessage.rewardAmount || 0).toFixed(2)} {latestMessage.rewardCurrency}</span>
+                              </div>
+                            )}
+
+                            {/* Body */}
+                            <div className="mb-[12px] ml-[46px] rounded-lg border border-white/10 bg-white/10 p-[8px] backdrop-blur-sm sm:ml-[48px] sm:p-[10px]">
+                              <p className="line-clamp-2 text-[12px] leading-[1.5] text-white/90 sm:text-[13px]">
                                 {latestMessage.summaryCount
-                                  ? t.header.newMessagesSummary.replace('{n}', String(latestMessage.summaryCount))
-                                  : latestMessage.title}
-                              </h3>
+                                  ? t.header.newMessagesSummaryHint
+                                  : latestMessage.content.replace(/<[^>]*>/g, '').slice(0, 80)}
+                              </p>
                             </div>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); dismissMessageToast(); }}
-                              aria-label={t.common.close}
-                              className="emp-close-btn max-sm:-m-0.5 flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 active:scale-90 transition-all"
-                              style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', minWidth: '32px', minHeight: '32px' }}
-                            >
-                              <X className="w-3.5 h-3.5 text-white/80" strokeWidth={2.5} />
-                            </button>
-                          </div>
-
-                          {latestMessage.notificationCategory === 'performance_reward' && (
-                            <div className="mb-2.5 ml-[44px] flex items-center justify-between gap-3 rounded-lg border border-white/20 bg-white/15 px-3 py-2 sm:ml-[46px]">
-                              <span className="min-w-0 text-[11px] font-bold uppercase leading-tight tracking-wider text-white/75">{t.messages.rewardWalletLabel}</span>
-                              <span className="shrink-0 whitespace-nowrap text-sm font-black text-white">+{Number(latestMessage.rewardAmount || 0).toFixed(2)} {latestMessage.rewardCurrency}</span>
-                            </div>
-                          )}
-
-                          {/* Body */}
-                          <div className="ml-[44px] sm:ml-[46px] p-2 sm:p-2.5 rounded-lg bg-white/10 border border-white/10 backdrop-blur-sm mb-2.5 sm:mb-3">
-                            <p className="text-[12px] line-clamp-2 leading-[1.5] text-white/85">
-                              {latestMessage.summaryCount
-                                ? t.header.newMessagesSummaryHint
-                                : latestMessage.content.replace(/<[^>]*>/g, '').slice(0, 80)}
-                            </p>
                           </div>
 
                           {/* Footer */}
-                          <div className="flex items-center justify-between ml-[44px] sm:ml-[46px]">
-                            <span className="text-[11px] font-medium text-white/50 truncate mr-2">
+                          <div className={`flex items-center justify-between gap-[8px] px-[12px] py-[8px] sm:px-[16px] sm:py-[10px] ${toastIsReward ? 'bg-amber-900/25' : 'bg-emerald-950/30'}`}>
+                            <span className="min-w-0 truncate text-[11px] font-semibold text-white/90 sm:text-[12px]">
                               {latestMessage.priority === 'urgent' ? t.header.urgent :
                                latestMessage.priority === 'high' ? t.header.highPriority : t.header.normal}
                             </span>
-                            <div className={`flex-shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg transition-all active:scale-95 hover:scale-105 bg-white shadow-md ${latestMessage.notificationCategory === 'performance_reward' ? 'text-amber-700' : 'text-emerald-700'}`}>
-                              <span className="text-[11px] font-bold">{t.header.view}</span>
-                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+                            <div className={`flex h-[32px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[10px] bg-white px-[14px] shadow-md transition-all hover:scale-105 active:scale-95 sm:h-[36px] ${toastIsReward ? 'text-amber-700' : 'text-emerald-700'}`}>
+                              <span className="text-[12px] font-bold sm:text-[13px]">{t.header.view}</span>
+                              <svg className="h-[11px] w-[11px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3} aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                             </div>
                           </div>
                         </div>
 
                         {/* Progress bar */}
-                        <div className="h-[2px] bg-black/10">
+                        <div className="relative h-[2px] bg-black/10">
                           <div className="h-full animate-shrink-width" style={{ background: 'linear-gradient(90deg, #6ee7b7, #a7f3d0, #ffffff)' }} />
                         </div>
                       </div>
-                    </div>
+                    </div>,
+                    document.body
                   )}
                 </div>
 
@@ -1485,6 +1531,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
         body:has(.employee-modal-backdrop, .employee-modal-surface) .customer-service-fab {
           visibility: hidden;
         }
+        .employee-header-toast { z-index: 10021; }
+        body:has(.employee-modal-backdrop, .employee-modal-surface) .employee-header-toast { z-index: 9000; }
         .employee-nav {
           position: fixed !important;
           bottom: 0 !important;
