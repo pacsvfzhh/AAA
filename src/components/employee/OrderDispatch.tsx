@@ -18,22 +18,47 @@ import DispatchShipSilhouette from './DispatchShipSilhouette';
 import { AcceptRing, OrderIcon3D, OrderSparkles } from './DispatchOrderVisuals';
 
 const STANDBY_YARD_STACKS = [
-  { x: 12, n: 3, tone: 0 }, { x: 38, n: 2, tone: 2 }, { x: 64, n: 1, tone: 1 },
-  { x: 274, n: 1, tone: 3 }, { x: 300, n: 2, tone: 1 }, { x: 326, n: 3, tone: 0 },
+  { x: 4, n: 3, tone: 0 }, { x: 30, n: 2, tone: 2 }, { x: 56, n: 1, tone: 1 },
 ].flatMap(stack => Array.from({ length: stack.n }, (_, k) => ({
-  key: `${stack.x}-${k}`,
+  key: `y-${stack.x}-${k}`,
   x: stack.x,
   y: 88 - 13 * k,
   tone: (stack.tone + k) % 4,
 })));
 
+const STANDBY_SHIP_BOXES = [
+  { x: 212, n: 3, tone: 1 }, { x: 238, n: 1, tone: 3 }, { x: 264, n: 2, tone: 0 }, { x: 290, n: 3, tone: 2 },
+].flatMap(stack => Array.from({ length: stack.n }, (_, k) => ({
+  key: `s-${stack.x}-${k}`,
+  x: stack.x,
+  y: 82 - 13 * k,
+  tone: (stack.tone + k) % 4,
+})));
+
+// Quay crane, side view: land-side and sea-side legs under a long girder; the boom reaches over the ship.
+const CRANE_LEGS = [
+  { topL: 90, botL: 82, topR: 98, botR: 100 },
+  { topL: 152, botL: 150, topR: 160, botR: 168 },
+].map(leg => {
+  const ys = [36, 56, 77, 98];
+  const left = (y: number) => leg.topL + ((leg.botL - leg.topL) * (y - 36)) / 62;
+  const right = (y: number) => leg.topR + ((leg.botR - leg.topR) * (y - 36)) / 62;
+  return {
+    polygon: `${leg.topL},36 ${leg.topR},36 ${leg.botR},98 ${leg.botL},98`,
+    lattice: ys.slice(0, -1).map((y, i) => `M${left(y).toFixed(1)} ${y}L${right(ys[i + 1]).toFixed(1)} ${ys[i + 1]}M${right(y).toFixed(1)} ${y}L${left(ys[i + 1]).toFixed(1)} ${ys[i + 1]}`).join(''),
+    struts: ys.slice(1, -1).map(y => `M${left(y).toFixed(1)} ${y}H${right(y).toFixed(1)}`).join(''),
+  };
+});
+const CRANE_GIRDER_LATTICE = `M60 36${Array.from({ length: 30 }, (_, i) => ` L${60 + 8 * (i + 1)} ${i % 2 === 0 ? 28 : 36}`).join('')}`;
+
 // One crane cycle (fractions of CRANE_CYCLE_S): lower, latch, lift, carry, lower, release, raise empty, return empty.
-// The dropped container is shipped out and a new one arrives at the pickup slot while the empty trolley returns.
+// The loaded container is taken off the ship and a new one arrives at the pickup slot while the empty trolley returns.
 const CRANE_CYCLE_S = 16;
 const CRANE_EASE = '0.4 0 0.2 1';
-const CRANE_PICKUP_DX = -34;
-const CRANE_DROP_DX = 34;
+const CRANE_PICKUP_DX = -56;
+const CRANE_DROP_DX = 70;
 const CRANE_LOWER_DY = 29.5;
+const CRANE_DROP_DY = 10.5;
 const craneTrack = (times: number[], values: number[], axis?: 'x' | 'y') => ({
   keyTimes: times.join(';'),
   keySplines: Array(times.length - 1).fill(CRANE_EASE).join(';'),
@@ -41,13 +66,11 @@ const craneTrack = (times: number[], values: number[], axis?: 'x' | 'y') => ({
 });
 const CRANE_TROLLEY_X = craneTrack([0, 0.26, 0.5, 0.74, 0.94, 1], [CRANE_PICKUP_DX, CRANE_PICKUP_DX, CRANE_DROP_DX, CRANE_DROP_DX, CRANE_PICKUP_DX, CRANE_PICKUP_DX], 'x');
 const CRANE_HOIST_TIMES = [0, 0.1, 0.16, 0.26, 0.5, 0.6, 0.66, 0.74, 1];
-const CRANE_HOIST_DY = [0, CRANE_LOWER_DY, CRANE_LOWER_DY, 0, 0, CRANE_LOWER_DY, CRANE_LOWER_DY, 0, 0];
+const CRANE_HOIST_DY = [0, CRANE_LOWER_DY, CRANE_LOWER_DY, 0, 0, CRANE_DROP_DY, CRANE_DROP_DY, 0, 0];
 const CRANE_HOIST_Y = craneTrack(CRANE_HOIST_TIMES, CRANE_HOIST_DY, 'y');
 const CRANE_CABLE_Y2 = craneTrack(CRANE_HOIST_TIMES, CRANE_HOIST_DY.map(dy => 52 + dy));
 const CRANE_BOX_X = craneTrack([0, 0.26, 0.5, 0.88, 0.881, 1], [CRANE_PICKUP_DX, CRANE_PICKUP_DX, CRANE_DROP_DX, CRANE_DROP_DX, CRANE_PICKUP_DX, CRANE_PICKUP_DX], 'x');
-const CRANE_BOX_Y = craneTrack([0, 0.16, 0.26, 0.5, 0.6, 0.88, 0.881, 1], [CRANE_LOWER_DY, CRANE_LOWER_DY, 0, 0, CRANE_LOWER_DY, CRANE_LOWER_DY, CRANE_LOWER_DY, CRANE_LOWER_DY], 'y');
-const CRANE_GIRDER_LATTICE = `M84 38${Array.from({ length: 22 }, (_, i) => ` L${(84 + 8.8 * (i + 1)).toFixed(1)} ${i % 2 === 0 ? 28 : 38}`).join('')}`;
-const CRANE_LEG_LATTICE = [94, 244].map(x => [38, 57, 76].map((y, i) => `M${x} ${y}L${x + 22} ${[57, 76, 96][i]}M${x + 22} ${y}L${x} ${[57, 76, 96][i]}`).join('')).join('');
+const CRANE_BOX_Y = craneTrack([0, 0.16, 0.26, 0.5, 0.6, 0.88, 0.881, 1], [CRANE_LOWER_DY, CRANE_LOWER_DY, 0, 0, CRANE_DROP_DY, CRANE_DROP_DY, CRANE_LOWER_DY, CRANE_LOWER_DY], 'y');
 const CRANE_BOX_OPACITY = craneTrack([0, 0.78, 0.86, 0.9, 0.98, 1], [1, 1, 0, 0, 1, 1]);
 
 
@@ -3695,62 +3718,65 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 85% 70% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
                     <div className="relative z-10 w-full">
-                      {/* Container yard: a gantry crane carries an order container from the queue stacks to the assigned stacks, on the panel's own wave line */}
+                      {/* Quay scene: a container crane takes an order container from the yard and loads it onto the ship, on the panel's own wave line */}
                       <div className="dispatch-standby-item relative -mx-4 mb-3" style={{ '--leave-order': 4, WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)', maskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)' } as CSSProperties} aria-hidden="true">
                         <svg viewBox="0 0 360 120" className="block h-auto w-full" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <g>
                             {STANDBY_YARD_STACKS.map(box => (
-                              <rect
-                                key={box.key}
-                                x={box.x}
-                                y={box.y}
-                                width="24"
-                                height="12"
-                                rx="1"
-                                className={`shs-box shs-box-${box.tone}`}
-                              />
+                              <rect key={box.key} x={box.x} y={box.y} width="24" height="12" rx="1" className={`shs-box shs-box-${box.tone}`} />
                             ))}
                           </g>
 
-                          <path d="M84 99H278" stroke="#93c5fd" strokeWidth="1.2" />
-                          <path d="M84 101.5H278" stroke="#bfdbfe" strokeWidth="1.6" strokeDasharray="1 3" />
-                          <rect x="134" y="88" width="24" height="12" rx="1" stroke="#93c5fd" strokeOpacity="0.7" strokeWidth="0.8" strokeDasharray="2 2" />
-                          <rect x="202" y="88" width="24" height="12" rx="1" stroke="#93c5fd" strokeOpacity="0.7" strokeWidth="0.8" strokeDasharray="2 2" />
-
-                          <g strokeLinecap="round">
-                            <path d={CRANE_LEG_LATTICE} stroke="#bfdbfe" strokeWidth="0.9" />
-                            <path d="M94 38V96M116 38V96M244 38V96M266 38V96" stroke="#7aa8ee" strokeWidth="2.4" />
-                            <path d="M94 57H116M94 76H116M244 57H266M244 76H266" stroke="#93c5fd" strokeWidth="1.3" />
-                            <path d="M105 10L94 28M105 10L116 28M255 10L244 28M255 10L266 28M105 10V28M255 10V28" stroke="#93c5fd" strokeWidth="1.3" />
-                            <path d="M105 10L84 28M105 10L150 28M255 10L210 28M255 10L278 28" stroke="#93c5fd" strokeOpacity="0.85" strokeWidth="0.9" />
+                          <g>
+                            <path d="M204 94H352L346 102H212Z" fill="#9dbbea" />
+                            <path d="M204 94H352" stroke="#dbeafe" strokeWidth="1.2" />
+                            <path d="M208 98H349" stroke="#fff" strokeOpacity="0.5" strokeWidth="0.8" />
+                            {STANDBY_SHIP_BOXES.map(box => (
+                              <rect key={box.key} x={box.x} y={box.y} width="24" height="12" rx="1" className={`shs-box shs-box-${box.tone}`} />
+                            ))}
+                            <rect x="322" y="66" width="24" height="28" rx="1.5" fill="#c7dcf7" />
+                            <rect x="318" y="60" width="32" height="7" rx="1.5" fill="#b3cdf3" />
+                            <path d="M326 72H342M326 77H342M326 82H342" stroke="#fff" strokeOpacity="0.75" strokeWidth="1.6" strokeLinecap="round" />
+                            <path d="M334 60V50" stroke="#9dbbea" strokeWidth="2" strokeLinecap="round" />
                           </g>
-                          <rect x="90" y="95.5" width="30" height="3.5" rx="1.2" fill="#93c5fd" />
-                          <rect x="240" y="95.5" width="30" height="3.5" rx="1.2" fill="#93c5fd" />
-                          <g fill="#60a5fa" stroke="#dbeafe" strokeWidth="0.6">
-                            <circle cx="95" cy="99.2" r="1.8" /><circle cx="101" cy="99.2" r="1.8" /><circle cx="109" cy="99.2" r="1.8" /><circle cx="115" cy="99.2" r="1.8" />
-                            <circle cx="245" cy="99.2" r="1.8" /><circle cx="251" cy="99.2" r="1.8" /><circle cx="259" cy="99.2" r="1.8" /><circle cx="265" cy="99.2" r="1.8" />
+
+                          <path d="M0 99.5H204" stroke="#93c5fd" strokeWidth="1.2" />
+                          <rect x="112" y="88" width="24" height="12" rx="1" stroke="#93c5fd" strokeOpacity="0.75" strokeWidth="0.8" strokeDasharray="2 2" />
+                          <rect x="238" y="69" width="24" height="12" rx="1" stroke="#93c5fd" strokeOpacity="0.75" strokeWidth="0.8" strokeDasharray="2 2" />
+
+                          {CRANE_LEGS.map(leg => (
+                            <g key={leg.polygon} strokeLinecap="round" strokeLinejoin="round">
+                              <polygon points={leg.polygon} fill="#bfdbfe" fillOpacity="0.4" stroke="#5b8fe8" strokeWidth="2.2" />
+                              <path d={leg.lattice} stroke="#5b8fe8" strokeOpacity="0.85" strokeWidth="1" />
+                              <path d={leg.struts} stroke="#5b8fe8" strokeWidth="1.4" />
+                            </g>
+                          ))}
+                          <g fill="#7aa8ee">
+                            <rect x="78" y="96" width="26" height="3.5" rx="1.2" />
+                            <rect x="146" y="96" width="26" height="3.5" rx="1.2" />
+                          </g>
+                          <g fill="#3b82f6" stroke="#dbeafe" strokeWidth="0.6">
+                            <circle cx="82" cy="99" r="1.8" /><circle cx="88" cy="99" r="1.8" /><circle cx="94" cy="99" r="1.8" /><circle cx="100" cy="99" r="1.8" />
+                            <circle cx="150" cy="99" r="1.8" /><circle cx="156" cy="99" r="1.8" /><circle cx="162" cy="99" r="1.8" /><circle cx="168" cy="99" r="1.8" />
                           </g>
 
                           <g strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M84 28H278M84 38H278" stroke="#7aa8ee" strokeWidth="2" />
-                            <path d={CRANE_GIRDER_LATTICE} stroke="#bfdbfe" strokeWidth="0.9" />
-                            <path d="M84 28V38M278 28V38" stroke="#7aa8ee" strokeWidth="2" />
+                            <path d="M94 28L126 6L158 28M126 6V28" stroke="#5b8fe8" strokeWidth="2" />
+                            <path d="M126 6L60 28M126 6L82 28M126 6L230 28M126 6L300 28" stroke="#5b8fe8" strokeOpacity="0.8" strokeWidth="0.9" />
+                            <path d="M60 28H300M60 36H300" stroke="#5b8fe8" strokeWidth="2.2" />
+                            <path d="M60 28V36M300 28V36" stroke="#5b8fe8" strokeWidth="2.2" />
+                            <path d={CRANE_GIRDER_LATTICE} stroke="#5b8fe8" strokeOpacity="0.75" strokeWidth="0.9" />
                           </g>
-                          <rect x="86" y="17" width="20" height="11" rx="1.5" fill="#dbeafe" stroke="#93c5fd" strokeWidth="0.9" />
-                          <rect x="89" y="20" width="6" height="4" rx="0.8" fill="#fff" fillOpacity="0.85" />
-                          <path d="M98.5 20H103M98.5 23H103" stroke="#93c5fd" strokeWidth="0.9" strokeLinecap="round" />
-                          <path d="M122 38V39.5M129 38V39.5" stroke="#93c5fd" strokeWidth="1" />
-                          <rect x="119" y="39.5" width="13" height="9" rx="1.5" fill="#dbeafe" stroke="#93c5fd" strokeWidth="0.9" />
-                          <rect x="121.5" y="41.5" width="8" height="4.5" rx="0.8" fill="#fff" fillOpacity="0.85" />
-                          <path d="M244 38V39.5M266 38V39.5" stroke="#93c5fd" strokeWidth="0.9" />
-                          <g fill="#fca5a5">
-                            <circle cx="105" cy="8.5" r="1.5">
-                              {!suppressAnimations && <animate attributeName="opacity" values="1;0.2;1" dur="2.4s" repeatCount="indefinite" />}
-                            </circle>
-                            <circle cx="255" cy="8.5" r="1.5">
-                              {!suppressAnimations && <animate attributeName="opacity" values="0.2;1;0.2" dur="2.4s" repeatCount="indefinite" />}
-                            </circle>
-                          </g>
+                          <rect x="57" y="22" width="10" height="14" rx="1.5" fill="#3b82f6" />
+                          <rect x="70" y="16" width="22" height="12" rx="1.5" fill="#dbeafe" stroke="#5b8fe8" strokeWidth="1" />
+                          <rect x="73" y="19" width="7" height="5" rx="0.8" fill="#fff" fillOpacity="0.9" />
+                          <path d="M83 20H89M83 24H89" stroke="#5b8fe8" strokeWidth="1" strokeLinecap="round" />
+                          <path d="M102 36V38M109 36V38" stroke="#5b8fe8" strokeWidth="1" />
+                          <rect x="99" y="38" width="13" height="9" rx="1.5" fill="#dbeafe" stroke="#5b8fe8" strokeWidth="1" />
+                          <rect x="101.5" y="40" width="8" height="4.5" rx="0.8" fill="#fff" fillOpacity="0.9" />
+                          <circle cx="126" cy="4.5" r="1.6" fill="#fca5a5">
+                            {!suppressAnimations && <animate attributeName="opacity" values="1;0.2;1" dur="2.4s" repeatCount="indefinite" />}
+                          </circle>
 
                           <g transform={`translate(${CRANE_PICKUP_DX} 0)`}>
                             {!suppressAnimations && (
