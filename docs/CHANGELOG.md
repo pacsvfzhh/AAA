@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · 手机端等待派单：End Session 按钮下移到面板底部
+- 需求：手机端 Order Processing 等待派单面板下方有多余空白，End Session / Stop accepting orders 按钮应该放到面板最底部。
+- 改动：手机上等待派单时，面板内容区改为纵向撑满，计时器等内容在剩余空间里垂直居中，End Session 按钮行固定在面板最下方。桌面、平板及其他状态不变。
+- 文件：`src/components/employee/OrderDispatch.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；未在浏览器里查看实际效果。
+
 ## 2026-10-16 · 手机端 Order Processing / New Order / In Progress 面板尺寸与 End Session 按钮
 - 需求：手机端等待派单时，End Session / Stop accepting orders 按钮会遮挡动画，要调整到下方；New Order 面板和接单后的订单详情面板尺寸要和 Order Processing 面板一样。
 - 改动：①End Session 按钮行在手机上压缩（按钮高度 60px → 52px，图标 36px → 32px，上下留白减小），整体更贴近面板底部；等待界面里的船和海浪相应下移约 14px，给动画留出更多空间。平板和桌面的位置保持不变，并补上了 600–767px 宽度下海浪和船与按钮行不重叠的偏移。②手机上 New Order 和 In Progress 面板原来固定 420px 高，现在使用 Order Processing 面板稳定下来的实际高度，所以订单到来、接单时面板大小不再跳变，三个面板一样大。刚打开页面就已有订单、还没测到 Order Processing 高度时，仍使用 420px。

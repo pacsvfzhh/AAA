@@ -2881,10 +2881,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
             animate={panelResizing && !(!currentOrder && viewportWidth < 768)}
             holdMax={!currentOrder && viewportWidth < 768}
             duration={1000}
-            outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : '-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10'}
-            innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}
+            outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''}`}
+            innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : waitingPanelActive ? 'max-md:flex max-md:flex-1 max-md:flex-col' : ''}
           >
-          <div className={`overflow-hidden ${
+          <div className={`overflow-hidden max-md:shrink-0 ${
             currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'hidden' : ''
           }`}>
           {currentOrder?.status !== 'pending' && currentOrder?.status !== 'accepted' && (
@@ -3382,13 +3382,13 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               </div>
             </div>
           ) : (
-            <div className="max-md:grid">
+            <div className={`max-md:grid ${waitingPanelActive ? 'max-md:flex-1' : ''}`}>
             {(waitingPanelActive || !session.isWorking || (isTransitioning && transitionType === 'start')) && (
               <div
-                className={`max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? (waitingEnterAnim ? 'dispatch-waiting-enter' : stopExiting ? 'dispatch-waiting-exit' : '') : 'invisible dispatch-parked md:hidden'}`}
+                className={`max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''} ${waitingPanelActive ? (waitingEnterAnim ? 'dispatch-waiting-enter' : stopExiting ? 'dispatch-waiting-exit' : '') : 'invisible dispatch-parked md:hidden'}`}
                 aria-hidden={waitingPanelActive ? undefined : true}
               >
-                <div className="relative min-h-[240px] overflow-visible py-7 md:overflow-hidden md:py-10">
+                <div className="relative min-h-[240px] overflow-visible py-7 max-md:flex max-md:flex-1 max-md:flex-col max-md:justify-center md:overflow-hidden md:py-10">
                   <div className="absolute -top-4 right-0 z-20 flex items-center gap-1.5 rounded-full border border-blue-200/80 bg-white/85 px-3 py-2 text-xs font-bold text-blue-800 shadow-[0_6px_20px_-10px_rgba(37,99,235,0.5)] backdrop-blur-sm md:hidden">
                     <span className="h-2 w-2 shrink-0 rounded-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.4)]" />
                     <span>{t.dispatch.autoDispatch}</span>
