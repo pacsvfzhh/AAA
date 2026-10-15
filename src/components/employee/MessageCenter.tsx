@@ -481,7 +481,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                 <div className="relative z-10 mb-5 h-[96px] w-[120px]" aria-hidden="true">
                   <span className="absolute left-1/2 top-1/2 h-[84px] w-[84px] -translate-x-1/2 -translate-y-1/2 -rotate-6 rounded-[28px] border-2 border-sky-300/40"></span>
                   <span className="absolute left-1/2 top-1/2 h-[74px] w-[74px] -translate-x-1/2 -translate-y-1/2 rotate-12 rounded-3xl border-2 border-blue-300/50"></span>
-                  <span className="absolute left-1/2 top-1/2 flex h-[64px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[22px] bg-gradient-to-br from-blue-600 via-blue-500 to-cyan-500 shadow-lg shadow-blue-500/25">
+                  <span className="absolute left-1/2 top-1/2 flex h-[64px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[22px] bg-gradient-to-br from-blue-400 via-sky-400 to-cyan-300 shadow-lg shadow-blue-400/20">
                     <Bell className="h-8 w-8 text-white" strokeWidth={2} />
                   </span>
                   <span className="absolute left-[82px] top-[10px] h-[14px] w-[14px] rounded-full bg-orange-400"></span>
