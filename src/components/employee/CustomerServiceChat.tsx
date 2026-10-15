@@ -2674,12 +2674,26 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                     </button>
                   </div>
                 ) : conversations.length === 0 ? (
-                  <div className="flex h-full flex-col items-center justify-center px-8 text-center">
-                    <div className="mb-5 flex h-[64px] w-[64px] items-center justify-center rounded-full bg-blue-100/70" aria-hidden="true">
-                      <MessageCircle className="h-7 w-7 text-blue-500" strokeWidth={1.75} />
+                  <div className="relative flex h-full flex-col items-center justify-center overflow-hidden px-8 text-center">
+                    <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+                      <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-blue-200/35"></div>
+                      <div className="absolute -bottom-20 -left-16 h-64 w-64 rounded-full bg-sky-200/35"></div>
+                      <div className="absolute left-7 top-[26%] h-14 w-14 rotate-12 rounded-2xl bg-indigo-200/30"></div>
+                      <div className="absolute bottom-[24%] right-9 h-10 w-10 -rotate-6 rounded-xl bg-blue-300/25"></div>
+                      <div className="absolute -left-10 top-1/2 h-[18px] w-[190px] -rotate-[24deg] rounded-full bg-white/50"></div>
                     </div>
-                    <p className="text-[15px] font-semibold leading-6 text-blue-900">{t.customerService.noConversations}</p>
-                    <p className="mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.customerService.noConversationsDesc}</p>
+                    <div className="relative z-10 mb-5 h-[72px] w-[100px]" aria-hidden="true">
+                      <div className="absolute left-0 top-0 flex h-[44px] w-[66px] flex-col justify-center gap-[5px] rounded-2xl rounded-bl-md bg-blue-200/90 px-3">
+                        <span className="h-[3px] w-full rounded-full bg-white/80"></span>
+                        <span className="h-[3px] w-2/3 rounded-full bg-white/80"></span>
+                      </div>
+                      <div className="absolute bottom-0 right-0 flex h-[40px] w-[58px] flex-col justify-center gap-[5px] rounded-2xl rounded-br-md bg-blue-500 px-3 shadow-sm shadow-blue-500/20">
+                        <span className="h-[3px] w-full rounded-full bg-white/80"></span>
+                        <span className="h-[3px] w-1/2 rounded-full bg-white/80"></span>
+                      </div>
+                    </div>
+                    <p className="relative z-10 text-[15px] font-semibold leading-6 text-blue-900">{t.customerService.noConversations}</p>
+                    <p className="relative z-10 mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.customerService.noConversationsDesc}</p>
                   </div>
                 ) : (
                   <div className="p-3 sm:p-4 space-y-2 sm:space-y-2.5">
