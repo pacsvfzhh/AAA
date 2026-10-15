@@ -2686,6 +2686,9 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         ) : (
                           <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-gradient-to-b from-blue-500 to-indigo-600' : 'bg-blue-500/70'}`} aria-hidden="true"></span>
                         )}
+                        {conv.unread_count > 0 && (
+                          <span className={`pointer-events-none absolute inset-x-0 top-0 h-[4px] bg-gradient-to-r to-transparent ${conv.customer.is_super ? 'from-orange-400 via-amber-400/80' : 'from-blue-500 via-sky-400/80'}`} aria-hidden="true"></span>
+                        )}
                         {conv.customer.is_super ? (
                           /* VIP card: 4-line vertical layout */
                           <div className="relative">
