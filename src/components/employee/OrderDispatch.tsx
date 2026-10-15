@@ -3661,26 +3661,60 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 85% 70% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
                     <div className="relative z-10 w-full">
-                      {/* Center icon */}
-                      <div className="dispatch-standby-item flex justify-center mb-3" style={{ '--leave-order': 4 } as CSSProperties}>
-                        <div className="relative">
-                          {/* Rings and glow orbit the icon; only ~39px sits above its centre, so the outer ring stays within that */}
-                          <div className="dispatch-standby-glow pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden="true">
-                            <div className={`absolute h-20 w-20 rounded-full bg-blue-200/40 blur-xl ${suppressAnimations ? '' : 'animate-pulse'}`}></div>
-                          </div>
-                          <div className="dispatch-standby-rings pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden="true">
-                            <div className={`absolute h-16 w-16 rounded-full border border-blue-200/60 ${suppressAnimations ? '' : 'animate-[spin_25s_linear_infinite]'}`}>
-                              <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-blue-400/60 rounded-full"></div>
-                            </div>
-                            <div className={`absolute h-[76px] w-[76px] rounded-full border border-blue-100/60 ${suppressAnimations ? '' : 'animate-[spin_35s_linear_infinite_reverse]'}`}>
-                              <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-1 h-1 bg-blue-300/60 rounded-full"></div>
-                            </div>
-                          </div>
-                          <div className={`absolute inset-0 bg-blue-400/20 rounded-full blur-md ${suppressAnimations ? '' : 'animate-pulse'}`}></div>
-                          <div className="relative w-12 h-12 bg-gradient-to-br from-[#1b4b84] via-blue-600 to-sky-500 border border-white/60 rounded-full flex items-center justify-center shadow-[0_10px_22px_-10px_rgba(37,99,235,0.85)]">
-                            <Timer className="w-5 h-5 text-white" />
-                          </div>
-                        </div>
+                      {/* Order flow motif: order -> processing -> done -> delivered along a route, blended into the panel */}
+                      <div className="dispatch-standby-item relative -mx-4 mb-2" style={{ '--leave-order': 4 } as CSSProperties} aria-hidden="true">
+                        <svg viewBox="0 0 340 120" className="block h-auto w-full" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <defs>
+                            <linearGradient id="ipm-blue" x1="0" y1="0" x2="1" y2="1">
+                              <stop offset="0" stopColor="#1b4b84" />
+                              <stop offset="0.55" stopColor="#2563eb" />
+                              <stop offset="1" stopColor="#38bdf8" />
+                            </linearGradient>
+                            <linearGradient id="ipm-green" x1="0" y1="0" x2="1" y2="1">
+                              <stop offset="0" stopColor="#10b981" />
+                              <stop offset="1" stopColor="#34d399" />
+                            </linearGradient>
+                          </defs>
+                          <path d="M30 40C20 10 90 0 120 18C160 36 150 80 110 92C70 104 40 90 30 40Z" fill="rgba(147,197,253,0.28)" />
+                          <path d="M200 70C220 40 290 50 320 76C340 100 280 116 240 108C205 100 190 90 200 70Z" fill="rgba(125,211,252,0.3)" />
+                          <rect x="150" y="6" width="22" height="22" rx="7" transform="rotate(18 161 17)" fill="rgba(165,180,252,0.22)" />
+                          <rect x="262" y="8" width="12" height="12" rx="4" transform="rotate(-14 268 14)" fill="rgba(147,197,253,0.32)" />
+                          <path d="M24 84Q76 28 124 62Q172 98 220 50Q268 6 316 34" stroke="#60a5fa" strokeOpacity="0.7" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="5 6" />
+                          <g transform="translate(14 72) rotate(-8 10 13)">
+                            <rect width="20" height="26" rx="4" fill="#fff" stroke="#93c5fd" strokeWidth="1.4" />
+                            <path d="M5 8h10M5 13h10M5 18h6" stroke="#60a5fa" strokeWidth="1.6" strokeLinecap="round" />
+                          </g>
+                          <g transform="translate(124 62)">
+                            <circle r="21" stroke="#93c5fd" strokeWidth="1.2" strokeDasharray="3 4" opacity="0.8">
+                              {!suppressAnimations && <animateTransform attributeName="transform" type="rotate" from="360" to="0" dur="14s" repeatCount="indefinite" />}
+                            </circle>
+                            <circle r="14" fill="url(#ipm-blue)" stroke="#fff" strokeOpacity="0.7" strokeWidth="1.2" />
+                            <g stroke="#fff" strokeWidth="2" strokeLinecap="round">
+                              {!suppressAnimations && <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="9s" repeatCount="indefinite" />}
+                              <line x1="-8" x2="8" y1="0" y2="0" />
+                              <line x1="-8" x2="8" y1="0" y2="0" transform="rotate(45)" />
+                              <line x1="-8" x2="8" y1="0" y2="0" transform="rotate(90)" />
+                              <line x1="-8" x2="8" y1="0" y2="0" transform="rotate(135)" />
+                            </g>
+                            <circle r="4.5" fill="#2563eb" stroke="#fff" strokeWidth="1.6" />
+                          </g>
+                          <g transform="translate(220 50)">
+                            <circle r="11" fill="url(#ipm-green)" stroke="#fff" strokeOpacity="0.8" strokeWidth="1.2" />
+                            <path d="M-5 0L-1.5 3.5L5.5 -3.5" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                          </g>
+                          <g transform="translate(316 34)">
+                            <path d="M0 -12L12 -6L0 0L-12 -6Z" fill="#bfdbfe" />
+                            <path d="M-12 -6L0 0V13L-12 7Z" fill="#60a5fa" />
+                            <path d="M0 0L12 -6V7L0 13Z" fill="#2563eb" />
+                          </g>
+                          {!suppressAnimations && (
+                            <g>
+                              <animateMotion dur="4.5s" repeatCount="indefinite" path="M24 84Q76 28 124 62Q172 98 220 50Q268 6 316 34" />
+                              <circle r="8" fill="#60a5fa" fillOpacity="0.28" />
+                              <circle r="3.4" fill="#2563eb" />
+                            </g>
+                          )}
+                        </svg>
                       </div>
 
                       {/* Standby status */}

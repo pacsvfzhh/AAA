@@ -3272,8 +3272,8 @@ button.dispatch-start-cta:active:not(:disabled) {
   animation: none !important;
 }
 
-/* After Start, rows drift away from the button upwards (order 0 = closest to the button), the rings ping outwards
-   (phones), and the veil (START_CONNECT_VEIL_DELAY_MS in OrderDispatch) arrives while the top rows clear.
+/* After Start, rows drift away from the button upwards (order 0 = closest to the button), and the veil
+   (START_CONNECT_VEIL_DELAY_MS in OrderDispatch) arrives while the top rows clear.
    Only opacity/transform animate, so nothing reflows or repaints mid-exit. */
 @media (prefers-reduced-motion: no-preference) {
   .dispatch-standby-leaving .dispatch-standby-item {
@@ -3281,13 +3281,6 @@ button.dispatch-start-cta:active:not(:disabled) {
     animation-delay: calc(var(--leave-order, 0) * 80ms);
   }
 
-  .dispatch-standby-leaving .dispatch-standby-rings {
-    animation: dispatchStandbyPing 1000ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .dispatch-standby-leaving .dispatch-standby-glow {
-    animation: dispatchStandbyGlowOut 760ms ease-out both;
-  }
 }
 
 @keyframes dispatchStandbyLeave {
@@ -3503,16 +3496,6 @@ button.dispatch-start-cta:active:not(:disabled) {
   100% { opacity: 0; transform: rotate(calc(var(--a) + 50deg)) translateX(calc(54px + var(--d))) scale(0.4); }
 }
 
-
-@keyframes dispatchStandbyPing {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(1.22); }
-}
-
-@keyframes dispatchStandbyGlowOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
 
 .dispatch-veil {
   position: absolute;
