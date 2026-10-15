@@ -478,18 +478,13 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   <div className="absolute bottom-[24%] right-9 h-10 w-10 -rotate-6 rounded-xl bg-blue-300/25"></div>
                   <div className="absolute -left-10 top-1/2 h-[18px] w-[190px] -rotate-[24deg] rounded-full bg-white/50"></div>
                 </div>
-                <div className="relative z-10 mb-5 h-[72px] w-[120px]" aria-hidden="true">
-                  <span className="absolute left-[56px] top-0 h-[6px] w-[8px] rounded-full bg-blue-200/90"></span>
-                  <span className="absolute left-[40px] top-[5px] h-[40px] w-[40px] rounded-t-full bg-blue-500">
-                    <span className="absolute left-[8px] top-[8px] h-[18px] w-[4px] rounded-full bg-white/80"></span>
+                <div className="relative z-10 mb-5 h-[96px] w-[120px]" aria-hidden="true">
+                  <span className="absolute left-1/2 top-1/2 h-[84px] w-[84px] -translate-x-1/2 -translate-y-1/2 -rotate-6 rounded-[28px] border-2 border-sky-300/40"></span>
+                  <span className="absolute left-1/2 top-1/2 h-[74px] w-[74px] -translate-x-1/2 -translate-y-1/2 rotate-12 rounded-3xl border-2 border-blue-300/50"></span>
+                  <span className="absolute left-1/2 top-1/2 flex h-[64px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[22px] bg-gradient-to-br from-blue-600 via-blue-500 to-cyan-500 shadow-lg shadow-blue-500/25">
+                    <Bell className="h-8 w-8 text-white" strokeWidth={2} />
                   </span>
-                  <span className="absolute left-[32px] top-[44px] h-[9px] w-[56px] rounded-full bg-blue-200/90"></span>
-                  <span className="absolute left-[55px] top-[57px] h-[10px] w-[10px] rounded-full bg-blue-200/90"></span>
-                  <span className="absolute left-[94px] top-[14px] h-[24px] w-[9px] rounded-r-full border-2 border-l-0 border-blue-400/80"></span>
-                  <span className="absolute left-[105px] top-[8px] h-[36px] w-[11px] rounded-r-full border-2 border-l-0 border-blue-300/70"></span>
-                  <span className="absolute left-[17px] top-[14px] h-[24px] w-[9px] rounded-l-full border-2 border-r-0 border-blue-400/80"></span>
-                  <span className="absolute left-[4px] top-[8px] h-[36px] w-[11px] rounded-l-full border-2 border-r-0 border-blue-300/70"></span>
-                  <span className="absolute left-[70px] top-[2px] h-[14px] w-[14px] rounded-full bg-orange-400"></span>
+                  <span className="absolute left-[82px] top-[10px] h-[14px] w-[14px] rounded-full bg-orange-400"></span>
                 </div>
                 <p className="relative z-10 text-[14px] font-semibold leading-6 text-blue-900">{t.messages.noMessages}</p>
                 <p className="relative z-10 mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.messages.emptyDesc}</p>
