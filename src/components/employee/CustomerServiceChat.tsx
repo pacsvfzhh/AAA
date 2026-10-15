@@ -2415,7 +2415,11 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                     stopContinuousSound();
                   }}
                   aria-label={t.common.close}
-                  className="emp-close-btn flex h-[36px] w-[36px] flex-shrink-0 items-center justify-center rounded-full !min-h-0 !min-w-0 !p-0 bg-slate-900/45 text-white ring-1 ring-white/50 transition-colors hover:bg-slate-900/60 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  className={`emp-close-btn flex h-[36px] w-[36px] flex-shrink-0 items-center justify-center rounded-full !min-h-0 !min-w-0 !p-0 text-white ring-1 ring-white/40 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                    messagePopup.customer.is_super
+                      ? 'bg-amber-900/25 hover:bg-amber-900/40'
+                      : 'bg-indigo-900/30 hover:bg-indigo-900/45'
+                  }`}
                   style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                 >
                   <X className="h-[18px] w-[18px]" strokeWidth={2.75} aria-hidden="true" />
