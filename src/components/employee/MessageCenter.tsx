@@ -9,6 +9,8 @@ import { useLanguage } from '../../lib/i18n/context';
 import QuickCopyRichContent from './QuickCopyRichContent';
 import PageLoader from './PageLoader';
 import PanelColorBlocks from './PanelColorBlocks';
+import NotificationDetailBackground from './NotificationDetailBackground';
+import { NOTIFICATION_DETAIL_THEMES, getNotificationDetailTone } from './notificationDetailTheme';
 
 interface MessageCenterProps {
   employee: Employee;
@@ -322,6 +324,8 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
   };
 
   const unreadCount = unreadMessages.length;
+  const detailTone = selectedMessage ? getNotificationDetailTone(selectedMessage.messages.priority, selectedMessage.messages.notification_category) : 'normal';
+  const detailTheme = NOTIFICATION_DETAIL_THEMES[detailTone];
 
   const sortedMessages = [...messages].sort((a, b) => {
     if (!a.is_read && b.is_read) return -1;
@@ -645,7 +649,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
           >
             {/* Detail Header */}
             <div className="relative flex-shrink-0 overflow-hidden">
-              <div className={`absolute inset-0 bg-gradient-to-br ${selectedMessage.messages.notification_category === 'performance_reward' ? 'from-amber-500 via-yellow-500 to-orange-500' : 'from-blue-600 via-blue-500 to-cyan-500'}`} />
+              <div className={`absolute inset-0 bg-gradient-to-br ${detailTheme.headerGradient}`} />
 
               {/* Decorative elements */}
               <div className="absolute top-0 right-0 w-48 h-48 opacity-[0.06]">
@@ -665,36 +669,36 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   type="button"
                   onClick={() => setSelectedMessage(null)}
                   aria-label={t.messages.close}
-                  className={`notification-panel-list-close emp-close-btn emp-close-btn--wrap group absolute right-2.5 top-2.5 z-10 flex items-center justify-center rounded-xl focus-visible:outline-none focus-visible:ring-2 lg:right-4 lg:top-3 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950 focus-visible:ring-amber-950/35' : 'text-white focus-visible:ring-white/60'}`}
+                  className={`notification-panel-list-close emp-close-btn emp-close-btn--wrap group absolute right-2.5 top-2.5 z-10 flex items-center justify-center rounded-xl focus-visible:outline-none focus-visible:ring-2 lg:right-4 lg:top-3 ${detailTheme.closeOuter}`}
                   style={{
                     WebkitTapHighlightColor: 'transparent',
                     top: !isDesktop ? 'calc(env(safe-area-inset-top, 0px) + 10px)' : undefined,
                   }}
                 >
-                  <span className={`flex h-9 w-9 items-center justify-center rounded-xl backdrop-blur-sm transition-all group-active:scale-95 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'border border-amber-950/20 bg-amber-950/15 group-hover:bg-amber-950/25' : 'border border-white/10 bg-white/15 group-hover:bg-white/25'}`}>
+                  <span className={`flex h-9 w-9 items-center justify-center rounded-xl backdrop-blur-sm transition-all group-active:scale-95 ${detailTheme.closeInner}`}>
                     <X className="h-4 w-4 shrink-0" strokeWidth={2.5} />
                   </span>
                 </button>
 
                 {/* Title section */}
                 <div className="flex items-start gap-2.5 pr-14">
-                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border backdrop-blur-sm sm:h-10 sm:w-10 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'border-amber-950/20 bg-amber-950/15 text-amber-950 shadow-sm shadow-amber-950/10' : 'border-white/20 bg-white/15'}`}>
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border backdrop-blur-sm sm:h-10 sm:w-10 ${detailTheme.iconBox}`}>
                     {selectedMessage.messages.notification_category === 'performance_reward'
                       ? <Gift className="h-5 w-5" strokeWidth={2} />
                       : getPriorityIcon(selectedMessage.messages.priority, 'h-5 w-5 text-white')}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className={`mb-1 break-words text-lg font-bold leading-tight lg:text-xl ${selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950' : 'text-white'}`}>
+                    <h3 className={`mb-1 break-words text-lg font-bold leading-tight lg:text-xl ${detailTheme.titleText}`}>
                       {selectedMessage.messages.title}
                     </h3>
-                    <div className={`flex flex-wrap items-center gap-2 text-sm font-medium ${selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950/75' : 'text-blue-100/90'}`}>
+                    <div className={`flex flex-wrap items-center gap-2 text-sm font-medium ${detailTheme.metaText}`}>
                       <div className="flex items-center gap-1.5">
-                        <Clock className={`h-3.5 w-3.5 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950/70' : 'text-cyan-200'}`} />
+                        <Clock className={`h-3.5 w-3.5 ${detailTheme.clockIcon}`} />
                         <span>
                           {new Date(selectedMessage.messages.created_at || 0).toLocaleDateString(dateLocale, { year: 'numeric', month: 'short', day: 'numeric' })}
                         </span>
                       </div>
-                      <span className={selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950/30' : 'text-white/20'}>|</span>
+                      <span className={detailTheme.metaDivider}>|</span>
                       <span>
                         {new Date(selectedMessage.messages.created_at || 0).toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })}
                       </span>
@@ -704,10 +708,10 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
 
                 {/* Tags */}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 pr-14">
-                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${selectedMessage.messages.notification_category === 'performance_reward' ? 'border-amber-950/25 bg-amber-950/15 text-amber-950' : getDeliveredMessageType(selectedMessage) === 'login_popup' ? 'border-white/20 bg-white/15 text-sky-100' : 'border-white/20 bg-white/15 text-cyan-100'}`}>
+                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${detailTheme.typeTag}`}>
                     {getDeliveredMessageType(selectedMessage) === 'login_popup' ? t.messages.loginNotification : t.messages.liveMessage}
                   </span>
-                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${selectedMessage.messages.notification_category === 'performance_reward' ? 'border-orange-800/25 bg-orange-800/20 text-orange-950' : 'border-white/15 bg-white/15 text-white'}`}>
+                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${detailTheme.priorityTag}`}>
                     {selectedMessage.messages.priority === 'urgent' ? t.messages.priorityUrgent : selectedMessage.messages.priority === 'high' ? t.messages.priorityHigh : selectedMessage.messages.priority === 'normal' ? t.messages.priorityNormal : t.messages.priorityLow} {t.messages.priority}
                   </span>
                 </div>
@@ -723,12 +727,13 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
               } as React.CSSProperties}
             >
               {/* Content card */}
-              <div className={`relative flex min-h-0 flex-1 flex-col overflow-hidden ${selectedMessage.messages.notification_category === 'performance_reward' ? 'bg-gradient-to-b from-amber-100 via-orange-50 to-amber-100/75' : 'bg-gradient-to-b from-blue-100/80 via-sky-50 to-blue-100/55'}`}>
+              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" style={{ background: detailTheme.contentGradient }}>
+                <NotificationDetailBackground tone={detailTone} />
                 {/* Top accent line */}
-                <div className={`absolute left-6 right-6 top-0 h-[2px] rounded-full bg-gradient-to-r from-transparent to-transparent ${selectedMessage.messages.notification_category === 'performance_reward' ? 'via-amber-400' : 'via-blue-300'}`} />
+                <div className={`absolute left-6 right-6 top-0 z-10 h-[2px] rounded-full bg-gradient-to-r from-transparent to-transparent ${detailTheme.accentLine}`} />
 
-                {selectedMessage.messages.notification_category === 'performance_reward' && (
-                  <div className="shrink-0 border-b border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-4 lg:px-7">
+                {detailTone === 'reward' && (
+                  <div className={`relative ${detailTheme.rewardBannerClass}`}>
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-sm font-black text-amber-800">{t.messages.rewardBonusLabel}</p>
@@ -743,12 +748,12 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   </div>
                 )}
 
-                <div className={`min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4 lg:p-5 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'reward-notification-scrollbar' : 'scrollbar-thin'}`}>
+                <div className={`relative min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4 lg:p-5 ${detailTheme.scrollbar}`}>
                   <QuickCopyRichContent
                     html={selectedMessage.messages.content}
                     copyLabel={t.messages.quickCopy}
                     copiedLabel={t.messages.copied}
-                    className="prose prose-sm lg:prose-base max-w-none leading-relaxed [&_a]:!text-blue-600 [&_a]:underline [&_img]:!rounded-xl [&_img]:!shadow-md [&_blockquote]:!border-l-blue-400 [&_blockquote]:!bg-blue-50/50 [&_blockquote]:!p-4 [&_blockquote]:!rounded-r-lg [&_h1]:!text-slate-900 [&_h2]:!text-slate-800 [&_h3]:!text-slate-700 [&_p]:!text-slate-700 [&_li]:!text-slate-700 message-content-dark"
+                    className={`prose prose-sm lg:prose-base max-w-none leading-relaxed ${detailTheme.prose} [&_a]:underline [&_img]:!rounded-xl [&_img]:!shadow-md [&_blockquote]:!p-4 [&_blockquote]:!rounded-r-lg [&_h1]:!text-slate-900 [&_h2]:!text-slate-800 [&_h3]:!text-slate-700 [&_p]:!text-slate-700 [&_li]:!text-slate-700 message-content-dark`}
                     style={{ wordBreak: 'break-word', overflowWrap: 'break-word', color: '#1e293b' }}
                   />
                 </div>
@@ -756,7 +761,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
             </div>
 
             {/* Detail Footer */}
-            <div className="relative flex-shrink-0 bg-white border-t border-blue-100 p-4 lg:p-5">
+            <div className={`relative flex-shrink-0 bg-white border-t p-4 lg:p-5 ${detailTheme.footerBorder}`}>
               {failedReadIds.has(selectedMessage.id) && (
                 <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
                   <span>{t.messages.readSyncFailed}</span>
@@ -777,19 +782,19 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                     </>
                   ) : (
                     <>
-                      <div className="flex items-center justify-center w-9 h-9 bg-blue-50 rounded-xl ring-1 ring-blue-200">
-                        <Sparkles className="w-4 h-4 text-blue-600" />
+                      <div className={`flex items-center justify-center w-9 h-9 rounded-xl ring-1 ${detailTheme.unreadIconBox}`}>
+                        <Sparkles className={`w-4 h-4 ${detailTheme.unreadIcon}`} />
                       </div>
                       <div>
                         <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wide">{t.messages.notification}</p>
-                        <p className="text-sm text-blue-700 font-semibold">{t.messages.markAsRead}</p>
+                        <p className={`text-sm font-semibold ${detailTheme.unreadLabel}`}>{t.messages.markAsRead}</p>
                       </div>
                     </>
                   )}
                 </div>
                 <button
                   onClick={() => setSelectedMessage(null)}
-                  className={`min-h-[44px] px-6 py-2.5 rounded-xl font-semibold text-sm transition-all active:scale-95 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'bg-gradient-to-r from-amber-500 via-yellow-500 to-orange-500 text-amber-950 shadow-lg shadow-amber-500/25 hover:from-amber-600 hover:via-yellow-600 hover:to-orange-600' : 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-lg shadow-blue-500/20 hover:from-blue-700 hover:to-cyan-600'}`}
+                  className={`min-h-[44px] px-6 py-2.5 rounded-xl font-semibold text-sm transition-all active:scale-95 ${detailTheme.footerButton}`}
                 >
                   {t.messages.close}
                 </button>

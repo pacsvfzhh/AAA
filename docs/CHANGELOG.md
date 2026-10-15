@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · 通知详情面板：公告风格背景，按优先级配色
+- 需求：铃铛 → Messages → 点击通知卡片进入的详情面板，内容背景要匹配公告面板风格，并按优先级配色；管理端员工预览同步。
+- 改动：内容区使用公告面板风格的白到浅色渐变，加柔光色块、点阵和虚线路线。普通蓝、重要绿、紧急红，奖金固定黄色；标题栏、标签、关闭按钮、底部按钮、链接、引用块和「标为已读」图标同步配色。管理端各处员工预览共用同一个详情面板，会按所选优先级显示。
+- 文件：`src/components/employee/notificationDetailTheme.ts`（新增）、`src/components/employee/NotificationDetailBackground.tsx`（新增）、`src/components/employee/EmployeeNotificationDetailPanel.tsx`、`src/components/employee/MessageCenter.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；未在浏览器里查看实际效果。
+
 ## 2026-10-15 · 客服聊天内容窗：加入色块背景，按 VIP / 普通区分配色
 - 需求：点击会话卡片进入的聊天内容窗也使用这个色块背景，并匹配 VIP 与普通角色的聊天主题。
 - 改动：聊天消息区在原有渐变底色上叠加固定不动的色块（消息滚动时背景不动）。普通客户为蓝 / 天蓝 / 靛色块，叠在原来的蓝灰渐变上；VIP 客户为琥珀 / 橙 / 淡黄色块，外加一个小菱形，叠在原来的暖黄渐变上，与 VIP 标题栏的琥珀色一致。`PanelColorBlocks` 增加 `tone`（`blue` / `gold`）参数；消息区拆成「外层固定背景 + 内层滚动区」两层，消息滚动与自动滚到底部的逻辑不变。
