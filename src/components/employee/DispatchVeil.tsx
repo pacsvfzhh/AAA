@@ -40,10 +40,11 @@ interface DispatchWavesProps {
   className?: string;
   wavelengths?: [number, number, number];
   speeds?: [number, number, number];
+  intensity?: number;
 }
 
 // Wave counts are derived from the rendered width so each crest keeps the same pixel shape on every screen.
-export function DispatchWaves({ className = '', wavelengths = [460, 230, 460], speeds = [51, 66, 84] }: DispatchWavesProps) {
+export function DispatchWaves({ className = '', wavelengths = [460, 230, 460], speeds = [51, 66, 84], intensity = 1 }: DispatchWavesProps) {
   const uid = useId().replace(/:/g, '');
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -77,8 +78,8 @@ export function DispatchWaves({ className = '', wavelengths = [460, 230, 460], s
           >
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor={layer.top} stopOpacity={layer.topOpacity} />
-                <stop offset="1" stopColor={layer.bottom} stopOpacity={layer.bottomOpacity} />
+                <stop offset="0" stopColor={layer.top} stopOpacity={Math.min(1, layer.topOpacity * intensity)} />
+                <stop offset="1" stopColor={layer.bottom} stopOpacity={Math.min(1, layer.bottomOpacity * intensity)} />
               </linearGradient>
             </defs>
             <path d={`${curve} V40 H0Z`} fill={`url(#${gradientId})`} />
