@@ -1485,6 +1485,39 @@ body {
   }
 }
 
+/* Chat floating button and its new-message card share these variables, so the card always sits above the button. */
+.customer-service-fab,
+.customer-service-popup {
+  --cs-fab-size: 56px;
+  --cs-fab-right: 16px;
+  --cs-fab-bottom: calc(var(--employee-bottom-nav-height, 72px) + 28px);
+}
+
+@media (min-width: 1025px) {
+  .customer-service-fab,
+  .customer-service-popup {
+    --cs-fab-size: 80px;
+  }
+}
+
+.customer-service-fab {
+  right: var(--cs-fab-right);
+  bottom: var(--cs-fab-bottom);
+}
+
+.customer-service-fab > button {
+  width: var(--cs-fab-size) !important;
+  height: var(--cs-fab-size) !important;
+  min-width: var(--cs-fab-size) !important;
+  min-height: var(--cs-fab-size) !important;
+}
+
+.customer-service-popup {
+  right: var(--cs-fab-right);
+  bottom: calc(var(--cs-fab-bottom) + var(--cs-fab-size) + 18px);
+  width: min(calc(100vw - var(--cs-fab-right) - 12px), 384px);
+}
+
 /* iPhone SE-class phones (≤359px, 568px tall): reclaim height from header, bottom nav and form chrome. */
 @media (max-width: 359px) {
   body:has(.employee-shell) .emp-header-row {
@@ -1574,16 +1607,11 @@ body {
     padding-bottom: 0 !important;
   }
 
-  .customer-service-fab {
-    right: 10px !important;
-    bottom: calc(var(--employee-bottom-nav-height, 72px) + 10px) !important;
-  }
-
-  .customer-service-fab > button {
-    width: 44px !important;
-    height: 44px !important;
-    min-width: 44px !important;
-    min-height: 44px !important;
+  .customer-service-fab,
+  .customer-service-popup {
+    --cs-fab-size: 44px;
+    --cs-fab-right: 10px;
+    --cs-fab-bottom: calc(var(--employee-bottom-nav-height, 72px) + 22px);
   }
 
   body:has(.employee-shell) .order-submission-form button.order-submission-submit {

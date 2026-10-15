@@ -1340,19 +1340,19 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
         <div className={`max-w-7xl mx-auto ${isMobile ? 'px-3 pt-[calc(0.75rem-1px)] pb-2' : isTablet ? 'px-5 pt-[calc(0.75rem-1px)] pb-4' : 'px-8 py-6 pb-6'}`}>
           <Suspense fallback={<PageLoader />}>
           <div>
-            <div className="emp-tab-pane sm:max-lg:pb-[88px]" style={{ display: activeTab === 'announcements' ? 'block' : 'none' }}>
+            <div className="emp-tab-pane sm:max-lg:pb-[100px]" style={{ display: activeTab === 'announcements' ? 'block' : 'none' }}>
               {isTabMounted('announcements') && <Suspense fallback={<PageLoader />}>{announcementsPage}</Suspense>}
             </div>
-            <div style={{ display: activeTab === 'dispatch' ? 'block' : 'none' }} className="emp-tab-pane pb-[72px] max-[359px]:pb-[66px] min-[480px]:pb-16 lg:pb-[88px] min-[1025px]:pb-20">
+            <div style={{ display: activeTab === 'dispatch' ? 'block' : 'none' }} className="emp-tab-pane pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px]">
               {isTabMounted('dispatch') && <Suspense fallback={<PageLoader />}>{dispatchPage}</Suspense>}
             </div>
-            <div className="emp-tab-pane space-y-4 sm:space-y-6 pb-[72px] max-[359px]:pb-[66px] min-[480px]:pb-16 lg:pb-[88px] min-[1025px]:pb-20" style={{ display: activeTab === 'orders' ? 'block' : 'none' }}>
+            <div className="emp-tab-pane space-y-4 sm:space-y-6 pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px]" style={{ display: activeTab === 'orders' ? 'block' : 'none' }}>
               {isTabMounted('orders') && <Suspense fallback={<PageLoader />}>{orderSubmissionPage}{orderListPage}</Suspense>}
             </div>
-            <div className="emp-tab-pane pb-[88px] lg:pb-24" style={{ display: activeTab === 'wallet' ? 'block' : 'none' }}>
+            <div className="emp-tab-pane pb-[100px] lg:pb-[108px]" style={{ display: activeTab === 'wallet' ? 'block' : 'none' }}>
               {isTabMounted('wallet') && <Suspense fallback={<PageLoader />}>{walletPage}</Suspense>}
             </div>
-            <div className="emp-tab-pane pb-[72px] max-[359px]:pb-[66px] min-[480px]:pb-16 lg:pb-[88px] min-[1025px]:pb-20" style={{ display: activeTab === 'statistics' ? 'block' : 'none' }}>
+            <div className="emp-tab-pane pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px]" style={{ display: activeTab === 'statistics' ? 'block' : 'none' }}>
               {isTabMounted('statistics') && <Suspense fallback={<PageLoader />}>{statisticsPage}</Suspense>}
             </div>
           </div>

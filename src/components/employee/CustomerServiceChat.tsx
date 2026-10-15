@@ -2359,40 +2359,42 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
         }
       `}</style>
       {messagePopup && !isOpen && createPortal(
-        <div className="fixed bottom-36 right-2 sm:right-4 md:bottom-44 lg:bottom-28 lg:right-4 z-[10001] w-[min(calc(100%-1.5rem),24rem)] animate-[slideIn_0.3s_ease-out_both] keep-animation" style={{ maxWidth: 'min(calc(100% - 1.5rem), 24rem)', WebkitTextSizeAdjust: '100%' }}>
-          <div className={`relative overflow-hidden rounded-2xl shadow-2xl animate-[fadeInUp_0.4s_ease-out_both] keep-animation border ${
+        <div className="customer-service-popup fixed z-[10001] animate-[slideIn_0.3s_ease-out_both] keep-animation" style={{ WebkitTextSizeAdjust: '100%' }}>
+          <div className={`relative overflow-hidden rounded-[18px] shadow-2xl animate-[fadeInUp_0.4s_ease-out_both] keep-animation border ${
             messagePopup.customer.is_super
               ? 'bg-gradient-to-br from-amber-500 via-yellow-500 to-amber-600 ring-1 ring-amber-400/50 border-amber-400/30'
               : 'bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-600 ring-1 ring-blue-400/50 border-blue-400/30'
           }`}>
-            {/* Decorative patterns - hidden on narrow screens */}
-            <div className={`hidden sm:block absolute top-0 right-0 w-24 h-24 rounded-full opacity-20 -translate-y-8 translate-x-8 ${
-              messagePopup.customer.is_super ? 'bg-yellow-300' : 'bg-blue-300'
-            }`}></div>
-            <div className={`hidden sm:block absolute bottom-0 left-0 w-16 h-16 rounded-full opacity-15 translate-y-6 -translate-x-6 ${
-              messagePopup.customer.is_super ? 'bg-orange-400' : 'bg-indigo-300'
-            }`}></div>
-            <div className={`hidden sm:block absolute top-1/2 right-4 w-8 h-8 rotate-45 opacity-10 ${
-              messagePopup.customer.is_super ? 'bg-white' : 'bg-white'
-            }`}></div>
-            <div className={`hidden sm:block absolute bottom-8 right-12 w-5 h-5 rounded-full opacity-20 ${
-              messagePopup.customer.is_super ? 'bg-amber-200' : 'bg-sky-200'
-            }`}></div>
+            <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+              <div className={`absolute -right-8 -top-8 h-[104px] w-[104px] rounded-full ${
+                messagePopup.customer.is_super ? 'bg-yellow-300/30' : 'bg-cyan-300/25'
+              }`}></div>
+              <div className={`absolute -bottom-8 -left-8 h-[88px] w-[88px] rounded-full ${
+                messagePopup.customer.is_super ? 'bg-orange-400/30' : 'bg-indigo-300/30'
+              }`}></div>
+              <div className={`absolute -right-10 top-[46%] h-[22px] w-[150px] -rotate-[28deg] rounded-full ${
+                messagePopup.customer.is_super ? 'bg-white/15' : 'bg-sky-200/15'
+              }`}></div>
+              <div className="absolute left-[38%] top-[10px] h-[10px] w-[10px] rotate-45 rounded-[2px] bg-white/30"></div>
+              <div className={`absolute bottom-[58px] right-[52px] h-[8px] w-[8px] rounded-full ${
+                messagePopup.customer.is_super ? 'bg-amber-100/60' : 'bg-cyan-200/60'
+              }`}></div>
+            </div>
 
-            <div className="relative p-3 sm:p-4">
-              <div className="flex items-start gap-2.5 sm:gap-3 mb-2.5 sm:mb-3">
+            <div className="relative p-[12px] sm:p-[16px]">
+              <div className="mb-[10px] flex items-start gap-[10px] sm:mb-[12px] sm:gap-[12px]">
                 <div className={`relative flex-shrink-0 rounded-xl overflow-hidden ring-2 shadow-lg ${
                   messagePopup.customer.is_super ? 'ring-white/60' : 'ring-white/50'
                 }`}>
                   <CustomerAvatar
                     customer={messagePopup.customer}
-                    className="w-10 h-10 sm:w-11 sm:h-11"
+                    className="h-[40px] w-[40px] sm:h-[44px] sm:w-[44px]"
                   />
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 sm:gap-2 mb-0.5">
-                    <h3 className="font-bold text-sm sm:text-base text-white truncate">
+                  <div className="mb-[2px] flex items-center gap-[6px] sm:gap-[8px]">
+                    <h3 className="truncate text-[14px] font-bold text-white sm:text-[16px]">
                       {messagePopup.customer.customer_name}
                     </h3>
                     {messagePopup.customer.is_super && (
@@ -2402,7 +2404,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                       </div>
                     )}
                   </div>
-                  <p className="text-[11px] sm:text-xs text-white/70 truncate">
+                  <p className="truncate text-[11px] text-white/80 sm:text-[12px]">
                     ID: {messagePopup.customer.customer_id}
                   </p>
                 </div>
@@ -2413,33 +2415,35 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                     stopContinuousSound();
                   }}
                   aria-label={t.common.close}
-                  className="emp-close-btn flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl transition-colors active:scale-95 max-sm:bg-white/15 hover:bg-white/20 text-white/60 hover:text-white"
-                  style={{ minWidth: '36px', minHeight: '36px', touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
+                  className="emp-close-btn flex h-[36px] w-[36px] flex-shrink-0 items-center justify-center rounded-full !min-h-0 !min-w-0 !p-0 bg-slate-900/45 text-white ring-1 ring-white/50 transition-colors hover:bg-slate-900/60 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                 >
-                  <X className="w-4 h-4" />
+                  <X className="h-[18px] w-[18px]" strokeWidth={2.75} aria-hidden="true" />
                 </button>
               </div>
 
-              <div className={`p-2.5 sm:p-3 rounded-xl mb-2.5 sm:mb-3 backdrop-blur-sm overflow-hidden ${
+              <div className={`mb-[12px] overflow-hidden rounded-xl p-[10px] backdrop-blur-sm sm:p-[12px] ${
                 messagePopup.customer.is_super
                   ? 'bg-amber-700/40 border border-amber-300/30'
                   : 'bg-blue-800/40 border border-blue-300/20'
               }`}>
                 {messagePopup.message.includes('\ud83d\udcf7 Photo') ? (
                   <div className="flex items-center gap-2 text-white/95">
-                    <Image className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
-                    <span className="text-xs sm:text-sm font-medium">{t.customerService.photo}</span>
+                    <Image className="h-[18px] w-[18px] flex-shrink-0" />
+                    <span className="text-[13px] font-medium sm:text-[14px]">{t.customerService.photo}</span>
                   </div>
                 ) : (
-                  <p className="text-xs sm:text-sm leading-relaxed break-words whitespace-pre-wrap text-white/95 line-clamp-3">
+                  <p className="line-clamp-3 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-white/95 sm:text-[14px]">
                     {messagePopup.message}
                   </p>
                 )}
               </div>
 
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-white/60 truncate min-w-0">
-                  <Clock className="w-3 h-3 flex-shrink-0" />
+              <div className={`-mx-[12px] -mb-[12px] flex items-center justify-between gap-[8px] px-[12px] py-[8px] sm:-mx-[16px] sm:-mb-[16px] sm:px-[16px] sm:py-[10px] ${
+                messagePopup.customer.is_super ? 'bg-amber-900/25' : 'bg-indigo-900/30'
+              }`}>
+                <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-white/80 sm:text-[12px]">
+                  <Clock className="h-3 w-3 flex-shrink-0" />
                   <span className="truncate">{messagePopup.time}</span>
                 </div>
 
@@ -2450,13 +2454,14 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                     stopContinuousSound();
                     handleSelectConversation(messagePopup.customer);
                   }}
-                  className={`flex-shrink-0 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg font-semibold text-xs sm:text-sm transition-all hover:scale-105 active:scale-95 shadow-md ${
+                  className={`inline-flex h-[36px] min-w-[104px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[10px] !min-h-0 !px-[14px] !py-0 !text-[13px] font-bold leading-none shadow-md transition-all hover:scale-[1.03] active:scale-95 sm:h-[40px] sm:!text-[14px] ${
                     messagePopup.customer.is_super
                       ? 'bg-white text-amber-700 hover:bg-amber-50'
                       : 'bg-white text-blue-700 hover:bg-blue-50'
                   }`}
                   style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                 >
+                  <MessageCircle className="h-[15px] w-[15px]" strokeWidth={2.5} aria-hidden="true" />
                   {t.customerService.replyNow}
                 </button>
               </div>
@@ -2469,7 +2474,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
       {!isOpen && createPortal(
         <div
           className="customer-service-fab fixed z-[9999]"
-          style={{ right: '16px', bottom: 'calc(var(--employee-bottom-nav-height, 72px) + 16px)' }}
         >
           <button
             onClick={() => {
@@ -2477,7 +2481,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
               setMessagePopup(null);
               stopContinuousSound();
             }}
-            className={`relative group active:scale-95 transition-transform keep-animation w-14 h-14 lg:w-20 lg:h-20 ${unreadCount > 0 ? 'chat-btn-shake' : ''}`}
+            className={`relative group active:scale-95 transition-transform keep-animation ${unreadCount > 0 ? 'chat-btn-shake' : ''}`}
             style={{
               padding: 0,
               background: 'none',
