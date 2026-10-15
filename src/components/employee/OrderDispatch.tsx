@@ -317,7 +317,6 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const [panelVeilKind, setPanelVeilKind] = useState<'start' | 'stop'>('start');
   const [startConnect, setStartConnect] = useState<'connecting' | 'connected' | 'failed' | null>(null);
   const [startChoreo, setStartChoreo] = useState(false);
-  // While the connect veil is up the panel keeps its height, so the standby -> waiting resize glides under it.
   const panelResizing = startExiting || waitingEnterAnim || stopExiting || startEnterAnim || startConnect !== null;
   const [panelVeilKey, setPanelVeilKey] = useState(0);
   const panelVeilTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -388,34 +387,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const grabFailedTimerRef = useRef<NodeJS.Timeout | null>(null);
   const acceptRevealTimersRef = useRef<NodeJS.Timeout[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [idlePanelHeight, setIdlePanelHeight] = useState<number | null>(null);
   const acceptGhostHostRef = useRef<HTMLDivElement>(null);
 
-  // On phones the New Order and In Progress panels reuse the height the Order Processing panel settled at, so the panel never jumps when an order arrives.
-  useLayoutEffect(() => {
-    const panel = panelRef.current;
-    if (!panel || currentOrder || viewportWidth >= 768) return;
-    const measure = () => {
-      if (panel.offsetHeight > 0) setIdlePanelHeight(panel.offsetHeight);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(panel);
-    return () => observer.disconnect();
-  }, [currentOrder, viewportWidth]);
-
-  // The remembered height belongs to the old device; a width change (device switch, rotation) drops it. Height-only resizes (mobile browser toolbars sliding) must not move the panel.
-  useEffect(() => {
-    if (!currentOrder) return;
-    let width = window.innerWidth;
-    const forget = () => {
-      if (window.innerWidth === width) return;
-      width = window.innerWidth;
-      setIdlePanelHeight(null);
-    };
-    window.addEventListener('resize', forget);
-    return () => window.removeEventListener('resize', forget);
-  }, [currentOrder]);
   const lastActivityRef = useRef<Date>(new Date());
   const pageHiddenAtRef = useRef<number | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -2808,17 +2781,17 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
 
       {/* Work Control Panel - Premium Blue/White Design */}
-      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(480px,max(340px,calc(100svh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_var(--dispatch-reserve,24px))))]' : 'h-[min(480px,max(340px,calc(100svh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_var(--dispatch-reserve,24px))))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
+      <div ref={panelRef} data-expanded={session.isWorking || Boolean(currentOrder) || startConnect === 'connecting' || startConnect === 'connected'} className={`dispatch-work-panel relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]' : 'p-5 md:p-10'} overflow-hidden ${
         currentOrder?.status === 'pending'
           ? 'bg-[linear-gradient(125deg,#164c9b_0%,#2370bd_55%,#167da9_100%)] border-2 border-blue-400/50 shadow-[0_22px_60px_-16px_rgba(12,43,112,0.32)]'
           : `border-2 border-blue-200/90 shadow-[0_16px_48px_-18px_rgba(37,99,235,0.2),0_6px_20px_-10px_rgba(37,99,235,0.12)] transition-[border-color,box-shadow] duration-700 ${
             waitingPanelActive
-              ? `min-h-[420px] short:max-md:min-h-0 md:min-h-0 dispatch-waiting-surface ${liteMotion ? 'dispatch-waiting-lite' : 'dispatch-waiting-surface-animated'}`
+              ? `dispatch-waiting-surface ${liteMotion ? 'dispatch-waiting-lite' : 'dispatch-waiting-surface-animated'}`
               : session.isWorking
               ? 'bg-gradient-to-br from-white via-blue-50/80 to-white'
-              : 'min-h-[420px] short:max-md:min-h-0 md:min-h-0 bg-white'
+              : 'bg-white'
           }`
-      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { [currentOrder?.status === 'pending' ? 'minHeight' : 'height']: `${idlePanelHeight}px` } : undefined}>
+      }`}>
         <div ref={acceptGhostHostRef} data-accept-ghost-host className="pointer-events-none absolute -inset-[2px] z-40 overflow-hidden rounded-2xl md:rounded-3xl" aria-hidden="true" />
         {(acceptRevealPhase === 'cover' || acceptRevealPhase === 'out') && <span role="status" className="sr-only">{t.dispatch.orderAccepted}</span>}
         {panelVeil && (
@@ -2904,14 +2877,12 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         }`}></div>
 
         {/* Content */}
-        <div className={`relative z-10 ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
+        <div className={`relative z-10 ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col'}`}>
           <SmoothHeight
-            animate={panelResizing && !(!currentOrder && viewportWidth < 768)}
-            holdMax={!currentOrder && viewportWidth < 768}
-            minHeightFloor="min(480px, max(340px, calc(100svh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - var(--dispatch-reserve, 24px))))"
+            animate={panelResizing && viewportWidth >= 600}
             duration={1000}
-            outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${!currentOrder ? 'max-md:flex max-md:flex-col' : ''}`}
-            innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : !currentOrder ? 'max-md:flex max-md:flex-1 max-md:flex-col' : ''}
+            outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${!currentOrder ? 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col' : ''}`}
+            innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : !currentOrder ? 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col' : ''}
           >
           <div className={`overflow-hidden max-md:shrink-0 ${
             currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'hidden' : ''
@@ -3411,10 +3382,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               </div>
             </div>
           ) : (
-            <div className="max-md:grid max-md:flex-1">
+            <div className="max-md:grid max-md:min-h-0 max-md:flex-1 max-md:grid-rows-[minmax(0,1fr)]">
             {(waitingPanelActive || !session.isWorking || (isTransitioning && transitionType === 'start')) && (
               <div
-                className={`max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''} ${waitingPanelActive ? (waitingEnterAnim ? 'dispatch-waiting-enter' : stopExiting ? 'dispatch-waiting-exit' : '') : 'invisible dispatch-parked md:hidden'}`}
+                className={`max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''} ${waitingPanelActive ? (waitingEnterAnim ? 'dispatch-waiting-enter' : stopExiting ? 'dispatch-waiting-exit' : '') : 'hidden dispatch-parked'}`}
                 aria-hidden={waitingPanelActive ? undefined : true}
               >
                 <div className="relative min-h-[240px] overflow-visible py-7 short:max-md:min-h-0 short:max-md:py-3 max-md:flex max-md:flex-1 max-md:flex-col max-md:justify-center md:overflow-hidden md:py-10">
@@ -3749,21 +3720,20 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
             {/* MOBILE-ONLY COMPACT LAYOUT */}
             <div
-              className={`md:hidden flex min-h-[320px] short:min-h-0 flex-col max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'invisible dispatch-parked' : ''}`}
+              className={`md:hidden min-h-0 flex-col max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'hidden dispatch-parked' : 'flex'}`}
               aria-hidden={waitingPanelActive ? true : undefined}
             >
               {/* Mobile Start View - Enriched */}
-                {/* The cell is as tall as the parked waiting view; shorter languages centre the visual and keep Start at the bottom */}
-                <div className={`flex flex-1 flex-col space-y-3 short:space-y-2 ${startEnterAnim ? 'dispatch-start-enter' : ''} ${isTransitioning && transitionType === 'start' ? 'dispatch-standby-leaving' : ''}`}>
+                <div className={`flex min-h-0 flex-1 flex-col space-y-3 short:space-y-2 ${startEnterAnim ? 'dispatch-start-enter' : ''} ${isTransitioning && transitionType === 'start' ? 'dispatch-standby-leaving' : ''}`}>
                   {/* Standby visual area */}
-                  <div className="relative -mx-4 flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-6 short:justify-start short:py-0">
+                  <div className="relative -mx-4 flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 short:justify-start">
                     {/* Background gradient */}
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 90% 52% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
                     <div className="relative z-10 w-full">
                       {/* Quay scene: a container crane takes an order container from the yard and loads it onto the ship, on the panel's own wave line */}
                       <div className="dispatch-standby-item relative -mx-4 mb-3 short:mb-1" style={{ '--leave-order': 4, WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)', maskImage: 'linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent)' } as CSSProperties} aria-hidden="true">
-                        <svg viewBox="0 0 360 120" className="block h-auto w-full" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <svg viewBox="0 0 360 120" className="block h-auto w-full short:max-md:h-[68px]" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <g>
                             {STANDBY_YARD_STACKS.map(box => (
                               <rect key={box.key} x={box.x} y={box.y} width="24" height="12" rx="1" className={`shs-box shs-box-${box.tone}`} />
@@ -3917,7 +3887,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                   </div>
 
                   {/* Start Button */}
-                  <div className="dispatch-start-cta-wrap">
+                  <div className="dispatch-start-cta-wrap shrink-0">
                   <button
                     type="button"
                     onClick={handleStartWork}

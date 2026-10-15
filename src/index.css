@@ -2539,6 +2539,30 @@ button.employee-header-action {
 :root { --dispatch-reserve: 24px; }
 @media (max-height: 640px) { :root { --dispatch-reserve: 56px; } }
 
+@media (max-width: 599px) {
+  .dispatch-work-panel {
+    --dispatch-working-height: min(580px, max(340px, calc(100svh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - var(--dispatch-reserve, 24px))));
+    display: flex;
+    flex-direction: column;
+    height: min(480px, var(--dispatch-working-height));
+    min-height: 0;
+  }
+
+  .dispatch-work-panel[data-expanded="true"] {
+    height: var(--dispatch-working-height);
+  }
+
+  .dispatch-work-panel.dispatch-panel-resizing {
+    transition: height 1000ms cubic-bezier(0.45, 0, 0.2, 1), border-color 700ms, box-shadow 700ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dispatch-work-panel.dispatch-panel-resizing {
+    transition: none;
+  }
+}
+
 /* Short phones (iPhone SE): the End Session row is shorter, so the ship and sea sit lower with it. */
 @media (max-width: 599px) and (max-height: 640px) {
   .dispatch-veil-sea.dispatch-panel-sea { bottom: 68px; }
@@ -3279,9 +3303,6 @@ button.dispatch-start-cta:active:not(:disabled) {
   .dispatch-veil .dispatch-veil-stage { animation-name: dispatchStartOverlayIn; }
 }
 
-/* The standby and waiting layouts share one grid cell on phones and the inactive one stays in place, invisible,
-   to hold the panel height. Invisible elements can't be composited, so their loops would tick on the main thread
-   every frame for nothing. */
 .dispatch-parked,
 .dispatch-parked *,
 .dispatch-parked *::before,
