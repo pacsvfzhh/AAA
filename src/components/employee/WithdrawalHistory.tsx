@@ -1,11 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Clock, CheckCircle, XCircle, History, ChevronDown, ChevronUp, TrendingUp, TrendingDown, DollarSign } from 'lucide-react';
+import { X, Clock, CheckCircle, XCircle, History, ChevronDown, ChevronUp, TrendingUp, TrendingDown, DollarSign, Wallet } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useResponsive } from '../../lib/useResponsive';
 import { useLanguage } from '../../lib/i18n/context';
 import { createFinancialOperationId, getEmployeeFinancialSession } from '../../lib/auth';
 import PageLoader from './PageLoader';
+import PanelColorBlocks from './PanelColorBlocks';
 
 interface Withdrawal {
   id: string;
@@ -341,7 +342,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
       <div
         className="employee-modal-surface relative bg-gray-50 w-full overflow-hidden flex flex-col
                    md:h-screen md:max-h-full md:rounded-none
-                   xl:h-auto xl:max-h-[90vh] xl:rounded-2xl xl:shadow-2xl xl:max-w-4xl"
+                   xl:h-[88vh] xl:max-h-[90vh] xl:rounded-2xl xl:shadow-2xl xl:max-w-4xl"
         style={{
           width: isMobile ? '100%' : undefined,
           height: isMobile ? '100dvh' : undefined,
@@ -403,8 +404,13 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
         )}
 
         <div
+          className="relative min-h-0 flex-1 overflow-hidden"
+          style={{ background: 'linear-gradient(145deg, #ffffff 0%, #f0f7ff 25%, #e6f2fe 50%, #f5faff 75%, #ffffff 100%)' }}
+        >
+        <PanelColorBlocks />
+        <div
           ref={scrollContainerRef}
-          className="emp-compact-panel flex-1 overflow-y-auto overscroll-contain sm:p-6"
+          className="emp-compact-panel relative h-full overflow-y-auto overscroll-contain sm:p-6"
           style={{
             WebkitOverflowScrolling: 'touch',
             paddingTop: isMobile ? '16px' : undefined,
@@ -416,12 +422,19 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
           {loading ? (
             <PageLoader variant="panel" label={t.withdrawals.loadingTransactions} className="h-full" />
           ) : records.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 sm:py-12 text-center">
-              <div className="w-16 h-16 rounded-full bg-blue-50 flex items-center justify-center mb-4">
-                <History className="w-8 h-8 text-blue-300" />
+            <div className="flex min-h-full flex-col items-center justify-center px-6 py-8 text-center">
+              <div className="relative mb-5 h-[96px] w-[120px]" aria-hidden="true">
+                <span className="absolute left-1/2 top-1/2 h-[84px] w-[84px] -translate-x-1/2 -translate-y-1/2 -rotate-6 rounded-[28px] border-2 border-sky-300/40"></span>
+                <span className="absolute left-1/2 top-1/2 h-[74px] w-[74px] -translate-x-1/2 -translate-y-1/2 rotate-12 rounded-3xl border-2 border-blue-300/50"></span>
+                <span className="absolute left-1/2 top-1/2 flex h-[64px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[22px] bg-gradient-to-br from-blue-400 via-sky-400 to-cyan-300 shadow-lg shadow-blue-400/20">
+                  <Wallet className="h-8 w-8 text-white" strokeWidth={2} />
+                </span>
+                <span className="absolute bottom-1 right-3 flex h-8 w-8 items-center justify-center rounded-full bg-white text-blue-500 shadow-md shadow-blue-300/40 ring-2 ring-blue-100">
+                  <History className="h-4 w-4" strokeWidth={2.5} />
+                </span>
               </div>
-              <p className="text-gray-700 text-base sm:text-lg font-medium">{t.withdrawals.noWithdrawals}</p>
-              <p className="text-gray-400 text-xs sm:text-sm mt-1.5 sm:mt-2">{t.withdrawals.historyHint}</p>
+              <p className="text-[14px] font-semibold leading-6 text-blue-900 sm:text-base">{t.withdrawals.noWithdrawals}</p>
+              <p className="mt-1 max-w-[260px] text-[13px] leading-5 text-blue-800/60">{t.withdrawals.historyHint}</p>
             </div>
           ) : (
           <>
@@ -746,6 +759,7 @@ export default function WithdrawalHistory({ employeeId, onClose }: WithdrawalHis
             )}
           </>
           )}
+        </div>
         </div>
 
         {/* Mobile Close Button */}
