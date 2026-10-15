@@ -888,8 +888,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     : latestMessage?.priority === 'high' ? t.header.highPriority
     : latestMessage?.priority === 'normal' ? t.header.normal
     : t.messages.priorityLow;
-  const toastPriorityStyle = latestMessage?.priority === 'urgent' ? 'bg-rose-500 text-white'
-    : latestMessage?.priority === 'high' ? 'bg-yellow-300 text-amber-900'
+  const toastPriorityStyle = latestMessage?.priority === 'urgent' ? 'bg-rose-100 text-rose-700'
+    : latestMessage?.priority === 'high' ? 'bg-yellow-100 text-amber-800'
     : latestMessage?.priority === 'normal' ? (toastIsReward ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')
     : 'bg-sky-100 text-sky-700';
 
@@ -1165,10 +1165,10 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                           <div className={`flex items-center justify-between gap-[8px] px-[14px] py-[8px] sm:px-[16px] sm:py-[10px] ${toastIsReward ? 'bg-amber-900/25' : 'bg-emerald-950/30'}`}>
                             <div className="flex min-w-0 items-center gap-[8px]">
                               <span className={`inline-flex h-[24px] flex-shrink-0 items-center gap-[5px] rounded-full px-[9px] text-[11px] font-bold leading-none shadow-md ring-1 ring-white/50 ${toastPriorityStyle}`}>
-                                {latestMessage.priority === 'urgent' ? <AlertCircle className="h-[13px] w-[13px]" strokeWidth={2.75} aria-hidden="true" />
-                                  : latestMessage.priority === 'high' ? <Zap className="h-[13px] w-[13px]" strokeWidth={2.75} aria-hidden="true" />
-                                  : latestMessage.priority === 'normal' ? <Shield className="h-[13px] w-[13px]" strokeWidth={2.75} aria-hidden="true" />
-                                  : <Radio className="h-[13px] w-[13px]" strokeWidth={2.75} aria-hidden="true" />}
+                                {latestMessage.priority === 'urgent' ? <AlertCircle className="h-[14px] w-[14px] min-h-[14px] min-w-[14px] flex-shrink-0" width={14} height={14} strokeWidth={2.75} aria-hidden="true" />
+                                  : latestMessage.priority === 'high' ? <Zap className="h-[14px] w-[14px] min-h-[14px] min-w-[14px] flex-shrink-0" width={14} height={14} strokeWidth={2.75} aria-hidden="true" />
+                                  : latestMessage.priority === 'normal' ? <Shield className="h-[14px] w-[14px] min-h-[14px] min-w-[14px] flex-shrink-0" width={14} height={14} strokeWidth={2.75} aria-hidden="true" />
+                                  : <Radio className="h-[14px] w-[14px] min-h-[14px] min-w-[14px] flex-shrink-0" width={14} height={14} strokeWidth={2.75} aria-hidden="true" />}
                                 <span className="whitespace-nowrap">{toastPriorityLabel}</span>
                               </span>
                               {toastIsReward && (
