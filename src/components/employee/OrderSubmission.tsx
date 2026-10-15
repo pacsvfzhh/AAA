@@ -431,6 +431,13 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
       return { cancel: () => { cancelled = true; }, done };
     };
 
+    const beginSubmitAnimation = (durationMs: number) => {
+      setShowSubmitAnimation(true);
+      setConfirmPhase('leaving');
+      setTimeout(closeConfirmSheet, reduceMotion ? 0 : 500);
+      return animateFullProgress(durationMs);
+    };
+
     let animation: ReturnType<typeof animateFullProgress> | undefined;
     let submissionAssignment: { id: string; assignment_id: string } | null = null;
     try {
@@ -448,17 +455,16 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
       ]);
       if (timingError) throw timingError;
       if (!timing?.available || timing.min_seconds == null || timing.max_seconds == null) {
-        throw new Error(timing?.message || '請先將員工指派至已啟用的訂單分組。');
+        const blockedKey = blockedSubmitKey(timing?.message);
+        if (blockedKey) throw new SubmitBlockedError(blockedKey, submitWaitMs(timing));
+        throw new Error(timing?.message || 'Submit wait is unavailable.');
       }
       if (timing.assignment_id && timing.assignment_code) {
         submissionAssignment = { id: timing.assignment_id, assignment_id: timing.assignment_code };
       }
       setActiveAssignment(submissionAssignment);
       const totalDuration = (timing.min_seconds + Math.random() * (timing.max_seconds - timing.min_seconds)) * 1000;
-      setShowSubmitAnimation(true);
-      setConfirmPhase('leaving');
-      setTimeout(closeConfirmSheet, reduceMotion ? 0 : 500);
-      animation = animateFullProgress(totalDuration);
+      animation = beginSubmitAnimation(totalDuration);
 
       // Run DB operations in parallel with the animation
       const productValue = parseFloat(formData.productValue);
@@ -552,7 +558,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
         if (markError || !markedSubmitted) {
           await supabase.from('used_order_data').delete().eq('order_id', orderData.id);
           await supabase.from('orders').delete().eq('id', orderData.id);
-          throw markError || new Error('The dispatch assignment is no longer active.');
+          throw markError || new SubmitBlockedError('assignmentExpired', null);
         }
       }
 
@@ -591,12 +597,26 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
 
     } catch (error: unknown) {
       console.error('Order submission error:', error);
-      animation?.cancel();
-      if (animation) setSubmissionProgress(100);
+      const blocked = error instanceof SubmitBlockedError ? error : null;
+      if (!animation && blocked?.durationMs != null) {
+        await sealPause;
+        animation = beginSubmitAnimation(blocked.durationMs);
+      }
+      if (animation) {
+        await animation.done;
+        setSubmissionProgress(100);
+      }
       setShowSubmitAnimation(false);
       closeConfirmSheet();
+      const rawMessage = error instanceof Error ? error.message : '';
       setResultType('error');
-      setResultMessage(error instanceof Error ? error.message : t.orderSubmission.failedRetry);
+      setResultMessage(
+        blocked
+          ? t.orderSubmission[blocked.key]
+          : /session (has expired|is invalid or expired)/i.test(rawMessage)
+            ? `${t.session.noLongerActive} ${t.session.signInAgain}`
+            : t.orderSubmission.failedRetry,
+      );
       setShowResultModal(true);
     } finally {
       setLoading(false);
@@ -1197,6 +1217,29 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
       `}</style>
     </div>
   );
+}
+
+type BlockedSubmitKey = 'noActiveGroup' | 'assignmentAwaiting' | 'assignmentExpired';
+
+class SubmitBlockedError extends Error {
+  constructor(readonly key: BlockedSubmitKey, readonly durationMs: number | null) {
+    super(key);
+  }
+}
+
+function blockedSubmitKey(message: unknown): BlockedSubmitKey | null {
+  if (typeof message !== 'string') return null;
+  if (message.includes('awaiting acceptance')) return 'assignmentAwaiting';
+  if (message.includes('No active dispatch group')) return 'noActiveGroup';
+  if (message.includes('no longer available for submission')) return 'assignmentExpired';
+  return null;
+}
+
+function submitWaitMs(timing: { min_seconds?: unknown; max_seconds?: unknown } | null | undefined): number | null {
+  const min = Number(timing?.min_seconds);
+  const max = Number(timing?.max_seconds);
+  if (timing?.min_seconds == null || timing?.max_seconds == null || !Number.isFinite(min) || !Number.isFinite(max) || min > max) return null;
+  return (min + Math.random() * (max - min)) * 1000;
 }
 
 type NoticeTone = 'error' | 'warning';
