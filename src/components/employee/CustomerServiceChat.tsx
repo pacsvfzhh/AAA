@@ -2574,29 +2574,20 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
 
           {showConversationList ? (
             <>
-              <div className="customer-service-panel-header relative z-10 flex-shrink-0 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 px-4 pt-3 pb-4 lg:px-6 lg:pt-5 lg:pb-5 overflow-hidden shadow-[0_8px_20px_-10px_rgba(30,58,138,0.7)]">
+              <div className="customer-service-panel-header relative z-10 flex-shrink-0 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 px-4 pt-3 pb-4 lg:px-6 lg:pt-5 lg:pb-5 overflow-hidden">
                 {/* Decorative elements */}
-                <div className="pointer-events-none absolute -right-10 -top-14 h-44 w-44 rounded-full bg-gradient-to-br from-sky-300/35 to-transparent" aria-hidden="true"></div>
-                <div className="pointer-events-none absolute -bottom-16 left-8 h-32 w-32 rounded-full bg-indigo-400/25" aria-hidden="true"></div>
-                <div className="pointer-events-none absolute -top-2 bottom-0 right-24 w-[26px] skew-x-[-20deg] bg-white/[0.07]" aria-hidden="true"></div>
-                <div className="pointer-events-none absolute -top-2 bottom-0 right-[60px] w-[8px] skew-x-[-20deg] bg-white/[0.07]" aria-hidden="true"></div>
-                <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/30" aria-hidden="true"></div>
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-sky-200/70 to-transparent" aria-hidden="true"></div>
+                <div className="absolute top-0 right-0 w-48 h-48 bg-white/[0.04] rounded-full -translate-y-1/2 translate-x-1/4"></div>
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/[0.04] rounded-full translate-y-1/2 -translate-x-1/4"></div>
 
                 <div className="relative flex items-center gap-3">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <div className="relative flex-shrink-0">
-                      <div className="flex h-[44px] w-[44px] items-center justify-center rounded-2xl border border-white/40 bg-gradient-to-br from-white/35 to-white/10 shadow-lg shadow-blue-950/30 lg:h-[50px] lg:w-[50px]">
-                        <MessageCircle className="h-[22px] w-[22px] text-white lg:h-6 lg:w-6" strokeWidth={2.25} />
+                      <div className="bg-white/20 p-2.5 lg:p-3 rounded-2xl border border-white/30 shadow-lg shadow-blue-900/20">
+                        <MessageCircle className="w-5 h-5 lg:w-6 lg:h-6 text-white" />
                       </div>
-                      {unreadCount > 0 && (
-                        <span className="absolute -right-1.5 -top-1.5 flex h-[20px] min-w-[20px] items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-orange-500 px-1 text-[12px] font-extrabold leading-none tabular-nums text-white ring-2 ring-blue-700 shadow-md">
-                          {unreadCount > 99 ? '99+' : unreadCount}
-                        </span>
-                      )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h2 className="text-[20px] leading-[28px] lg:text-[22px] font-extrabold text-white tracking-[0.01em] [text-shadow:0_1px_3px_rgba(15,23,42,0.3)]">
+                      <h2 className="text-[20px] leading-[28px] lg:text-[22px] font-bold text-white tracking-tight">
                         {t.customerService.title}
                       </h2>
                       <p className="text-xs lg:text-sm text-blue-100/90 mt-0.5 font-medium">
@@ -2680,31 +2671,20 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         className={`w-full rounded-2xl transition-all duration-200 hover:translate-x-0.5 active:scale-[0.98] group relative overflow-hidden ${skipListAnimationRef.current ? '' : 'animate-[fadeInUp_0.4s_ease-out_both]'} ${
                           conv.customer.is_super
                             ? conv.unread_count > 0
-                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-br from-amber-100 via-orange-50 to-amber-100 border border-orange-400 ring-2 ring-orange-300/50 shadow-[0_8px_20px_-8px_rgba(249,115,22,0.55)] hover:shadow-[0_10px_24px_-8px_rgba(249,115,22,0.7)]'
-                              : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-br from-amber-50 via-white to-orange-50 border border-amber-300/80 hover:border-amber-400 hover:shadow-lg hover:shadow-amber-100/60'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-amber-50 border border-orange-300 shadow-sm hover:shadow-md'
+                              : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-amber-50/60 border border-amber-200 hover:border-amber-300 hover:shadow-md'
                             : conv.unread_count > 0
-                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-br from-blue-50 via-white to-orange-50 border border-orange-300 ring-2 ring-orange-200/60 shadow-[0_8px_20px_-8px_rgba(249,115,22,0.45)] hover:shadow-[0_10px_24px_-8px_rgba(249,115,22,0.6)]'
-                              : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-br from-white to-slate-50 border border-slate-200/80 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-50/50'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-orange-50/70 border border-orange-200 shadow-sm hover:shadow-md'
+                              : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-white border border-slate-200 hover:border-blue-200 hover:shadow-md'
                         }`}
                         style={skipListAnimationRef.current ? undefined : {
                           animationDelay: `${Math.min(index * 0.05, 0.4)}s`
                         }}
                       >
                         {conv.customer.is_super ? (
-                          <>
-                            <span className={`pointer-events-none absolute inset-y-0 left-0 w-[5px] bg-gradient-to-b ${conv.unread_count > 0 ? 'from-red-500 via-orange-500 to-amber-400 animate-pulse' : 'from-amber-300 via-amber-500 to-orange-500'}`} aria-hidden="true"></span>
-                            <span className="pointer-events-none absolute -right-7 -top-7 h-24 w-24 rounded-full bg-gradient-to-br from-amber-300/45 to-orange-300/15" aria-hidden="true"></span>
-                            <span className="pointer-events-none absolute -bottom-9 right-12 h-20 w-20 rounded-full bg-amber-200/30" aria-hidden="true"></span>
-                            <span className="pointer-events-none absolute -right-8 top-1/2 h-[10px] w-[120px] -rotate-[28deg] rounded-full bg-white/60" aria-hidden="true"></span>
-                            <Award className="pointer-events-none absolute bottom-2 right-3 h-14 w-14 -rotate-12 text-amber-500/15" aria-hidden="true" />
-                          </>
+                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-orange-500' : 'bg-amber-400'}`} aria-hidden="true"></span>
                         ) : (
-                          <>
-                            <span className={`pointer-events-none absolute inset-y-0 left-0 w-[5px] bg-gradient-to-b ${conv.unread_count > 0 ? 'from-red-500 via-orange-500 to-amber-400 animate-pulse' : 'from-sky-300 via-blue-400 to-indigo-500'}`} aria-hidden="true"></span>
-                            <span className={`pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full ${conv.unread_count > 0 ? 'bg-orange-200/50' : 'bg-blue-100/70'}`} aria-hidden="true"></span>
-                            <span className="pointer-events-none absolute -bottom-6 right-14 h-14 w-14 rounded-full bg-sky-100/70" aria-hidden="true"></span>
-                            <span className="pointer-events-none absolute right-[38%] top-2 h-1.5 w-1.5 rotate-45 rounded-[2px] bg-blue-300/40" aria-hidden="true"></span>
-                          </>
+                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.unread_count > 0 ? 'bg-orange-500' : 'bg-blue-500/70'}`} aria-hidden="true"></span>
                         )}
                         {conv.customer.is_super ? (
                           /* VIP card: 4-line vertical layout */
@@ -2739,7 +2719,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     {conv.customer.customer_name}
                                   </span>
                                   {conv.unread_count > 0 && (
-                                    <span className="relative flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-extrabold leading-none tabular-nums rounded-full ring-2 ring-white shadow-md shadow-orange-400/60 flex-shrink-0 after:absolute after:-inset-[3px] after:rounded-full after:border-2 after:border-orange-400/70 after:animate-ping">
+                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-sm flex-shrink-0">
                                       {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                     </span>
                                   )}
@@ -2814,7 +2794,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                   {conv.customer.customer_name}
                                 </span>
                                 {conv.unread_count > 0 && (
-                                  <span className="relative flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-extrabold leading-none tabular-nums rounded-full ring-2 ring-white shadow-md shadow-orange-400/60 flex-shrink-0 after:absolute after:-inset-[3px] after:rounded-full after:border-2 after:border-orange-400/70 after:animate-ping">
+                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-sm flex-shrink-0">
                                     {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                   </span>
                                 )}
