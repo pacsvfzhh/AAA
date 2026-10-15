@@ -270,6 +270,8 @@ const en = {
     activeAssignment: 'Active Assignment',
     activeAssignmentDesc: 'Submit order details for this assignment',
     assignmentExpired: 'This assignment has expired. Please return to Order Assignment.',
+    noActiveGroup: 'No active order group is assigned to you. Please contact your manager.',
+    assignmentAwaiting: 'An order is awaiting your acceptance. Please accept it in Order Assignment first.',
   },
 
   // Order list
