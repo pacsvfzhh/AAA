@@ -2852,7 +2852,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
             </>
           ) : (
             <>
-              <div className={`customer-service-panel-header customer-service-chat-header relative flex-shrink-0 px-4 pt-3 pb-5 lg:px-6 lg:pt-6 lg:pb-6 overflow-hidden ${
+              <div className={`customer-service-panel-header customer-service-chat-header relative flex-shrink-0 px-4 pt-3 pb-5 lg:px-6 lg:pt-3 lg:pb-3 overflow-hidden ${
                 selectedCustomer?.is_super
                   ? 'bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600'
                   : 'bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700'
