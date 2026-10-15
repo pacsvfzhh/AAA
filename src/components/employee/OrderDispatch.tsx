@@ -134,12 +134,22 @@ const ACCEPT_REVEAL_OUT_MS = 900;
 const START_CHARGE_MS = 900;
 const STOP_PANEL_RESIZE_MS = 1400;
 const STOP_VEIL_REVEAL_MS = 700;
+const GRAB_FAILED_FADE_MS = 700;
 
 const ACCEPT_GHOST_BADGE =
   '<span class="dispatch-ghost-tint"></span><span class="dispatch-ghost-ring"></span><span class="dispatch-ghost-ring dispatch-ghost-ring-2"></span>' +
   '<span class="dispatch-ghost-badge"><svg viewBox="0 0 24 24" fill="none"><path d="M6 12.5l4 4 8-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></span>';
 const ACCEPT_GHOST_BTN_CHECK =
   '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5.5 12.5l4.2 4.2 8.8-9.4" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg>';
+
+// Frozen copy of the panel as it is now; it fades out over whatever replaces it. React never renders into it.
+function buildPanelSnapshot(panel: HTMLElement) {
+  const snapshot = panel.cloneNode(true) as HTMLElement;
+  snapshot.querySelector('[data-accept-ghost-host]')?.remove();
+  snapshot.classList.add('dispatch-accept-ghost', 'dispatch-grab-snapshot');
+  snapshot.inert = true;
+  return snapshot;
+}
 
 // Static copy of the New Order panel showing the claimed state; React never renders into it.
 function buildAcceptGhost(panel: HTMLElement, text: { title: string; code: string; status: string }) {
@@ -314,6 +324,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const [startExiting, setStartExiting] = useState(false);
   const [waitingEnterAnim, setWaitingEnterAnim] = useState(false);
   const [stopExiting, setStopExiting] = useState(false);
+  const [grabTransition, setGrabTransition] = useState(false);
+  const grabTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [panelVeil, setPanelVeil] = useState<'in' | 'out' | null>(null);
   const [panelVeilKind, setPanelVeilKind] = useState<'start' | 'stop'>('start');
   const [startConnect, setStartConnect] = useState<'connecting' | 'connected' | 'failed' | null>(null);
@@ -328,7 +340,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     const timer = setTimeout(() => setStartPanelExpanded(true), START_CONNECT_VEIL_FADE_MS);
     return () => clearTimeout(timer);
   }, [startConnect]);
-  const panelResizing = startExiting || waitingEnterAnim || stopExiting || startConnect !== null;
+  const panelResizing = startExiting || waitingEnterAnim || stopExiting || grabTransition || startConnect !== null;
   const [panelVeilKey, setPanelVeilKey] = useState(0);
   const panelVeilTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealPanel = () => {
@@ -419,17 +431,16 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
   useLayoutEffect(() => {
     const panel = panelRef.current;
-    if (!panel || (viewportWidth >= 600 && !stopExiting)) return;
+    if (!panel || (viewportWidth >= 600 && !stopExiting && !grabTransition)) return;
     const previous = panelHeightRef.current;
     const next = parseFloat(getComputedStyle(panel).height);
     if (!(next > 0)) return;
     panelHeightRef.current = next;
     if (!previous || Math.abs(previous - next) < 1 || !panelResizing || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-    const collapsing = stopExiting && next < previous;
     const timing = {
-      duration: collapsing ? STOP_PANEL_RESIZE_MS : 1000,
-      easing: collapsing ? 'cubic-bezier(0.4, 0, 0.2, 1)' : 'cubic-bezier(0.25, 0.1, 0.25, 1)',
+      duration: stopExiting ? STOP_PANEL_RESIZE_MS : grabTransition ? GRAB_FAILED_FADE_MS : 1000,
+      easing: stopExiting || grabTransition ? 'cubic-bezier(0.4, 0, 0.2, 1)' : 'cubic-bezier(0.25, 0.1, 0.25, 1)',
     };
     const ratio = previous / next;
     const panelAnimation = panel.animate([
@@ -440,7 +451,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     const animations = [panelAnimation];
 
     // Surfaces follow the panel's full height; only foreground content needs inverse scaling.
-    const foreground = panel.querySelectorAll<HTMLElement>(':scope > .dispatch-panel-content, :scope > .dispatch-idle-band, :scope > .dispatch-veil > .dispatch-veil-content');
+    const foreground = panel.querySelectorAll<HTMLElement>(':scope > .dispatch-panel-content, :scope > .dispatch-idle-band, :scope > .dispatch-veil > .dispatch-veil-content, :scope > [data-accept-ghost-host]');
     for (const child of foreground) {
       const top = child.offsetTop;
       const frames = Array.from({ length: 61 }, (_, i) => {
@@ -463,7 +474,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       animations.forEach(animation => animation.cancel());
       if (panelResizeAnimationRef.current === panelAnimation) panelResizeAnimationRef.current = null;
     };
-  }, [mobilePanelExpanded, panelResizing, stopExiting, viewportWidth]);
+  }, [mobilePanelExpanded, panelResizing, stopExiting, grabTransition, viewportWidth]);
 
   useEffect(() => {
     const scene = standbySceneRef.current;
@@ -660,6 +671,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       if (fiveMinuteWarningRef.current) clearTimeout(fiveMinuteWarningRef.current);
       if (grabFailedTimerRef.current) clearTimeout(grabFailedTimerRef.current);
       acceptRevealTimersRef.current.forEach(clearTimeout);
+      if (grabTransitionTimerRef.current) clearTimeout(grabTransitionTimerRef.current);
       clearInterval(workTimeInterval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handlePageHide);
@@ -780,7 +792,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     const body = document.body;
     const html = document.documentElement;
     const previousHtmlOverflow = html.style.overflow;
+    const scrollbarWidth = Math.max(0, window.innerWidth - html.clientWidth);
     const previousBodyStyles = {
+      paddingRight: body.style.paddingRight,
       position: body.style.position,
       top: body.style.top,
       left: body.style.left,
@@ -788,6 +802,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       overflow: body.style.overflow,
     };
     html.style.overflow = 'hidden';
+    if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`;
     body.style.position = 'fixed';
     body.style.top = `-${scrollY}px`;
     body.style.left = '0';
@@ -2303,6 +2318,17 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       if (acceptError) throw acceptError;
 
       if (acceptResult?.reason === 'grab_failed') {
+        if (grabTransitionTimerRef.current) clearTimeout(grabTransitionTimerRef.current);
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches && panelRef.current && acceptGhostHostRef.current) {
+          const ghostHost = acceptGhostHostRef.current;
+          ghostHost.replaceChildren(buildPanelSnapshot(panelRef.current));
+          setGrabTransition(true);
+          grabTransitionTimerRef.current = setTimeout(() => {
+            grabTransitionTimerRef.current = null;
+            ghostHost.replaceChildren();
+            if (componentMountedRef.current) setGrabTransition(false);
+          }, GRAB_FAILED_FADE_MS + 100);
+        }
         setShowGrabFailedModal(true);
         setCurrentOrder(null);
         setShowOrderDetail(false);
@@ -2802,7 +2828,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       )}
 
       {showGrabFailedModal && createPortal(
-        <div className="employee-modal-backdrop fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-4" style={{ overscrollBehavior: 'contain' }}>
+        <div className="employee-modal-backdrop dispatch-modal-backdrop-in fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/70 p-4" style={{ overscrollBehavior: 'contain' }}>
           <div role="alertdialog" aria-modal="true" aria-labelledby="dispatch-claim-title" aria-describedby="dispatch-claim-description" className="employee-modal-surface w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-[24px] bg-white shadow-[0_32px_90px_-20px_rgba(15,23,42,0.55)]">
             <div className="relative overflow-hidden bg-gradient-to-br from-[#12356d] via-[#1b487d] to-[#705348] px-6 py-6 sm:px-8 sm:py-7">
               <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cyan-300 via-amber-300 to-orange-400" />
@@ -2977,7 +3003,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         {/* Content */}
         <div className={`dispatch-panel-content relative z-10 ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col'}`}>
           <SmoothHeight
-            animate={!stopExiting && panelResizing && viewportWidth >= 600 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches}
+            animate={!stopExiting && !grabTransition && panelResizing && viewportWidth >= 600 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches}
             duration={1000}
             outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${!currentOrder ? 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col' : ''}`}
             innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : !currentOrder ? 'max-md:flex max-md:min-h-0 max-md:flex-1 max-md:flex-col' : ''}
