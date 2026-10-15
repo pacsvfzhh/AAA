@@ -2928,7 +2928,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
             </div>
           ) : (
             /* DESKTOP & MOBILE: Blue/White premium layout */
-            <div className={`flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 ${waitingPanelActive ? 'mb-0 border-b border-white/65 pb-[calc(1.25rem-1px)] short:max-md:pb-[calc(0.75rem-1px)] md:mb-6 md:pb-6' : 'mb-5 short:max-md:mb-3 md:mb-10'}`}>
+            <div className={`flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 ${waitingPanelActive ? 'mb-0 border-b border-white/65 pb-[calc(1.25rem-1px)] short:max-md:pb-[calc(0.75rem-1px)] md:mb-6 md:pb-6' : 'mb-5 short:max-md:mb-2 md:mb-10'}`}>
               {/* Mobile: Full-width status banner */}
               <div className="w-full md:w-auto">
                 <div className="flex items-center gap-3 md:gap-4">
@@ -3736,7 +3736,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                 {/* The cell is as tall as the parked waiting view; shorter languages centre the visual and keep Start at the bottom */}
                 <div className={`flex flex-1 flex-col space-y-3 short:space-y-2 ${startEnterAnim ? 'dispatch-start-enter' : ''} ${isTransitioning && transitionType === 'start' ? 'dispatch-standby-leaving' : ''}`}>
                   {/* Standby visual area */}
-                  <div className="relative -mx-4 flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-6 short:py-2">
+                  <div className="relative -mx-4 flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-6 short:justify-start short:py-0">
                     {/* Background gradient */}
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 90% 52% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
@@ -3866,14 +3866,14 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                       </div>
 
                       {/* Work description text */}
-                      <div className="dispatch-standby-item text-center px-4 mb-4 short:hidden" style={{ '--leave-order': 1 } as CSSProperties}>
+                      <div className="dispatch-standby-item text-center px-4 mb-4 short:mb-2" style={{ '--leave-order': 1 } as CSSProperties}>
                         <p className="text-xs text-slate-500 leading-relaxed text-balance">
                           {t.dispatch.sessionDesc}
                         </p>
                       </div>
 
                       {/* Info cards */}
-                      <div className="dispatch-standby-item grid grid-cols-2 gap-2 px-1 short:hidden" style={{ '--leave-order': 0 } as CSSProperties}>
+                      <div className="dispatch-standby-item grid grid-cols-2 gap-2 px-1" style={{ '--leave-order': 0 } as CSSProperties}>
                         <div className="bg-white/80 border border-blue-100 rounded-lg px-2.5 py-2 shadow-sm">
                           <div className="flex items-center gap-1.5 mb-1">
                             <div className="w-4 h-4 rounded-md bg-blue-50 flex items-center justify-center">
