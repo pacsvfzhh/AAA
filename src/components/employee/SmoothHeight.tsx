@@ -49,21 +49,39 @@ export default function SmoothHeight({ animate, holdMax = false, outerClassName 
     }
     let max = 0;
     let width = inner.offsetWidth;
+    // The held min-height can stretch inner (flex-1), so the natural height is read with it lifted for a moment.
+    const naturalHeight = () => {
+      const held = outer.style.minHeight;
+      outer.style.minHeight = '';
+      const natural = inner.offsetHeight;
+      outer.style.minHeight = held;
+      return natural;
+    };
     const measure = () => {
       if (inner.offsetWidth !== width) {
         width = inner.offsetWidth;
         max = 0;
       }
-      const next = inner.offsetHeight + verticalPadding(outer);
-      if (inner.offsetHeight > 0 && next > max) {
+      const natural = naturalHeight();
+      const next = natural + verticalPadding(outer);
+      if (natural > 0 && next > max) {
         max = next;
         setMinHeight(next);
       }
     };
+    // Viewport height changes (device switch, rotation) can change the natural height without changing the width.
+    const onResize = () => {
+      max = 0;
+      measure();
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(inner);
-    return () => observer.disconnect();
+    window.addEventListener('resize', onResize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
   }, [holdMax]);
 
   const style = {
