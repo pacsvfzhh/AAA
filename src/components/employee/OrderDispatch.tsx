@@ -3715,7 +3715,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                   {/* Standby visual area */}
                   <div className="relative -mx-4 flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-6">
                     {/* Background gradient */}
-                    <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 85% 70% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
+                    <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 90% 52% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
                     <div className="relative z-10 w-full">
                       {/* Quay scene: a container crane takes an order container from the yard and loads it onto the ship, on the panel's own wave line */}
