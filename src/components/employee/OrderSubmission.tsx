@@ -908,7 +908,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                     { label: t.orderSubmission.productNumber, value: formData.orderNumber, mono: true },
                     { label: t.orderSubmission.transactionId, value: formData.transactionId, mono: true },
                   ].map(({ label, value, mono }, index) => (
-                    <div key={label} className={`confirm-field flex min-w-0 flex-col justify-center border-slate-200 py-3 pl-4 pr-3 sm:py-4 sm:pl-7 sm:pr-6 ${index % 2 === 0 ? 'border-r' : ''} ${index >= 2 ? 'border-t' : ''}`}>
+                    <div key={label} className={`confirm-field relative z-10 flex min-w-0 flex-col justify-center border-slate-200 py-3 pl-4 pr-3 sm:py-4 sm:pl-7 sm:pr-6 ${index % 2 === 0 ? 'border-r' : ''} ${index >= 2 ? 'border-t' : ''}`}>
                       <dt className="flex min-w-0 items-center gap-1.5">
                         <span className="flex-shrink-0 rounded bg-[#12356d] px-1 py-px font-mono text-[9px] font-bold leading-tight text-white">{String(index + 1).padStart(2, '0')}</span>
                         <span className="truncate text-[11px] font-semibold text-slate-500 sm:text-[13px]">{label}</span>
@@ -918,7 +918,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                   ))}
                   <span
                     key={confirmPhase === 'idle' ? 'pending' : 'sealed'}
-                    className={`confirm-stamp pointer-events-none absolute bottom-1 right-1 h-32 w-32 mix-blend-multiply sm:bottom-3 sm:right-5 sm:h-56 sm:w-56 ${confirmPhase === 'idle' ? 'text-blue-700/50' : 'is-sealed text-blue-700/80'}`}
+                    className={`confirm-stamp pointer-events-none absolute z-0 bottom-1 right-1 h-32 w-32 mix-blend-multiply sm:bottom-3 sm:right-5 sm:h-56 sm:w-56 ${confirmPhase === 'idle' ? 'text-blue-700/25' : 'is-sealed text-blue-700/40'}`}
                   >
                     <ConfirmStamp
                       ring={t.orderSubmission.stampRing}
