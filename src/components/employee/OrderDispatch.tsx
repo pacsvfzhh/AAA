@@ -3061,7 +3061,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     <div className={currentOrder.status === 'accepted' ? 'min-w-0 flex-1' : undefined}>
                       <div className={currentOrder.status === 'accepted' ? 'flex flex-wrap items-center gap-x-2 gap-y-1 md:gap-x-3' : 'flex items-center space-x-2 md:space-x-3'}>
                         <h3 className={`text-base md:text-3xl font-black tracking-tight ${
-                          currentOrder.status === 'pending' ? 'text-white' : hasTimeout ? 'text-rose-100 drop-shadow-lg' : 'text-gray-800'
+                          currentOrder.status === 'pending' ? 'text-white' : hasTimeout ? 'text-rose-100 drop-shadow-lg' : 'text-[#12356d]'
                         }`}>
                           {currentOrder.status === 'pending' ? t.dispatch.newOrderHeading : hasTimeout ? t.dispatch.timeout : t.dispatch.inProgress}
                         </h3>
@@ -3073,7 +3073,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                         )}
                       </div>
                       <div className={`text-[11px] md:text-sm font-semibold mt-1 md:mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 ${
-                        currentOrder.status === 'pending' ? 'text-blue-100' : hasTimeout ? 'text-rose-200' : 'text-gray-500'
+                        currentOrder.status === 'pending' ? 'text-blue-100' : hasTimeout ? 'text-rose-200' : 'text-blue-600'
                       }`}>
                         <span className="flex items-center gap-2">
                           <Clock className="w-3 h-3 md:w-4 md:h-4" />
@@ -3114,7 +3114,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                         <div className="flex items-center space-x-1.5">
                           <div className={`w-1 h-1 rounded-full animate-pulse ${currentOrder.status === 'pending' ? 'bg-cyan-300' : 'bg-blue-500'}`}></div>
                           <FileText className={`w-3 h-3 ${currentOrder.status === 'pending' ? 'text-cyan-200' : 'text-blue-500'}`} />
-                          <h4 className={`text-[11px] font-bold uppercase tracking-wide ${currentOrder.status === 'pending' ? 'text-blue-50' : 'text-gray-700'}`}>{t.dispatch.orderDetails}</h4>
+                          <h4 className={`text-[11px] font-bold uppercase tracking-wide ${currentOrder.status === 'pending' ? 'text-blue-50' : 'text-blue-800'}`}>{t.dispatch.orderDetails}</h4>
                         </div>
                         {currentOrder.status === 'pending' && (
                           <div className="rounded border border-amber-200/30 bg-amber-300/15 px-1.5 py-0.5">
@@ -3171,7 +3171,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                               <div className={`relative w-2 h-2 rounded-full ${currentOrder.status === 'pending' ? 'bg-cyan-300' : 'bg-blue-500'}`}></div>
                             </div>
                             <FileText className={`w-5 h-5 ${currentOrder.status === 'pending' ? 'text-cyan-200' : 'text-blue-500'}`} />
-                            <h4 className={`text-sm font-bold uppercase tracking-widest ${currentOrder.status === 'pending' ? 'text-blue-50' : 'text-gray-700'}`}>{t.dispatch.orderDetails}</h4>
+                            <h4 className={`text-sm font-bold uppercase tracking-widest ${currentOrder.status === 'pending' ? 'text-blue-50' : 'text-blue-800'}`}>{t.dispatch.orderDetails}</h4>
                           </div>
                           {currentOrder.status === 'accepted' && (
                             <div className="flex h-6 items-stretch gap-[2px] opacity-60" aria-hidden="true">

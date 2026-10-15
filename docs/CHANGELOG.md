@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · In Progress 面板文字颜色匹配网站主题
+- 需求：In Progress 面板里的「In Progress」标题、「Complete task」副标题和「ORDER DETAILS」文字，颜色要和网站的蓝色主题匹配。
+- 改动：「In Progress」标题从灰黑色改为网站顶栏用的深蓝 `#12356d`；「Complete task」从灰色改为蓝色（blue-600）；「ORDER DETAILS」（手机和桌面）从灰色改为深蓝（blue-800）。超时（红色）状态和 New Order（白色）状态的颜色不变。
+- 文件：`src/components/employee/OrderDispatch.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 通过；未运行 ESLint，也未在浏览器里查看实际效果。
+
 ## 2026-10-16 · 小屏手机待机面板：恢复说明文字和两个信息框
 - 需求：小屏手机上待机面板里的说明文字和 AUTO-DISPATCH / REAL-TIME 两个信息框要保留，把龙门吊动画往上移，给下面的内容留位置。
 - 改动：矮屏上不再隐藏说明文字和两个信息框（撤销上一条里隐藏说明文字的改动）；龙门吊场景去掉上下留白并靠上对齐，说明文字、标题与面板标题之间的间距缩小。内容比基准高度高时，面板（连同等待派单、New Order、In Progress）会一起略微撑高，不会被截掉。
