@@ -918,7 +918,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                   ))}
                   <span
                     key={confirmPhase === 'idle' ? 'pending' : 'sealed'}
-                    className={`confirm-stamp pointer-events-none absolute z-0 bottom-1 right-1 h-32 w-32 mix-blend-multiply sm:bottom-3 sm:right-5 sm:h-56 sm:w-56 ${confirmPhase === 'idle' ? 'text-blue-700/25' : 'is-sealed text-blue-700/40'}`}
+                    className={`confirm-stamp pointer-events-none absolute z-0 bottom-1 right-1 h-32 w-32 mix-blend-multiply sm:bottom-3 sm:right-5 sm:h-56 sm:w-56 ${confirmPhase === 'idle' ? 'text-blue-700/15' : 'is-sealed text-blue-700/25'}`}
                   >
                     <ConfirmStamp
                       ring={t.orderSubmission.stampRing}
