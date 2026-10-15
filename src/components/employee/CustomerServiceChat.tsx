@@ -2609,7 +2609,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                       </div>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h2 className="text-lg lg:text-xl font-bold text-white tracking-tight">
+                      <h2 className="text-[20px] leading-[28px] lg:text-[22px] font-extrabold text-white tracking-[0.01em] [text-shadow:0_1px_3px_rgba(15,23,42,0.3)]">
                         {t.customerService.title}
                       </h2>
                       <p className="text-xs lg:text-sm text-blue-100 mt-0.5 font-medium">
@@ -2760,7 +2760,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     {conv.customer.customer_name}
                                   </span>
                                   {conv.unread_count > 0 && (
-                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-r from-red-500 to-rose-500 text-white text-[11px] font-bold rounded-full shadow-md shadow-red-300/60 animate-pulse flex-shrink-0">
+                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-extrabold leading-none tabular-nums rounded-full ring-2 ring-white shadow-md shadow-orange-400/60 animate-pulse flex-shrink-0">
                                       {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                     </span>
                                   )}
@@ -2835,7 +2835,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                   {conv.customer.customer_name}
                                 </span>
                                 {conv.unread_count > 0 && (
-                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-r from-red-500 to-rose-500 text-white text-[11px] font-bold rounded-full shadow-md shadow-red-300/60 animate-pulse flex-shrink-0">
+                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-extrabold leading-none tabular-nums rounded-full ring-2 ring-white shadow-md shadow-orange-400/60 animate-pulse flex-shrink-0">
                                     {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                   </span>
                                 )}
