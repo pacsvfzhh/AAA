@@ -17,6 +17,14 @@
 
 ---
 
+## 2026-10-16 · 修复 ResizeObserver loop 报错
+- 需求：控制台出现 "ResizeObserver loop completed with undelivered notifications"。
+- 原因：上一条改动里，记忆高度在 ResizeObserver 回调中被立即修改，导致同一帧内内容区再次变化。
+- 改动：量高度的动作改为推迟到下一帧执行，不再在回调里直接改。
+- 文件：`src/components/employee/SmoothHeight.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；没有浏览器，未实测报错是否消失。
+
 ## 2026-10-16 · 手机端面板切换设备尺寸后不恢复
 - 需求：在预览里先用 iPhone SE，换到 iPhone 17，再换回 iPhone SE，派单面板还停在 iPhone 17 的高度。
 - 原因：Order Processing 面板会记住出现过的最大高度（避免待机/等待切换时跳动），且内容区被撑满到这个高度，所以屏幕变小后量到的还是旧高度，永远缩不回去。

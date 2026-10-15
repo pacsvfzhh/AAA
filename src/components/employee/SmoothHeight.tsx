@@ -72,13 +72,20 @@ export default function SmoothHeight({ animate, holdMax = false, outerClassName 
     // Viewport height changes (device switch, rotation) can change the natural height without changing the width.
     const onResize = () => {
       max = 0;
-      measure();
+      schedule();
+    };
+    // Changing min-height inside the observer callback would resize inner again in the same frame (ResizeObserver loop error).
+    let frame = 0;
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
     };
     measure();
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(schedule);
     observer.observe(inner);
     window.addEventListener('resize', onResize);
     return () => {
+      cancelAnimationFrame(frame);
       observer.disconnect();
       window.removeEventListener('resize', onResize);
     };
