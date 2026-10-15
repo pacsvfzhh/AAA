@@ -913,12 +913,12 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                         <span className="flex-shrink-0 rounded bg-[#12356d] px-1 py-px font-mono text-[9px] font-bold leading-tight text-white">{String(index + 1).padStart(2, '0')}</span>
                         <span className="truncate text-[11px] font-semibold text-slate-500 sm:text-[13px]">{label}</span>
                       </dt>
-                      <dd className={`mt-1.5 truncate text-sm font-semibold text-[#12356d] sm:mt-2.5 sm:text-xl ${mono ? 'font-mono tracking-wide' : ''}`}>{value}</dd>
+                      <dd className={`mt-1.5 truncate text-sm font-bold text-[#12356d] sm:mt-2.5 sm:text-xl ${mono ? 'font-mono tracking-wide' : ''}`}>{value}</dd>
                     </div>
                   ))}
                   <span
                     key={confirmPhase === 'idle' ? 'pending' : 'sealed'}
-                    className={`confirm-stamp pointer-events-none absolute bottom-1 right-1 h-16 w-16 mix-blend-multiply sm:bottom-3 sm:right-5 sm:h-28 sm:w-28 ${confirmPhase === 'idle' ? 'text-blue-700/50' : 'is-sealed text-blue-700/80'}`}
+                    className={`confirm-stamp pointer-events-none absolute bottom-1 right-1 h-32 w-32 mix-blend-multiply sm:bottom-3 sm:right-5 sm:h-56 sm:w-56 ${confirmPhase === 'idle' ? 'text-blue-700/50' : 'is-sealed text-blue-700/80'}`}
                   >
                     <ConfirmStamp
                       ring={t.orderSubmission.stampRing}

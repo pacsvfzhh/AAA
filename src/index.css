@@ -1709,7 +1709,7 @@ body {
   .confirm-field { padding: 6px 8px 6px 12px !important; }
   .confirm-field dt > span:last-child { font-size: 10px !important; }
   .confirm-field dd { font-size: 12.5px !important; margin-top: 2px !important; }
-  .confirm-stamp { width: 52px !important; height: 52px !important; }
+  .confirm-stamp { width: 104px !important; height: 104px !important; }
 
   .confirm-warning { padding: 5px 10px 5px 12px !important; }
   .confirm-warning p { font-size: 10.5px !important; }
