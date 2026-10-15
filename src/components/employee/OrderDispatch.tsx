@@ -2913,12 +2913,12 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                   {currentOrder.status === 'accepted' && !hasTimeout ? (
                     <>
                       <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-blue-400/60 to-transparent" />
-                      <PanelColorBlocks />
+                      <PanelColorBlocks topCorner="left" />
                       <div className="pointer-events-none absolute inset-x-0 top-0 h-28 overflow-hidden" aria-hidden="true">
-                        <span className="absolute right-[14%] top-5 h-12 w-12 rotate-12 rounded-2xl bg-sky-200/45" />
-                        <span className="absolute right-[30%] top-9 h-5 w-5 rounded-full bg-indigo-200/45" />
-                        <span className="absolute left-[42%] top-3 h-8 w-8 -rotate-6 rounded-xl bg-blue-200/35" />
-                        <span className="absolute left-[3%] top-12 h-4 w-4 rotate-45 rounded-[4px] bg-sky-300/35" />
+                        <span className="absolute left-[14%] top-5 h-12 w-12 rotate-12 rounded-2xl bg-sky-200/45" />
+                        <span className="absolute left-[30%] top-9 h-5 w-5 rounded-full bg-indigo-200/45" />
+                        <span className="absolute right-[42%] top-3 h-8 w-8 -rotate-6 rounded-xl bg-blue-200/35" />
+                        <span className="absolute right-[3%] top-12 h-4 w-4 rotate-45 rounded-[4px] bg-sky-300/35" />
                       </div>
                       <div className="dispatch-idle-blocks ip-bg" aria-hidden="true">
                         <span className="idle-block idle-block-left" />

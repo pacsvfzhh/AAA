@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · In Progress 面板：右上角色块改到左上角
+- 需求：In Progress 面板右上角的色块图案改放左上角。
+- 改动：顶部大圆移到左上角，原来在左侧的圆角方块换到右侧避免和大圆挤在一起；标题行周围的几个小色块左右对调。`PanelColorBlocks` 新增 `topCorner`（`left` / `right`）参数，默认右上角，其他面板不受影响。
+- 文件：`src/components/employee/PanelColorBlocks.tsx`、`src/components/employee/OrderDispatch.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；未在浏览器里查看实际效果。
+
 ## 2026-10-16 · In Progress 面板：色块背景，ORDER DETAILS 顶部线变浅
 - 需求：ORDER DETAILS 内容框上方的装饰线要更透明、比面板顶部装饰线更浅；In Progress 面板加上通知面板那样的色块背景，放在空白区域和标题周围，内容框内不加。
 - 改动：①内容框顶部线由深蓝实色改为半透明浅蓝渐变（桌面和手机都改）。②面板背景垫上通知面板同款的大圆和圆角方块，并在标题行周围补了几个小方块和小圆点。色块在内容框下面，内容框本身是接近不透明的白底，所以框内基本看不到。订单超时变红时不显示这些蓝色色块。
