@@ -1081,6 +1081,17 @@ body:has(.employee-shell) .employee-modal-surface {
   isolation: isolate;
 }
 
+@keyframes messagePanelSlideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  body:has(.employee-shell) .employee-modal-surface.message-center-panel {
+    animation: messagePanelSlideIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both !important;
+  }
+}
+
 /* Submit Order success dialog: badge pops, rings ripple, check draws, commission card rises and a shine sweeps once. */
 @media (prefers-reduced-motion: no-preference) {
   .submit-success-badge { animation: submitSuccessPop 520ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }

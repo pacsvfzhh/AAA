@@ -313,7 +313,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
 
       {/* Message Center Panel - full screen on mobile/tablet with solid background */}
       <div
-        className="employee-modal-surface fixed inset-0 lg:inset-auto lg:top-0 lg:right-0 lg:h-full lg:w-full lg:max-w-2xl overflow-hidden flex flex-col"
+        className="employee-modal-surface message-center-panel fixed inset-0 lg:inset-auto lg:top-0 lg:right-0 lg:h-full lg:w-full lg:max-w-2xl lg:rounded-l-2xl lg:shadow-[-12px_0_32px_-12px_rgba(15,23,42,0.35)] overflow-hidden flex flex-col"
         style={{ zIndex: 10001 }}
       >
         {/* SOLID opaque background - not transparent */}
