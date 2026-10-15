@@ -6527,19 +6527,6 @@ body:has(.employee-shell) .order-detail-content-scrollbar::-webkit-scrollbar-thu
     will-change: transform;
   }
 
-  @keyframes badgeBounce {
-    0%, 100% {
-      transform: translateY(0) scale(1);
-    }
-    50% {
-      transform: translateY(-5px) scale(1.05);
-    }
-  }
-
-  .animate-badge-bounce {
-    animation: badgeBounce 1.5s ease-in-out infinite;
-  }
-
   /* ============================================
      SCROLL OPTIMIZATION FOR MOBILE DEVICES
      ============================================ */
@@ -7380,4 +7367,29 @@ body:has(.employee-shell) .order-detail-content-scrollbar::-webkit-scrollbar-thu
   animation-duration: 2s !important;
   -webkit-animation-iteration-count: infinite !important;
   animation-iteration-count: infinite !important;
+}
+
+@keyframes badgeShake {
+  0%, 54%, 100% { rotate: 0deg; }
+  6% { rotate: -14deg; }
+  12% { rotate: 14deg; }
+  18% { rotate: -12deg; }
+  24% { rotate: 12deg; }
+  30% { rotate: -8deg; }
+  36% { rotate: 8deg; }
+  42% { rotate: -4deg; }
+  48% { rotate: 4deg; }
+}
+
+@keyframes badgeLift {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-5px) scale(1.05); }
+}
+
+.animate-badge-shake.keep-animation {
+  animation: badgeShake 1.5s ease-in-out infinite !important;
+}
+
+.animate-badge-shake-lift.keep-animation {
+  animation: badgeLift 1.5s ease-in-out infinite, badgeShake 1.5s ease-in-out infinite !important;
 }

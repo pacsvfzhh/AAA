@@ -2682,7 +2682,19 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         }}
                       >
                         {conv.unread_count > 0 ? (
-                          <span className={`pointer-events-none absolute inset-0 rounded-[15px] border-l-[7px] border-t-[5px] [mask-image:linear-gradient(to_right,#000_50%,transparent_100%)] ${conv.customer.is_super ? 'border-orange-500' : 'border-blue-600'}`} aria-hidden="true"></span>
+                          <span
+                            className="pointer-events-none absolute inset-0 rounded-[15px]"
+                            style={{
+                              padding: '3px 0 0 4px',
+                              background: conv.customer.is_super
+                                ? 'linear-gradient(135deg, #f97316 0%, #fbbf24 45%, rgba(251,191,36,0) 85%)'
+                                : 'linear-gradient(135deg, #2563eb 0%, #60a5fa 45%, rgba(96,165,250,0) 85%)',
+                              WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+                              WebkitMaskComposite: 'xor',
+                              mask: 'linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0)',
+                            }}
+                            aria-hidden="true"
+                          ></span>
                         ) : (
                           <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.customer.is_super ? 'bg-amber-400' : 'bg-blue-500/70'}`} aria-hidden="true"></span>
                         )}
@@ -2719,7 +2731,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     {conv.customer.customer_name}
                                   </span>
                                   {conv.unread_count > 0 && (
-                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-sm flex-shrink-0">
+                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-md shadow-orange-400/50 animate-pulse flex-shrink-0">
                                       {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                     </span>
                                   )}
@@ -2794,7 +2806,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                   {conv.customer.customer_name}
                                 </span>
                                 {conv.unread_count > 0 && (
-                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-sm flex-shrink-0">
+                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-md shadow-orange-400/50 animate-pulse flex-shrink-0">
                                     {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                   </span>
                                 )}

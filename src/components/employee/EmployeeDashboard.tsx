@@ -1078,7 +1078,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                   {/* Unread count badge */}
                   {unreadMessageCount > 0 && (
                     <div
-                      className={`absolute -top-2 -right-2 min-w-[22px] h-[22px] px-1.5 bg-red-500 text-white text-[12px] leading-none font-bold tabular-nums rounded-full shadow-[0_2px_6px_rgba(220,38,38,0.45)] flex items-center justify-center border-2 border-white z-20 keep-animation ${hasNewMessage ? 'animate-badge-bounce' : ''}`}
+                      className={`absolute -top-2 -right-2 min-w-[22px] h-[22px] px-1.5 bg-red-500 text-white text-[12px] leading-none font-bold tabular-nums rounded-full shadow-[0_2px_6px_rgba(220,38,38,0.45)] flex items-center justify-center border-2 border-white z-20 keep-animation ${hasNewMessage ? 'animate-badge-shake-lift' : 'animate-badge-shake'}`}
                       style={{ willChange: hasNewMessage ? 'transform' : 'auto' }}
                     >
                       {unreadMessageCount > 99 ? '99+' : unreadMessageCount}
