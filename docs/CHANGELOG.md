@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · In Progress 面板顶部装饰线：流光 + 脉冲
+- 需求：Order Assignment 的 In Progress 面板上方增加符合面板主题的装饰线，并带脉冲效果。
+- 改动：进行中面板顶部原来是静态细线，现在换成和「等待接单 / 新订单」面板一致的流光装饰线（蓝到天蓝到靛蓝渐变，有光带扫过），并增加发光脉冲（明暗和光晕循环）。订单超时变红时，装饰线同步变成红橙色，脉冲更快。开启「减少动态效果」时不播放动画。
+- 文件：`src/components/employee/OrderDispatch.tsx`、`src/index.css`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；未在浏览器里查看实际效果。
+
 ## 2026-10-16 · 派单记录 / 今日订单 / 每日明细：色块背景与空状态图标
 - 需求：Order Assignment 的 Today's Assignment Records、Orders 的 Today's Orders、Daily Statistics 的 Daily Breakdown 三个面板的内容区使用和通知面板一样的背景；无记录时设计匹配功能的图标。
 - 改动：三个内容区都垫上固定的色块背景（卡片、统计格、表格在上面）。无记录时的图标按功能区分：派单记录为「清单 + 包裹」，今日订单为「账单 + 包裹」，每日明细为「日历 + 柱状图」，文字改为蓝色系。新增共用组件 `PanelEmptyIcon`；`PanelColorBlocks` 新增 `className` 参数，用于把色块垫在内容下面。

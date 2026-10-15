@@ -2801,7 +2801,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         )}
         {/* Top accent border */}
         <div className={`absolute top-0 left-0 right-0 rounded-t-2xl md:rounded-t-3xl transition-all duration-500 ${panelVeil ? 'opacity-0' : ''} ${
-          waitingPanelActive ? 'dispatch-waiting-accent z-[2] h-1.5 bg-gradient-to-r from-blue-600 via-sky-400 to-blue-500 shadow-[0_3px_10px_rgba(37,99,235,0.3)]' : currentOrder?.status === 'pending' ? 'dispatch-waiting-accent dispatch-order-accent z-[2] h-1.5 bg-gradient-to-r from-cyan-400 via-sky-300 to-amber-400 shadow-[0_3px_12px_rgba(34,211,238,0.3)]' : 'h-1 bg-gradient-to-r from-[#12356d] via-blue-600 to-cyan-400'
+          waitingPanelActive ? 'dispatch-waiting-accent z-[2] h-1.5 bg-gradient-to-r from-blue-600 via-sky-400 to-blue-500 shadow-[0_3px_10px_rgba(37,99,235,0.3)]' : currentOrder?.status === 'pending' ? 'dispatch-waiting-accent dispatch-order-accent z-[2] h-1.5 bg-gradient-to-r from-cyan-400 via-sky-300 to-amber-400 shadow-[0_3px_12px_rgba(34,211,238,0.3)]' : currentOrder?.status === 'accepted' ? (hasTimeout ? 'dispatch-waiting-accent dispatch-progress-accent dispatch-progress-accent--alert z-20 h-1.5 bg-gradient-to-r from-rose-500 via-orange-400 to-rose-500 shadow-[0_3px_10px_rgba(244,63,94,0.35)]' : 'dispatch-waiting-accent dispatch-progress-accent z-20 h-1.5 bg-gradient-to-r from-blue-600 via-sky-400 to-indigo-500 shadow-[0_3px_10px_rgba(37,99,235,0.3)]') : 'h-1 bg-gradient-to-r from-[#12356d] via-blue-600 to-cyan-400'
         }`}></div>
 
         {/* Content */}

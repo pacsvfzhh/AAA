@@ -2184,6 +2184,21 @@ button.employee-header-action {
   background: linear-gradient(90deg, transparent, rgb(255 255 255 / 24%) 18%, rgb(255 255 255 / 96%) 50%, rgb(253 230 138 / 80%) 68%, transparent);
 }
 
+.dispatch-progress-accent {
+  --progress-glow: 56 189 248;
+  animation: dispatchProgressPulse 2.2s ease-in-out infinite;
+}
+
+.dispatch-progress-accent--alert {
+  --progress-glow: 244 63 94;
+  animation-duration: 1.4s;
+}
+
+@keyframes dispatchProgressPulse {
+  0%, 100% { opacity: 0.82; box-shadow: 0 3px 8px rgb(var(--progress-glow) / 25%); }
+  50% { opacity: 1; box-shadow: 0 4px 18px rgb(var(--progress-glow) / 70%); }
+}
+
 .dispatch-accept-btn {
   isolation: isolate;
   animation: dispatchAcceptGlow 2.6s ease-in-out infinite;
