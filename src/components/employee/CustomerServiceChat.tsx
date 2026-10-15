@@ -2302,7 +2302,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
 
         @media (max-width: 1023px) {
           .customer-service-panel-header {
-            padding-top: calc(env(safe-area-inset-top) + 12px);
+            padding-top: calc(env(safe-area-inset-top) + 16px);
           }
 
           .customer-service-composer {
@@ -2852,7 +2852,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
             </>
           ) : (
             <>
-              <div className={`customer-service-panel-header customer-service-chat-header relative flex-shrink-0 px-4 pt-3 pb-4 lg:px-6 lg:pt-5 lg:pb-5 overflow-hidden ${
+              <div className={`customer-service-panel-header customer-service-chat-header relative flex-shrink-0 px-4 pt-3 pb-5 lg:px-6 lg:pt-6 lg:pb-6 overflow-hidden ${
                 selectedCustomer?.is_super
                   ? 'bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600'
                   : 'bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700'
@@ -2892,7 +2892,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <div className="h-5 truncate text-sm font-bold leading-5 text-white sm:h-6 sm:text-base sm:leading-6">
+                        <div className="h-6 truncate text-[17px] font-bold leading-6 tracking-tight text-white sm:h-7 sm:text-[19px] sm:leading-7">
                           {selectedCustomer.customer_name}
                         </div>
 
