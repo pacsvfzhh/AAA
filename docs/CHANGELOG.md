@@ -19,8 +19,8 @@
 
 ## 2026-10-15 · Submit Order 的 Product Type 选择框增加清除按钮
 - 需求：员工端 Orders 页 Submit Order 面板的 Product Type 选择框需要清除按钮。
-- 改动：选中产品类型后，选择框右侧（下拉箭头左边）出现圆形 X 按钮；点击后恢复为「选择产品类型」，关闭下拉菜单并清空搜索词，其他已填内容不受影响，焦点回到选择框。未选择时不显示。按钮提示文字已加入全部 10 种语言（`clearProductType`）。
-- 文件：`src/components/employee/OrderSubmission.tsx`、`src/lib/i18n/locales/*.ts`（10 个语言文件）、`docs/employee-portal.md`
+- 改动：选中产品类型后，选择框右侧（下拉箭头左边）出现圆形 X 按钮；点击后恢复为「选择产品类型」，关闭下拉菜单并清空搜索词，其他已填内容不受影响，焦点回到选择框。未选择时不显示。按钮只有图标，没有悬停提示文字，也不涉及多语言（仅有不可见的无障碍标签，固定英文，与同文件的「Clear search」一致）。
+- 文件：`src/components/employee/OrderSubmission.tsx`、`docs/employee-portal.md`
 - 数据库/服务端：无
 - 验证：typecheck、ESLint 通过；未能在预览中实际点击（预览需要员工账号登录，本环境无法登录），请登录后在 Orders 页验证。
 - 备注：前端改动需用户自行部署后才对正式网站生效。

@@ -204,7 +204,6 @@ const hi = {
     title: 'ऑर्डर जमा करें',
     userNumber: 'उपयोगकर्ता संख्या',
     productType: 'उत्पाद प्रकार',
-    clearProductType: 'उत्पाद प्रकार साफ़ करें',
     productValue: 'उत्पाद मूल्य',
     productNumber: 'उत्पाद संख्या',
     transactionId: 'लेन-देन आईडी',

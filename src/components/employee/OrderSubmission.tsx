@@ -675,8 +675,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                 <button
                   type="button"
                   onClick={handleProductTypeClear}
-                  aria-label={t.orderSubmission.clearProductType}
-                  title={t.orderSubmission.clearProductType}
+                  aria-label="Clear product type"
                   className="absolute right-8 sm:right-10 top-1/2 flex !h-[28px] !w-[28px] !min-h-[28px] !min-w-[28px] -translate-y-1/2 items-center justify-center rounded-full bg-blue-50 !p-0 text-blue-600 transition-colors hover:bg-blue-100 hover:text-blue-700 active:bg-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
                 >
                   <X className="h-4 w-4" strokeWidth={2.5} aria-hidden="true" />

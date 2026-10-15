@@ -191,7 +191,6 @@ const zh = {
     title: '提交订单',
     userNumber: '用户编号',
     productType: '产品类型',
-    clearProductType: '清除产品类型',
     productValue: '产品价值',
     productNumber: '产品编号',
     transactionId: '交易ID',

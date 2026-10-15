@@ -191,7 +191,6 @@ const es = {
     title: 'Enviar pedido',
     userNumber: 'Numero de usuario',
     productType: 'Tipo de producto',
-    clearProductType: 'Borrar tipo de producto',
     productValue: 'Valor del producto',
     productNumber: 'Numero de producto',
     transactionId: 'ID de transaccion',
