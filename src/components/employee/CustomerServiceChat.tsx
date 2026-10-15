@@ -1,6 +1,6 @@
-import { useState, useEffect, useLayoutEffect, useRef, memo, useMemo, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, memo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageCircle, X, Send, Image, Star, ArrowLeft, Search, Clock, Zap, Sparkles, Award, Gift, ZoomIn, ZoomOut, RotateCcw, Megaphone, ChevronRight } from 'lucide-react';
+import { MessageCircle, X, Send, Image, Star, ArrowLeft, Clock, Zap, Sparkles, Award, Gift, ZoomIn, ZoomOut, RotateCcw, Megaphone, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { sanitizeChatMessage, sanitizeAnnouncementContent } from '../../lib/sanitizeHTML';
 import { useLanguage } from '../../lib/i18n/context';
@@ -302,8 +302,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
   const [uploadProgress, setUploadProgress] = useState(0);
   const uploadingTempIdRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [conversationsError, setConversationsError] = useState(false);
@@ -1910,16 +1908,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
     return date.toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' });
   };
 
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  const filteredConversations = useMemo(() => conversations.filter(conv =>
-    conv.customer.customer_name.toLowerCase().includes(debouncedSearchQuery.toLowerCase()) ||
-    conv.customer.customer_id.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
-  ), [conversations, debouncedSearchQuery]);
-
   return (
     <>
       <style>{`
@@ -2227,8 +2215,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
         }
 
         button.customer-service-panel-close,
-        button.customer-service-header-btn,
-        button.customer-service-search-clear {
+        button.customer-service-header-btn {
           box-sizing: border-box;
           width: 44px !important;
           height: 44px !important;
@@ -2311,14 +2298,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
             top: calc(env(safe-area-inset-top) + 20px);
             right: calc(env(safe-area-inset-right) + 20px);
           }
-        }
-
-        input.customer-service-search {
-          box-sizing: border-box;
-          height: 40px;
-          min-height: 40px !important;
-          padding-top: 0;
-          padding-bottom: 0;
         }
 
         @media (max-width: 1023px) {
@@ -2595,24 +2574,32 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
 
           {showConversationList ? (
             <>
-              <div className="customer-service-panel-header relative z-10 flex-shrink-0 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 px-4 pt-3 pb-4 lg:px-6 lg:pt-5 lg:pb-5 overflow-hidden">
+              <div className="customer-service-panel-header relative z-10 flex-shrink-0 bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 px-4 pt-3 pb-4 lg:px-6 lg:pt-5 lg:pb-5 overflow-hidden shadow-[0_8px_20px_-10px_rgba(30,58,138,0.7)]">
                 {/* Decorative elements */}
-                <div className="absolute top-0 right-0 w-48 h-48 bg-white/[0.04] rounded-full -translate-y-1/2 translate-x-1/4"></div>
-                <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/[0.04] rounded-full translate-y-1/2 -translate-x-1/4"></div>
-                <div className="absolute top-1/3 right-1/3 w-1.5 h-1.5 bg-white/10 rounded-full"></div>
+                <div className="pointer-events-none absolute -right-10 -top-14 h-44 w-44 rounded-full bg-gradient-to-br from-sky-300/35 to-transparent" aria-hidden="true"></div>
+                <div className="pointer-events-none absolute -bottom-16 left-8 h-32 w-32 rounded-full bg-indigo-400/25" aria-hidden="true"></div>
+                <div className="pointer-events-none absolute -top-2 bottom-0 right-24 w-[26px] skew-x-[-20deg] bg-white/[0.07]" aria-hidden="true"></div>
+                <div className="pointer-events-none absolute -top-2 bottom-0 right-[60px] w-[8px] skew-x-[-20deg] bg-white/[0.07]" aria-hidden="true"></div>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/30" aria-hidden="true"></div>
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-sky-200/70 to-transparent" aria-hidden="true"></div>
 
                 <div className="relative flex items-center gap-3">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <div className="relative flex-shrink-0">
-                      <div className="bg-white/20 p-2.5 lg:p-3 rounded-2xl border border-white/30 shadow-lg shadow-blue-900/20">
-                        <MessageCircle className="w-5 h-5 lg:w-6 lg:h-6 text-white" />
+                      <div className="flex h-[44px] w-[44px] items-center justify-center rounded-2xl border border-white/40 bg-gradient-to-br from-white/35 to-white/10 shadow-lg shadow-blue-950/30 lg:h-[50px] lg:w-[50px]">
+                        <MessageCircle className="h-[22px] w-[22px] text-white lg:h-6 lg:w-6" strokeWidth={2.25} />
                       </div>
+                      {unreadCount > 0 && (
+                        <span className="absolute -right-1.5 -top-1.5 flex h-[20px] min-w-[20px] items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-orange-500 px-1 text-[12px] font-extrabold leading-none tabular-nums text-white ring-2 ring-blue-700 shadow-md">
+                          {unreadCount > 99 ? '99+' : unreadCount}
+                        </span>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <h2 className="text-[20px] leading-[28px] lg:text-[22px] font-extrabold text-white tracking-[0.01em] [text-shadow:0_1px_3px_rgba(15,23,42,0.3)]">
                         {t.customerService.title}
                       </h2>
-                      <p className="text-xs lg:text-sm text-blue-100 mt-0.5 font-medium">
+                      <p className="text-xs lg:text-sm text-blue-100/90 mt-0.5 font-medium">
                         {t.customerService.subtitle}
                       </p>
                     </div>
@@ -2630,31 +2617,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </button>
                 </div>
 
-                <div className="group/search relative mt-4">
-                  <div className="absolute left-3 sm:left-3.5 top-1/2 -translate-y-1/2">
-                    <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-300 transition-colors duration-200 group-focus-within/search:text-white" />
-                  </div>
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder={t.customerService.searchPlaceholder}
-                    autoComplete="off"
-                    className="customer-service-search w-full pl-9 sm:pl-10 pr-[44px] bg-white/15 border border-white/20 rounded-lg text-white text-xs sm:text-sm placeholder-blue-200 focus:outline-none focus:border-white/90 focus:bg-blue-950/25 focus:shadow-[0_0_0_3px_rgba(125,211,252,0.28)] transition-[background-color,border-color,box-shadow] duration-200"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="customer-service-search-clear group absolute right-0 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-lg"
-                      aria-label="Clear search"
-                    >
-                      <span className="flex h-[32px] w-[32px] items-center justify-center rounded-lg transition-colors group-hover:bg-white/10">
-                        <X className="h-[18px] w-[18px] text-blue-200 transition-colors group-hover:text-white" />
-                      </span>
-                    </button>
-                  )}
-                </div>
-              </div>
+                              </div>
 
               <div
                    ref={conversationListRef}
@@ -2665,7 +2628,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                      scrollbarColor: 'rgba(148, 163, 184, 0.4) transparent',
                      background: 'linear-gradient(180deg, #f8fafc 0%, #f1f5f9 50%, #e8eef6 100%)'
                    }}>
-                {loadingConversations && filteredConversations.length === 0 ? (
+                {loadingConversations && conversations.length === 0 ? (
                   <div className="p-3 sm:p-4 space-y-2.5" aria-label={t.customerService.loadingMessages}>
                     {Array.from({ length: 4 }).map((_, index) => (
                       <div
@@ -2697,7 +2660,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                       {t.common.retry}
                     </button>
                   </div>
-                ) : filteredConversations.length === 0 ? (
+                ) : conversations.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-center px-6">
                     <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-slate-100 to-blue-50 flex items-center justify-center mb-4 shadow-inner">
                       <MessageCircle className="w-10 h-10 text-slate-300" />
@@ -2707,7 +2670,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </div>
                 ) : (
                   <div className="p-3 sm:p-4 space-y-2 sm:space-y-2.5">
-                    {filteredConversations.map((conv, index) => (
+                    {conversations.map((conv, index) => (
                       <button
                         key={conv.customer.id}
                         onClick={() => handleSelectConversation(conv.customer)}
@@ -2717,16 +2680,32 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         className={`w-full rounded-2xl transition-all duration-200 hover:translate-x-0.5 active:scale-[0.98] group relative overflow-hidden ${skipListAnimationRef.current ? '' : 'animate-[fadeInUp_0.4s_ease-out_both]'} ${
                           conv.customer.is_super
                             ? conv.unread_count > 0
-                              ? 'p-3.5 sm:p-4 bg-gradient-to-r from-amber-100 via-orange-50 to-amber-100 border-2 border-amber-400 hover:border-amber-500 hover:shadow-lg hover:shadow-amber-200/60 ring-1 ring-amber-300/50'
-                              : 'p-3.5 sm:p-4 bg-gradient-to-r from-amber-50 via-white to-orange-50 border border-amber-200/80 hover:border-amber-300 hover:shadow-lg hover:shadow-amber-100/50'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-br from-amber-100 via-orange-50 to-amber-100 border border-orange-400 ring-2 ring-orange-300/50 shadow-[0_8px_20px_-8px_rgba(249,115,22,0.55)] hover:shadow-[0_10px_24px_-8px_rgba(249,115,22,0.7)]'
+                              : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-br from-amber-50 via-white to-orange-50 border border-amber-300/80 hover:border-amber-400 hover:shadow-lg hover:shadow-amber-100/60'
                             : conv.unread_count > 0
-                              ? 'p-3.5 sm:p-4 bg-gradient-to-r from-blue-50 via-sky-50/80 to-blue-50 border-2 border-blue-400 hover:border-blue-500 hover:shadow-lg hover:shadow-blue-200/60 ring-1 ring-blue-300/50'
-                              : 'p-3.5 sm:p-4 bg-white border border-slate-200/80 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-50/50'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-br from-blue-50 via-white to-orange-50 border border-orange-300 ring-2 ring-orange-200/60 shadow-[0_8px_20px_-8px_rgba(249,115,22,0.45)] hover:shadow-[0_10px_24px_-8px_rgba(249,115,22,0.6)]'
+                              : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-br from-white to-slate-50 border border-slate-200/80 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-50/50'
                         }`}
                         style={skipListAnimationRef.current ? undefined : {
                           animationDelay: `${Math.min(index * 0.05, 0.4)}s`
                         }}
                       >
+                        {conv.customer.is_super ? (
+                          <>
+                            <span className={`pointer-events-none absolute inset-y-0 left-0 w-[5px] bg-gradient-to-b ${conv.unread_count > 0 ? 'from-red-500 via-orange-500 to-amber-400 animate-pulse' : 'from-amber-300 via-amber-500 to-orange-500'}`} aria-hidden="true"></span>
+                            <span className="pointer-events-none absolute -right-7 -top-7 h-24 w-24 rounded-full bg-gradient-to-br from-amber-300/45 to-orange-300/15" aria-hidden="true"></span>
+                            <span className="pointer-events-none absolute -bottom-9 right-12 h-20 w-20 rounded-full bg-amber-200/30" aria-hidden="true"></span>
+                            <span className="pointer-events-none absolute -right-8 top-1/2 h-[10px] w-[120px] -rotate-[28deg] rounded-full bg-white/60" aria-hidden="true"></span>
+                            <Award className="pointer-events-none absolute bottom-2 right-3 h-14 w-14 -rotate-12 text-amber-500/15" aria-hidden="true" />
+                          </>
+                        ) : (
+                          <>
+                            <span className={`pointer-events-none absolute inset-y-0 left-0 w-[5px] bg-gradient-to-b ${conv.unread_count > 0 ? 'from-red-500 via-orange-500 to-amber-400 animate-pulse' : 'from-sky-300 via-blue-400 to-indigo-500'}`} aria-hidden="true"></span>
+                            <span className={`pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full ${conv.unread_count > 0 ? 'bg-orange-200/50' : 'bg-blue-100/70'}`} aria-hidden="true"></span>
+                            <span className="pointer-events-none absolute -bottom-6 right-14 h-14 w-14 rounded-full bg-sky-100/70" aria-hidden="true"></span>
+                            <span className="pointer-events-none absolute right-[38%] top-2 h-1.5 w-1.5 rotate-45 rounded-[2px] bg-blue-300/40" aria-hidden="true"></span>
+                          </>
+                        )}
                         {conv.customer.is_super ? (
                           /* VIP card: 4-line vertical layout */
                           <div className="relative">
@@ -2760,7 +2739,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     {conv.customer.customer_name}
                                   </span>
                                   {conv.unread_count > 0 && (
-                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-extrabold leading-none tabular-nums rounded-full ring-2 ring-white shadow-md shadow-orange-400/60 animate-pulse flex-shrink-0">
+                                    <span className="relative flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-extrabold leading-none tabular-nums rounded-full ring-2 ring-white shadow-md shadow-orange-400/60 flex-shrink-0 after:absolute after:-inset-[3px] after:rounded-full after:border-2 after:border-orange-400/70 after:animate-ping">
                                       {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                     </span>
                                   )}
@@ -2793,7 +2772,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     const isPhoto = conv.last_message.includes('\ud83d\udcf7 Photo') || (!stripped && hasImg);
                                     if (isPhoto && !stripped) {
                                       return (
-                                        <p className="text-xs text-amber-700/60 truncate flex items-center gap-1">
+                                        <p className={`text-xs truncate flex items-center gap-1 ${conv.unread_count > 0 ? 'font-semibold text-amber-900' : 'text-amber-700/60'}`}>
                                           <Image className="w-3 h-3 flex-shrink-0" />
                                           <span>{t.customerService.photo}</span>
                                         </p>
@@ -2801,7 +2780,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     }
                                     const preview = stripped || '';
                                     return (
-                                      <p className="text-xs text-amber-700/60 truncate">
+                                      <p className={`text-xs truncate ${conv.unread_count > 0 ? 'font-semibold text-amber-900' : 'text-amber-700/60'}`}>
                                         {preview.length > 40 ? `${preview.substring(0, 40)}...` : preview}
                                       </p>
                                     );
@@ -2831,11 +2810,11 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
 
                             <div className="flex-1 min-w-0 text-left">
                               <div className="flex items-center justify-between gap-2 mb-0.5">
-                                <span className="text-sm font-semibold truncate text-gray-900">
+                                <span className={`text-sm truncate text-gray-900 ${conv.unread_count > 0 ? 'font-bold' : 'font-semibold'}`}>
                                   {conv.customer.customer_name}
                                 </span>
                                 {conv.unread_count > 0 && (
-                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-extrabold leading-none tabular-nums rounded-full ring-2 ring-white shadow-md shadow-orange-400/60 animate-pulse flex-shrink-0">
+                                  <span className="relative flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-extrabold leading-none tabular-nums rounded-full ring-2 ring-white shadow-md shadow-orange-400/60 flex-shrink-0 after:absolute after:-inset-[3px] after:rounded-full after:border-2 after:border-orange-400/70 after:animate-ping">
                                     {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                   </span>
                                 )}
@@ -2852,7 +2831,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                   const isPhoto = conv.last_message.includes('\ud83d\udcf7 Photo') || (!stripped && hasImg);
                                   if (isPhoto && !stripped) {
                                     return (
-                                      <p className="text-xs text-gray-600 truncate flex items-center gap-1">
+                                      <p className={`text-xs truncate flex items-center gap-1 ${conv.unread_count > 0 ? 'font-semibold text-slate-900' : 'text-gray-600'}`}>
                                         <Image className="w-3 h-3 flex-shrink-0" />
                                         <span>{t.customerService.photo}</span>
                                       </p>
@@ -2860,7 +2839,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                   }
                                   const preview = stripped || '';
                                   return (
-                                    <p className="text-xs text-gray-600 truncate">
+                                    <p className={`text-xs truncate ${conv.unread_count > 0 ? 'font-semibold text-slate-900' : 'text-gray-600'}`}>
                                       {preview.length > 35 ? `${preview.substring(0, 35)}...` : preview}
                                     </p>
                                   );
