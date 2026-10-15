@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Bell, Eye, AlertCircle, CheckCircle, Clock, Zap, Shield, Radio, ChevronRight, MailOpen, Sparkles, Gift, Wallet } from 'lucide-react';
+import { X, Bell, Eye, AlertCircle, CheckCircle, Clock, Zap, Shield, Radio, ChevronRight, Sparkles, Gift, Wallet } from 'lucide-react';
 import { formatSupabaseError, isSupabaseTransientError, supabase } from '../../lib/supabase';
 import { getEmployeeFinancialSession } from '../../lib/auth';
 import { Employee, MessageWithRecipient } from '../../types';
@@ -470,21 +470,32 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
             {loading || !panelReady ? (
               <PageLoader variant="panel" label={t.messages.loading} className="!min-h-[calc(100dvh-180px)] lg:!min-h-[calc(100dvh-220px)]" />
             ) : messages.length === 0 ? (
-              <div className="flex items-center justify-center py-20">
-                <div className="text-center px-6">
-                  <div className="relative mx-auto mb-6 w-28 h-28">
-                    <div className="absolute inset-0 bg-gradient-to-br from-blue-100 to-cyan-100 rounded-3xl rotate-3 border border-blue-200" />
-                    <div className="absolute inset-0 bg-white rounded-3xl -rotate-1 border border-blue-100 shadow-lg shadow-blue-50 flex items-center justify-center">
-                      <MailOpen className="w-12 h-12 text-blue-300" />
-                    </div>
-                    <div className="absolute -top-2 -right-2 w-9 h-9 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-200">
-                      <CheckCircle className="w-5 h-5 text-white" />
-                    </div>
-                    <div className="absolute -bottom-1 -left-1 w-6 h-6 bg-cyan-100 rounded-lg border border-cyan-200" />
-                  </div>
-                  <p className="text-slate-800 text-lg font-bold mb-1.5">{t.messages.noMessages}</p>
-                  <p className="text-slate-400 text-sm">{t.messages.emptyDesc}</p>
+              <div className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-8 text-center">
+                <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+                  <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-blue-200/35"></div>
+                  <div className="absolute -bottom-20 -left-16 h-64 w-64 rounded-full bg-sky-200/35"></div>
+                  <div className="absolute left-7 top-[26%] h-14 w-14 rotate-12 rounded-2xl bg-indigo-200/30"></div>
+                  <div className="absolute bottom-[24%] right-9 h-10 w-10 -rotate-6 rounded-xl bg-blue-300/25"></div>
+                  <div className="absolute -left-10 top-1/2 h-[18px] w-[190px] -rotate-[24deg] rounded-full bg-white/50"></div>
                 </div>
+                <div className="relative z-10 mb-5 h-[72px] w-[104px]" aria-hidden="true">
+                  <div className="absolute left-0 top-0 flex h-[40px] w-[76px] items-center gap-[7px] rounded-2xl bg-blue-200/90 px-2.5">
+                    <span className="h-[18px] w-[18px] flex-shrink-0 rounded-full bg-white/80"></span>
+                    <span className="flex flex-1 flex-col gap-[5px]">
+                      <span className="h-[3px] w-full rounded-full bg-white/80"></span>
+                      <span className="h-[3px] w-2/3 rounded-full bg-white/80"></span>
+                    </span>
+                  </div>
+                  <div className="absolute bottom-0 right-0 flex h-[40px] w-[76px] items-center gap-[7px] rounded-2xl bg-blue-500 px-2.5 shadow-sm shadow-blue-500/20">
+                    <span className="h-[18px] w-[18px] flex-shrink-0 rounded-full bg-white/80"></span>
+                    <span className="flex flex-1 flex-col gap-[5px]">
+                      <span className="h-[3px] w-full rounded-full bg-white/80"></span>
+                      <span className="h-[3px] w-1/2 rounded-full bg-white/80"></span>
+                    </span>
+                  </div>
+                </div>
+                <p className="relative z-10 text-[14px] font-semibold leading-6 text-blue-900">{t.messages.noMessages}</p>
+                <p className="relative z-10 mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.messages.emptyDesc}</p>
               </div>
             ) : (
               <div className="message-list-fade flex flex-col gap-4">
