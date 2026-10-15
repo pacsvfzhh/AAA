@@ -3130,7 +3130,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                           </div>
                         </div>
                       ) : (
-                        <div className={`order-details-scrollbar text-gray-800 leading-[1.6] font-medium whitespace-pre-wrap break-words overflow-y-auto pr-1.5 custom-scrollbar ${currentOrder.status === 'accepted' ? 'emp-detail-text min-h-0 flex-1 text-[13px]' : 'max-h-[140px] text-xs'}`}>
+                        <div className={`order-details-scrollbar text-gray-800 leading-[1.6] font-medium whitespace-pre-wrap break-words overflow-y-auto pr-1.5 custom-scrollbar ${currentOrder.status === 'accepted' ? 'emp-detail-text min-h-0 flex-1 text-[14px]' : 'max-h-[140px] text-xs'}`}>
                           {currentOrder.dispatch_orders.order_content}
                         </div>
                       )}
