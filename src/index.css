@@ -1694,13 +1694,9 @@ body {
   .confirm-band h2 { font-size: 14px !important; }
   .confirm-band p { font-size: 11px !important; margin-top: 0 !important; }
 
-  .confirm-amount { padding: 10px 12px !important; }
-  .confirm-amount .text-\[28px\] { font-size: 24px !important; }
-  .confirm-amount > div:first-of-type > div { margin-top: 4px !important; }
-  .confirm-amount ol { margin: 8px 0 !important; }
-  .confirm-amount ol li { gap: 3px !important; }
-  .confirm-amount ol li > span:last-child { font-size: 9px !important; }
-  .confirm-amount > div:last-child { margin-top: 0 !important; padding-top: 6px !important; font-size: 9px !important; }
+  .confirm-amount { padding: 8px 12px 10px !important; }
+  .confirm-amount .text-\[30px\] { font-size: 28px !important; }
+  .confirm-amount > div:first-of-type > div { margin-top: 3px !important; }
 
   .confirm-doc-head { padding: 7px 10px 7px 12px !important; gap: 8px !important; }
   .confirm-doc-head > div:first-of-type { gap: 3px !important; }

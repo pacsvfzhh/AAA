@@ -937,9 +937,9 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                 </div>
               </section>
 
-              <aside className="confirm-amount relative order-first flex flex-col justify-between overflow-hidden bg-gradient-to-br from-[#12356d] via-[#1b4b8f] to-blue-600 p-4 text-white sm:px-7 sm:py-5 lg:order-last lg:px-6">
+              <aside className="confirm-amount relative order-first flex flex-col justify-between overflow-hidden bg-gradient-to-br from-[#12356d] via-[#1b4b8f] to-blue-600 px-4 py-3 text-white sm:px-7 sm:py-4 lg:order-last lg:justify-center lg:px-6 lg:py-5">
                 <span className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rotate-[18deg] rounded-[30%] bg-white/10" aria-hidden="true" />
-                <svg className="pointer-events-none absolute -bottom-1 right-3 h-14 w-24 text-white/15 sm:h-20 sm:w-36" viewBox="0 0 120 64" fill="none" aria-hidden="true">
+                <svg className="pointer-events-none absolute -bottom-1 right-3 h-12 w-20 text-white/15 sm:h-14 sm:w-24 lg:h-20 lg:w-36" viewBox="0 0 120 64" fill="none" aria-hidden="true">
                   <g stroke="currentColor" strokeWidth="1.5">
                     <rect x="4" y="34" width="54" height="26" rx="2" />
                     <rect x="60" y="34" width="54" height="26" rx="2" />
@@ -948,30 +948,19 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                   </g>
                 </svg>
                 <div className="relative">
-                  <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-100/80 sm:text-[11px]">
-                    <span className="rounded bg-white/15 px-1 py-px font-mono text-[9px] font-bold tracking-normal text-white">05</span>
+                  <p className="flex items-center gap-2 text-sm font-semibold tracking-wide text-blue-50 sm:text-base">
+                    <span className="rounded bg-white/15 px-1.5 py-px font-mono text-[10px] font-bold tracking-normal text-white">05</span>
                     {t.orderSubmission.totalAmount}
                   </p>
-                  <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                    <span className="text-[28px] font-semibold leading-none tracking-tight tabular-nums sm:text-4xl">
+                  <div className="mt-1.5 flex flex-nowrap items-baseline gap-x-2 lg:mt-3">
+                    <span className="text-[30px] font-semibold leading-none tracking-tight tabular-nums sm:text-4xl">
                       {parseFloat(formData.productValue).toFixed(2)}
                     </span>
-                    <span className="rounded-md bg-white/15 px-2 py-0.5 text-xs font-semibold tracking-wider ring-1 ring-white/20">{currencyUnit}</span>
+                    <span className="text-base font-semibold leading-none tracking-wider text-blue-100 sm:text-xl">{currencyUnit}</span>
                   </div>
-                  <p className="mt-2 hidden truncate text-xs text-blue-100/80 sm:block">{selectedProductType?.name}</p>
+                  <p className="mt-2 hidden truncate text-xs text-blue-100/80 lg:block">{selectedProductType?.name}</p>
                 </div>
-                <ol className="relative my-3 grid grid-cols-4 gap-1 sm:my-5">
-                  {[t.orderSubmission.encrypt, t.orderSubmission.validate, t.orderSubmission.broadcast, t.orderSubmission.confirm].map((label, index) => (
-                    <li key={label} className="relative flex min-w-0 flex-col items-center gap-1.5 text-center">
-                      {index > 0 && <span className="absolute left-[calc(-50%+10px)] right-[calc(50%+10px)] top-[7px] h-px bg-white/25" aria-hidden="true" />}
-                      <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full border border-white/50 bg-[#163f7c]" aria-hidden="true">
-                        <span className="h-1 w-1 rounded-full bg-cyan-300" />
-                      </span>
-                      <span className="w-full truncate text-[10px] font-medium text-blue-100/85 sm:text-[11px]">{label}</span>
-                    </li>
-                  ))}
-                </ol>
-                <div className="relative mt-3 flex items-center gap-3 border-t border-white/15 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-100/90 sm:mt-5 sm:pt-3 sm:text-[11px]">
+                <div className="relative mt-3 hidden items-center gap-3 border-t border-white/15 pt-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-100/90 lg:flex">
                   <span className="inline-flex items-center gap-1.5">
                     <Lock className="h-3 w-3" strokeWidth={2.5} aria-hidden="true" />
                     {t.orderSubmission.encrypted}
