@@ -2788,7 +2788,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       )}
 
       {/* Work Control Panel - Premium Blue/White Design */}
-      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(480px,max(340px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_var(--dispatch-reserve,24px))))]' : 'h-[min(480px,max(340px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_var(--dispatch-reserve,24px))))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
+      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]' : 'h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
         currentOrder?.status === 'pending'
           ? 'bg-[linear-gradient(125deg,#164c9b_0%,#2370bd_55%,#167da9_100%)] border-2 border-blue-400/50 shadow-[0_22px_60px_-16px_rgba(12,43,112,0.32)]'
           : `border-2 border-blue-200/90 shadow-[0_16px_48px_-18px_rgba(37,99,235,0.2),0_6px_20px_-10px_rgba(37,99,235,0.12)] transition-[border-color,box-shadow] duration-700 ${
@@ -2798,7 +2798,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               ? 'bg-gradient-to-br from-white via-blue-50/80 to-white'
               : 'min-h-[420px] short:max-md:min-h-0 md:min-h-0 bg-white'
           }`
-      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { [currentOrder?.status === 'pending' ? 'minHeight' : 'height']: `${idlePanelHeight}px` } : undefined}>
+      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { [currentOrder?.status === 'pending' ? 'minHeight' : 'height']: `min(${idlePanelHeight}px, max(300px, calc(100dvh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - 24px)))` } : undefined}>
         <div ref={acceptGhostHostRef} data-accept-ghost-host className="pointer-events-none absolute -inset-[2px] z-40 overflow-hidden rounded-2xl md:rounded-3xl" aria-hidden="true" />
         {(acceptRevealPhase === 'cover' || acceptRevealPhase === 'out') && <span role="status" className="sr-only">{t.dispatch.orderAccepted}</span>}
         {panelVeil && (
@@ -2888,10 +2888,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           <SmoothHeight
             animate={panelResizing && !(!currentOrder && viewportWidth < 768)}
             holdMax={!currentOrder && viewportWidth < 768}
-            minHeightFloor="min(480px, max(340px, calc(100dvh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - var(--dispatch-reserve, 24px))))"
             duration={1000}
-            outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${!currentOrder ? 'max-md:flex max-md:flex-col' : ''}`}
-            innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : !currentOrder ? 'max-md:flex max-md:flex-1 max-md:flex-col' : ''}
+            outerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : `-mx-5 -mb-5 px-5 pb-5 md:-mx-10 md:-mb-10 md:px-10 md:pb-10 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''}`}
+            innerClassName={currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : waitingPanelActive ? 'max-md:flex max-md:flex-1 max-md:flex-col' : ''}
           >
           <div className={`overflow-hidden max-md:shrink-0 ${
             currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'hidden' : ''
@@ -2928,7 +2927,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
             </div>
           ) : (
             /* DESKTOP & MOBILE: Blue/White premium layout */
-            <div className={`flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 ${waitingPanelActive ? 'mb-0 border-b border-white/65 pb-[calc(1.25rem-1px)] short:max-md:pb-[calc(0.75rem-1px)] md:mb-6 md:pb-6' : 'mb-5 short:max-md:mb-2 md:mb-10'}`}>
+            <div className={`flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 ${waitingPanelActive ? 'mb-0 border-b border-white/65 pb-[calc(1.25rem-1px)] short:max-md:pb-[calc(0.75rem-1px)] md:mb-6 md:pb-6' : 'mb-5 short:max-md:mb-3 md:mb-10'}`}>
               {/* Mobile: Full-width status banner */}
               <div className="w-full md:w-auto">
                 <div className="flex items-center gap-3 md:gap-4">
@@ -3022,11 +3021,11 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                 </>
               )}
 
-              <div className={`relative z-10 ${currentOrder.status === 'pending' ? 'flex min-h-0 flex-1 flex-col p-5 short:max-md:p-3 md:p-6 lg:p-10' : 'p-3 md:p-8'} ${currentOrder.status === 'accepted' ? `flex min-h-0 flex-1 flex-col ${acceptRevealPhase === 'cover' ? 'opacity-0' : acceptRevealPhase === 'out' ? 'dispatch-accept-content-in' : ''}` : ''}`}>
+              <div className={`relative z-10 ${currentOrder.status === 'pending' ? 'flex min-h-0 flex-1 flex-col p-5 short:max-md:p-4 md:p-6 lg:p-10' : 'p-3 md:p-8'} ${currentOrder.status === 'accepted' ? `flex min-h-0 flex-1 flex-col ${acceptRevealPhase === 'cover' ? 'opacity-0' : acceptRevealPhase === 'out' ? 'dispatch-accept-content-in' : ''}` : ''}`}>
                 {/* Premium Header with Blockchain Aesthetic */}
                 <div className={currentOrder.status === 'accepted'
                   ? `mb-3 grid grid-cols-1 gap-4 md:mb-6 lg:gap-6 ${isTablet ? '' : 'lg:grid-cols-7'}`
-                  : `flex flex-col md:flex-row items-start md:items-center justify-between mb-3 space-y-2 md:space-y-0 ${currentOrder.status === 'pending' ? 'border-b border-white/20 pb-4 short:max-md:mb-2 short:max-md:pb-2 md:mb-4 md:pb-4 lg:mb-6 lg:pb-6' : 'md:mb-6'}`}>
+                  : `flex flex-col md:flex-row items-start md:items-center justify-between mb-3 space-y-2 md:space-y-0 ${currentOrder.status === 'pending' ? 'border-b border-white/20 pb-4 short:max-md:pb-3 md:mb-4 md:pb-4 lg:mb-6 lg:pb-6' : 'md:mb-6'}`}>
                   <div className={`flex items-center space-x-2 md:space-x-4 ${currentOrder.status === 'accepted' ? `min-w-0 ${isTablet ? '' : 'lg:col-span-5'}` : ''}`}>
                     {/* Enhanced Icon Container */}
                     <div className="relative">
@@ -3061,7 +3060,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     <div className={currentOrder.status === 'accepted' ? 'min-w-0 flex-1' : undefined}>
                       <div className={currentOrder.status === 'accepted' ? 'flex flex-wrap items-center gap-x-2 gap-y-1 md:gap-x-3' : 'flex items-center space-x-2 md:space-x-3'}>
                         <h3 className={`text-base md:text-3xl font-black tracking-tight ${
-                          currentOrder.status === 'pending' ? 'text-white' : hasTimeout ? 'text-rose-100 drop-shadow-lg' : 'text-[#12356d]'
+                          currentOrder.status === 'pending' ? 'text-white' : hasTimeout ? 'text-rose-100 drop-shadow-lg' : 'text-gray-800'
                         }`}>
                           {currentOrder.status === 'pending' ? t.dispatch.newOrderHeading : hasTimeout ? t.dispatch.timeout : t.dispatch.inProgress}
                         </h3>
@@ -3073,9 +3072,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                         )}
                       </div>
                       <div className={`text-[11px] md:text-sm font-semibold mt-1 md:mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 ${
-                        currentOrder.status === 'pending' ? 'text-blue-100' : hasTimeout ? 'text-rose-200' : 'text-blue-600'
+                        currentOrder.status === 'pending' ? 'text-blue-100' : hasTimeout ? 'text-rose-200' : 'text-gray-500'
                       }`}>
-                        <span className="flex items-center gap-2">
+                        <span className={`flex items-center gap-2 ${currentOrder.status === 'accepted' ? 'opacity-75' : ''}`}>
                           <Clock className="w-3 h-3 md:w-4 md:h-4" />
                           <span>{currentOrder.status === 'pending' ? t.dispatch.acceptWithin : hasTimeout ? t.dispatch.completeNow : t.dispatch.completeTask}</span>
                         </span>
@@ -3090,7 +3089,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     </div>
                   </div>
                   {currentOrder.status === 'pending' ? (
-                    <span className="rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 py-1 text-[11px] font-bold text-white shadow-sm shadow-orange-950/20 short:max-md:hidden md:px-4 md:py-1.5 md:text-xs" data-accept-status>{t.dispatch.statusPending}</span>
+                    <span className="rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-2.5 py-1 text-[11px] font-bold text-white shadow-sm shadow-orange-950/20 md:px-4 md:py-1.5 md:text-xs" data-accept-status>{t.dispatch.statusPending}</span>
                   ) : currentOrder.status !== 'accepted' ? getStatusBadge(currentOrder.status) : null}
                 </div>
 
@@ -3105,7 +3104,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                 {/* Order Content - Compact Blockchain Design */}
                 {/* MOBILE: Full Width Order Details First */}
                 <div className={`md:hidden mb-2.5 ${currentOrder.status === 'pending' ? 'flex flex-1 flex-col justify-center' : currentOrder.status === 'accepted' ? '-mx-3 flex min-h-0 flex-1 flex-col' : ''}`}>
-                  <div className={`relative ${currentOrder.status === 'pending' ? 'py-3 short:max-md:py-1' : `overflow-hidden border border-gray-200 bg-white/90 p-2.5 shadow-sm backdrop-blur-md ${currentOrder.status === 'accepted' ? 'rounded-none border-x-0 px-3.5' : 'rounded-lg'}`} ${currentOrder.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
+                  <div className={`relative ${currentOrder.status === 'pending' ? 'py-3' : `overflow-hidden border border-gray-200 bg-white/90 p-2.5 shadow-sm backdrop-blur-md ${currentOrder.status === 'accepted' ? 'rounded-none border-x-0 px-3.5' : 'rounded-lg'}`} ${currentOrder.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
                     {currentOrder.status === 'accepted' && !hasTimeout && (
                       <span className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-blue-400/55 via-sky-300/70 to-blue-400/55" aria-hidden="true" />
                     )}
@@ -3114,7 +3113,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                         <div className="flex items-center space-x-1.5">
                           <div className={`w-1 h-1 rounded-full animate-pulse ${currentOrder.status === 'pending' ? 'bg-cyan-300' : 'bg-blue-500'}`}></div>
                           <FileText className={`w-3 h-3 ${currentOrder.status === 'pending' ? 'text-cyan-200' : 'text-blue-500'}`} />
-                          <h4 className={`text-[11px] font-bold uppercase tracking-wide ${currentOrder.status === 'pending' ? 'text-blue-50' : 'text-blue-800'}`}>{t.dispatch.orderDetails}</h4>
+                          <h4 className={`text-[11px] font-bold uppercase tracking-wide ${currentOrder.status === 'pending' ? 'text-blue-50' : 'text-gray-700'}`}>{t.dispatch.orderDetails}</h4>
                         </div>
                         {currentOrder.status === 'pending' && (
                           <div className="rounded border border-amber-200/30 bg-amber-300/15 px-1.5 py-0.5">
@@ -3130,7 +3129,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                           <div className="pointer-events-none absolute left-1/2 top-1/2 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan-400/20 blur-3xl" />
                           <OrderSparkles count={12} />
                           <div className="relative">
-                            <div className="relative mb-3 short:max-md:mb-2 inline-flex items-center justify-center" data-accept-icon>
+                            <div className="relative mb-3 inline-flex items-center justify-center" data-accept-icon>
                               <OrderIcon3D size="sm" />
                             </div>
                             <p className="mb-1 text-base font-bold tracking-tight text-white" data-accept-title>{t.dispatch.newOrderAvailable}</p>
@@ -3171,7 +3170,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                               <div className={`relative w-2 h-2 rounded-full ${currentOrder.status === 'pending' ? 'bg-cyan-300' : 'bg-blue-500'}`}></div>
                             </div>
                             <FileText className={`w-5 h-5 ${currentOrder.status === 'pending' ? 'text-cyan-200' : 'text-blue-500'}`} />
-                            <h4 className={`text-sm font-bold uppercase tracking-widest ${currentOrder.status === 'pending' ? 'text-blue-50' : 'text-blue-800'}`}>{t.dispatch.orderDetails}</h4>
+                            <h4 className={`text-sm font-bold uppercase tracking-widest ${currentOrder.status === 'pending' ? 'text-blue-50' : 'text-gray-700'}`}>{t.dispatch.orderDetails}</h4>
                           </div>
                           {currentOrder.status === 'accepted' && (
                             <div className="flex h-6 items-stretch gap-[2px] opacity-60" aria-hidden="true">
@@ -3391,7 +3390,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               </div>
             </div>
           ) : (
-            <div className="max-md:grid max-md:flex-1">
+            <div className={`max-md:grid ${waitingPanelActive ? 'max-md:flex-1' : ''}`}>
             {(waitingPanelActive || !session.isWorking || (isTransitioning && transitionType === 'start')) && (
               <div
                 className={`max-md:col-start-1 max-md:row-start-1 ${waitingPanelActive ? 'max-md:flex max-md:flex-col' : ''} ${waitingPanelActive ? (waitingEnterAnim ? 'dispatch-waiting-enter' : stopExiting ? 'dispatch-waiting-exit' : '') : 'invisible dispatch-parked md:hidden'}`}
@@ -3734,9 +3733,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
             >
               {/* Mobile Start View - Enriched */}
                 {/* The cell is as tall as the parked waiting view; shorter languages centre the visual and keep Start at the bottom */}
-                <div className={`flex flex-1 flex-col space-y-3 short:space-y-2 ${startEnterAnim ? 'dispatch-start-enter' : ''} ${isTransitioning && transitionType === 'start' ? 'dispatch-standby-leaving' : ''}`}>
+                <div className={`flex flex-1 flex-col space-y-3 ${startEnterAnim ? 'dispatch-start-enter' : ''} ${isTransitioning && transitionType === 'start' ? 'dispatch-standby-leaving' : ''}`}>
                   {/* Standby visual area */}
-                  <div className="relative -mx-4 flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-6 short:justify-start short:py-0">
+                  <div className="relative -mx-4 flex flex-1 flex-col items-center justify-center overflow-hidden px-4 py-6 short:py-2">
                     {/* Background gradient */}
                     <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 90% 52% at 50% 45%, rgba(239,246,255,0.9) 0%, rgba(219,234,254,0.6) 30%, rgba(191,219,254,0.3) 55%, transparent 80%)' }}></div>
 
@@ -3866,14 +3865,14 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                       </div>
 
                       {/* Work description text */}
-                      <div className="dispatch-standby-item text-center px-4 mb-4 short:mb-2" style={{ '--leave-order': 1 } as CSSProperties}>
+                      <div className="dispatch-standby-item text-center px-4 mb-4" style={{ '--leave-order': 1 } as CSSProperties}>
                         <p className="text-xs text-slate-500 leading-relaxed text-balance">
                           {t.dispatch.sessionDesc}
                         </p>
                       </div>
 
                       {/* Info cards */}
-                      <div className="dispatch-standby-item grid grid-cols-2 gap-2 px-1" style={{ '--leave-order': 0 } as CSSProperties}>
+                      <div className="dispatch-standby-item grid grid-cols-2 gap-2 px-1 short:hidden" style={{ '--leave-order': 0 } as CSSProperties}>
                         <div className="bg-white/80 border border-blue-100 rounded-lg px-2.5 py-2 shadow-sm">
                           <div className="flex items-center gap-1.5 mb-1">
                             <div className="w-4 h-4 rounded-md bg-blue-50 flex items-center justify-center">

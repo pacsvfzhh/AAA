@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-16 · In Progress 面板：副标题加一点透明度
+- 需求：「完成任务」这行文字（带时钟图标）要有一点透明度。
+- 改动：接单后的 In Progress 面板里，这行文字和时钟图标的不透明度设为 75%；右侧任务编号标签不变。New Order 面板里的同一行不变。
+- 文件：`src/components/employee/OrderDispatch.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 通过；未运行 ESLint，也未在浏览器里查看实际效果。
+
 ## 2026-10-16 · In Progress 面板文字颜色匹配网站主题
 - 需求：In Progress 面板里的「In Progress」标题、「Complete task」副标题和「ORDER DETAILS」文字，颜色要和网站的蓝色主题匹配。
 - 改动：「In Progress」标题从灰黑色改为网站顶栏用的深蓝 `#12356d`；「Complete task」从灰色改为蓝色（blue-600）；「ORDER DETAILS」（手机和桌面）从灰色改为深蓝（blue-800）。超时（红色）状态和 New Order（白色）状态的颜色不变。
