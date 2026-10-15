@@ -191,11 +191,19 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     }
   };
 
+  const getUnreadLine = (priority: string, isReward: boolean) => {
+    const [from, to] = isReward ? ['#f59e0b', '#facc15']
+      : priority === 'urgent' ? ['#f43f5e', '#fb7185']
+      : priority === 'high' ? ['#10b981', '#34d399']
+      : ['#2563eb', '#60a5fa'];
+    return `linear-gradient(135deg, ${from} 0%, ${to} 45%, ${to}00 85%)`;
+  };
+
   const getCardStyle = (priority: string, isUnread: boolean, isReward: boolean) => {
     if (isReward) {
       return isUnread
         ? {
-            card: 'bg-gradient-to-br from-amber-100 via-yellow-50 to-orange-50 ring-2 ring-amber-300 shadow-xl shadow-amber-200/60',
+            card: 'bg-gradient-to-r from-amber-200 via-amber-100 to-orange-50 ring-2 ring-amber-300 shadow-xl shadow-amber-200/60',
             iconBg: 'bg-gradient-to-br from-amber-400 via-yellow-400 to-orange-400',
             iconText: 'text-amber-950',
             accent: 'from-amber-500 via-yellow-400 to-orange-400',
@@ -216,7 +224,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     if (isUnread) {
       if (priority === 'urgent') {
         return {
-          card: 'bg-gradient-to-br from-rose-100 via-rose-50 to-orange-50 ring-2 ring-rose-300 shadow-xl shadow-rose-300/70',
+          card: 'bg-gradient-to-r from-rose-200 via-rose-100 to-orange-50 ring-2 ring-rose-300 shadow-xl shadow-rose-300/70',
           iconBg: 'bg-gradient-to-br from-rose-500 to-orange-500',
           iconText: 'text-white',
           accent: 'from-rose-500 via-red-400 to-orange-400',
@@ -227,7 +235,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
       }
       if (priority === 'high') {
         return {
-          card: 'bg-gradient-to-br from-emerald-100 via-emerald-50 to-green-50 ring-2 ring-emerald-300 shadow-xl shadow-emerald-300/70',
+          card: 'bg-gradient-to-r from-emerald-200 via-emerald-100 to-green-50 ring-2 ring-emerald-300 shadow-xl shadow-emerald-300/70',
           iconBg: 'bg-gradient-to-br from-emerald-500 to-green-500',
           iconText: 'text-white',
           accent: 'from-emerald-500 via-green-400 to-teal-300',
@@ -237,7 +245,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
         };
       }
       return {
-        card: 'bg-gradient-to-br from-blue-100 via-blue-50 to-sky-50 ring-2 ring-blue-300 shadow-xl shadow-blue-300/70',
+        card: 'bg-gradient-to-r from-blue-200 via-blue-100 to-sky-50 ring-2 ring-blue-300 shadow-xl shadow-blue-300/70',
         iconBg: 'bg-gradient-to-br from-blue-500 to-sky-500',
         iconText: 'text-white',
         accent: 'from-blue-500 via-sky-400 to-cyan-400',
@@ -446,8 +454,22 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   >
                     {/* Card */}
                     <div className={`relative rounded-2xl overflow-hidden border msg-force-transition hover:-translate-y-0.5 hover:shadow-xl ${isUnread ? 'border-2 border-white shadow-[0_10px_30px_rgba(37,99,235,0.28)] ring-offset-2 ring-offset-[#f0f5ff] brightness-[1.03]' : 'border-slate-200/85 opacity-[0.86] saturate-[0.8] hover:opacity-100 hover:saturate-100'} ${style.card}`}>
-                      {/* Left accent bar */}
-                      <div className={`absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b ${style.accent} rounded-l-2xl`} />
+                      {/* Accent: unread cards get a left + top L-shaped gradient line, read cards a thin left bar */}
+                      {isUnread ? (
+                        <div
+                          className="pointer-events-none absolute inset-0 rounded-[14px]"
+                          style={{
+                            padding: '3px 0 0 5px',
+                            background: getUnreadLine(msg.messages.priority, isReward),
+                            WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+                            WebkitMaskComposite: 'xor',
+                            mask: 'linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0)',
+                          }}
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <div className={`absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b ${style.accent} rounded-l-2xl`} />
+                      )}
 
                       {/* Decorative pattern blocks */}
                       <div className="absolute top-0 right-0 w-32 h-full overflow-hidden pointer-events-none opacity-[0.07]">
@@ -455,17 +477,6 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                         <div className={`absolute bottom-2 right-8 w-10 h-10 border-2 ${style.patternColor} rounded-lg -rotate-6`} />
                         <div className={`absolute top-1/2 right-2 w-6 h-6 border-2 ${style.patternColor} rounded-full`} />
                       </div>
-
-                      {/* Color accent corner block for unread */}
-                      {isUnread && (
-                        <>
-                          <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-br from-white/25 via-transparent to-transparent" />
-                          <div className={`pointer-events-none absolute inset-0 z-0 bg-gradient-to-br ${style.accent} opacity-[0.24]`} />
-                          <div className="absolute top-0 right-0 z-0 h-20 w-20 overflow-hidden pointer-events-none">
-                            <div className={`absolute -top-10 -right-10 h-20 w-20 bg-gradient-to-bl ${style.accent} opacity-[0.28] rounded-full`} />
-                          </div>
-                        </>
-                      )}
 
                       <div className="relative z-10 py-3 pr-4 pl-5 lg:py-3.5 lg:pr-5 lg:pl-6">
                         <div className="flex items-start gap-3">
