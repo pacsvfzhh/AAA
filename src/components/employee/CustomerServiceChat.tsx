@@ -2630,9 +2630,9 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </button>
                 </div>
 
-                <div className="relative mt-4">
+                <div className="group/search relative mt-4">
                   <div className="absolute left-3 sm:left-3.5 top-1/2 -translate-y-1/2">
-                    <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-300" />
+                    <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-300 transition-colors duration-200 group-focus-within/search:text-white" />
                   </div>
                   <input
                     type="text"
@@ -2640,7 +2640,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder={t.customerService.searchPlaceholder}
                     autoComplete="off"
-                    className="customer-service-search w-full pl-9 sm:pl-10 pr-[44px] bg-white/15 border border-white/20 rounded-lg text-white text-xs sm:text-sm placeholder-blue-200 focus:outline-none focus:ring-2 focus:ring-white/30 focus:border-white/40 focus:bg-white/20 transition-all"
+                    className="customer-service-search w-full pl-9 sm:pl-10 pr-[44px] bg-white/15 border border-white/20 rounded-lg text-white text-xs sm:text-sm placeholder-blue-200 focus:outline-none focus:border-white/90 focus:bg-blue-950/25 focus:shadow-[0_0_0_3px_rgba(125,211,252,0.28)] transition-[background-color,border-color,box-shadow] duration-200"
                   />
                   {searchQuery && (
                     <button
