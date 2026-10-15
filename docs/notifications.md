@@ -3,6 +3,7 @@
 ## 后台发送 `MessageManagement.tsx`（导航「通知」）
 - 收件人面板：二级只看到自己的员工；可按启用/已验证、姓名或员工 ID 筛选；多个标签之间是 **OR** 条件；已勾选的员工排到列表最前面；改变筛选不会取消已勾选。
 - 发送：`send_admin_message_with_delivery`，参数含 `delivery_mode`（`realtime_only` / `login_only` / `realtime_with_login_fallback`）、优先级、可选奖金和 `operation_id`。内容相同的请求复用同一个操作编号，避免重复发奖。
+- 优先级配色（2026-10-15，员工端与管理端统一）：普通 = 蓝色，重要 = 绿色，紧急 = 红色（沿用），绩效奖励 = 琥珀色（沿用）。员工端在 `MessageCenter.tsx`（消息卡片、优先级标签）与 `EmployeeDashboard.tsx`（铃铛弹出卡片的优先级胶囊）；管理端在 `MessageManagement.tsx` 的优先级选择按钮、消息列表标签和消息详情里的优先级卡片。
 - 奖金：`send_admin_message_secure` 在同一事务内为每位收件人调用 `private.credit_performance_bonus`：写一笔 `wallet_transactions(type='performance_bonus')`，`wallets.available_balance` 与 `users.total_income` 同步增加，并由触发器记入 `wallet_ledger_entries`、排入钱包对账；任何一步失败整笔回滚。总额 = 金额 × 收件人数。前端金额没有上限、不四舍五入（确认框会显示人均与总额）。永久删除员工时，其奖金流水与自动执行记录一并清除。
 - 范本：`message_templates`（按 `admin_id` 隔离），可载入、套用、新增、修改、删除。
 - 已读显示：汇总 `message_recipients.is_read` / `read_at`。筛选「已讀」= 有收件人且全部已读；「未讀」包含部分已读。

@@ -191,7 +191,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     }
   };
 
-  const getCardStyle = (priority: string, messageType: string, isUnread: boolean, index: number, isReward: boolean) => {
+  const getCardStyle = (priority: string, isUnread: boolean, isReward: boolean) => {
     if (isReward) {
       return isUnread
         ? {
@@ -227,71 +227,47 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
       }
       if (priority === 'high') {
         return {
-          card: 'bg-gradient-to-br from-amber-100 via-amber-50 to-yellow-50 ring-2 ring-amber-300 shadow-xl shadow-amber-300/70',
-          iconBg: 'bg-gradient-to-br from-amber-500 to-yellow-500',
+          card: 'bg-gradient-to-br from-emerald-100 via-emerald-50 to-green-50 ring-2 ring-emerald-300 shadow-xl shadow-emerald-300/70',
+          iconBg: 'bg-gradient-to-br from-emerald-500 to-green-500',
           iconText: 'text-white',
-          accent: 'from-amber-500 via-yellow-400 to-orange-300',
-          patternColor: 'border-amber-300',
-          dotColor: 'bg-amber-500',
-          titleColor: 'text-amber-900',
+          accent: 'from-emerald-500 via-green-400 to-teal-300',
+          patternColor: 'border-emerald-300',
+          dotColor: 'bg-emerald-500',
+          titleColor: 'text-emerald-900',
         };
       }
-      if (messageType === 'realtime') {
-        return {
-          card: 'bg-gradient-to-br from-blue-100 via-blue-50 to-sky-50 ring-2 ring-blue-300 shadow-xl shadow-blue-300/70',
-          iconBg: 'bg-gradient-to-br from-blue-500 to-sky-500',
-          iconText: 'text-white',
-          accent: 'from-blue-500 via-sky-400 to-cyan-400',
-          patternColor: 'border-blue-300',
-          dotColor: 'bg-blue-500',
-          titleColor: 'text-blue-900',
-        };
-      }
-      // Login notifications use a distinct cyan treatment.
-      const variants = [
-        {
-          card: 'bg-gradient-to-br from-cyan-100 via-cyan-50 to-sky-50 ring-2 ring-cyan-300 shadow-xl shadow-cyan-300/70',
-          iconBg: 'bg-gradient-to-br from-cyan-500 to-sky-500',
-          iconText: 'text-white',
-          accent: 'from-cyan-500 via-sky-400 to-blue-400',
-          patternColor: 'border-cyan-300',
-          dotColor: 'bg-cyan-500',
-          titleColor: 'text-cyan-950',
-        },
-        {
-          card: 'bg-gradient-to-br from-cyan-100 via-sky-50 to-blue-50 ring-2 ring-cyan-300 shadow-xl shadow-cyan-300/70',
-          iconBg: 'bg-gradient-to-br from-cyan-600 to-blue-500',
-          iconText: 'text-white',
-          accent: 'from-cyan-600 via-sky-400 to-blue-400',
-          patternColor: 'border-cyan-300',
-          dotColor: 'bg-cyan-600',
-          titleColor: 'text-cyan-950',
-        },
-      ];
-      return variants[index % 2];
+      return {
+        card: 'bg-gradient-to-br from-blue-100 via-blue-50 to-sky-50 ring-2 ring-blue-300 shadow-xl shadow-blue-300/70',
+        iconBg: 'bg-gradient-to-br from-blue-500 to-sky-500',
+        iconText: 'text-white',
+        accent: 'from-blue-500 via-sky-400 to-cyan-400',
+        patternColor: 'border-blue-300',
+        dotColor: 'bg-blue-500',
+        titleColor: 'text-blue-900',
+      };
     }
 
-    // Read messages retain a softer type-specific color treatment.
-    if (messageType === 'realtime') {
+    // Read messages keep a softer version of the priority color.
+    if (priority === 'high') {
       return {
-        card: 'bg-gradient-to-br from-blue-50/55 via-white/85 to-sky-50/45 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
-        iconBg: 'bg-blue-50',
-        iconText: 'text-blue-400',
-        accent: 'from-blue-300/70 via-sky-200/70 to-cyan-200/70',
-        patternColor: 'border-blue-100',
-        dotColor: 'bg-blue-300',
-        titleColor: 'text-blue-700',
+        card: 'bg-gradient-to-br from-emerald-50/55 via-white/85 to-green-50/45 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
+        iconBg: 'bg-emerald-50',
+        iconText: 'text-emerald-400',
+        accent: 'from-emerald-300/70 via-green-200/70 to-teal-200/70',
+        patternColor: 'border-emerald-100',
+        dotColor: 'bg-emerald-300',
+        titleColor: 'text-emerald-700',
       };
     }
 
     return {
-      card: 'bg-gradient-to-br from-cyan-50/55 via-white/85 to-sky-50/45 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
-      iconBg: 'bg-cyan-50',
-      iconText: 'text-cyan-400',
-      accent: 'from-cyan-300/70 via-sky-200/70 to-blue-200/70',
-      patternColor: 'border-cyan-100',
-      dotColor: 'bg-cyan-300',
-      titleColor: 'text-cyan-700',
+      card: 'bg-gradient-to-br from-blue-50/55 via-white/85 to-sky-50/45 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
+      iconBg: 'bg-blue-50',
+      iconText: 'text-blue-400',
+      accent: 'from-blue-300/70 via-sky-200/70 to-cyan-200/70',
+      patternColor: 'border-blue-100',
+      dotColor: 'bg-blue-300',
+      titleColor: 'text-blue-700',
     };
   };
 
@@ -460,7 +436,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                 const isUnread = !msg.is_read;
                 const isReward = msg.messages.notification_category === 'performance_reward';
                 const deliveredMessageType = getDeliveredMessageType(msg);
-                const style = getCardStyle(msg.messages.priority, deliveredMessageType, isUnread, index, isReward);
+                const style = getCardStyle(msg.messages.priority, isUnread, isReward);
                 return (
                   <div
                     key={msg.id}
@@ -546,7 +522,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                                   msg.messages.priority === 'urgent'
                                     ? 'bg-rose-100 text-rose-700 ring-1 ring-rose-200/80'
                                     : msg.messages.priority === 'high'
-                                      ? 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/80'
+                                      ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/80'
                                       : 'bg-blue-100 text-blue-700 ring-1 ring-blue-200/80'
                                 }`}>
                                   {msg.messages.priority === 'urgent' ? t.messages.priorityUrgent : msg.messages.priority === 'high' ? t.messages.priorityHigh : msg.messages.priority === 'normal' ? t.messages.priorityNormal : t.messages.priorityLow}

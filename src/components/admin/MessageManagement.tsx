@@ -137,9 +137,9 @@ const getMessagePriorityTone = (priority: Message['priority']) => {
     case 'urgent':
       return { card: 'border-red-800/90 bg-gradient-to-br from-red-950/80 via-slate-800 to-slate-900', accent: 'bg-red-400', icon: 'bg-red-900/80 text-red-200 ring-1 ring-red-700/60', label: 'text-red-200/70', value: 'text-red-100' };
     case 'high':
-      return { card: 'border-amber-800/90 bg-gradient-to-br from-amber-950/80 via-slate-800 to-slate-900', accent: 'bg-amber-400', icon: 'bg-amber-900/80 text-amber-200 ring-1 ring-amber-700/60', label: 'text-amber-200/70', value: 'text-amber-100' };
-    case 'normal':
       return { card: 'border-emerald-800/90 bg-gradient-to-br from-emerald-950/80 via-slate-800 to-slate-900', accent: 'bg-emerald-400', icon: 'bg-emerald-900/80 text-emerald-200 ring-1 ring-emerald-700/60', label: 'text-emerald-200/70', value: 'text-emerald-100' };
+    case 'normal':
+      return { card: 'border-blue-800/90 bg-gradient-to-br from-blue-950/80 via-slate-800 to-slate-900', accent: 'bg-blue-400', icon: 'bg-blue-900/80 text-blue-200 ring-1 ring-blue-700/60', label: 'text-blue-200/70', value: 'text-blue-100' };
     default:
       return { card: 'border-slate-700 bg-gradient-to-br from-slate-800 via-slate-800 to-slate-900', accent: 'bg-slate-400', icon: 'bg-slate-700 text-slate-200 ring-1 ring-slate-600', label: 'text-slate-300/70', value: 'text-slate-100' };
   }
@@ -1233,8 +1233,8 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
   const getPriorityColor = (priority: string) => {
     switch (priority) {
       case 'urgent': return 'text-red-400 bg-red-500/10 border-red-500/30';
-      case 'high': return 'text-amber-400 bg-amber-500/10 border-amber-500/30';
-      case 'normal': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
+      case 'high': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
+      case 'normal': return 'text-blue-400 bg-blue-500/10 border-blue-500/30';
       case 'low': return 'text-slate-400 bg-slate-500/10 border-slate-500/30';
       default: return 'text-slate-400 bg-slate-500/10 border-slate-500/30';
     }
@@ -1737,8 +1737,8 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
                   {(['normal', 'high', 'urgent'] as const).map((priority) => {
                     const isActive = messageForm.priority === priority;
                     const config: Record<string, { activeBg: string; activeBorder: string; activeShadow: string; inactiveBg: string; inactiveText: string; inactiveBorder: string; hoverBg: string; hoverBorder: string; dot: string }> = {
-                      normal: { activeBg: 'bg-emerald-600', activeBorder: 'border-emerald-400', activeShadow: 'shadow-emerald-600/30', inactiveBg: 'bg-emerald-950/30', inactiveText: 'text-emerald-400', inactiveBorder: 'border-emerald-500/30', hoverBg: 'hover:bg-emerald-900/40', hoverBorder: 'hover:border-emerald-500/50', dot: 'bg-emerald-400' },
-                      high:   { activeBg: 'bg-amber-600', activeBorder: 'border-amber-400', activeShadow: 'shadow-amber-600/30', inactiveBg: 'bg-amber-950/30', inactiveText: 'text-amber-400', inactiveBorder: 'border-amber-500/30', hoverBg: 'hover:bg-amber-900/40', hoverBorder: 'hover:border-amber-500/50', dot: 'bg-amber-400' },
+                      normal: { activeBg: 'bg-blue-600', activeBorder: 'border-blue-400', activeShadow: 'shadow-blue-600/30', inactiveBg: 'bg-blue-950/30', inactiveText: 'text-blue-400', inactiveBorder: 'border-blue-500/30', hoverBg: 'hover:bg-blue-900/40', hoverBorder: 'hover:border-blue-500/50', dot: 'bg-blue-400' },
+                      high:   { activeBg: 'bg-emerald-600', activeBorder: 'border-emerald-400', activeShadow: 'shadow-emerald-600/30', inactiveBg: 'bg-emerald-950/30', inactiveText: 'text-emerald-400', inactiveBorder: 'border-emerald-500/30', hoverBg: 'hover:bg-emerald-900/40', hoverBorder: 'hover:border-emerald-500/50', dot: 'bg-emerald-400' },
                       urgent: { activeBg: 'bg-red-600', activeBorder: 'border-red-400', activeShadow: 'shadow-red-600/30', inactiveBg: 'bg-red-950/30', inactiveText: 'text-red-400', inactiveBorder: 'border-red-500/30', hoverBg: 'hover:bg-red-900/40', hoverBorder: 'hover:border-red-500/50', dot: 'bg-red-400' },
                     };
                     const c = config[priority];

@@ -889,8 +889,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     : latestMessage?.priority === 'normal' ? t.header.normal
     : t.messages.priorityLow;
   const toastPriorityStyle = latestMessage?.priority === 'urgent' ? 'bg-white text-rose-600'
-    : latestMessage?.priority === 'high' ? 'bg-white text-amber-600'
-    : latestMessage?.priority === 'normal' ? (toastIsReward ? 'bg-white text-amber-700' : 'bg-white text-emerald-600')
+    : latestMessage?.priority === 'high' ? 'bg-white text-emerald-600'
+    : latestMessage?.priority === 'normal' ? (toastIsReward ? 'bg-white text-amber-700' : 'bg-white text-blue-600')
     : 'bg-white text-sky-600';
 
   return (
