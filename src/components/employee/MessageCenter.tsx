@@ -21,6 +21,17 @@ const getDeliveredMessageType = (message: MessageWithRecipient): 'realtime' | 'l
     || (message.messages.delivery_mode === 'realtime_only' ? 'realtime' : 'login_popup');
 
 const MESSAGE_PANEL_ANIMATION_MS = 520;
+const MESSAGE_PANEL_ANIMATED_QUERY = '(min-width: 1024px) and (prefers-reduced-motion: no-preference)';
+
+const canScrollInside = (element: Element | null) => {
+  let current = element;
+  while (current && current !== document.body && current !== document.documentElement) {
+    const { overflowY } = getComputedStyle(current);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && current.scrollHeight > current.clientHeight) return true;
+    current = current.parentElement;
+  }
+  return false;
+};
 
 export default function MessageCenter({ employee, initialMessage, onClose, onSessionExpired }: MessageCenterProps) {
   const { t, dateLocale } = useLanguage();
@@ -39,7 +50,14 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
   const loadMessagesRef = useRef<(() => Promise<void>) | null>(null);
   const loadRequestIdRef = useRef(0);
   const [isClosing, setIsClosing] = useState(false);
+  const [panelReady, setPanelReady] = useState(() => !window.matchMedia(MESSAGE_PANEL_ANIMATED_QUERY).matches);
   const closeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (panelReady) return;
+    const timer = window.setTimeout(() => setPanelReady(true), MESSAGE_PANEL_ANIMATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [panelReady]);
 
   useEffect(() => () => {
     if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
@@ -47,8 +65,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
 
   const requestClose = () => {
     if (isClosing) return;
-    const animated = window.matchMedia('(min-width: 1024px) and (prefers-reduced-motion: no-preference)').matches;
-    if (!animated) {
+    if (!window.matchMedia(MESSAGE_PANEL_ANIMATED_QUERY).matches) {
       onClose();
       return;
     }
@@ -74,30 +91,35 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
       left: body.style.left,
       right: body.style.right,
       overflow: body.style.overflow,
-      paddingRight: body.style.paddingRight,
     };
 
-    html.style.setProperty('overflow-y', 'hidden', 'important');
     if (root) root.inert = true;
 
     if (isDesktop) {
-      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
-      body.style.overflow = 'hidden';
-      if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`;
-    } else {
-      body.style.position = 'fixed';
-      body.style.top = `-${scrollY}px`;
-      body.style.left = '0';
-      body.style.right = '0';
-      body.style.overflow = 'hidden';
+      // Hiding the page scrollbar would resize the page when the panel opens and again when it closes, so block wheel scrolling instead.
+      const blockWheel = (event: WheelEvent) => {
+        if (!canScrollInside(event.target as Element | null)) event.preventDefault();
+      };
+      window.addEventListener('wheel', blockWheel, { passive: false });
+      return () => {
+        window.removeEventListener('wheel', blockWheel);
+        if (root) root.inert = rootWasInert;
+      };
     }
+
+    html.style.setProperty('overflow-y', 'hidden', 'important');
+    body.style.position = 'fixed';
+    body.style.top = `-${scrollY}px`;
+    body.style.left = '0';
+    body.style.right = '0';
+    body.style.overflow = 'hidden';
 
     return () => {
       Object.assign(body.style, previousStyles);
       if (previousHtmlOverflowY) html.style.setProperty('overflow-y', previousHtmlOverflowY, previousHtmlOverflowYPriority);
       else html.style.removeProperty('overflow-y');
       if (root) root.inert = rootWasInert;
-      if (!isDesktop) window.scrollTo(0, scrollY);
+      window.scrollTo(0, scrollY);
     };
   }, [isDesktop]);
 
@@ -445,7 +467,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                 <button type="button" onClick={() => failedReadIds.forEach(id => void markAsRead(id))} className="shrink-0 rounded-lg border border-rose-200 bg-white px-2.5 py-1.5">{t.common.retry}</button>
               </div>
             )}
-            {loading ? (
+            {loading || !panelReady ? (
               <PageLoader variant="panel" label={t.messages.loading} className="!min-h-[calc(100dvh-180px)] lg:!min-h-[calc(100dvh-220px)]" />
             ) : messages.length === 0 ? (
               <div className="flex items-center justify-center py-20">
@@ -465,7 +487,8 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                 </div>
               </div>
             ) : (
-              sortedMessages.map((msg, index) => {
+              <div className="message-list-fade flex flex-col gap-4">
+              {sortedMessages.map((msg) => {
                 const isUnread = !msg.is_read;
                 const isReward = msg.messages.notification_category === 'performance_reward';
                 const deliveredMessageType = getDeliveredMessageType(msg);
@@ -474,8 +497,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   <div
                     key={msg.id}
                     onClick={() => openMessage(msg)}
-                    className="group relative cursor-pointer msg-force-transition msg-fade-in active:scale-[0.98]"
-                    style={{ animationDelay: `${index * 0.04}s` }}
+                    className="group relative cursor-pointer msg-force-transition active:scale-[0.98]"
                   >
                     {/* Card */}
                     <div className={`relative rounded-2xl overflow-hidden msg-force-transition hover:-translate-y-0.5 hover:shadow-xl ${isUnread ? 'shadow-[0_10px_30px_rgba(37,99,235,0.28)] brightness-[1.03]' : 'border border-slate-200/85 opacity-[0.86] saturate-[0.8] hover:opacity-100 hover:saturate-100'} ${style.card}`}>
@@ -595,7 +617,8 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                     </div>
                   </div>
                 );
-              })
+              })}
+              </div>
             )}
           </div>
         </div>
