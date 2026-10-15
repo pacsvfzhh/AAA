@@ -144,12 +144,11 @@ export default function DispatchVeil({ phase, label, connect, revealDuration }: 
 
   return (
     <div ref={veilRef} className={veilClass} style={revealDuration !== undefined ? { '--dispatch-stop-reveal-duration': `${revealDuration}ms` } as CSSProperties : undefined} aria-hidden="true">
-      <span className="dispatch-veil-blob dispatch-veil-blob-1" />
-      <span className="dispatch-veil-blob dispatch-veil-blob-2" />
-      <span className="dispatch-veil-blob dispatch-veil-blob-3" />
-      <span className="dispatch-veil-sweep" />
-
       <div className="dispatch-veil-content" style={stageHeight ? { bottom: 'auto', height: stageHeight } : undefined}>
+        <span className="dispatch-veil-blob dispatch-veil-blob-1" />
+        <span className="dispatch-veil-blob dispatch-veil-blob-2" />
+        <span className="dispatch-veil-blob dispatch-veil-blob-3" />
+        <span className="dispatch-veil-sweep" />
         <div className="dispatch-veil-stage">
           {connect ? (
             <div className="dispatch-veil-hull">

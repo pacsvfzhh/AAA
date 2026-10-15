@@ -3546,7 +3546,6 @@ button.dispatch-start-cta:active:not(:disabled) {
   inset: 0;
   z-index: 30;
   overflow: hidden;
-  border-radius: inherit;
   pointer-events: none;
   background:
     radial-gradient(120% 90% at 15% 0%, rgb(224 242 254 / 95%) 0%, transparent 60%),
@@ -3597,7 +3596,6 @@ button.dispatch-start-cta:active:not(:disabled) {
 .dispatch-veil-blob {
   position: absolute;
   border-radius: 28%;
-  filter: blur(2px);
   animation: dispatchVeilBlob 2.4s ease-in-out infinite alternate;
 }
 
