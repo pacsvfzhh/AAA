@@ -203,7 +203,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     if (isReward) {
       return isUnread
         ? {
-            card: 'bg-gradient-to-r from-amber-200 via-amber-100 to-orange-50 ring-2 ring-amber-300 shadow-xl shadow-amber-200/60',
+            card: 'bg-gradient-to-r from-amber-200 via-amber-100 to-orange-50 shadow-xl shadow-amber-200/60',
             iconBg: 'bg-gradient-to-br from-amber-400 via-yellow-400 to-orange-400',
             iconText: 'text-amber-950',
             accent: 'from-amber-500 via-yellow-400 to-orange-400',
@@ -224,7 +224,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     if (isUnread) {
       if (priority === 'urgent') {
         return {
-          card: 'bg-gradient-to-r from-rose-200 via-rose-100 to-orange-50 ring-2 ring-rose-300 shadow-xl shadow-rose-300/70',
+          card: 'bg-gradient-to-r from-rose-200 via-rose-100 to-orange-50 shadow-xl shadow-rose-300/70',
           iconBg: 'bg-gradient-to-br from-rose-500 to-orange-500',
           iconText: 'text-white',
           accent: 'from-rose-500 via-red-400 to-orange-400',
@@ -235,7 +235,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
       }
       if (priority === 'high') {
         return {
-          card: 'bg-gradient-to-r from-emerald-200 via-emerald-100 to-green-50 ring-2 ring-emerald-300 shadow-xl shadow-emerald-300/70',
+          card: 'bg-gradient-to-r from-emerald-200 via-emerald-100 to-green-50 shadow-xl shadow-emerald-300/70',
           iconBg: 'bg-gradient-to-br from-emerald-500 to-green-500',
           iconText: 'text-white',
           accent: 'from-emerald-500 via-green-400 to-teal-300',
@@ -245,7 +245,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
         };
       }
       return {
-        card: 'bg-gradient-to-r from-blue-200 via-blue-100 to-sky-50 ring-2 ring-blue-300 shadow-xl shadow-blue-300/70',
+        card: 'bg-gradient-to-r from-blue-200 via-blue-100 to-sky-50 shadow-xl shadow-blue-300/70',
         iconBg: 'bg-gradient-to-br from-blue-500 to-sky-500',
         iconText: 'text-white',
         accent: 'from-blue-500 via-sky-400 to-cyan-400',
@@ -453,11 +453,11 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                     style={{ animationDelay: `${index * 0.04}s` }}
                   >
                     {/* Card */}
-                    <div className={`relative rounded-2xl overflow-hidden border msg-force-transition hover:-translate-y-0.5 hover:shadow-xl ${isUnread ? 'border-2 border-white shadow-[0_10px_30px_rgba(37,99,235,0.28)] ring-offset-2 ring-offset-[#f0f5ff] brightness-[1.03]' : 'border-slate-200/85 opacity-[0.86] saturate-[0.8] hover:opacity-100 hover:saturate-100'} ${style.card}`}>
+                    <div className={`relative rounded-2xl overflow-hidden msg-force-transition hover:-translate-y-0.5 hover:shadow-xl ${isUnread ? 'shadow-[0_10px_30px_rgba(37,99,235,0.28)] brightness-[1.03]' : 'border border-slate-200/85 opacity-[0.86] saturate-[0.8] hover:opacity-100 hover:saturate-100'} ${style.card}`}>
                       {/* Accent: unread cards get a left + top L-shaped gradient line, read cards a thin left bar */}
                       {isUnread ? (
                         <div
-                          className="pointer-events-none absolute inset-0 rounded-[14px]"
+                          className="pointer-events-none absolute inset-0 rounded-2xl"
                           style={{
                             padding: '3px 0 0 5px',
                             background: getUnreadLine(msg.messages.priority, isReward),
