@@ -7393,3 +7393,7 @@ body:has(.employee-shell) .order-detail-content-scrollbar::-webkit-scrollbar-thu
 .animate-badge-shake-lift.keep-animation {
   animation: badgeLift 1.5s ease-in-out infinite, badgeShake 1.5s ease-in-out infinite !important;
 }
+
+.animate-badge-shake-pulse.keep-animation {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite, badgeShake 1.5s ease-in-out infinite !important;
+}

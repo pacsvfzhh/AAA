@@ -2731,7 +2731,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     {conv.customer.customer_name}
                                   </span>
                                   {conv.unread_count > 0 && (
-                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-md shadow-orange-400/50 animate-pulse flex-shrink-0">
+                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-md shadow-orange-400/50 keep-animation animate-badge-shake-pulse flex-shrink-0">
                                       {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                     </span>
                                   )}
@@ -2806,7 +2806,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                   {conv.customer.customer_name}
                                 </span>
                                 {conv.unread_count > 0 && (
-                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-md shadow-orange-400/50 animate-pulse flex-shrink-0">
+                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-md shadow-orange-400/50 keep-animation animate-badge-shake-pulse flex-shrink-0">
                                     {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                   </span>
                                 )}
