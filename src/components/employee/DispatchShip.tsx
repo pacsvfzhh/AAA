@@ -2,6 +2,7 @@ interface DispatchShipProps {
   idPrefix: string;
   className?: string;
   viewBox?: string;
+  waterline?: boolean;
 }
 
 const BOX_COLORS = ['#2563eb', '#0ea5e9', '#1d4ed8', '#38bdf8', '#6366f1', '#0891b2', '#3b82f6', '#60a5fa', '#1e40af', '#22d3ee'];
@@ -21,7 +22,8 @@ const containers = TIERS.flatMap((tiers, bay) => {
 
 const bayGaps = [1, 3, 5, 7, 9].map((bay) => 252 + (bay + 1) * 41 + Math.floor(bay / 2) * 4 + 1);
 
-export default function DispatchShip({ idPrefix, className = '', viewBox = '80 40 720 230' }: DispatchShipProps) {
+export default function DispatchShip({ idPrefix, className = '', viewBox = '80 40 720 230', waterline = false }: DispatchShipProps) {
+  const water = `${idPrefix}-water`;
   const hull = `${idPrefix}-hull`;
   const hullClip = `${idPrefix}-hull-clip`;
   const cabin = `${idPrefix}-cabin`;
@@ -52,9 +54,24 @@ export default function DispatchShip({ idPrefix, className = '', viewBox = '80 4
         <clipPath id={hullClip}>
           <path d={hullPath} />
         </clipPath>
+        {waterline && (
+          <>
+            <linearGradient id={`${water}-fade`} x1="0" y1="233" x2="0" y2="262" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stopColor="#fff" />
+              <stop offset="0.4" stopColor="#8a8a8a" />
+              <stop offset="1" stopColor="#000" />
+            </linearGradient>
+            <mask id={`${water}-mask`} maskUnits="userSpaceOnUse" x="0" y="0" width="800" height="300">
+              <rect width="800" height="300" fill={`url(#${water}-fade)`} />
+            </mask>
+            <filter id={`${water}-soft`} x="-5%" y="-150%" width="110%" height="400%">
+              <feGaussianBlur stdDeviation="3" />
+            </filter>
+          </>
+        )}
       </defs>
 
-      <g>
+      <g mask={waterline ? `url(#${water}-mask)` : undefined}>
         {/* Containers */}
         {containers.map((c) => (
           <g key={c.key}>
@@ -132,6 +149,14 @@ export default function DispatchShip({ idPrefix, className = '', viewBox = '80 4
         <ellipse cx="748" cy="182" rx="5.5" ry="4" fill="#172554" fillOpacity="0.8" />
         <path d="M748 186V198M743 194Q748 200 753 194" stroke="#172554" strokeOpacity="0.6" strokeWidth="1.4" strokeLinecap="round" />
       </g>
+      {waterline && (
+        <g>
+          <ellipse cx="436" cy="254" rx="320" ry="9" fill="#1e3a8a" fillOpacity="0.14" filter={`url(#${water}-soft)`} />
+          <path d="M170 252H300M360 258H520M580 252H700" stroke="#bae6fd" strokeOpacity="0.55" strokeWidth="1.6" strokeLinecap="round" />
+          <ellipse cx="436" cy="237.5" rx="352" ry="3.4" fill="#fff" fillOpacity="0.55" filter={`url(#${water}-soft)`} />
+          <path d="M96 238Q84 233 66 240M768 238Q786 232 800 239" stroke="#fff" strokeOpacity="0.75" strokeWidth="2" strokeLinecap="round" />
+        </g>
+      )}
     </svg>
   );
 }

@@ -2462,11 +2462,12 @@ button.employee-header-action {
   width: min(450px, 92%);
   height: auto;
   left: 38.2%;
-  bottom: 94px;
+  bottom: 101px;
+  translate: 0 21%;
+  transform-origin: 50% 79%;
   transform: translateX(-50%);
   opacity: 0.36;
-  filter: drop-shadow(0 14px 24px rgb(37 99 235 / 14%));
-  animation: dispatchPanelShip 3.6s ease-in-out infinite;
+  animation: dispatchPanelShip 5s ease-in-out infinite;
 }
 
 .dispatch-ship-light { animation: dispatchShipLight 2.4s ease-in-out infinite; }
@@ -2476,8 +2477,8 @@ button.employee-header-action {
 }
 
 @keyframes dispatchPanelShip {
-  0%, 100% { transform: translate(calc(-50% - 8px), 0) rotate(-0.5deg); }
-  50% { transform: translate(calc(-50% + 8px), -6px) rotate(0.5deg); }
+  0%, 100% { transform: translate(calc(-50% - 4px), 0) rotate(-0.45deg); }
+  50% { transform: translate(calc(-50% + 4px), -2px) rotate(0.45deg); }
 }
 
 .dispatch-veil-sea.dispatch-panel-sea {
@@ -2492,7 +2493,7 @@ button.employee-header-action {
 
 @media (min-width: 600px) and (max-width: 767px) {
   .dispatch-veil-sea.dispatch-panel-sea { bottom: 130px; }
-  .dispatch-panel-ship { bottom: 134px; }
+  .dispatch-panel-ship { bottom: 141px; }
 }
 
 @media (min-width: 768px) {
@@ -2514,7 +2515,7 @@ button.employee-header-action {
 @media (min-width: 768px) {
   .dispatch-panel-ship {
     width: min(760px, 82%);
-    bottom: 96px;
+    bottom: 113px;
   }
 
   .dispatch-panel-sea {
@@ -2526,7 +2527,7 @@ button.employee-header-action {
 @media (min-width: 1024px) {
   .dispatch-panel-ship {
     width: min(1020px, 84%);
-    bottom: 100px;
+    bottom: 134px;
   }
 
   .dispatch-panel-sea {

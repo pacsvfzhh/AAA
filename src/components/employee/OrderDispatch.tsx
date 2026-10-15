@@ -2861,7 +2861,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               <span className="dispatch-panel-arc dispatch-panel-arc-bottom-right" />
             </div>
             <DispatchGulls />
-            <DispatchShip idPrefix="dispatch-panel" viewBox="0 0 800 300" className="dispatch-panel-ship pointer-events-none absolute z-[2]" />
+            <DispatchShip idPrefix="dispatch-panel" viewBox="0 0 800 300" waterline className="dispatch-panel-ship pointer-events-none absolute z-[2]" />
             <DispatchWaves wavelengths={[565, 377, 565]} speeds={[43, 59, 75]} className="dispatch-panel-sea pointer-events-none absolute z-[2]" />
             </div>
             <div className={`absolute right-5 top-5 z-20 hidden items-center gap-1.5 rounded-full border border-blue-200/80 bg-white/85 px-3 py-2 text-xs font-bold text-blue-800 shadow-[0_6px_20px_-10px_rgba(37,99,235,0.5)] backdrop-blur-sm md:right-10 md:top-10 md:flex ${waitingEnterAnim ? 'dispatch-decor-fade' : ''}`}>
