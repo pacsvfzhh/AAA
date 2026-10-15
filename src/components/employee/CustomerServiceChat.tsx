@@ -2675,17 +2675,13 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </div>
                 ) : conversations.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center px-8 text-center">
-                    <div className="relative mb-6 h-[96px] w-[112px]" aria-hidden="true">
-                      <div className="absolute left-0 top-1 h-[64px] w-[84px] -rotate-6 rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-sky-100/70 shadow-sm"></div>
-                      <div className="absolute bottom-0 right-0 h-[56px] w-[74px] rotate-6 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50 to-white shadow-sm"></div>
-                      <div className="absolute left-1/2 top-1/2 flex h-[64px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 shadow-lg shadow-blue-600/30 ring-4 ring-white">
-                        <MessageCircle className="h-8 w-8 text-white" strokeWidth={2} />
+                    <div className="mb-5 flex h-[76px] w-[76px] items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-slate-200" aria-hidden="true">
+                      <div className="flex h-[56px] w-[56px] items-center justify-center rounded-full bg-blue-50">
+                        <MessageCircle className="h-7 w-7 text-blue-500" strokeWidth={1.75} />
                       </div>
-                      <span className="absolute -right-1 top-0 h-3 w-3 rounded-full bg-cyan-400 ring-2 ring-white"></span>
                     </div>
-                    <p className="text-[16px] font-semibold leading-6 text-slate-800">{t.customerService.noConversations}</p>
-                    <p className="mt-1.5 max-w-[250px] text-[13px] leading-5 text-slate-500">{t.customerService.noConversationsDesc}</p>
-                    <span className="mt-5 h-[3px] w-10 rounded-full bg-gradient-to-r from-blue-500 to-cyan-400" aria-hidden="true"></span>
+                    <p className="text-[15px] font-semibold leading-6 text-slate-700">{t.customerService.noConversations}</p>
+                    <p className="mt-1 max-w-[250px] text-[13px] leading-5 text-slate-500">{t.customerService.noConversationsDesc}</p>
                   </div>
                 ) : (
                   <div className="p-3 sm:p-4 space-y-2 sm:space-y-2.5">
