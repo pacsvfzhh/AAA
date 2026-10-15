@@ -888,10 +888,10 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     : latestMessage?.priority === 'high' ? t.header.highPriority
     : latestMessage?.priority === 'normal' ? t.header.normal
     : t.messages.priorityLow;
-  const toastPriorityStyle = latestMessage?.priority === 'urgent' ? 'bg-rose-100 text-rose-700'
-    : latestMessage?.priority === 'high' ? 'bg-yellow-100 text-amber-800'
-    : latestMessage?.priority === 'normal' ? (toastIsReward ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800')
-    : 'bg-sky-100 text-sky-700';
+  const toastPriorityStyle = latestMessage?.priority === 'urgent' ? 'bg-rose-300 text-rose-950'
+    : latestMessage?.priority === 'high' ? 'bg-yellow-300 text-amber-950'
+    : latestMessage?.priority === 'normal' ? (toastIsReward ? 'bg-amber-300 text-amber-950' : 'bg-emerald-300 text-emerald-950')
+    : 'bg-sky-300 text-sky-950';
 
   return (
     <div className={`min-h-screen relative nav-root-padding employee-shell`} style={{ background: '#f8fafc' }}>
