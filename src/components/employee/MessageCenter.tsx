@@ -484,7 +484,6 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   <span className="absolute left-1/2 top-1/2 flex h-[64px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[22px] bg-gradient-to-br from-blue-400 via-sky-400 to-cyan-300 shadow-lg shadow-blue-400/20">
                     <Bell className="h-8 w-8 text-white" strokeWidth={2} />
                   </span>
-                  <span className="absolute left-[82px] top-[10px] h-[14px] w-[14px] rounded-full bg-orange-400"></span>
                 </div>
                 <p className="relative z-10 text-[14px] font-semibold leading-6 text-blue-900">{t.messages.noMessages}</p>
                 <p className="relative z-10 mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.messages.emptyDesc}</p>
