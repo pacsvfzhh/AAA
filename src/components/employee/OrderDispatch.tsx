@@ -403,6 +403,14 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     observer.observe(panel);
     return () => observer.disconnect();
   }, [currentOrder, viewportWidth]);
+
+  // The remembered height belongs to the old viewport; fall back to the viewport-based height until the idle panel is measured again.
+  useEffect(() => {
+    if (!currentOrder) return;
+    const forget = () => setIdlePanelHeight(null);
+    window.addEventListener('resize', forget);
+    return () => window.removeEventListener('resize', forget);
+  }, [currentOrder]);
   const lastActivityRef = useRef<Date>(new Date());
   const pageHiddenAtRef = useRef<number | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -2780,7 +2788,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       )}
 
       {/* Work Control Panel - Premium Blue/White Design */}
-      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? 'flex h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))] flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]' : 'p-5 md:p-10'} overflow-hidden ${
+      <div ref={panelRef} className={`relative rounded-2xl md:rounded-3xl ${panelResizing ? 'dispatch-panel-resizing' : ''} ${currentOrder?.status === 'pending' || currentOrder?.status === 'accepted' ? `flex ${currentOrder?.status === 'pending' ? 'min-h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]' : 'h-[min(420px,max(300px,calc(100dvh_-_var(--employee-header-height,56px)_-_var(--employee-bottom-nav-height,70px)_-_24px)))]'} flex-col p-0 md:h-[clamp(420px,calc(100vh_-_var(--employee-header-height,76px)_-_var(--employee-bottom-nav-height,0px)_-_48px),575px)]` : 'p-5 md:p-10'} overflow-hidden ${
         currentOrder?.status === 'pending'
           ? 'bg-[linear-gradient(125deg,#164c9b_0%,#2370bd_55%,#167da9_100%)] border-2 border-blue-400/50 shadow-[0_22px_60px_-16px_rgba(12,43,112,0.32)]'
           : `border-2 border-blue-200/90 shadow-[0_16px_48px_-18px_rgba(37,99,235,0.2),0_6px_20px_-10px_rgba(37,99,235,0.12)] transition-[border-color,box-shadow] duration-700 ${
@@ -2790,7 +2798,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               ? 'bg-gradient-to-br from-white via-blue-50/80 to-white'
               : 'min-h-[420px] short:max-md:min-h-0 md:min-h-0 bg-white'
           }`
-      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { height: `min(${idlePanelHeight}px, max(300px, calc(100dvh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - 24px)))` } : undefined}>
+      }`} style={(currentOrder?.status === 'pending' || currentOrder?.status === 'accepted') && idlePanelHeight && viewportWidth < 768 ? { [currentOrder?.status === 'pending' ? 'minHeight' : 'height']: `min(${idlePanelHeight}px, max(300px, calc(100dvh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - 24px)))` } : undefined}>
         <div ref={acceptGhostHostRef} data-accept-ghost-host className="pointer-events-none absolute -inset-[2px] z-40 overflow-hidden rounded-2xl md:rounded-3xl" aria-hidden="true" />
         {(acceptRevealPhase === 'cover' || acceptRevealPhase === 'out') && <span role="status" className="sr-only">{t.dispatch.orderAccepted}</span>}
         {panelVeil && (
@@ -3013,11 +3021,11 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                 </>
               )}
 
-              <div className={`relative z-10 ${currentOrder.status === 'pending' ? 'flex min-h-0 flex-1 flex-col p-5 md:p-6 lg:p-10' : 'p-3 md:p-8'} ${currentOrder.status === 'accepted' ? `flex min-h-0 flex-1 flex-col ${acceptRevealPhase === 'cover' ? 'opacity-0' : acceptRevealPhase === 'out' ? 'dispatch-accept-content-in' : ''}` : ''}`}>
+              <div className={`relative z-10 ${currentOrder.status === 'pending' ? 'flex min-h-0 flex-1 flex-col p-5 short:max-md:p-4 md:p-6 lg:p-10' : 'p-3 md:p-8'} ${currentOrder.status === 'accepted' ? `flex min-h-0 flex-1 flex-col ${acceptRevealPhase === 'cover' ? 'opacity-0' : acceptRevealPhase === 'out' ? 'dispatch-accept-content-in' : ''}` : ''}`}>
                 {/* Premium Header with Blockchain Aesthetic */}
                 <div className={currentOrder.status === 'accepted'
                   ? `mb-3 grid grid-cols-1 gap-4 md:mb-6 lg:gap-6 ${isTablet ? '' : 'lg:grid-cols-7'}`
-                  : `flex flex-col md:flex-row items-start md:items-center justify-between mb-3 space-y-2 md:space-y-0 ${currentOrder.status === 'pending' ? 'border-b border-white/20 pb-4 md:mb-4 md:pb-4 lg:mb-6 lg:pb-6' : 'md:mb-6'}`}>
+                  : `flex flex-col md:flex-row items-start md:items-center justify-between mb-3 space-y-2 md:space-y-0 ${currentOrder.status === 'pending' ? 'border-b border-white/20 pb-4 short:max-md:pb-3 md:mb-4 md:pb-4 lg:mb-6 lg:pb-6' : 'md:mb-6'}`}>
                   <div className={`flex items-center space-x-2 md:space-x-4 ${currentOrder.status === 'accepted' ? `min-w-0 ${isTablet ? '' : 'lg:col-span-5'}` : ''}`}>
                     {/* Enhanced Icon Container */}
                     <div className="relative">
@@ -3117,7 +3125,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
 
                       {currentOrder.status === 'pending' ? (
-                        <div className="relative py-4 text-center">
+                        <div className="relative py-4 text-center short:max-md:py-2">
                           <div className="pointer-events-none absolute left-1/2 top-1/2 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan-400/20 blur-3xl" />
                           <OrderSparkles count={12} />
                           <div className="relative">

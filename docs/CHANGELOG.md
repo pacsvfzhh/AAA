@@ -17,6 +17,14 @@
 
 ---
 
+## 2026-10-16 · 切换机型后 New Order 面板显示出错
+- 需求：在预览里切换机型尺寸时，New Order 面板显示出错。
+- 原因：New Order 面板用的是之前在别的机型上量到的高度，换机型后这个高度不再合适，内容被裁切或留出大片空白。
+- 改动：①窗口大小变化时丢掉旧的记忆高度，先用「屏幕高度 − 顶栏 − 底部导航」算出的高度，等待派单面板重新量过再更新。②New Order 面板的高度改成最小高度，内容多时可以撑高而不是被裁掉；In Progress 仍是固定高度，订单内容在框内滚动。③小屏手机（宽度小于 600px、高度不超过 640px）上 New Order 面板的内外边距收紧。
+- 文件：`src/components/employee/OrderDispatch.tsx`
+- 数据库/服务端：无
+- 验证：typecheck 和 ESLint 通过；没有浏览器，未实测切换机型。
+
 ## 2026-10-16 · 修复 ResizeObserver loop 报错
 - 需求：控制台出现 "ResizeObserver loop completed with undelivered notifications"。
 - 原因：上一条改动里，记忆高度在 ResizeObserver 回调中被立即修改，导致同一帧内内容区再次变化。
