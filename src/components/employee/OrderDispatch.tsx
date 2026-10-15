@@ -2913,6 +2913,13 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                   {currentOrder.status === 'accepted' && !hasTimeout ? (
                     <>
                       <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-blue-400/60 to-transparent" />
+                      <PanelColorBlocks />
+                      <div className="pointer-events-none absolute inset-x-0 top-0 h-28 overflow-hidden" aria-hidden="true">
+                        <span className="absolute right-[14%] top-5 h-12 w-12 rotate-12 rounded-2xl bg-sky-200/45" />
+                        <span className="absolute right-[30%] top-9 h-5 w-5 rounded-full bg-indigo-200/45" />
+                        <span className="absolute left-[42%] top-3 h-8 w-8 -rotate-6 rounded-xl bg-blue-200/35" />
+                        <span className="absolute left-[3%] top-12 h-4 w-4 rotate-45 rounded-[4px] bg-sky-300/35" />
+                      </div>
                       <div className="dispatch-idle-blocks ip-bg" aria-hidden="true">
                         <span className="idle-block idle-block-left" />
                         <span className="idle-block idle-block-right" />
@@ -3020,7 +3027,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                 <div className={`md:hidden mb-2.5 ${currentOrder.status === 'pending' ? 'flex flex-1 flex-col justify-center' : currentOrder.status === 'accepted' ? '-mx-3 flex min-h-0 flex-1 flex-col' : ''}`}>
                   <div className={`relative ${currentOrder.status === 'pending' ? 'py-3' : `overflow-hidden border border-gray-200 bg-white/90 p-2.5 shadow-sm backdrop-blur-md ${currentOrder.status === 'accepted' ? 'rounded-none border-x-0 px-3.5' : 'rounded-lg'}`} ${currentOrder.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
                     {currentOrder.status === 'accepted' && !hasTimeout && (
-                      <span className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-blue-600 via-sky-400 to-blue-500" aria-hidden="true" />
+                      <span className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-blue-400/55 via-sky-300/70 to-blue-400/55" aria-hidden="true" />
                     )}
                     <div className={`relative z-10 ${currentOrder.status === 'accepted' ? 'flex min-h-0 flex-1 flex-col' : ''}`}>
                       <div className="flex items-center justify-between mb-1.5">
@@ -3069,7 +3076,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                           <div className="absolute inset-0 opacity-[0.02]" style={{ backgroundImage: 'radial-gradient(circle, rgba(37,99,235,1) 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
                           {currentOrder.status === 'accepted' && !hasTimeout && (
                             <>
-                              <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-600 via-sky-400 to-blue-500" />
+                              <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-400/55 via-sky-300/70 to-blue-400/55" />
                               <Ship className="pointer-events-none absolute -bottom-8 -right-6 h-48 w-48 text-blue-500/[0.05]" strokeWidth={1.2} aria-hidden="true" />
                             </>
                           )}
