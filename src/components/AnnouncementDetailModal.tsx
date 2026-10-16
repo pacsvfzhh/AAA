@@ -24,6 +24,24 @@ interface AnnouncementDetailModalProps {
   isIOS?: boolean;
 }
 
+// Layout jumps once, then everything after the image slides from its old spot via transform: no per-frame
+// layout, so text neither stutters nor reflows. Skipped for images above the viewport (scroll anchoring handles those).
+function glideFollowingContent(frame: HTMLElement, delta: number, container: HTMLElement) {
+  if (Math.abs(delta) < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const scroller = container.closest('.announcement-detail-scroll');
+  if (scroller && frame.getBoundingClientRect().bottom - delta <= scroller.getBoundingClientRect().top) return;
+  const following: Element[] = [];
+  for (let node: Element | null = frame; node && node !== container; node = node.parentElement) {
+    for (let sibling = node.nextElementSibling; sibling; sibling = sibling.nextElementSibling) following.push(sibling);
+  }
+  following.slice(0, 80).forEach(element => {
+    element.animate(
+      [{ transform: `translateY(${-delta}px)` }, { transform: 'translateY(0)' }],
+      { duration: 520, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', composite: 'add' },
+    );
+  });
+}
+
 export default function AnnouncementDetailModal({
   title,
   content,
@@ -64,44 +82,37 @@ export default function AnnouncementDetailModal({
       img.parentNode?.insertBefore(frame, img);
       frame.append(loaderHost, img);
       loaderHosts.push(loaderHost);
+      const placeholderHeight = frame.offsetHeight;
 
       let cancelled = false;
       let unmountTimer: number | undefined;
-      let heightTimer: number | undefined;
+      // The browser sizes the <img> the moment it loads, before decode finishes; hold the placeholder height until the reveal.
+      const holdPlaceholder = () => { frame.style.height = `${placeholderHeight}px`; };
       const settle = (failed: boolean) => {
         if (cancelled) return;
         const startHeight = frame.offsetHeight;
+        frame.style.height = '';
         frame.classList.add('is-loaded');
         if (failed) frame.classList.add('is-error');
-        const endHeight = frame.offsetHeight;
-        // The placeholder collapses to the image's real height; tween it so the text below glides instead of jumping.
-        if (Math.abs(endHeight - startHeight) > 1 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-          frame.style.height = `${startHeight}px`;
-          frame.style.overflow = 'hidden';
-          void frame.offsetHeight;
-          frame.style.transition = 'height .5s cubic-bezier(0.4, 0, 0.2, 1)';
-          frame.style.height = `${endHeight}px`;
-          heightTimer = window.setTimeout(() => {
-            frame.style.height = '';
-            frame.style.overflow = '';
-            frame.style.transition = '';
-          }, 560);
-        }
+        glideFollowingContent(frame, frame.offsetHeight - startHeight, container);
         unmountTimer = window.setTimeout(() => {
           setImageLoaderHosts(prev => prev.filter(host => host !== loaderHost));
         }, 450);
       };
       const reveal = () => {
+        holdPlaceholder();
         // Decode before fading so large images don't drop the first animation frames.
         (img.decode ? img.decode() : Promise.resolve()).catch(() => undefined).then(() => settle(false));
       };
-      const fail = () => settle(true);
+      const fail = () => {
+        holdPlaceholder();
+        settle(true);
+      };
       img.addEventListener('load', reveal, { once: true });
       img.addEventListener('error', fail, { once: true });
       imageCleanups.push(() => {
         cancelled = true;
         window.clearTimeout(unmountTimer);
-        window.clearTimeout(heightTimer);
         img.removeEventListener('load', reveal);
         img.removeEventListener('error', fail);
       });
