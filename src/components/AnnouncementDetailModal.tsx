@@ -67,10 +67,26 @@ export default function AnnouncementDetailModal({
 
       let cancelled = false;
       let unmountTimer: number | undefined;
+      let heightTimer: number | undefined;
       const settle = (failed: boolean) => {
         if (cancelled) return;
+        const startHeight = frame.offsetHeight;
         frame.classList.add('is-loaded');
         if (failed) frame.classList.add('is-error');
+        const endHeight = frame.offsetHeight;
+        // The placeholder collapses to the image's real height; tween it so the text below glides instead of jumping.
+        if (Math.abs(endHeight - startHeight) > 1 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          frame.style.height = `${startHeight}px`;
+          frame.style.overflow = 'hidden';
+          void frame.offsetHeight;
+          frame.style.transition = 'height .5s cubic-bezier(0.4, 0, 0.2, 1)';
+          frame.style.height = `${endHeight}px`;
+          heightTimer = window.setTimeout(() => {
+            frame.style.height = '';
+            frame.style.overflow = '';
+            frame.style.transition = '';
+          }, 560);
+        }
         unmountTimer = window.setTimeout(() => {
           setImageLoaderHosts(prev => prev.filter(host => host !== loaderHost));
         }, 450);
@@ -85,6 +101,7 @@ export default function AnnouncementDetailModal({
       imageCleanups.push(() => {
         cancelled = true;
         window.clearTimeout(unmountTimer);
+        window.clearTimeout(heightTimer);
         img.removeEventListener('load', reveal);
         img.removeEventListener('error', fail);
       });
