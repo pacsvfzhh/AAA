@@ -3201,7 +3201,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                     </div>
 
                     {/* Title Section */}
-                    <div className={currentOrder.status === 'accepted' ? 'min-w-0 flex-1' : undefined}>
+                    <div className={currentOrder.status === 'accepted' ? `min-w-0 flex-1${hasTimeout ? '' : ' flex flex-wrap items-center justify-between gap-x-3 gap-y-1'}` : undefined}>
                       <div className={currentOrder.status === 'accepted' ? 'flex flex-wrap items-center gap-x-2 gap-y-1 md:gap-x-3' : 'flex items-center space-x-2 md:space-x-3'}>
                         <h3 className={`text-xl leading-tight md:text-3xl font-black tracking-tight ${
                           currentOrder.status === 'pending' ? 'text-white' : hasTimeout ? 'text-rose-100 drop-shadow-lg' : 'text-[#12356d]'
@@ -3215,7 +3215,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                           </div>
                         )}
                       </div>
-                      <div className={`text-[11px] md:text-sm font-semibold mt-1 md:mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 ${
+                      <div className={`text-[11px] md:text-sm font-semibold ${currentOrder.status === 'accepted' && !hasTimeout ? 'ml-auto' : 'mt-1 md:mt-1.5'} flex flex-wrap items-center gap-x-2 gap-y-1 ${
                         currentOrder.status === 'pending' ? 'text-blue-100' : hasTimeout ? 'text-rose-200' : 'text-blue-600'
                       }`}>
                         {(currentOrder.status === 'pending' || hasTimeout) && (
@@ -3225,7 +3225,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                           </span>
                         )}
                         {currentOrder.status === 'accepted' && currentOrder.assignment_id && (
-                          <div className={`${hasTimeout ? 'ml-auto ' : ''}flex max-w-full min-w-0 items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-2 py-0.5 shadow-sm md:gap-1.5 md:px-3 md:py-1`}>
+                          <div className={`ml-auto flex max-w-full min-w-0 items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-2 py-0.5 shadow-sm md:gap-1.5 md:px-3 md:py-1`}>
                             <span className="hidden text-[11px] font-bold uppercase tracking-wider text-blue-600 md:inline">{t.dispatch.assignmentIdLabel}</span>
                             <span className="min-w-0 break-all font-mono text-[11px] font-black tracking-wide text-blue-700 md:text-xs">{currentOrder.assignment_id}</span>
                             {currentOrder.order_submitted && <CheckCircle className="h-3 w-3 shrink-0 text-emerald-600" />}
