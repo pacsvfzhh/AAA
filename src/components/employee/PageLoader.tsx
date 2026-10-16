@@ -55,7 +55,8 @@ export default function PageLoader({ label, variant = 'page', tone = 'light', cl
   const { t } = useLanguage();
   const [{ handoff, now }] = useState(() => {
     const at = performance.now();
-    return { handoff: liveLoaders > 0 || at - lastLoaderGoneAt < 600, now: at };
+    const staticBootLoader = typeof document !== 'undefined' && document.getElementById('loading-screen') !== null;
+    return { handoff: staticBootLoader || liveLoaders > 0 || at - lastLoaderGoneAt < 600, now: at };
   });
 
   useEffect(() => {
