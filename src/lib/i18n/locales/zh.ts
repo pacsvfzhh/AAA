@@ -257,6 +257,8 @@ const zh = {
     activeAssignment: '当前任务',
     activeAssignmentDesc: '请提交此任务的订单详情',
     assignmentExpired: '此任务已过期，请返回订单分配页面。',
+    noActiveGroup: '您尚未被分配到已启用的订单分组，请联系管理员。',
+    assignmentAwaiting: '有新订单正等待您接收，请先在订单分配页面接收。',
   },
   orderList: {
     title: '订单记录',
