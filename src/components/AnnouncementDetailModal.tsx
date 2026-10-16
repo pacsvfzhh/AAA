@@ -79,10 +79,12 @@ export default function AnnouncementDetailModal({
       const width = Number(img.getAttribute('width'));
       const height = Number(img.getAttribute('height'));
       if (width > 0 && height > 0) frame.style.aspectRatio = `${width} / ${height}`;
+      const shimmer = document.createElement('span');
+      shimmer.className = 'announcement-img-shimmer';
       const loaderHost = document.createElement('span');
       loaderHost.className = 'announcement-img-loader';
       img.parentNode?.insertBefore(frame, img);
-      frame.append(loaderHost, img);
+      frame.append(shimmer, loaderHost, img);
       loaderHosts.push(loaderHost);
       const placeholderHeight = frame.offsetHeight;
 
@@ -96,19 +98,28 @@ export default function AnnouncementDetailModal({
         frame.style.height = '';
         // The loader keeps its placeholder size while fading out, so the frame resizing never stretches it.
         frame.style.setProperty('--placeholder-height', `${startHeight}px`);
-        // Without known dimensions the frame resizes, so let the content below slide clear before the image fades in over it.
-        if (!frame.style.aspectRatio && !failed) frame.style.setProperty('--img-fade-delay', '.28s');
+        // While the image is held it is already laid out at its real size, so the growth is known before the class flips.
+        const growth = failed ? 0 : img.offsetHeight - startHeight;
+        // Growing: the content below slides clear first, then the image crossfades with the lingering placeholder.
+        if (growth > 1) {
+          frame.style.setProperty('--img-fade-delay', '.28s');
+          frame.style.setProperty('--placeholder-fade', '.5s');
+        } else {
+          frame.style.setProperty('--placeholder-fade', '.2s');
+        }
         frame.classList.add('is-loaded');
         if (failed) frame.classList.add('is-error');
         glideFollowingContent(frame, frame.offsetHeight - startHeight, container);
         unmountTimer = window.setTimeout(() => {
           setImageLoaderHosts(prev => prev.filter(host => host !== loaderHost));
-        }, 450);
+        }, 900);
       };
       const reveal = () => {
         holdPlaceholder();
         // Decode before fading so large images don't drop the first animation frames.
-        (img.decode ? img.decode() : Promise.resolve()).catch(() => undefined).then(() => settle(false));
+        (img.decode ? img.decode() : Promise.resolve()).catch(() => undefined)
+          .then(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+          .then(() => settle(false));
       };
       const fail = () => {
         holdPlaceholder();
@@ -360,18 +371,22 @@ export default function AnnouncementDetailModal({
         .announcement-detail-content h3 { font-size: 1.125rem; line-height: 1.4; }
         .announcement-detail-content h4 { font-size: 1rem; line-height: 1.4; }
         .announcement-detail-content > *:first-child { margin-top: 0; }
-        @keyframes announcement-img-shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+        @keyframes announcement-img-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
         .announcement-img-frame { position: relative; display: block; width: 100%; min-height: 200px; margin: 1rem auto; border-radius: .75rem; }
-        .announcement-img-frame::before { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 1px solid #e0ecff; background: linear-gradient(100deg, #f8fafc 20%, #eff6ff 45%, #f8fafc 70%) 0 0 / 200% 100%; animation: announcement-img-shimmer 2.4s linear infinite; transition: opacity .45s ease; }
-        .announcement-img-loader { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: inherit; transition: opacity .35s ease; }
-        .announcement-img-frame.is-loaded .announcement-img-loader { opacity: 0; pointer-events: none; bottom: auto; height: var(--placeholder-height, 100%); transition-duration: .2s; }
-        .announcement-detail-content .announcement-img-frame > img { position: relative; z-index: 1; margin: 0 auto; opacity: 0; transition: opacity .4s ease-out var(--img-fade-delay, 0s); }
+        .announcement-img-frame::before { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 1px solid #e0ecff; background: #f4f8fd; transition: opacity var(--placeholder-fade, .35s) ease; }
+        .announcement-img-shimmer { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; transition: opacity var(--placeholder-fade, .35s) ease; }
+        .announcement-img-shimmer::before { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 25%, rgb(219 234 254 / 85%) 50%, transparent 75%); animation: announcement-img-sweep 1.8s ease-in-out infinite; will-change: transform; }
+        .announcement-img-loader { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: inherit; transition: opacity var(--placeholder-fade, .35s) ease; }
+        .announcement-img-frame.is-loaded .announcement-img-loader,
+        .announcement-img-frame.is-loaded .announcement-img-shimmer { opacity: 0; pointer-events: none; bottom: auto; height: var(--placeholder-height, 100%); }
+        .announcement-detail-content .announcement-img-frame > img { position: relative; z-index: 1; margin: 0 auto; opacity: 0; will-change: opacity; transition: opacity .4s ease-out var(--img-fade-delay, 0s); }
+        .announcement-img-frame.is-loaded .announcement-img-shimmer::before { animation-play-state: paused; }
         .announcement-img-frame.is-loaded { min-height: 0; aspect-ratio: auto !important; }
-        .announcement-img-frame.is-loaded::before { opacity: 0; animation: none; transition-duration: .2s; bottom: auto; height: var(--placeholder-height, 100%); }
+        .announcement-img-frame.is-loaded::before { opacity: 0; bottom: auto; height: var(--placeholder-height, 100%); }
         .announcement-detail-content .announcement-img-frame.is-loaded > img { opacity: 1; }
         .announcement-detail-content > :first-child > .announcement-img-frame:first-child { margin-top: 0; }
         @media (prefers-reduced-motion: reduce) {
-          .announcement-img-frame::before { animation: none; }
+          .announcement-img-shimmer::before { animation: none; }
           .announcement-detail-content .announcement-img-frame > img { transition: none; }
         }
         .announcement-detail-content > :first-child > img:first-child,
