@@ -7,6 +7,8 @@ import { logEmployeeLogin } from '../../lib/loginHistoryService';
 import { formatSupabaseError, isSupabaseTransientError, supabase } from '../../lib/supabase';
 import { useCompanyName } from '../../lib/useCompanyName';
 import { useResponsive } from '../../lib/useResponsive';
+import { useDeviceOptimization } from '../../lib/useDeviceOptimization';
+import { getNotificationAudioContext, installNotificationAudioUnlock } from '../../lib/notificationAudio';
 import { tabSessionManager } from '../../lib/TabSessionManager';
 import { useLanguage } from '../../lib/i18n/context';
 import type { Language } from '../../lib/i18n/types';
@@ -81,7 +83,6 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   const [showMessageToast, setShowMessageToast] = useState(false);
   const [latestMessage, setLatestMessage] = useState<MessageToast | null>(null);
   const [messageToastQueue, setMessageToastQueue] = useState<MessageToast[]>([]);
-  const [audioContextReady, setAudioContextReady] = useState(false);
   const [showPasswordChange, setShowPasswordChange] = useState(false);
   const [showSessionExpired, setShowSessionExpired] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -95,6 +96,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   const employeeNavRef = useRef<HTMLElement>(null);
   const { companyName } = useCompanyName(employee.created_by);
   const { isMobile, isTablet } = useResponsive();
+  const { isLowEnd } = useDeviceOptimization();
   const { t, language, setLanguage } = useLanguage();
   const [bootPhase, setBootPhase] = useState<'show' | 'exit' | 'done'>('show');
   useEffect(() => {
@@ -356,36 +358,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     await logout(false);
   };
 
-  // Initialize audio context on first user interaction
-  useEffect(() => {
-    const initAudioContext = () => {
-      if (!audioContextReady) {
-        try {
-          const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-          if (!AudioContextConstructor) return;
-          const audioContext = new AudioContextConstructor();
-          audioContext.resume().then(() => {
-            setAudioContextReady(true);
-            console.log('Audio context initialized and ready');
-          });
-        } catch (error) {
-          console.error('Error initializing audio context:', error);
-        }
-      }
-    };
-
-    // Listen for any user interaction to initialize audio
-    const events = ['click', 'touchstart', 'keydown'];
-    events.forEach(event => {
-      document.addEventListener(event, initAudioContext, { once: true });
-    });
-
-    return () => {
-      events.forEach(event => {
-        document.removeEventListener(event, initAudioContext);
-      });
-    };
-  }, [audioContextReady]);
+  // Unlock the shared notification audio context from real user gestures
+  useEffect(() => installNotificationAudioUnlock(), []);
 
   // Handle click outside user menu to close it
   useEffect(() => {
@@ -613,14 +587,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   const playNotificationSound = () => {
     // Create a pleasant notification sound with two tones
     try {
-      const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioContextConstructor) return;
-      const audioContext = new AudioContextConstructor();
-
-      // Resume audio context if suspended (browser autoplay policy)
-      if (audioContext.state === 'suspended') {
-        audioContext.resume();
-      }
+      const audioContext = getNotificationAudioContext();
+      if (!audioContext) return;
 
       // First tone (higher pitch)
       const oscillator1 = audioContext.createOscillator();
@@ -902,8 +870,12 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
           <>
             <div className="absolute top-0 right-0 w-[50%] h-[50%] bg-gradient-to-bl from-blue-50/50 via-transparent to-transparent"></div>
             <div className="absolute bottom-0 left-0 w-[40%] h-[40%] bg-gradient-to-tr from-slate-100/60 via-transparent to-transparent"></div>
-            <div className="absolute top-[20%] right-[15%] w-[500px] h-[500px] bg-blue-50/40 rounded-full blur-[150px]"></div>
-            <div className="absolute bottom-[20%] left-[10%] w-[400px] h-[400px] bg-sky-50/30 rounded-full blur-[130px]"></div>
+            {!isLowEnd && (
+              <>
+                <div className="absolute top-[20%] right-[15%] w-[500px] h-[500px] bg-blue-50/40 rounded-full blur-[150px]"></div>
+                <div className="absolute bottom-[20%] left-[10%] w-[400px] h-[400px] bg-sky-50/30 rounded-full blur-[130px]"></div>
+              </>
+            )}
 
             {/* Decorative color blocks - desktop */}
             <div className="absolute top-[12%] left-[5%] w-24 h-24 bg-gradient-to-br from-blue-100/60 to-cyan-100/40 rounded-2xl rotate-12 opacity-60"></div>

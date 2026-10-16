@@ -7,6 +7,7 @@ import { Play, Square, CheckCircle, XCircle, Clock, Package, TrendingUp, AlertTr
 import PanelColorBlocks from './PanelColorBlocks';
 import PanelEmptyIcon from './PanelEmptyIcon';
 import { useDeviceOptimization } from '../../lib/useDeviceOptimization';
+import { getNotificationAudioContext } from '../../lib/notificationAudio';
 import { useResponsive } from '../../lib/useResponsive';
 import { useLanguage } from '../../lib/i18n/context';
 import type { Employee } from '../../types';
@@ -360,20 +361,25 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const [liteMotion, setLiteMotion] = useState(false);
 
   // Device optimization hooks
-  const { isLowEnd, tier } = useDeviceOptimization();
+  const { isLowEnd } = useDeviceOptimization();
   const { isMobile, isTablet, width: viewportWidth } = useResponsive();
   const { t, dateLocale, language } = useLanguage();
+
+  // A device already known to be low-performance gets the still waiting panel without waiting for the frame-rate probe further down.
+  useEffect(() => {
+    if (isLowEnd) setLiteMotion(true);
+  }, [isLowEnd]);
 
   // Memoize performance settings based on device
   // Tablets (isTablet) should have full animations like desktop
   const performanceSettings = useMemo(() => ({
-    enableAnimations: !isLowEnd && (!isMobile || isTablet || tier === 'high'),
-    enableParticles: !isLowEnd && (!isMobile || isTablet),
+    enableAnimations: !isLowEnd,
+    enableParticles: !isLowEnd,
     enableComplexGradients: !isLowEnd,
     reduceTransitions: isLowEnd || (isMobile && !isTablet),
     particleCount: isLowEnd ? 0 : (isMobile && !isTablet) ? 3 : 8,
     transitionDuration: isLowEnd ? 200 : (isMobile && !isTablet) ? 300 : 500,
-  }), [isLowEnd, isMobile, isTablet, tier]);
+  }), [isLowEnd, isMobile, isTablet]);
 
   const startBtnParticles = useMemo(() => {
     const r = (min: number, max: number) => min + Math.random() * (max - min);
@@ -907,9 +913,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
   const playOrderNotificationSound = () => {
     try {
-      const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioContextConstructor) return;
-      const audioContext = new AudioContextConstructor();
+      const audioContext = getNotificationAudioContext();
+      if (!audioContext) return;
 
       // Create a more prominent multi-tone notification sound
       const playTone = (frequency: number, startTime: number, duration: number, volume: number = 0.3) => {

@@ -7,6 +7,7 @@ import { useLanguage } from '../../lib/i18n/context';
 import { CustomerAvatarDisplay } from '../admin/CustomerAvatarPicker';
 import { preloadCustomerAvatar } from '../admin/customerAvatarUtils';
 import { uploadStorageObjectWithProgress } from '../../lib/storageUpload';
+import { getNotificationAudioContext } from '../../lib/notificationAudio';
 import { uniqueRealtimeChannelName } from '../../lib/realtimeChannel';
 import PageLoader from './PageLoader';
 import PanelColorBlocks from './PanelColorBlocks';
@@ -776,9 +777,8 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
   };
 
   const playNotificationSound = (isSuper: boolean) => {
-    const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextConstructor) return;
-    const audioContext = new AudioContextConstructor();
+    const audioContext = getNotificationAudioContext();
+    if (!audioContext) return;
 
     const playTone = (frequency: number, startTime: number, duration: number, volume: number) => {
       const oscillator = audioContext.createOscillator();

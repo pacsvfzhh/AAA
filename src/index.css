@@ -1539,10 +1539,20 @@ body {
   }
 }
 
-/* iOS Safari zooms the page when focusing inputs under 16px; -webkit-touch-callout is iOS-only. */
+/* iOS Safari zooms the page when focusing inputs under 16px (and the viewport allows zooming, so it stays zoomed);
+   -webkit-touch-callout is iOS-only. Phones get it everywhere, tablets only inside the employee shell where :has() is supported. */
 @supports (-webkit-touch-callout: none) {
-  @media (max-width: 639px) {
-    .order-submission-form :is(input, textarea) {
+  @media (max-width: 767px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
+  }
+  @media (min-width: 768px) {
+    body:has(.employee-shell) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+    body:has(.employee-shell) select,
+    body:has(.employee-shell) textarea {
       font-size: 16px !important;
     }
   }
@@ -1923,6 +1933,19 @@ button.employee-header-action {
   .animate-breath-ripple {
     animation: breathRipple 3.5s ease-in-out infinite !important;
   }
+}
+
+/* Low-performance mode: devicePerformance sets .perf-lite on <html> for weak hardware, Save-Data, or a measured
+   frame-rate drop (older phones, battery saver, iOS Low Power Mode). Only effects that never carry content are dropped. */
+html.perf-lite *,
+html.perf-lite *::before,
+html.perf-lite *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.perf-lite .pointer-events-none[class*="blur-"] {
+  filter: none !important;
 }
 
 /* Tablet optimization - ensure animations work on iPad and other tablets */

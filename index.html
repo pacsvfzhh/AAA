@@ -63,6 +63,12 @@
         opacity: 1;
       }
 
+      /* Same phone root sizes as src/index.css, so the boot loader's rem sizes already match before the stylesheet loads. */
+      @media (max-width: 320px) { html { font-size: 12px; } }
+      @media (min-width: 321px) and (max-width: 375px) { html { font-size: 13px; } }
+      @media (min-width: 376px) and (max-width: 414px) { html { font-size: 14px; } }
+      @media (min-width: 415px) and (max-width: 480px) { html { font-size: 15px; } }
+
       @media (min-width: 768px) and (max-width: 1366px) and (hover: none) {
         html { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
         body { overscroll-behavior: none; }
@@ -100,8 +106,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 160px;
-        height: 160px;
+        width: 10rem;
+        height: 10rem;
       }
       .boot-glow {
         position: absolute;
@@ -120,8 +126,8 @@
       }
       .boot-ring {
         position: relative;
-        width: 64px;
-        height: 64px;
+        width: 4rem;
+        height: 4rem;
       }
       .boot-ring > div {
         position: absolute;
@@ -142,24 +148,24 @@
         border: 0;
       }
       .boot-dot {
-        width: 10px;
-        height: 10px;
+        width: 0.625rem;
+        height: 0.625rem;
         border-radius: 9999px;
         background: rgba(59, 130, 246, 0.8);
         animation: emp-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) calc(0ms - var(--p2000)) infinite;
       }
       .boot-label {
-        margin-top: -16px;
-        font-size: 14px;
-        line-height: 20px;
+        margin-top: -1rem;
+        font-size: 0.875rem;
+        line-height: 1.25rem;
         font-weight: 600;
         letter-spacing: 0.025em;
         color: #64748b;
       }
       @media (min-width: 640px) {
-        .boot-stage { width: 192px; height: 192px; }
+        .boot-stage { width: 12rem; height: 12rem; }
         .boot-ring { width: 72px; height: 72px; }
-        .boot-label { font-size: 16px; line-height: 24px; }
+        .boot-label { font-size: 1rem; line-height: 1.5rem; }
       }
       @keyframes emp-loader-block {
         from { opacity: 0.55; transform: translateY(0) rotate(var(--emp-rot)); }
