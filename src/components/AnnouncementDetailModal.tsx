@@ -203,16 +203,11 @@ export default function AnnouncementDetailModal({
           }}
         >
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5 blur-2xl" />
-            <div className="absolute -bottom-8 -left-8 h-32 w-32 rounded-full bg-blue-300/10 blur-xl" />
+            <div className="absolute -bottom-14 -right-8 h-32 w-32 rotate-[18deg] rounded-[30%] bg-white/10" />
+            <div className="absolute -bottom-12 -left-8 h-28 w-28 -rotate-[18deg] rounded-[30%] bg-cyan-300/15" />
+            <div className="absolute bottom-3 right-[22%] h-9 w-9 rotate-12 rounded-xl bg-white/[0.07]" />
+            <div className="absolute right-[38%] top-3 h-4 w-4 -rotate-6 rounded-md bg-sky-200/15" />
             <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-            <div
-              className="absolute inset-0 opacity-[0.04]"
-              style={{
-                backgroundImage: 'linear-gradient(to right, white 1px, transparent 1px), linear-gradient(to bottom, white 1px, transparent 1px)',
-                backgroundSize: '32px 32px',
-              }}
-            />
           </div>
 
           <button
