@@ -2599,6 +2599,23 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     };
   }, [waitingPanelActive, waitingEnterAnim, liteMotion]);
 
+  useEffect(() => {
+    if (!session.isWorking) return;
+    const root = document.documentElement;
+    let timer = 0;
+    const onScroll = () => {
+      if (!root.classList.contains('dispatch-scrolling')) root.classList.add('dispatch-scrolling');
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => root.classList.remove('dispatch-scrolling'), 160);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.clearTimeout(timer);
+      root.classList.remove('dispatch-scrolling');
+    };
+  }, [session.isWorking]);
+
   const getStatusBadge = (status: string) => {
     const badges = {
       pending: { text: t.dispatch.statusPending, color: 'bg-orange-50 text-orange-700 border border-orange-200' },

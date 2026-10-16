@@ -1694,10 +1694,13 @@ body {
   .confirm-band h2 { font-size: 14px !important; }
   .confirm-band p { font-size: 11px !important; margin-top: 0 !important; }
 
-  .confirm-amount { padding: 9px 12px 9px !important; }
-  .confirm-amount .text-\[30px\] { font-size: 26px !important; }
-  .confirm-amount > div:first-of-type > div:last-of-type { margin-top: 4px !important; }
-  .confirm-amount > div:last-child { margin-top: 6px !important; padding-top: 6px !important; font-size: 9px !important; }
+  .confirm-amount { padding: 10px 12px !important; }
+  .confirm-amount .text-\[28px\] { font-size: 24px !important; }
+  .confirm-amount > div:first-of-type > div { margin-top: 4px !important; }
+  .confirm-amount ol { margin: 8px 0 !important; }
+  .confirm-amount ol li { gap: 3px !important; }
+  .confirm-amount ol li > span:last-child { font-size: 9px !important; }
+  .confirm-amount > div:last-child { margin-top: 0 !important; padding-top: 6px !important; font-size: 9px !important; }
 
   .confirm-doc-head { padding: 7px 10px 7px 12px !important; gap: 8px !important; }
   .confirm-doc-head > div:first-of-type { gap: 3px !important; }
@@ -1709,7 +1712,7 @@ body {
   .confirm-field { padding: 6px 8px 6px 12px !important; }
   .confirm-field dt > span:last-child { font-size: 10px !important; }
   .confirm-field dd { font-size: 12.5px !important; margin-top: 2px !important; }
-  .confirm-stamp { width: 104px !important; height: 104px !important; }
+  .confirm-stamp { width: 52px !important; height: 52px !important; }
 
   .confirm-warning { padding: 5px 10px 5px 12px !important; }
   .confirm-warning p { font-size: 10.5px !important; }
@@ -3990,6 +3993,14 @@ button.dispatch-start-cta:active:not(:disabled) {
 .dispatch-panel-resizing .dispatch-waiting-accent::after,
 .dispatch-panel-resizing .dispatch-panel-wave,
 .dispatch-panel-resizing [class*="dispatch-gull"] {
+  animation-play-state: paused !important;
+}
+
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing)::before,
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing)::after,
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing) *,
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing) *::before,
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing) *::after {
   animation-play-state: paused !important;
 }
 
