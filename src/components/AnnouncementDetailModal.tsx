@@ -100,6 +100,8 @@ export default function AnnouncementDetailModal({
       loaderHost.className = 'announcement-img-loader';
       img.parentNode?.insertBefore(frame, img);
       frame.append(shimmer, loaderHost, img);
+      // Lazy images below the fold never report a size while the text is hidden, which would stall the reveal.
+      img.loading = 'eager';
       loaderHosts.push(loaderHost);
       const placeholderHeight = frame.offsetHeight;
 
@@ -390,9 +392,12 @@ export default function AnnouncementDetailModal({
                   fontSize: '15px',
                   lineHeight: '1.6',
                   color: '#374151',
+                  // While gated the content is laid out (so images can be measured) but takes no space, keeping the loader in view.
+                  height: contentReady ? 'auto' : 0,
+                  overflow: contentReady ? 'visible' : 'hidden',
                   opacity: contentReady ? 1 : 0,
                   pointerEvents: contentReady ? 'auto' : 'none',
-                  transition: gatedRef.current ? 'opacity .3s ease-out' : 'none',
+                  transition: gatedRef.current ? 'opacity .18s ease-out' : 'none',
                 }}
                 dangerouslySetInnerHTML={{ __html: sanitizedContent }}
               />
