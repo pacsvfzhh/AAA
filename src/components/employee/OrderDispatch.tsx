@@ -312,6 +312,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const [isProcessing, setIsProcessing] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [dispatchPause, setDispatchPause] = useState<{ type: 'unavailable' | 'error'; message: string } | null>(null);
+  const [dismissedPause, setDismissedPause] = useState<typeof dispatchPause>(null);
+  const pauseCardVisible = session.isWorking && dispatchPause !== null && dispatchPause !== dismissedPause;
   const [timeoutStopMinutes, setTimeoutStopMinutes] = useState(10);
   // Debounce states for preventing duplicate requests
   const [isAccepting, setIsAccepting] = useState(false);
@@ -2782,9 +2784,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       )}
 
       {/* Notification System - portaled so the fixed stack never becomes a space-y sibling that adds margin above the panel */}
-      {(notifications.length > 0 || (session.isWorking && dispatchPause)) && createPortal(
+      {(notifications.length > 0 || pauseCardVisible) && createPortal(
         <div className="dispatch-notice-stack pointer-events-none fixed inset-x-3 z-[60] flex flex-col gap-2.5 sm:inset-x-auto sm:right-4 sm:w-[380px]">
-          {session.isWorking && dispatchPause && (() => {
+          {pauseCardVisible && dispatchPause && (() => {
             const tone = dispatchPause.type === 'error' ? NOTICE_TONES.error : NOTICE_TONES.warning;
             const Icon = tone.icon;
             // Chinese and Japanese sentences end in a full-width stop and are not followed by a space
@@ -2792,7 +2794,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
             return (
               <div
                 role="status"
-                className={`dispatch-notice pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-[20px] bg-gradient-to-br via-white to-white py-3.5 pl-3.5 pr-4 shadow-[0_2px_6px_-2px_rgba(15,23,42,0.08),0_22px_44px_-20px_rgba(15,23,42,0.35)] ring-1 ${tone.surface}`}
+                className={`dispatch-notice pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-[20px] bg-gradient-to-br via-white to-white py-3.5 pl-3.5 pr-11 shadow-[0_2px_6px_-2px_rgba(15,23,42,0.08),0_22px_44px_-20px_rgba(15,23,42,0.35)] ring-1 ${tone.surface}`}
               >
                 <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-lg ${tone.badge}`} aria-hidden="true">
                   <Icon className="h-5 w-5" strokeWidth={2.25} />
@@ -2802,6 +2804,15 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                   <p className="mt-1 text-[13px] leading-relaxed text-slate-600">{pauseMessage}</p>
                 </div>
                 <span className={`absolute inset-x-0 bottom-0 h-[3px] opacity-60 ${tone.bar}`} aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={() => setDismissedPause(dispatchPause)}
+                  aria-label={t.common.close}
+                  className="emp-close-btn absolute right-1.5 top-1.5 flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                  style={{ padding: 0, minWidth: '36px', minHeight: '36px' }}
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
             );
           })()}
