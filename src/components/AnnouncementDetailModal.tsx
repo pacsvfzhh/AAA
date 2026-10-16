@@ -30,14 +30,13 @@ function glideFollowingContent(frame: HTMLElement, delta: number, container: HTM
   if (Math.abs(delta) < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const scroller = container.closest('.announcement-detail-scroll');
   if (scroller && frame.getBoundingClientRect().bottom - delta <= scroller.getBoundingClientRect().top) return;
-  const timing: KeyframeAnimationOptions = { duration: 520, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' };
-  // The grown frame is clipped to its old height and opens at the same pace the text slides down, so text never sits under the image.
-  if (delta > 0) frame.animate([{ clipPath: `inset(0 0 ${delta}px 0)` }, { clipPath: 'inset(0 0 0 0)' }], timing);
+  const timing: KeyframeAnimationOptions = { duration: 480, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' };
   const following: Element[] = [];
   for (let node: Element | null = frame; node && node !== container; node = node.parentElement) {
     for (let sibling = node.nextElementSibling; sibling; sibling = sibling.nextElementSibling) following.push(sibling);
   }
-  following.slice(0, 80).forEach(element => {
+  const reach = window.innerHeight * 2;
+  following.filter(element => element.getBoundingClientRect().top < reach).forEach(element => {
     element.animate(
       [{ transform: `translateY(${-delta}px)` }, { transform: 'translateY(0)' }],
       { ...timing, composite: 'add' },
@@ -95,6 +94,10 @@ export default function AnnouncementDetailModal({
         if (cancelled) return;
         const startHeight = frame.offsetHeight;
         frame.style.height = '';
+        // The loader keeps its placeholder size while fading out, so the frame resizing never stretches it.
+        frame.style.setProperty('--placeholder-height', `${startHeight}px`);
+        // Without known dimensions the frame resizes, so let the content below slide clear before the image fades in over it.
+        if (!frame.style.aspectRatio && !failed) frame.style.setProperty('--img-fade-delay', '.28s');
         frame.classList.add('is-loaded');
         if (failed) frame.classList.add('is-error');
         glideFollowingContent(frame, frame.offsetHeight - startHeight, container);
@@ -361,15 +364,15 @@ export default function AnnouncementDetailModal({
         .announcement-img-frame { position: relative; display: block; width: 100%; min-height: 200px; margin: 1rem auto; border-radius: .75rem; }
         .announcement-img-frame::before { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 1px solid #e0ecff; background: linear-gradient(100deg, #f8fafc 20%, #eff6ff 45%, #f8fafc 70%) 0 0 / 200% 100%; animation: announcement-img-shimmer 2.4s linear infinite; transition: opacity .45s ease; }
         .announcement-img-loader { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: inherit; transition: opacity .35s ease; }
-        .announcement-img-frame.is-loaded .announcement-img-loader { opacity: 0; pointer-events: none; }
-        .announcement-detail-content .announcement-img-frame > img { position: relative; z-index: 1; margin: 0 auto; opacity: 0; transform: scale(.985); transition: opacity .45s ease-out, transform .45s ease-out; }
-        .announcement-img-frame.is-loaded { width: fit-content; max-width: 100%; min-height: 0; aspect-ratio: auto !important; }
-        .announcement-img-frame.is-loaded::before { opacity: 0; animation: none; }
-        .announcement-detail-content .announcement-img-frame.is-loaded > img { opacity: 1; transform: none; }
+        .announcement-img-frame.is-loaded .announcement-img-loader { opacity: 0; pointer-events: none; bottom: auto; height: var(--placeholder-height, 100%); transition-duration: .2s; }
+        .announcement-detail-content .announcement-img-frame > img { position: relative; z-index: 1; margin: 0 auto; opacity: 0; transition: opacity .4s ease-out var(--img-fade-delay, 0s); }
+        .announcement-img-frame.is-loaded { min-height: 0; aspect-ratio: auto !important; }
+        .announcement-img-frame.is-loaded::before { opacity: 0; animation: none; transition-duration: .2s; bottom: auto; height: var(--placeholder-height, 100%); }
+        .announcement-detail-content .announcement-img-frame.is-loaded > img { opacity: 1; }
         .announcement-detail-content > :first-child > .announcement-img-frame:first-child { margin-top: 0; }
         @media (prefers-reduced-motion: reduce) {
           .announcement-img-frame::before { animation: none; }
-          .announcement-detail-content .announcement-img-frame > img { transition: none; transform: none; }
+          .announcement-detail-content .announcement-img-frame > img { transition: none; }
         }
         .announcement-detail-content > :first-child > img:first-child,
         .announcement-detail-content > img:first-child { margin-top: 0; }
