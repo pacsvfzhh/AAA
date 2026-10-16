@@ -5,6 +5,7 @@ import type { LucideIcon } from 'lucide-react';
 import { marked } from 'marked';
 import { sanitizeAnnouncementContent } from '../lib/sanitizeHTML';
 import PageLoader from './employee/PageLoader';
+import PanelColorBlocks from './employee/PanelColorBlocks';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -263,6 +264,12 @@ export default function AnnouncementDetailModal({
         </div>
 
         <div
+          className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+          style={{ background: 'linear-gradient(160deg, #ffffff 0%, #f0f7ff 40%, #e6f2fe 100%)' }}
+        >
+        <PanelColorBlocks />
+        <div className="pointer-events-none absolute left-6 right-6 top-0 z-10 h-[2px] rounded-full bg-gradient-to-r from-transparent via-blue-300 to-transparent" aria-hidden="true" />
+        <div
           className="announcement-detail-scroll relative min-h-0 flex-1 overflow-y-auto"
           style={{
             WebkitOverflowScrolling: 'touch',
@@ -286,6 +293,7 @@ export default function AnnouncementDetailModal({
             )}
             {imageLoaderHosts.map(host => createPortal(<PageLoader variant="inline" className="!min-h-0 !py-0" />, host))}
           </div>
+        </div>
         </div>
 
         <div
