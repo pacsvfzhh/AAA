@@ -378,7 +378,7 @@ export default function AnnouncementDetailModal({
             padding: isMobileDevice ? '12px 16px 16px' : '20px 24px 24px',
           }}
         >
-          <div className="relative" style={{ minHeight: contentLoading ? '60vh' : !contentReady && sanitizedContent ? '40vh' : 'auto' }}>
+          <div className="relative" style={{ minHeight: contentLoading || (!contentReady && sanitizedContent) ? '60vh' : 'auto' }}>
             {contentLoading || (!contentReady && sanitizedContent) ? (
               <div className="absolute inset-0 flex items-center justify-center">
                 <PageLoader variant="panel" className="!min-h-0" />
