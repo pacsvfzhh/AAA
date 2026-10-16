@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, memo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageCircle, X, Send, Image, Star, ArrowLeft, Clock, Zap, Sparkles, Award, Gift, ZoomIn, ZoomOut, RotateCcw, Megaphone, ChevronRight } from 'lucide-react';
+import { MessageCircle, X, Send, Image, Star, ArrowLeft, Clock, Zap, Sparkles, Award, Gift, Megaphone, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { sanitizeChatMessage, sanitizeAnnouncementContent } from '../../lib/sanitizeHTML';
 import { useLanguage } from '../../lib/i18n/context';
@@ -11,6 +11,7 @@ import { getNotificationAudioContext } from '../../lib/notificationAudio';
 import { uniqueRealtimeChannelName } from '../../lib/realtimeChannel';
 import PageLoader from './PageLoader';
 import PanelColorBlocks from './PanelColorBlocks';
+import ChatImageViewer from './ChatImageViewer';
 
 function extractImageOnlyUrl(content: string): string | null {
   const container = document.createElement('div');
@@ -483,10 +484,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
       }
     }
   }, [fetchRichCardContent, fetchTemplateContentForViewer, fetchAutoMsgContentForViewer]);
-  const [imageZoom, setImageZoom] = useState(1);
-  const [imageDrag, setImageDrag] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
   const audioRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const popupTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [customerOnlineStatus, setCustomerOnlineStatus] = useState<Map<string, boolean>>(new Map());
@@ -891,7 +888,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
           <ChatImage
             src={msg.image_url}
             alt="Shared image"
-            onClickImage={isUploading ? () => {} : (url: string) => { setPreviewImage(url); setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
+            onClickImage={isUploading ? () => {} : (url: string) => setPreviewImage(url)}
           />
           {isUploading && (
             <div className="absolute inset-0 bg-black/25 backdrop-blur-[2px] flex flex-col items-center justify-center rounded-xl z-10">
@@ -1089,7 +1086,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
         <ChatImage
           src={imageOnlyUrl}
           alt="Shared image"
-          onClickImage={(url: string) => { setPreviewImage(url); setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
+          onClickImage={(url: string) => setPreviewImage(url)}
         />
       );
     }
@@ -1107,11 +1104,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
               e.stopPropagation();
               e.preventDefault();
               const imgSrc = (target as HTMLImageElement).src;
-              if (imgSrc) {
-                setPreviewImage(imgSrc);
-                setImageZoom(1);
-                setImageDrag({ x: 0, y: 0 });
-              }
+              if (imgSrc) setPreviewImage(imgSrc);
             }
           }}
         />
@@ -2292,37 +2285,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
           box-shadow: 0 6px 14px -8px rgb(15 23 42 / 45%);
         }
 
-        .cs-viewer-toolbar {
-          top: calc(env(safe-area-inset-top) + 12px);
-          right: calc(env(safe-area-inset-right) + 12px);
-        }
-
-        button.cs-viewer-btn {
-          box-sizing: border-box;
-          width: 40px !important;
-          height: 40px !important;
-          min-width: 40px !important;
-          min-height: 40px !important;
-          padding: 0 !important;
-          flex: 0 0 auto;
-        }
-
-        @media (pointer: coarse), (max-width: 1023px) {
-          button.cs-viewer-btn {
-            width: 44px !important;
-            height: 44px !important;
-            min-width: 44px !important;
-            min-height: 44px !important;
-          }
-        }
-
-        @media (min-width: 640px) {
-          .cs-viewer-toolbar {
-            top: calc(env(safe-area-inset-top) + 20px);
-            right: calc(env(safe-area-inset-right) + 20px);
-          }
-        }
-
         @media (max-width: 1023px) {
           .customer-service-panel-header {
             padding-top: calc(env(safe-area-inset-top) + 16px);
@@ -3233,75 +3195,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
           </div>
         </div>
       )}
-      {previewImage && createPortal(
-        <div
-          className="employee-modal-backdrop fixed inset-0 z-[99999] flex items-center justify-center bg-black/90"
-          onClick={(e) => { if (e.target === e.currentTarget) { setPreviewImage(null); setImageZoom(1); setImageDrag({ x: 0, y: 0 }); } }}
-        >
-          <div className="cs-viewer-toolbar absolute z-10 flex items-center gap-1.5 sm:gap-2">
-            <button
-              type="button"
-              onClick={() => setImageZoom(z => Math.max(0.5, z - 0.25))}
-              className="cs-viewer-btn flex items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 active:bg-white/25"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label="Zoom out"
-            >
-              <ZoomOut className="h-5 w-5 shrink-0" />
-            </button>
-            <span className="w-[64px] sm:w-[72px] text-center font-mono text-[17px] sm:text-[19px] leading-none font-semibold tabular-nums text-white/90">{Math.round(imageZoom * 100)}%</span>
-            <button
-              type="button"
-              onClick={() => setImageZoom(z => Math.min(5, z + 0.25))}
-              className="cs-viewer-btn flex items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 active:bg-white/25"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label="Zoom in"
-            >
-              <ZoomIn className="h-5 w-5 shrink-0" />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
-              className="cs-viewer-btn flex items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 active:bg-white/25"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label="Reset"
-            >
-              <RotateCcw className="h-5 w-5 shrink-0" />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setPreviewImage(null); setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
-              className="cs-viewer-btn ml-1 flex items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/25 active:bg-white/30"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label={t.common.close}
-            >
-              <X className="h-5 w-5 shrink-0" strokeWidth={2.25} />
-            </button>
-          </div>
-
-          <div
-            className="w-full h-full flex items-center justify-center overflow-hidden cursor-grab active:cursor-grabbing"
-            onMouseDown={(e) => { setIsDragging(true); dragStartRef.current = { x: e.clientX, y: e.clientY, ox: imageDrag.x, oy: imageDrag.y }; }}
-            onMouseMove={(e) => { if (!isDragging) return; setImageDrag({ x: dragStartRef.current.ox + e.clientX - dragStartRef.current.x, y: dragStartRef.current.oy + e.clientY - dragStartRef.current.y }); }}
-            onMouseUp={() => setIsDragging(false)}
-            onMouseLeave={() => setIsDragging(false)}
-            onTouchStart={(e) => { const t = e.touches[0]; setIsDragging(true); dragStartRef.current = { x: t.clientX, y: t.clientY, ox: imageDrag.x, oy: imageDrag.y }; }}
-            onTouchMove={(e) => { if (!isDragging) return; const t = e.touches[0]; setImageDrag({ x: dragStartRef.current.ox + t.clientX - dragStartRef.current.x, y: dragStartRef.current.oy + t.clientY - dragStartRef.current.y }); }}
-            onTouchEnd={() => setIsDragging(false)}
-          >
-            <img
-              src={previewImage}
-              alt="Preview"
-              className="max-w-[95vw] max-h-[90vh] sm:max-w-[85vw] sm:max-h-[85vh] object-contain select-none"
-              style={{
-                transform: `scale(${imageZoom}) translate(${imageDrag.x / imageZoom}px, ${imageDrag.y / imageZoom}px)`,
-                transition: isDragging ? 'none' : 'transform 0.2s ease-out',
-              }}
-              draggable={false}
-            />
-          </div>
-        </div>,
-        document.body
-      )}
+      {previewImage && <ChatImageViewer src={previewImage} onClose={() => setPreviewImage(null)} />}
       {viewingRichCard && createPortal(
         <div
           className="employee-modal-backdrop fixed inset-0 z-[10000] flex items-stretch justify-stretch p-0 xl:items-center xl:justify-center xl:p-6 overflow-hidden touch-none"

@@ -76,7 +76,8 @@ export function isEmployeeSessionEndedError(error: unknown): boolean {
   const message = formatSupabaseError(error).toLowerCase();
   return message.includes('employee session is invalid or expired')
     || message.includes('employee session has expired')
-    || message.includes('invalid employee logout session');
+    || message.includes('invalid employee logout session')
+    || message.includes('invalid employee login session');
 }
 
 export function isSupabaseTransientError(error: unknown): boolean {
