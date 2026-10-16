@@ -509,12 +509,12 @@ export default function DailyStatistics({ employeeId }: DailyStatisticsProps) {
                       {dailyStats.map((stat, index) => (
                         <tr
                           key={`${stat.date}-${index}`}
-                          className="border-b border-gray-200 hover:bg-blue-50 transition-colors"
+                          className="group border-b border-gray-200 transition-colors duration-150 hover:bg-blue-100/80"
                         >
-                          <td className="px-3 lg:px-4 py-2.5 whitespace-nowrap">
+                          <td className="px-3 lg:px-4 py-2.5 whitespace-nowrap shadow-[inset_3px_0_0_transparent] transition-shadow duration-150 group-hover:shadow-[inset_3px_0_0_#2563eb]">
                             <div className="flex items-center gap-2">
-                              <div className="w-1 h-1 rounded-full bg-blue-400"></div>
-                              <span className="text-[13px] lg:text-sm text-gray-700 font-medium">{formatDay(stat.dateKey)}</span>
+                              <div className="w-1 h-1 rounded-full bg-blue-400 transition-transform duration-150 group-hover:scale-[2] group-hover:bg-blue-600"></div>
+                              <span className="text-[13px] lg:text-sm text-gray-700 font-medium transition-colors group-hover:text-[#12356d]">{formatDay(stat.dateKey)}</span>
                             </div>
                           </td>
                           <td className="px-2 lg:px-3 py-2.5">
