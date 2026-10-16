@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bell, Calendar, Pin, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -66,19 +66,34 @@ export default function AnnouncementDetailModal({
     return sanitizeAnnouncementContent(typeof rendered === 'string' ? rendered : '');
   }, [content]);
 
-  useEffect(() => {
+  const [contentReady, setContentReady] = useState(false);
+  const gatedRef = useRef(false);
+
+  // Images are given their exact box (aspect ratio and width) as soon as the browser knows their size, which is
+  // usually long before the pixels arrive. Content stays hidden behind the page loader until then (max 1.2s),
+  // so the reveal never moves text; images only fade in place.
+  useLayoutEffect(() => {
     const container = contentRef.current;
     if (!container) return;
 
     const imageCleanups: Array<() => void> = [];
     const loaderHosts: HTMLElement[] = [];
+    let waiting = 0;
+    let scanning = true;
+    let revealed = false;
+    let gateTimer: number | undefined;
+    const openGate = () => {
+      if (revealed) return;
+      revealed = true;
+      window.clearTimeout(gateTimer);
+      setContentReady(true);
+    };
+    imageCleanups.push(() => window.clearTimeout(gateTimer));
+
     container.querySelectorAll('img').forEach(img => {
       if ((img.complete && img.naturalWidth > 0) || img.parentElement?.classList.contains('announcement-img-frame')) return;
       const frame = document.createElement('span');
       frame.className = 'announcement-img-frame';
-      const width = Number(img.getAttribute('width'));
-      const height = Number(img.getAttribute('height'));
-      if (width > 0 && height > 0) frame.style.aspectRatio = `${width} / ${height}`;
       const shimmer = document.createElement('span');
       shimmer.className = 'announcement-img-shimmer';
       const loaderHost = document.createElement('span');
@@ -89,27 +104,61 @@ export default function AnnouncementDetailModal({
       const placeholderHeight = frame.offsetHeight;
 
       let cancelled = false;
+      let sized = false;
+      let counted = true;
+      let pollId = 0;
       let unmountTimer: number | undefined;
-      // The browser sizes the <img> the moment it loads, before decode finishes; hold the placeholder height until the reveal.
-      const holdPlaceholder = () => { frame.style.height = `${placeholderHeight}px`; };
+      waiting++;
+      const resolveGate = () => {
+        if (!counted) return;
+        counted = false;
+        waiting--;
+        if (!scanning && waiting === 0) openGate();
+      };
+      const applySize = () => {
+        if (sized || cancelled) return;
+        const attrWidth = Number(img.getAttribute('width'));
+        const attrHeight = Number(img.getAttribute('height'));
+        const useAttrs = attrWidth > 0 && attrHeight > 0;
+        const w = useAttrs ? attrWidth : img.naturalWidth;
+        const h = useAttrs ? attrHeight : img.naturalHeight;
+        if (!(w > 0 && h > 0)) return;
+        sized = true;
+        const before = frame.offsetHeight;
+        frame.style.aspectRatio = `${w} / ${h}`;
+        frame.style.maxWidth = `${w}px`;
+        frame.classList.add('has-size');
+        if (revealed) glideFollowingContent(frame, frame.offsetHeight - before, container);
+        resolveGate();
+      };
+      const pollSize = () => {
+        if (sized || cancelled) return;
+        applySize();
+        if (!sized) pollId = requestAnimationFrame(pollSize);
+      };
+      applySize();
+      if (!sized) pollId = requestAnimationFrame(pollSize);
+      // Fallback for images whose size only shows up at load: the browser sizes the <img> before decode finishes, so hold the placeholder height until the reveal.
+      const holdPlaceholder = () => { if (!sized) frame.style.height = `${placeholderHeight}px`; };
       const settle = (failed: boolean) => {
         if (cancelled) return;
+        resolveGate();
         const startHeight = frame.offsetHeight;
         frame.style.height = '';
         // The loader keeps its placeholder size while fading out, so the frame resizing never stretches it.
         frame.style.setProperty('--placeholder-height', `${startHeight}px`);
         // While the image is held it is already laid out at its real size, so the growth is known before the class flips.
-        const growth = failed ? 0 : img.offsetHeight - startHeight;
+        const growth = failed || sized ? 0 : img.offsetHeight - startHeight;
         // Growing: the content below slides clear first, then the image crossfades with the lingering placeholder.
         if (growth > 1) {
           frame.style.setProperty('--img-fade-delay', '.28s');
           frame.style.setProperty('--placeholder-fade', '.5s');
         } else {
-          frame.style.setProperty('--placeholder-fade', '.2s');
+          frame.style.setProperty('--placeholder-fade', sized ? '.4s' : '.2s');
         }
         frame.classList.add('is-loaded');
         if (failed) frame.classList.add('is-error');
-        glideFollowingContent(frame, frame.offsetHeight - startHeight, container);
+        if (!sized) glideFollowingContent(frame, frame.offsetHeight - startHeight, container);
         unmountTimer = window.setTimeout(() => {
           setImageLoaderHosts(prev => prev.filter(host => host !== loaderHost));
         }, 900);
@@ -129,12 +178,21 @@ export default function AnnouncementDetailModal({
       img.addEventListener('error', fail, { once: true });
       imageCleanups.push(() => {
         cancelled = true;
+        cancelAnimationFrame(pollId);
         window.clearTimeout(unmountTimer);
         img.removeEventListener('load', reveal);
         img.removeEventListener('error', fail);
       });
     });
     setImageLoaderHosts(loaderHosts);
+    scanning = false;
+    if (waiting === 0) {
+      openGate();
+    } else {
+      gatedRef.current = true;
+      setContentReady(false);
+      gateTimer = window.setTimeout(openGate, 1200);
+    }
 
     container.querySelectorAll('video').forEach(video => {
       video.controls = true;
@@ -210,7 +268,7 @@ export default function AnnouncementDetailModal({
       imageCleanups.forEach(cleanup => cleanup());
       setImageLoaderHosts([]);
     };
-  }, [sanitizedContent]);
+  }, [sanitizedContent, contentLoading]);
 
   return createPortal(
     <div
@@ -318,16 +376,24 @@ export default function AnnouncementDetailModal({
             padding: isMobileDevice ? '12px 16px 16px' : '20px 24px 24px',
           }}
         >
-          <div className="relative" style={{ minHeight: contentLoading ? '60vh' : 'auto' }}>
-            {contentLoading ? (
+          <div className="relative" style={{ minHeight: contentLoading ? '60vh' : !contentReady && sanitizedContent ? '40vh' : 'auto' }}>
+            {contentLoading || (!contentReady && sanitizedContent) ? (
               <div className="absolute inset-0 flex items-center justify-center">
                 <PageLoader variant="panel" className="!min-h-0" />
               </div>
-            ) : (
+            ) : null}
+            {!contentLoading && (
               <div
                 ref={contentRef}
                 className="announcement-detail-content relative"
-                style={{ fontSize: '15px', lineHeight: '1.6', color: '#374151' }}
+                style={{
+                  fontSize: '15px',
+                  lineHeight: '1.6',
+                  color: '#374151',
+                  opacity: contentReady ? 1 : 0,
+                  pointerEvents: contentReady ? 'auto' : 'none',
+                  transition: gatedRef.current ? 'opacity .3s ease-out' : 'none',
+                }}
                 dangerouslySetInnerHTML={{ __html: sanitizedContent }}
               />
             )}
@@ -381,7 +447,9 @@ export default function AnnouncementDetailModal({
         .announcement-img-frame.is-loaded .announcement-img-shimmer { opacity: 0; pointer-events: none; bottom: auto; height: var(--placeholder-height, 100%); }
         .announcement-detail-content .announcement-img-frame > img { position: relative; z-index: 1; margin: 0 auto; opacity: 0; will-change: opacity; transition: opacity .4s ease-out var(--img-fade-delay, 0s); }
         .announcement-img-frame.is-loaded .announcement-img-shimmer::before { animation-play-state: paused; }
-        .announcement-img-frame.is-loaded { min-height: 0; aspect-ratio: auto !important; }
+        .announcement-img-frame.has-size { min-height: 0; }
+        .announcement-detail-content .announcement-img-frame.has-size > img { width: 100%; height: 100%; margin: 0; }
+        .announcement-img-frame.is-loaded:not(.has-size) { min-height: 0; }
         .announcement-img-frame.is-loaded::before { opacity: 0; bottom: auto; height: var(--placeholder-height, 100%); }
         .announcement-detail-content .announcement-img-frame.is-loaded > img { opacity: 1; }
         .announcement-detail-content > :first-child > .announcement-img-frame:first-child { margin-top: 0; }
