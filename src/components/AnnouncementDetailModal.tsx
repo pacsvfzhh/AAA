@@ -30,6 +30,9 @@ function glideFollowingContent(frame: HTMLElement, delta: number, container: HTM
   if (Math.abs(delta) < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const scroller = container.closest('.announcement-detail-scroll');
   if (scroller && frame.getBoundingClientRect().bottom - delta <= scroller.getBoundingClientRect().top) return;
+  const timing: KeyframeAnimationOptions = { duration: 520, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' };
+  // The grown frame is clipped to its old height and opens at the same pace the text slides down, so text never sits under the image.
+  if (delta > 0) frame.animate([{ clipPath: `inset(0 0 ${delta}px 0)` }, { clipPath: 'inset(0 0 0 0)' }], timing);
   const following: Element[] = [];
   for (let node: Element | null = frame; node && node !== container; node = node.parentElement) {
     for (let sibling = node.nextElementSibling; sibling; sibling = sibling.nextElementSibling) following.push(sibling);
@@ -37,7 +40,7 @@ function glideFollowingContent(frame: HTMLElement, delta: number, container: HTM
   following.slice(0, 80).forEach(element => {
     element.animate(
       [{ transform: `translateY(${-delta}px)` }, { transform: 'translateY(0)' }],
-      { duration: 520, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', composite: 'add' },
+      { ...timing, composite: 'add' },
     );
   });
 }
