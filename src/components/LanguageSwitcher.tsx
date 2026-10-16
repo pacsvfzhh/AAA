@@ -34,10 +34,10 @@ export default function LanguageSwitcher({ variant = 'desktop', onOpenModal }: L
       <>
         <button
           onClick={handleOpen}
-          className="w-full px-4 py-3 flex items-center gap-3 rounded-xl hover:bg-slate-50 transition-all duration-200 group"
+          className="w-full px-4 py-3 flex items-center gap-3 rounded-xl hover:bg-emerald-50 transition-all duration-200 group"
         >
-          <div className="w-8 h-8 bg-slate-50 group-hover:bg-slate-100 rounded-lg flex items-center justify-center transition-colors">
-            <Globe className="w-4 h-4 text-slate-500" />
+          <div className="w-8 h-8 bg-emerald-50 group-hover:bg-emerald-100 rounded-lg flex items-center justify-center transition-colors">
+            <Globe className="w-4 h-4 text-emerald-600" />
           </div>
           <div className="flex-1 text-left">
             <span className="text-sm font-medium text-slate-700 group-hover:text-slate-900 transition-colors">

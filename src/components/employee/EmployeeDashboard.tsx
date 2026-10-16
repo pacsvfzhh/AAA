@@ -1294,8 +1294,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                             }}
                             className="w-full px-4 py-3 flex items-center gap-3 rounded-xl hover:bg-red-50 transition-all duration-200 group"
                           >
-                            <div className="w-8 h-8 bg-slate-50 group-hover:bg-red-100 rounded-lg flex items-center justify-center transition-colors">
-                              <LogOut className="w-4 h-4 text-slate-400 group-hover:text-red-500 transition-colors" />
+                            <div className="w-8 h-8 bg-red-50 group-hover:bg-red-100 rounded-lg flex items-center justify-center transition-colors">
+                              <LogOut className="w-4 h-4 text-red-500" />
                             </div>
                             <span className="text-sm font-medium text-slate-700 group-hover:text-red-600 transition-colors">{t.header.logout}</span>
                           </button>
