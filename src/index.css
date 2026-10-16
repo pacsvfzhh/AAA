@@ -797,6 +797,26 @@
   color: #2563eb !important;
 }
 
+/* Notification detail body. Fixed px so the phone root-size steps (12-15px) cannot shrink reading text; list-card previews keep their own smaller sizes. */
+.notification-detail-prose {
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+@media (max-width: 359px) {
+  .notification-detail-prose {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+}
+
+@media (min-width: 600px) {
+  .notification-detail-prose {
+    font-size: 16px;
+    line-height: 1.7;
+  }
+}
+
 @keyframes fadeInScale {
   from {
     opacity: 0;
@@ -1844,6 +1864,15 @@ body {
   a:not([class*="w-["]):not([class*="h-["]),
   [role="button"]:not([class*="w-["]):not([class*="h-["]) {
     min-height: 48px; /* Slightly larger for small screens */
+  }
+}
+
+/* A link inside notification text is a word in a sentence; the touch-target padding above would open a 16px gap on each side of it. Same specificity, so it must stay below those rules. */
+@media (pointer: coarse) {
+  .notification-detail-prose a:not([class]) {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
   }
 }
 
@@ -5698,11 +5727,6 @@ body:has(.employee-shell) .order-detail-content-scrollbar::-webkit-scrollbar-thu
 
   .prose-invert em {
     font-style: italic;
-  }
-
-  .prose-sm {
-    font-size: 0.875rem;
-    line-height: 1.5;
   }
 
   /* Responsive image styles for announcements */

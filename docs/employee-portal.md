@@ -73,6 +73,7 @@
 - 错过的实时通知不会丢：页面可见且在线时（每 30 秒、切回页面或恢复联网时；实时连接断开也照常执行，失败按 30 秒起倍增、最长 5 分钟重试），`claim_next_realtime_notification_delivery` 会补弹所有未投递、未过期的实时通知；`realtime_with_login_fallback` 的通知在下次登录时由登录弹窗先显示。
 - 一次补弹超过 3 条时只显示一张「你有 N 条新消息」提示（只响一次提示音），点击打开通知中心但不选中任何一条，因此不会标为已读；3 条以内仍逐条弹出。实时到达的新通知照旧逐条弹出。
 - `EmployeeNotificationDetailPanel.tsx` 是通知详情的展示组件（后台预览也在用），本身不写已读。
+- 通知详情正文字号（2026-10-16）：正文容器统一用 `.notification-detail-prose`（`src/index.css`）：手机 15px、平板/电脑 16px（宽度 ≤359px 为 14px），行高 1.65–1.7，用固定 px，不受手机根字号（12–15px）缩小影响；管理员在编辑器里设的大/中/小字是 em 比例，随正文一起放大。使用处：`MessageCenter.tsx` 详情、`LoginPopupMessages.tsx`（手机与平板/电脑两种布局）、`EmployeeNotificationDetailPanel.tsx`（后台预览）。通知列表卡片预览和铃铛弹出卡片预览（11/12px）是另一套小字号，不要和详情共用同一个类。触屏设备的全局「最小点击区域」规则会给每个 `<a>` 加内边距，`.notification-detail-prose` 内无 class 的链接已在 `src/index.css` 里排除，避免句中链接前后出现空白。
 - 公告：`AnnouncementBoard.tsx` 读 `announcements`，`AnnouncementDetailModal.tsx` 净化后显示；公告没有已读标记。首次加载且没有缓存时，内容区正中显示「加载中...」；加载完成仍无公告才显示居中的「暂无公告」卡片。之后的实时刷新在后台进行，不再显示加载状态。切到其他标签（公告页 `display: none`）时自动滚动循环停止，切回后由 `ResizeObserver` 重新启动。
 
 ## 聊天

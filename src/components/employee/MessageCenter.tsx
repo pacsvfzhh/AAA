@@ -770,7 +770,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                     html={selectedMessage.messages.content}
                     copyLabel={t.messages.quickCopy}
                     copiedLabel={t.messages.copied}
-                    className={`prose prose-sm lg:prose-base max-w-none leading-relaxed ${detailTheme.prose} [&_a]:underline [&_img]:!rounded-xl [&_img]:!shadow-md [&_blockquote]:!p-4 [&_blockquote]:!rounded-r-lg [&_h1]:!text-slate-900 [&_h2]:!text-slate-800 [&_h3]:!text-slate-700 [&_p]:!text-slate-700 [&_li]:!text-slate-700 message-content-dark`}
+                    className={`notification-detail-prose max-w-none ${detailTheme.prose} [&_a]:underline [&_img]:!rounded-xl [&_img]:!shadow-md [&_blockquote]:!p-4 [&_blockquote]:!rounded-r-lg [&_h1]:!text-slate-900 [&_h2]:!text-slate-800 [&_h3]:!text-slate-700 [&_p]:!text-slate-700 [&_li]:!text-slate-700 message-content-dark`}
                     style={{ wordBreak: 'break-word', overflowWrap: 'break-word', color: '#1e293b' }}
                   />
                 </div>
