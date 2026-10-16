@@ -26,6 +26,7 @@
     "@tiptap/starter-kit": "^3.10.2",
     "bcryptjs": "^3.0.2",
     "dompurify": "^3.3.0",
+    "fflate": "^0.8.3",
     "lucide-react": "^0.344.0",
     "mammoth": "^1.11.0",
     "marked": "^16.4.1",
