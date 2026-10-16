@@ -1014,7 +1014,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                 </div>
                 {!isMobile && !isTablet ? (
                   <div className="flex min-w-0 flex-1 items-center gap-4">
-                    <h1 className="truncate text-[20px] font-bold leading-none tracking-tight text-white" style={{ textShadow: '0 1px 12px rgba(56,189,248,0.25)' }}>
+                    <h1 className="emp-brand-title truncate text-[22px] leading-tight">
                       {companyName}
                     </h1>
                     <span className="h-6 w-px flex-shrink-0 bg-gradient-to-b from-transparent via-white/35 to-transparent" aria-hidden="true"></span>
@@ -1026,7 +1026,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                   </div>
                 ) : (
                 <div className="flex-1 min-w-0" style={{ maxWidth: isMobile ? 'calc(100vw - 140px)' : undefined }}>
-                  <h1 className={`${isMobile ? 'text-[15px]' : 'text-lg'} font-bold text-white truncate tracking-tight leading-tight`}>
+                  <h1 className={`emp-brand-title ${isMobile ? 'text-[17px]' : 'text-xl'} truncate leading-tight`}>
                     {companyName}
                   </h1>
                   <div className="flex items-center gap-1.5 mt-px">
