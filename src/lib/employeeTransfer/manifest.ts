@@ -119,8 +119,7 @@ export function serializeManifest(value: VolumeManifest): Uint8Array {
   return bytes;
 }
 
-// Canonical serialization is part of v1. Re-encoding comparison rejects duplicate JSON keys,
-// alternate number/escape spellings, unknown keys and ambiguous parser interpretations.
+// Canonical re-encoding rejects duplicate keys and ambiguous JSON spellings.
 export function parseManifest(bytes: Uint8Array): VolumeManifest {
   if (bytes.length > MAX_MANIFEST_BYTES) invalid();
   let value: unknown;

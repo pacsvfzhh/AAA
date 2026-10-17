@@ -102,9 +102,13 @@ RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
   -- pg_get_triggerdef excludes tgenabled, so disabling does not change this digest.
   SELECT encode(sha256(convert_to(jsonb_build_array(
-    pg_get_triggerdef(trigger.oid, false), pg_get_functiondef(trigger.tgfoid)
+    pg_get_triggerdef(trigger.oid, false), pg_get_functiondef(trigger.tgfoid),
+    procedure.proowner::text, procedure.proacl::text,
+    (SELECT role.rolsuper FROM pg_roles AS role WHERE role.oid = procedure.proowner),
+    (SELECT role.rolbypassrls FROM pg_roles AS role WHERE role.oid = procedure.proowner)
   )::text, 'UTF8')), 'hex')
-  FROM pg_trigger AS trigger WHERE trigger.oid = p_trigger AND NOT trigger.tgisinternal;
+  FROM pg_trigger AS trigger JOIN pg_proc AS procedure ON procedure.oid = trigger.tgfoid
+  WHERE trigger.oid = p_trigger AND NOT trigger.tgisinternal;
 $$;
 
 CREATE FUNCTION private.employee_transfer_pending_trigger_bypass()
@@ -250,6 +254,28 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION private.employee_transfer_require_trigger_restore()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+BEGIN
+  IF NEW.action = 'trigger_bypass'
+    AND NOT EXISTS (SELECT 1 FROM private.employee_transfer_events AS restored
+      WHERE restored.action = 'trigger_restore'
+        AND restored.details ->> 'transaction_id' = NEW.details ->> 'transaction_id'
+        AND restored.details ->> 'bypass_id' = NEW.details ->> 'bypass_id') THEN
+    RAISE EXCEPTION 'Employee transfer triggers must be restored before committing.';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER employee_transfer_require_trigger_restore
+AFTER INSERT ON private.employee_transfer_events
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW WHEN (NEW.action = 'trigger_bypass')
+EXECUTE FUNCTION private.employee_transfer_require_trigger_restore();
+
+REVOKE ALL ON FUNCTION private.employee_transfer_require_trigger_restore() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION private.employee_transfer_trigger_tables() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION private.employee_transfer_fixed_trigger_policy() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION private.employee_transfer_lock_trigger_tables(text[]) FROM PUBLIC, anon, authenticated;

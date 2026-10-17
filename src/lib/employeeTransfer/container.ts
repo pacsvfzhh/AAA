@@ -33,9 +33,9 @@ export const DEFAULT_CONTAINER_LIMITS: Readonly<ContainerLimits> = Object.freeze
 });
 export interface ContainerProgress {
   phase: 'write' | 'verify';
-  /** Actual business-entry payload bytes handled; excludes ZIP framing and manifest bytes. */
+  // Excludes ZIP framing, manifest and the writer's first-pass scan.
   bytes: number;
-  /** Entries whose payload has been fully handled (not business commits). */
+  // Completed payloads, not business commits.
   entries: number;
   path?: string;
 }
@@ -49,14 +49,14 @@ export interface VerifyOptions extends ContainerOptions {
 }
 export interface TransferEntry {
   path: string;
-  /** Known exact size permits unambiguous binary framing without scanning media for ZIP signatures. */
   bytes: number;
-  source: TransferByteSource;
+  // Must reopen immutable bytes twice; one-shot sources require temporary storage.
+  open: () => TransferByteSource;
 }
 export interface TemporaryTransferSink {
-  /** Temporary storage ONLY. Awaited before reading more input. May be called with zero bytes for empty files. */
-  append(path: string, chunk: Uint8Array): Promise<void>;
-  /** Remove/discard all temporary data; called once on any parse, source, callback or authentication failure. */
+  // Temporary writes must respect abort invalidation, including late completions.
+  append(path: string, chunk: Uint8Array, signal?: AbortSignal): Promise<void>;
+  // Atomically invalidate pending/future writes and discard data without waiting for blocked writes.
   abort(reason: unknown): Promise<void>;
 }
 
@@ -89,15 +89,16 @@ function crcStream(path: string): ZipPassThrough {
   return stream;
 }
 
-async function nextWithSignal<T>(iterator: AsyncIterator<T>, signal?: AbortSignal): Promise<IteratorResult<T>> {
+async function withSignal<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   checkAbort(signal);
-  if (!signal) return iterator.next();
+  if (!signal) return operation();
   return new Promise((resolve, reject) => {
     const abort = () => reject(new DOMException('Transfer cancelled.', 'AbortError'));
     signal.addEventListener('abort', abort, { once: true });
+    // Both handlers stay attached after cancellation, including for a late operation rejection.
     Promise.resolve().then(() => {
       checkAbort(signal);
-      return iterator.next();
+      return operation();
     }).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
   });
 }
@@ -108,7 +109,7 @@ async function* iterate<T>(source: AsyncIterable<T>, signal?: AbortSignal): Asyn
   let ended = false;
   try {
     while (true) {
-      const next = await nextWithSignal(iterator, signal);
+      const next = await withSignal(() => iterator.next(), signal);
       checkAbort(signal);
       if (next.done) { ended = true; return; }
       yield next.value;
@@ -183,6 +184,30 @@ class NdjsonCheck {
   }
 }
 
+class EntryCheck {
+  private readonly crc: ZipPassThrough;
+  private readonly hash = new Sha256();
+  private readonly ndjson?: NdjsonCheck;
+  private bytes = 0;
+  constructor(path: string, private readonly expectedBytes: number, lineLimit?: number) {
+    this.crc = crcStream(path);
+    if (lineLimit !== undefined) this.ndjson = new NdjsonCheck(lineLimit);
+  }
+  push(chunk: Uint8Array): void {
+    this.bytes += chunk.length;
+    size(this.bytes, this.expectedBytes);
+    this.ndjson?.push(chunk);
+    this.hash.update(chunk);
+    this.crc.push(chunk, false);
+  }
+  finish(): { bytes: number; crc: number; sha256: string } {
+    if (this.bytes !== this.expectedBytes) invalid('Entry size mismatch.');
+    this.ndjson?.push(EMPTY, true);
+    this.crc.push(EMPTY, true);
+    return { bytes: this.bytes, crc: this.crc.crc >>> 0, sha256: this.hash.digestHex() };
+  }
+}
+
 interface ZipRecord {
   path: string;
   bytes: number;
@@ -192,9 +217,7 @@ interface ZipRecord {
   stamp: number;
 }
 
-// v1 profile: ZIP32, STORED only, no extras/comments, no directory or symlink entries.
-// Local headers contain exact sizes even when bit 3 adds a signed CRC/size descriptor.
-// This is deliberate: scanning unknown-size STORED media for PK signatures is unsafe.
+// Two passes provide CRC/sizes up front so binary media never needs unsafe ZIP-signature scanning.
 function localHeader(record: ZipRecord): Uint8Array {
   const name = encoder.encode(record.path);
   const bytes = new Uint8Array(30 + name.length);
@@ -203,19 +226,11 @@ function localHeader(record: ZipRecord): Uint8Array {
   data.setUint16(4, 20, true);
   data.setUint16(6, record.flags, true);
   data.setUint32(10, record.stamp, true);
+  data.setUint32(14, record.crc, true);
   data.setUint32(18, record.bytes, true);
   data.setUint32(22, record.bytes, true);
   data.setUint16(26, name.length, true);
   bytes.set(name, 30);
-  return bytes;
-}
-function descriptor(record: ZipRecord): Uint8Array {
-  const bytes = new Uint8Array(16);
-  const data = view(bytes);
-  data.setUint32(0, 0x08074b50, true);
-  data.setUint32(4, record.crc, true);
-  data.setUint32(8, record.bytes, true);
-  data.setUint32(12, record.bytes, true);
   return bytes;
 }
 function centralHeader(record: ZipRecord): Uint8Array {
@@ -273,36 +288,30 @@ export async function* writePlainVolume(
     if (!manifest && observed.length >= limits.maxEntries) invalid('Entry count limit exceeded.');
     size(entry.bytes, manifest ? limits.maxManifestBytes : limits.maxEntryBytes);
     if (!manifest) size(payloadBytes + entry.bytes, limits.maxTotalBytes);
-    const record: ZipRecord = { path: entry.path, bytes: entry.bytes, offset: zipBytes, crc: 0, flags: 8, stamp: 0x00210000 };
-    const crc = crcStream(entry.path);
-    const hash = new Sha256();
-    const ndjson = kind === 'ndjson' ? new NdjsonCheck(limits.maxLineBytes) : undefined;
+    const lineLimit = kind === 'ndjson' ? limits.maxLineBytes : undefined;
+    const firstCheck = new EntryCheck(entry.path, entry.bytes, lineLimit);
+    for await (const chunk of bounded(entry.open(), options.signal)) firstCheck.push(chunk);
+    const first = firstCheck.finish();
+    const record: ZipRecord = { path: entry.path, bytes: first.bytes, offset: zipBytes, crc: first.crc, flags: 0, stamp: 0x00210000 };
     yield account(localHeader(record));
-    let count = 0;
-    for await (const chunk of bounded(entry.source, options.signal)) {
-      count += chunk.length;
-      size(count, entry.bytes);
-      ndjson?.push(chunk);
-      hash.update(chunk);
-      crc.push(chunk, false);
+    const secondCheck = new EntryCheck(entry.path, entry.bytes, lineLimit);
+    for await (const chunk of bounded(entry.open(), options.signal)) {
+      secondCheck.push(chunk);
       if (!manifest) { payloadBytes += chunk.length; progress(entry.path); }
       yield account(chunk);
     }
-    if (count !== entry.bytes) invalid('Entry size mismatch.');
-    ndjson?.push(EMPTY, true);
-    crc.push(EMPTY, true);
-    record.crc = crc.crc >>> 0;
-    yield account(descriptor(record));
+    const second = secondCheck.finish();
+    if (first.crc !== second.crc || first.sha256 !== second.sha256) invalid('Entry changed between passes.');
     records.push(record);
     if (!manifest) {
-      observed.push({ path: entry.path, bytes: count, sha256: hash.digestHex(), kind: kind! });
+      observed.push({ path: entry.path, bytes: first.bytes, sha256: first.sha256, kind: kind! });
       progress(entry.path);
     }
   }
 
   for await (const entry of iterate(entries, options.signal)) yield* writeEntry(entry);
   const manifestBytes = serializeManifest({ version: 1, ...identity, entries: observed });
-  yield* writeEntry({ path: MANIFEST_PATH, bytes: manifestBytes.length, source: single(manifestBytes) }, true);
+  yield* writeEntry({ path: MANIFEST_PATH, bytes: manifestBytes.length, open: () => single(manifestBytes) }, true);
   const centralOffset = zipBytes;
   for (const record of records) {
     checkAbort(options.signal);
@@ -331,6 +340,9 @@ export async function verifyPlainVolume(
     let manifest: VolumeManifest | undefined;
     let payloadBytes = 0;
     const progress = (path: string) => options.onProgress?.({ phase: 'verify', bytes: payloadBytes, entries: observed.length, path });
+    const append = (path: string, chunk: Uint8Array) => withSignal(
+      () => sink.append(path, new Uint8Array(chunk), options.signal), options.signal,
+    );
     let signature = view(await reader.exact(4)).getUint32(0, true);
     while (signature === 0x04034b50) {
       if (manifest) invalid('Manifest must be the last ZIP entry.');
@@ -339,10 +351,9 @@ export async function verifyPlainVolume(
       const flags = header.getUint16(2, true);
       const bytes = header.getUint32(18, true);
       const localCrc = header.getUint32(10, true);
-      if (header.getUint16(0, true) !== 20 || (flags !== 0 && flags !== 8)
+      if (header.getUint16(0, true) !== 20 || flags !== 0
         || header.getUint16(4, true) !== 0 || header.getUint16(24, true) !== 0
-        || bytes === 0xffffffff || header.getUint32(14, true) !== bytes
-        || (flags === 8 && localCrc !== 0)) invalid('Unsupported or unsafe ZIP entry.');
+        || bytes === 0xffffffff || header.getUint32(14, true) !== bytes) invalid('Unsupported or unsafe ZIP entry.');
       const path = await readName(reader, header.getUint16(22, true));
       const isManifest = path === MANIFEST_PATH;
       const kind = isManifest ? undefined : claimEntryPath(path, paths);
@@ -350,14 +361,14 @@ export async function verifyPlainVolume(
       size(bytes, isManifest ? limits.maxManifestBytes : limits.maxEntryBytes);
       if (!isManifest) size(payloadBytes + bytes, limits.maxTotalBytes);
       // Reject advertised lengths past the archive limit before allocating or reading payload.
-      size(reader.position + bytes + (flags === 8 ? 16 : 0), limits.maxZipBytes);
+      size(reader.position + bytes, limits.maxZipBytes);
       const record: ZipRecord = { path, bytes, offset, flags, stamp: header.getUint32(6, true), crc: 0 };
       const crc = crcStream(path);
       const hash = new Sha256();
       const ndjson = kind === 'ndjson' ? new NdjsonCheck(limits.maxLineBytes) : undefined;
       const manifestBytes = isManifest ? new Uint8Array(bytes) : undefined;
       let count = 0;
-      if (!bytes && !isManifest) { await sink.append(path, EMPTY); checkAbort(options.signal); }
+      if (!bytes && !isManifest) { await append(path, EMPTY); checkAbort(options.signal); }
       while (count < bytes) {
         const chunk = await reader.take(Math.min(MAX_CONTAINER_INPUT_BYTES, bytes - count));
         if (!chunk.length) invalid();
@@ -366,8 +377,8 @@ export async function verifyPlainVolume(
         crc.push(chunk, false);
         if (manifestBytes) manifestBytes.set(chunk, count);
         else {
-          // Own the sink chunk: producers may reuse their input buffer after the next pull.
-          await sink.append(path, chunk.slice());
+          // Always copy, including Node Buffer inputs (Buffer.slice() would alias the producer).
+          await append(path, chunk);
           checkAbort(options.signal);
           payloadBytes += chunk.length;
           progress(path);
@@ -377,11 +388,7 @@ export async function verifyPlainVolume(
       ndjson?.push(EMPTY, true);
       crc.push(EMPTY, true);
       record.crc = crc.crc >>> 0;
-      if (flags === 8) {
-        const descriptor = view(await reader.exact(16));
-        if (descriptor.getUint32(0, true) !== 0x08074b50 || descriptor.getUint32(4, true) !== record.crc
-          || descriptor.getUint32(8, true) !== bytes || descriptor.getUint32(12, true) !== bytes) invalid('ZIP descriptor mismatch.');
-      } else if (record.crc !== localCrc) invalid('ZIP CRC mismatch.');
+      if (record.crc !== localCrc) invalid('ZIP CRC mismatch.');
       records.push(record);
       if (manifestBytes) {
         manifest = parseManifest(manifestBytes);
@@ -398,8 +405,7 @@ export async function verifyPlainVolume(
     }
     if (!manifest || signature !== 0x02014b50) invalid();
     const centralOffset = reader.position - 4;
-    // Match every byte of each canonical central header against observed local entries.
-    // Rejects offsets, flags, methods, sizes, CRC, names/order, symlinks, extras and disk aliases.
+    // Canonical headers also exclude symlinks, extras and alternate disk/offset interpretations.
     for (let index = 0; index < records.length; index++) {
       if (signature !== 0x02014b50) invalid('Missing ZIP central directory.');
       const expectedHeader = centralHeader(records[index]);
@@ -412,8 +418,7 @@ export async function verifyPlainVolume(
     const end = await reader.exact(18);
     const expectedEnd = endRecord(records.length, centralSize, centralOffset);
     if (!end.every((byte, index) => byte === expectedEnd[index + 4])) invalid('Invalid ZIP end record.');
-    // Pull EOF, not merely EOCD: this also consumes/validates crypto's final authentication
-    // record and rejects trailing plaintext/ciphertext before exposing a verified manifest.
+    // EOF also authenticates crypto's final record; EOCD alone cannot prove the volume is complete.
     if ((await reader.take(1)).length) invalid('Trailing ZIP bytes.');
     checkAbort(options.signal);
     return manifest;

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 import { build } from 'esbuild';
-import { zipSync, unzipSync } from 'fflate';
+import { Unzip, zipSync, unzipSync } from 'fflate';
 
 const root = new URL('../../', import.meta.url);
 const passphrase = 'local-only-correct-horse-2026';
@@ -47,7 +47,7 @@ async function collect(source) {
   return Buffer.concat(chunks);
 }
 async function* entries(items = files) {
-  for (const item of items) yield { path: item.path, bytes: item.bytes.length, source: fragments(item.bytes, [1, 7, 3, 65521]) };
+  for (const item of items) yield { path: item.path, bytes: item.bytes.length, open: () => fragments(item.bytes, [1, 7, 3, 65521]) };
 }
 function temporarySink() {
   const chunks = new Map();
@@ -237,12 +237,74 @@ test('all seven allowed buckets and signature-looking media work with one-byte b
   assert.deepEqual(await api.verifyPlainVolume(fragments(bytes, [1]), temporarySink()), manifestFor(items));
 });
 
-test('known-size stored ZIP without descriptors is supported; unknown-size descriptor scan is not', async () => {
+test('fflate.Unzip one-byte interoperability preserves every PK signature inside media', async () => {
+  const signatures = Buffer.from('PK\x03\x04PK\x07\x08PK\x01\x02PK\x05\x06');
+  const payload = Buffer.concat([signatures, media, signatures, signatures]);
+  const items = [{ path: 'media/chat-images/signatures.bin', bytes: payload },
+    { path: 'data/empty.ndjson', bytes: Buffer.alloc(0) }];
+  const bytes = await collect(api.writePlainVolume(entries(items), info));
+  const extracted = new Map();
+  const ended = new Set();
+  const unzip = new Unzip(file => {
+    assert.equal(file.compression, 0);
+    assert.ok(!extracted.has(file.name));
+    extracted.set(file.name, []);
+    file.ondata = (error, chunk, final) => {
+      assert.ifError(error);
+      extracted.get(file.name).push(Buffer.from(chunk));
+      if (final) ended.add(file.name);
+    };
+    file.start();
+  });
+  for (let index = 0; index < bytes.length; index++) unzip.push(bytes.subarray(index, index + 1), index === bytes.length - 1);
+  assert.deepEqual([...extracted.keys()], [...items.map(item => item.path), 'manifest.json']);
+  assert.equal(ended.size, extracted.size);
+  for (const item of items) assert.deepEqual(Buffer.concat(extracted.get(item.path)), item.bytes);
+  assert.deepEqual(JSON.parse(Buffer.concat(extracted.get('manifest.json')).toString()), manifestFor(items));
+  for (const entry of layout(bytes).entries) {
+    assert.equal(bytes.readUInt16LE(entry.offset + 6), 0);
+    assert.equal(bytes.readUInt32LE(entry.offset + 14), crc32(bytes.subarray(entry.start, entry.end)));
+    assert.equal(bytes.readUInt32LE(entry.offset + 18), entry.size);
+  }
+});
+
+test('sink retains independent Uint8Arrays when a Buffer producer reuses and zeroes its storage at EOF', async () => {
+  for (const chunkSize of [fixture.length, 97]) {
+    const reusable = Buffer.alloc(chunkSize);
+    const retained = new Map();
+    async function* source() {
+      for (let offset = 0; offset < fixture.length; offset += reusable.length) {
+        reusable.fill(0);
+        const length = Math.min(reusable.length, fixture.length - offset);
+        fixture.copy(reusable, 0, offset, offset + length);
+        yield reusable.subarray(0, length);
+      }
+      reusable.fill(0);
+    }
+    const sink = {
+      async append(path, chunk) {
+        assert.equal(Buffer.isBuffer(chunk), false);
+        if (!retained.has(path)) retained.set(path, []);
+        retained.get(path).push(chunk); // Deliberately retain the exact supplied reference, no defensive copy.
+      },
+      async abort() { assert.fail('unexpected abort'); },
+    };
+    assert.deepEqual(await api.verifyPlainVolume(source(), sink), manifest);
+    assert.ok(reusable.every(byte => byte === 0));
+    for (const file of files) assert.deepEqual(Buffer.concat(retained.get(file.path)), file.bytes);
+  }
+});
+
+test('only flags=0 stored ZIP is supported; all descriptor profiles are rejected before any append', async () => {
   assert.deepEqual(await api.verifyPlainVolume(fragments(rawZip([...files, manifestFile()])), temporarySink()), manifest);
-  const changed = Buffer.from(fixture);
-  changed.writeUInt32LE(0, 18);
-  changed.writeUInt32LE(0, 22);
-  await rejectPlain(changed);
+  for (const advertised of ['known', 'zero', 'zip64']) {
+    const bytes = rawZip([...files.map(file => ({ ...file, descriptor: true })), manifestFile()]);
+    if (advertised !== 'known') {
+      bytes.writeUInt32LE(advertised === 'zero' ? 0 : 0xffffffff, 18);
+      bytes.writeUInt32LE(advertised === 'zero' ? 0 : 0xffffffff, 22);
+    }
+    assert.equal((await rejectPlain(bytes)).calls, 0);
+  }
 });
 
 test('wrong passphrase, ciphertext/header/final tag tamper, missing final and trailing ciphertext abort once', async t => {
@@ -304,7 +366,7 @@ test('valid encryption cannot make a ZIP missing its central directory valid', a
   assert.ok(sink.calls > 0);
 });
 
-test('reject each truncation in descriptor, central directory and EOCD, plus trailing bytes', async t => {
+test('reject each truncation in payload, central directory and EOCD, plus trailing bytes', async t => {
   const { entries: local, central, eocd } = layout(fixture);
   const cuts = new Set([0, 1, 29, local[0].end - 1, local[0].end, central - 1, central, central + 1,
     eocd - 1, eocd, ...Array.from({ length: 21 }, (_, index) => eocd + index + 1)]);
@@ -330,7 +392,7 @@ test('central directory and EOCD fields cannot lie about entries, sizes, CRC, fl
   });
 });
 
-test('local header, size descriptor and CRC tampering is rejected', async t => {
+test('local header, declared size and CRC tampering is rejected', async t => {
   const { entries: local } = layout(fixture);
   for (const offset of [4, 6, 8, 14, 18, 22, 26, 28, local[0].start, local[0].end,
     local[0].end + 4, local[0].end + 8, local[0].end + 12]) await t.test(`offset-${offset}`, async () => {
@@ -469,7 +531,7 @@ test('NDJSON is opaque but validates streaming UTF-8 and bounded lines across ch
 test('1 MiB per-push bound for entry, plain ZIP and encrypted inputs', async () => {
   const oversized = new Uint8Array(api.MAX_CONTAINER_INPUT_BYTES + 1);
   async function* source() { yield oversized; }
-  async function* input() { yield { path: 'media/chat-images/a', bytes: oversized.length, source: source() }; }
+  async function* input() { yield { path: 'media/chat-images/a', bytes: oversized.length, open: source }; }
   await assert.rejects(collect(api.writePlainVolume(input(), info)));
   const plainSink = temporarySink();
   await assert.rejects(api.verifyPlainVolume(source(), plainSink));
@@ -481,17 +543,59 @@ test('1 MiB per-push bound for entry, plain ZIP and encrypted inputs', async () 
 
 test('writer refuses declared size mismatches and closes entry source on failure or cancellation', async () => {
   for (const declared of [data.length - 1, data.length + 1, -1, 0.5]) {
-    async function* input() { yield { path: 'data/users.ndjson', bytes: declared, source: fragments(data) }; }
+    async function* input() { yield { path: 'data/users.ndjson', bytes: declared, open: () => fragments(data) }; }
     await assert.rejects(collect(api.writePlainVolume(input(), info)));
   }
   let closed = 0;
   async function* source() { try { yield data; yield data; } finally { closed++; } }
-  async function* input() { yield { path: 'data/users.ndjson', bytes: data.length * 2, source: source() }; }
+  async function* input() { yield { path: 'data/users.ndjson', bytes: data.length * 2, open: source }; }
   const writer = api.writePlainVolume(input(), info);
-  await writer.next(); // local header, no payload read yet
-  await writer.next();
-  await writer.return();
+  await writer.next(); // first pass fully consumed/closed before emitting the CRC-bearing local header
   assert.equal(closed, 1);
+  await writer.next(); // second pass has begun; returning must close that pass too
+  await writer.return();
+  assert.equal(closed, 2);
+});
+
+test('two-pass writer rejects size/hash/UTF-8/line mutations and equal-CRC different-content sources', async t => {
+  const first = Buffer.from('1234\n');
+  const cases = [
+    ['same size', 'data/mutation.ndjson', first, Buffer.from('4321\n')],
+    ['shorter', 'data/mutation.ndjson', first, Buffer.from('123\n')],
+    ['longer', 'data/mutation.ndjson', first, Buffer.from('12345\n')],
+    ['bad UTF-8', 'data/mutation.ndjson', first, Buffer.from([0xc3, 0x28, 0x31, 0x32, 0x0a])],
+    ['line too long', 'data/mutation.ndjson', first, Buffer.from('12345')],
+    ['CRC collision', 'media/chat-images/mutation.bin', Buffer.from('plumless'), Buffer.from('buckeroo')],
+  ];
+  assert.equal(crc32(cases.at(-1)[2]), crc32(cases.at(-1)[3]));
+  for (const [name, path, before, after] of cases) await t.test(name, async () => {
+    let opens = 0;
+    const output = [];
+    async function* input() {
+      yield { path, bytes: before.length, open: () => fragments(opens++ === 0 ? before : after, [1, 3]) };
+    }
+    await assert.rejects(async () => {
+      for await (const chunk of api.writePlainVolume(input(), info, { limits: { maxLineBytes: 4 } })) output.push(Buffer.from(chunk));
+    });
+    assert.equal(opens, 2);
+    assert.ok(output.length > 0);
+    assert.equal(output[0].readUInt16LE(6), 0);
+    assert.equal(output[0].readUInt32LE(14), crc32(before));
+    assert.ok(!Buffer.concat(output).includes(Buffer.from('manifest.json')));
+  });
+});
+
+test('first-pass size or UTF-8 failure emits no local header or payload and never reopens the source', async () => {
+  for (const [bytes, declared] of [[Buffer.from('valid\n'), 7], [Buffer.from([0xf0, 0x9f]), 2]]) {
+    let opens = 0;
+    let output = 0;
+    async function* input() {
+      yield { path: 'data/invalid.ndjson', bytes: declared, open: () => { opens++; return fragments(bytes); } };
+    }
+    await assert.rejects(async () => { for await (const chunk of api.writePlainVolume(input(), info)) output += chunk.length; });
+    assert.equal(opens, 1);
+    assert.equal(output, 0);
+  }
 });
 
 test('async sink backpressure prevents reading ahead or concurrent append calls', async () => {
@@ -522,38 +626,63 @@ test('async sink backpressure prevents reading ahead or concurrent append calls'
   assert.deepEqual(await result, manifest);
 });
 
-test('large media incremental writer and sink do not aggregate the entry or read ahead', async () => {
+test('large media uses two bounded passes, no first-pass payload output and second-pass sink backpressure', async () => {
   const part = randomBytes(65536);
   const count = 129;
   const total = part.length * count;
-  let produced = 0;
+  const produced = [0, 0];
+  const progress = [];
+  let opens = 0;
   let consumed = 0;
   let maxLag = 0;
   const expected = createHash('sha256');
   for (let i = 0; i < count; i++) expected.update(part);
-  async function* source() { for (let i = 0; i < count; i++) { produced++; yield part; } }
-  async function* input() { yield { path: 'media/chat-images/large.bin', bytes: total, source: source() }; }
-  const writer = api.writePlainVolume(input(), info);
+  async function* source(pass) { for (let i = 0; i < count; i++) { produced[pass]++; yield part; } }
+  function open() { const pass = opens++; assert.ok(pass < 2); return source(pass); }
+  async function* input() { yield { path: 'media/chat-images/large.bin', bytes: total, open }; }
+  const writer = api.writePlainVolume(input(), info, { onProgress: value => progress.push(value) });
   const header = await writer.next();
-  assert.equal(produced, 0);
+  assert.equal(opens, 1);
+  assert.deepEqual(produced, [count, 0]); // Complete bounded first scan before the first ZIP bytes.
+  assert.deepEqual(progress, []); // Scanning is not counted as written payload.
   assert.ok(header.value.length < 1024);
   async function* zip() {
     yield header.value;
     for await (const chunk of writer) {
       assert.ok(chunk.length <= api.MAX_CONTAINER_INPUT_BYTES);
-      maxLag = Math.max(maxLag, produced * part.length - consumed);
+      maxLag = Math.max(maxLag, produced[1] * part.length - consumed);
       yield chunk;
     }
   }
+  let release;
+  let entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
   const actual = createHash('sha256');
   const sink = {
-    async append(path, bytes) { assert.equal(path, 'media/chat-images/large.bin'); actual.update(bytes); consumed += bytes.length; },
+    async append(path, bytes) {
+      assert.equal(path, 'media/chat-images/large.bin');
+      if (!consumed) { entered(); await gate; }
+      actual.update(bytes);
+      consumed += bytes.length;
+    },
     async abort() { assert.fail('unexpected abort'); },
   };
-  const verified = await api.verifyPlainVolume(zip(), sink);
+  const result = api.verifyPlainVolume(zip(), sink);
+  await started;
+  assert.equal(opens, 2);
+  assert.deepEqual(produced, [count, 1]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(produced, [count, 1]); // No extra reads while the first temporary append waits.
+  release();
+  const verified = await result;
   assert.equal(verified.entries[0].sha256, expected.digest('hex'));
   assert.equal(actual.digest('hex'), verified.entries[0].sha256);
+  assert.equal(opens, 2);
+  assert.deepEqual(produced, [count, count]);
   assert.equal(consumed, total);
+  assert.equal(progress.at(-1).bytes, total);
+  assert.equal(progress.at(-1).entries, 1);
   assert.ok(maxLag <= part.length);
 });
 
@@ -612,6 +741,100 @@ test('abort signal rejects pre-aborted, pending source and late sink work withou
   lateSink.append = async () => late.abort();
   await assert.rejects(api.verifyPlainVolume(fragments(fixture), lateSink, { signal: late.signal }), { name: 'AbortError' });
   assert.equal(lateSink.aborts, 1);
+});
+
+test('cancellation rejects promptly while append never resolves and calls abort exactly once', async () => {
+  const controller = new AbortController();
+  let entered;
+  let aborts = 0;
+  let verified;
+  const started = new Promise(resolve => { entered = resolve; });
+  const sink = {
+    append(path, bytes, signal) {
+      assert.equal(signal, controller.signal);
+      assert.ok(path && bytes.length);
+      entered();
+      return new Promise(() => {});
+    },
+    async abort(reason) { assert.equal(reason.name, 'AbortError'); aborts++; },
+  };
+  const result = api.verifyPlainVolume(fragments(fixture), sink, { signal: controller.signal })
+    .then(value => { verified = value; });
+  await started;
+  controller.abort();
+  let timer;
+  try {
+    await assert.rejects(Promise.race([result, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Cancellation waited for an unresolvable append.')), 1000);
+    })]), { name: 'AbortError' });
+  } finally { clearTimeout(timer); }
+  assert.equal(verified, undefined);
+  assert.equal(aborts, 1);
+});
+
+test('abort fences pending/future writes so late append completion or rejection cannot resurrect temporary data', async t => {
+  for (const completion of ['resolve', 'reject']) await t.test(completion, async () => {
+    const controller = new AbortController();
+    let entered;
+    let release;
+    let valid = true;
+    let aborts = 0;
+    let calls = 0;
+    let lateFinished = false;
+    let verified;
+    const storage = new Map();
+    const started = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const lateFailure = new Error('late append rejection');
+    const sink = {
+      async append(path, bytes, signal) {
+        if (!valid) throw new Error('Temporary sink was invalidated.');
+        calls++;
+        if (calls > 1) {
+          entered();
+          await gate; // Model storage that cannot cancel its in-flight I/O itself.
+          lateFinished = true;
+          if (completion === 'reject') throw lateFailure;
+        }
+        // The adapter's atomic invalidation/generation fence is essential, not the promise race.
+        if (!valid || signal?.aborted) return;
+        if (!storage.has(path)) storage.set(path, []);
+        storage.get(path).push(bytes);
+      },
+      async abort(reason) {
+        assert.equal(reason.name, 'AbortError');
+        aborts++;
+        valid = false; // Invalidate synchronously on invocation, before any asynchronous cleanup.
+        storage.clear();
+      },
+    };
+    const result = api.verifyPlainVolume(fragments(fixture, [16]), sink, { signal: controller.signal })
+      .then(value => { verified = value; });
+    await started;
+    assert.ok(storage.size > 0);
+    controller.abort();
+    let timer;
+    try {
+      await assert.rejects(Promise.race([result, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Cancellation waited for late storage I/O.')), 1000);
+      })]), { name: 'AbortError' });
+    } finally { clearTimeout(timer); }
+    assert.equal(verified, undefined);
+    assert.equal(storage.size, 0);
+    assert.equal(aborts, 1);
+    assert.equal(lateFinished, false);
+    release();
+    // Any late rejection must be handled by the parser's existing operation handlers.
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(lateFinished, true);
+    assert.equal(storage.size, 0);
+    assert.equal(aborts, 1);
+    const countAfterAbort = calls;
+    await assert.rejects(sink.append('data/future.ndjson', Buffer.from('x')), /invalidated/);
+    assert.equal(calls, countAfterAbort);
+    assert.equal(storage.size, 0);
+  });
 });
 
 test('volume set requires every index, unique IDs/paths, same package/source/scope/time and count', () => {

@@ -372,6 +372,9 @@ test('trigger and trigger-function definition changes block restore before any m
     ['trigger function body', `CREATE OR REPLACE FUNCTION private.fixture_effect() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN RETURN COALESCE(NEW, OLD); END; $$`],
     ['trigger function settings', `ALTER FUNCTION private.fixture_effect() SET search_path = public`],
+    ['trigger function owner', `CREATE ROLE transfer_trigger_owner;
+      ALTER FUNCTION private.fixture_effect() OWNER TO transfer_trigger_owner`],
+    ['trigger function grants', `GRANT EXECUTE ON FUNCTION private.fixture_effect() TO anon`],
     ['missing trigger', `DROP TRIGGER trigger_enqueue_changed_wallet ON public.wallets`],
     ['unexpected enabled mode', `ALTER TABLE public.wallets ENABLE TRIGGER trigger_enqueue_changed_wallet`],
     ['new unreviewed trigger', `CREATE TRIGGER new_protection BEFORE INSERT ON public.wallets
@@ -417,6 +420,51 @@ test('transaction rollback restores modes and receipts after import/restore erro
   assert.equal(await scalar('SELECT count(*)::int FROM private.employee_transfer_events'), eventCount);
 });
 
+test('commit refuses an omitted restore and rolls back all disabled modes and receipts', async () => {
+  const initial = await modes();
+  const count = await scalar('SELECT count(*)::int FROM private.employee_transfer_events');
+  await db.exec('BEGIN');
+  try {
+    await bypass();
+    await db.exec(`INSERT INTO public.wallet_transactions VALUES (100, 'not committed')`);
+    await assert.rejects(db.exec('COMMIT'), /must be restored before committing/);
+  } finally {
+    await db.exec('ROLLBACK');
+  }
+  assert.deepEqual(await modes(), initial);
+  assert.equal(await scalar('SELECT count(*)::int FROM private.employee_transfer_events'), count);
+  assert.equal(await scalar('SELECT count(*)::int FROM public.wallet_transactions WHERE id = 100'), 0);
+});
+
+test('swallowing a restore error outside the bypass savepoint cannot commit disabled triggers', async () => {
+  const initial = await modes();
+  await db.exec('BEGIN');
+  try {
+    await bypass();
+    await db.exec(`DO $$ BEGIN
+      BEGIN
+        PERFORM private.employee_transfer_restore_triggers('[]'::jsonb);
+      EXCEPTION WHEN OTHERS THEN NULL;
+      END;
+    END $$`);
+    await assert.rejects(db.exec('COMMIT'), /must be restored before committing/);
+  } finally {
+    await db.exec('ROLLBACK');
+  }
+  assert.deepEqual(await modes(), initial);
+});
+
+test('forcing deferred checks before restore fails closed; after restore it can commit', async () => {
+  const initial = await modes();
+  await transaction(async () => {
+    const payload = await bypass();
+    await rejected(() => db.exec('SET CONSTRAINTS ALL IMMEDIATE'), /must be restored before committing/);
+    await restore(payload);
+    await db.exec('SET CONSTRAINTS ALL IMMEDIATE');
+  });
+  assert.deepEqual(await modes(), initial);
+});
+
 test('mid-bypass and mid-restore DDL exceptions roll back all helper-local changes', async () => {
   await transaction(async () => {
     await db.exec(`
@@ -460,6 +508,7 @@ test('all changed helpers use SECURITY DEFINER, a fixed search path and explicit
     'employee_transfer_lock_trigger_tables(text[])', 'employee_transfer_trigger_digest(oid)',
     'employee_transfer_pending_trigger_bypass()', 'employee_transfer_unreviewed_triggers()',
     'employee_transfer_bypass_triggers(text[])', 'employee_transfer_restore_triggers(jsonb)',
+    'employee_transfer_require_trigger_restore()',
   ]) {
     const [fn] = await rows(`SELECT oid, prosecdef, proconfig,
       EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f', proowner)))
