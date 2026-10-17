@@ -67,6 +67,17 @@ NOTIFY pgrst, 'reload schema';
   - 2026-10：历史清理排程 `20261001043534_unify_history_cleanup_schedule.sql`；内容稽核与已删员工 `20261002000000` 至 `20261030000000`（见 `docs/content-audit.md`）；通知自动化扩容与通知状态权限 `20261101000000`、`20261101000001`（正式库版本 `20261009104010`、`20261009104257`，见 `docs/notifications.md`）；聊天扩容 `20261101000002_scale_service_chat_queries.sql`（正式库版本 `20261009173803`，见 `docs/service-chat.md`）；主动停工后刷新不再恢复 `20261101000003_keep_user_stopped_work_sessions_stopped.sql`（正式库版本 `20261013183142`，见 `docs/employee-portal.md`）。
 - 本地有但正式库从未执行：`20260905015900_fix_workspace_summary_counts.sql`（正式库没有 `sync_conversation_source_type` 触发器）。正式的 `get_ccc_conversation_summaries` 来自 `20260901220357_enforce_ccc_group_isolation.sql`（超管工作区的摘要也包含其他非紧急组员工，前端再按本组员工过滤），`get_admin_groups_for_customer_service` 来自 `20260930081803_align_service_conversation_sources.sql`；消息与客户的 `source_type` 一致由该迁移的 `(customer_id, source_type)` 复合外键保证。改写这些函数时以正式库实际定义为准。
 
+## 资料迁移实施前只读复核（2026-10-17）
+
+- 用户重新授权后连接恢复；正式仍无 `employee_transfer/export/import` 接口及六张迁移私有表。没有部署迁移、Edge Function 或修改 Storage/cron/业务资料。
+- 正式为 96 张 public/private 根表、871 列，另有 `orders_history_2025`、`orders_history_2026` 两个分区。本地 103 张根表包含六张未部署的迁移表和正式不存在的 `notification_automation_date_runs`，不能直接当成正式基线。
+- 共同的 96 张表列名/类型一致，八处可空性不同：正式 `users.created_by`、`private.content_audit_events.actor_admin_id` 可空；`bulk_import_log` 的 `table_name/import_type/total_records` 和 `group_configs` 的 `group_id/config_type/config_value` 正式必填，与本地覆盖库存相反。库存尚未校准，不改正式结构来迁就测试。
+- 正式执行表有 `(task_id, task_version, user_id, period_key, stage)` 唯一约束；现有函数未引用本地多出的 `notification_automation_date_runs`。迁移必须按实际自动化定义验证续接，不能擅自补表。
+- 根表上 100 个非内部触发器均 `O`，表属主 postgres；仅取定义指纹，未试关触发器。真实 PostgreSQL 锁、事务恢复及 PostgREST 缓存行为尚未验收。
+- 当前 MCP postgres 查询超时为 2 分钟，但浏览器用的 anon 角色为 **3 秒**；authenticated/authenticator 为 8 秒，authenticator 锁超时 8 秒。前端请求等待设成 120 秒不会提高这个数据库上限；批次和资金原子提交须按真实路径测试，不直接全局放宽。
+- 七个桶和策略已核对；私有 `content-audit-evidence` 没有浏览器读写策略。现有留证服务不是迁移上传通道，需另做任务绑定的受控服务端接口；未上传、下载或测试 CORS，也未放宽桶权限。
+- 九个 cron 仍启用，`content-audit` 仍为 v14、`verify_jwt=false`。本轮未重验本文件全部历史安全结论；完整检查范围与未通过门槛见 `docs/employee-data-transfer-plan.md` 第 16 节。
+
 ## pg_cron 定时任务（时间为 UTC；2026-10-09 最近一次运行均成功）
 | 正式任务名 | 频率 | 调用 | 用途 | 定义迁移 |
 |---|---|---|---|---|
