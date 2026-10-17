@@ -2,36 +2,45 @@ import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
-import { replayMigrations } from './replay-migrations.mjs';
+import { EXPECTED_REPLAY_FAILURES, assertExpectedReplayFailures, replayMigrations } from './replay-migrations.mjs';
 
 const extensions = { pgcrypto, pg_trgm, uuid_ossp };
 const signatures = new WeakMap();
 
-// Migrations that cannot replay outside production (missing dashboard-only objects or data guards).
-export const KNOWN_REPLAY_FAILURES = new Set([
-  '20251031230000_add_admins_update_policy.sql',
-  '20251114230000_add_admin_scope_to_account_locks.sql',
-  '20251114235000_fix_account_locks_rls_policies.sql',
-  '20251129073341_fix_all_function_search_paths.sql',
-  '20260411213553_insert_bart_members_simulation_data.sql',
-  '20260411213832_fix_bart_commission_amounts_and_wallet_balances.sql',
-  '20260706000801_revoke_unused_security_definer_functions.sql',
-  '20260706001347_fix_security_definer_revoke_from_public.sql',
-  '20260706002034_convert_client_functions_to_security_invoker.sql',
-  '20260706002123_convert_internal_functions_to_security_invoker.sql',
-  '20260928080144_align_weighted_dispatch_assignment.sql',
-  '20261026000000_archive_legacy_empty_notifications.sql',
-]);
+// 仅为旧诊断调用保留文件名索引；严格校验绝不使用这个可变 Set 作白名单。
+export const KNOWN_REPLAY_FAILURES = new Set(EXPECTED_REPLAY_FAILURES.map(item => item.file));
 
-export async function createSites(options = {}) {
-  const { db: base, failures } = await replayMigrations(options);
-  const dump = await base.dumpDataDir('none');
-  await base.close();
-  return {
-    failures,
-    oldSite: new PGlite({ loadDataDir: dump, extensions }),
-    newSite: new PGlite({ loadDataDir: dump, extensions }),
-  };
+// 始终严格验证后才 dump/克隆；诊断请直接调用 replayMigrations。第二参数仅用于
+// 隔离测试资源释放。两份克隆的 site_id 必然相同，测试必须显式模拟新站身份，
+// 本助手不改身份、触发器审核、同站拒绝或任何正式 SQL 校验。
+export async function createSites(
+  options = {},
+  { replay = replayMigrations, createDatabase = config => new PGlite(config) } = {},
+) {
+  const result = await replay({ ...options, strict: true });
+  const { db: base, failures, files } = result;
+  const opened = new Set([base]);
+  try {
+    const validation = assertExpectedReplayFailures(result, { upTo: options.upTo });
+    const dump = await base.dumpDataDir('none');
+    await base.close();
+    opened.delete(base);
+    const oldSite = createDatabase({ loadDataDir: dump, extensions });
+    opened.add(oldSite);
+    await oldSite.waitReady;
+    const newSite = createDatabase({ loadDataDir: dump, extensions });
+    opened.add(newSite);
+    await newSite.waitReady;
+    // 成功交付后由调用方关闭两站。
+    return { failures, files, validation, oldSite, newSite };
+  } catch (error) {
+    const closed = await Promise.allSettled([...opened].map(async db => db.close()));
+    const closeErrors = closed.filter(item => item.status === 'rejected').map(item => item.reason);
+    if (closeErrors.length) {
+      throw new AggregateError([error, ...closeErrors], `${error.message}; site cleanup failed`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 async function signature(db, name) {
