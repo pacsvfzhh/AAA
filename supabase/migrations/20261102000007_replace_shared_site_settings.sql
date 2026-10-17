@@ -13,6 +13,18 @@ CREATE TABLE private.employee_transfer_shared_backups (
 ALTER TABLE private.employee_transfer_shared_backups ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON private.employee_transfer_shared_backups FROM PUBLIC, anon, authenticated;
 
+CREATE FUNCTION private.employee_transfer_discard_unsealed_backup()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path=pg_catalog,public,private,pg_temp AS $$
+BEGIN
+  DELETE FROM private.employee_transfer_shared_backups WHERE id=NEW.id AND sealed_at IS NULL;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER discard_unsealed_transfer_backup AFTER UPDATE OF status ON private.employee_transfer_jobs
+FOR EACH ROW WHEN (NEW.status <> 'running') EXECUTE FUNCTION private.employee_transfer_discard_unsealed_backup();
+REVOKE ALL ON FUNCTION private.employee_transfer_discard_unsealed_backup() FROM PUBLIC,anon,authenticated;
+
 CREATE FUNCTION private.employee_transfer_shared_replace_job(p_session uuid,p_token uuid)
 RETURNS private.employee_transfer_jobs LANGUAGE plpgsql SECURITY DEFINER
 SET search_path=pg_catalog,public,private,pg_temp AS $$
@@ -104,6 +116,16 @@ BEGIN
           SELECT body INTO v_target FROM private.employee_transfer_shared_rows(v_key) WHERE body->>'admin_id' IS NOT DISTINCT FROM v_mapped->>'admin_id'
             AND body->>'config_type'=v_row->>'config_type' ORDER BY cursor LIMIT 1;
         END IF;
+        SELECT count(*) INTO v_count FROM public.admin_configs WHERE admin_id IS NOT DISTINCT FROM (v_mapped->>'admin_id')::uuid AND config_type=v_row->>'config_type';
+        IF v_count>1 AND (
+          (SELECT count(*) FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
+            WHERE (v_admin_map->>(source.value->>'admin_id')) IS NOT DISTINCT FROM v_mapped->>'admin_id' AND source.value->>'config_type'=v_row->>'config_type')<>v_count
+          OR EXISTS(SELECT 1 FROM private.employee_transfer_shared_rows(v_key) AS target
+            WHERE target.body->>'admin_id' IS NOT DISTINCT FROM v_mapped->>'admin_id' AND target.body->>'config_type'=v_row->>'config_type'
+              AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
+                WHERE (jsonb_set(source.value,'{admin_id}',COALESCE(v_admin_map->(source.value->>'admin_id'),'null'::jsonb))-ARRAY['created_at','updated_at'])
+                  =(target.body-ARRAY['created_at','updated_at'])))
+        ) THEN v_reason:='ambiguous_target_setting'; END IF;
         IF v_target IS NOT NULL THEN v_target_id:=v_target->>'id'; END IF;
         IF COALESCE(v_mapped->>'icon_custom_url','')<>'' OR COALESCE(v_target->>'icon_custom_url','')<>'' THEN v_reason:='media_backup_and_rewrite_required'; END IF;
         v_mapped:=jsonb_set(v_mapped,'{id}',to_jsonb(v_target_id));
@@ -279,7 +301,8 @@ BEGIN
   WHERE relation.relnamespace='public'::regnamespace AND NOT trigger.tgisinternal AND (
     (relation.relname=ANY(ARRAY['admins','financial_admin_credentials','admin_financial_sessions']) AND (trigger.tgtype::integer & 20)<>0)
     OR (relation.relname='admin_group_members' AND (trigger.tgtype::integer & 28)<>0)
-    OR (relation.relname IN ('admin_groups','admin_configs','system_configs') AND (trigger.tgtype::integer & 16)<>0 AND trigger.tgname NOT IN ('guard_content_audit_public_media_reference','guard_employee_chat_image_reference')));
+    OR (relation.relname IN ('admin_groups','admin_configs','system_configs','notification_automation_plans') AND (trigger.tgtype::integer & 16)<>0
+      AND NOT (relation.relname IN ('admin_configs','system_configs') AND trigger.tgname IN ('guard_content_audit_public_media_reference','guard_employee_chat_image_reference'))));
   IF v_count<>2 OR v_invalid THEN RAISE EXCEPTION 'An unreviewed write trigger prevents shared replacement.'; END IF;
 END;
 $$;

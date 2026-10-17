@@ -195,7 +195,7 @@ const seal = (job, plan, bytes, sha256 = hash(bytes), length = bytes.length) => 
   ...auth(job), p_plan_hash: plan.plan_hash, p_sha256: sha256, p_bytes: length,
 });
 const apply = (job, plan) => rpc('employee_import_shared_replace_apply', { ...auth(job), p_plan_hash: plan.plan_hash });
-const cancel = job => rpc('employee_transfer_cancel', auth(job));
+const cancel = (job, token = session) => rpc('employee_transfer_cancel', auth(job, token));
 const saved = (backupId, no = 0, token = session) => rpc('get_employee_shared_saved_backup_chunk', {
   p_admin_session_token: token, p_backup_id: backupId, p_chunk_no: no,
 });
@@ -268,6 +268,25 @@ async function businessState() {
 const jobState = job => scalar(db, `SELECT jsonb_build_object('summary',summary,'admin_map',admin_map,
   'default_admin_id',default_admin_id,'status',status) FROM private.employee_transfer_jobs WHERE id=$1`, [job.job_id]);
 const events = job => rows(db, 'SELECT action,details FROM private.employee_transfer_events WHERE job_id=$1 ORDER BY id', [job.job_id]);
+const backupState = job => scalar(db, 'SELECT to_jsonb(backup) FROM private.employee_transfer_shared_backups AS backup WHERE id=$1', [job.job_id]);
+const backupCount = job => scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_shared_backups WHERE id=$1', [job.job_id]);
+const stagingState = job => rows(db, 'SELECT to_jsonb(staged) AS value FROM private.employee_transfer_staging AS staged WHERE job_id=$1 ORDER BY table_key,chunk_no', [job.job_id]);
+async function uploadGateChunks(job, plan, sealed) {
+  const bytes = gateCipher();
+  await append(job, plan, 0, bytes.subarray(0, 47));
+  await append(job, plan, 1, bytes.subarray(47));
+  if (sealed) await seal(job, plan, bytes);
+  return bytes;
+}
+async function failTransferEvent(action) {
+  await db.exec(`CREATE FUNCTION public.fixture_shared_event_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.action='${action}' THEN RAISE EXCEPTION 'fixture transfer event failure'; END IF;
+      RETURN NEW;
+    END; $$;
+    CREATE TRIGGER fixture_shared_event_failure BEFORE INSERT ON private.employee_transfer_events
+    FOR EACH ROW EXECUTE FUNCTION public.fixture_shared_event_failure()`);
+}
 const triggerState = () => rows(db, `SELECT relation.relname,trigger.tgname,trigger.tgenabled,pg_get_triggerdef(trigger.oid) AS definition
   FROM pg_trigger AS trigger JOIN pg_class AS relation ON relation.oid=trigger.tgrelid
   WHERE relation.relnamespace='public'::regnamespace AND NOT trigger.tgisinternal ORDER BY relation.relname,trigger.tgname`);
@@ -513,6 +532,46 @@ test('system keys and administrator/global settings use source values and mapped
     }
   }));
 
+for (const retainedIndex of [0, 1]) {
+  test(`one exact-ID source currency replacement cannot choose between two target globals (retained row ${retainedIndex + 1})`,
+    async () => transaction(async () => {
+      const sourceGlobals = values(pkg, 'admin_configs').filter(item => item.admin_id === null && item.config_type === 'currency_unit');
+      const targetGlobals = await rows(db, `SELECT id,config_value FROM public.admin_configs
+        WHERE admin_id IS NULL AND config_type='currency_unit' ORDER BY id`);
+      assert.equal(sourceGlobals.length, 2, 'exercise the real historical duplicate-global fixture');
+      assert.equal(targetGlobals.length, 2);
+      assert.deepEqual(sourceGlobals.map(item => item.id).sort(), targetGlobals.map(item => item.id).sort());
+      const retained = sourceGlobals[retainedIndex];
+      const input = changed('admin_configs', items => items.filter(item => item.admin_id !== null ||
+        item.config_type !== 'currency_unit' || item.id === retained.id).map(item => item.id === retained.id
+        ? { ...item, config_value: item.config_value === 'EUR' ? 'USD' : 'EUR' } : item));
+      assert.equal(values(input, 'admin_configs').filter(item => item.admin_id === null && item.config_type === 'currency_unit').length, 1);
+      const before = await businessState();
+      const { job, plan } = await prepared(input);
+      assert.equal(plan.can_apply, false, 'an exact ID must not bypass an ambiguous target natural key');
+      assert.ok(plan.conflicts.some(item => item.table_key === 'admin_configs' && item.source_id === retained.id &&
+        item.reason === 'ambiguous_target_setting'), JSON.stringify(plan.conflicts));
+      await assert.rejects(descriptor(job), /conflict-free/);
+      await assert.rejects(apply(job, plan), /saved and sealed|conflicts/);
+      assert.equal(await backupCount(job), 0);
+      assert.deepEqual(await businessState(), before);
+    }));
+}
+
+test('the full exact-ID exact-content duplicate global currency set remains reusable without changing either target row',
+  async () => transaction(async () => {
+    const input = changed('admin_configs', items => items.filter(item => item.admin_id === null && item.config_type === 'currency_unit'));
+    assert.equal(values(input, 'admin_configs').length, 2);
+    const before = await rows(db, 'SELECT to_jsonb(item) AS value FROM public.admin_configs AS item ORDER BY id');
+    const { job, plan } = await prepared(input);
+    applicable(plan);
+    assert.deepEqual(plan.conflicts, []);
+    await gateBackup(job, plan);
+    assert.equal((await apply(job, plan)).success, true);
+    assert.deepEqual(await rows(db, 'SELECT to_jsonb(item) AS value FROM public.admin_configs AS item ORDER BY id'), before,
+      'neither the duplicate set nor settings outside the source selection should be rewritten');
+  }));
+
 test('new non-root identities can be created alongside same-name replacements and retain nullable parent fields while disabled',
   async () => transaction(async () => {
     const newId = randomUUID();
@@ -734,8 +793,10 @@ test('cancel clears plaintext staging and task access but keeps sealed private c
   async () => transaction(async () => {
     const { job, plan } = await prepared();
     const bytes = await gateBackup(job, plan);
+    const backup = await backupState(job);
     const before = await businessState();
     await cancel(job);
+    assert.deepEqual(await backupState(job), backup, 'successful cancellation must preserve the whole sealed backup');
     assert.equal((await jobState(job)).status, 'cancelled');
     assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1', [job.job_id]), 0);
     assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_shared_backups WHERE id=$1 AND sealed_at IS NOT NULL', [job.job_id]), 1);
@@ -748,12 +809,96 @@ test('cancel clears plaintext staging and task access but keeps sealed private c
     assert.deepEqual(await businessState(), before, 'cancel before apply does not overwrite business data');
   }));
 
-test('cancelled unsealed backups are not exposed by the durable ciphertext reader', async () => transaction(async () => {
-  const { job, plan } = await prepared();
-  await append(job, plan, 0, gateCipher());
-  await cancel(job);
-  await assert.rejects(saved(job.job_id), /unavailable/);
-}));
+for (const uploaded of [false, true]) {
+  test(`cancel deletes the unsealed backup row and its ciphertext chunks (${uploaded ? 'two uploaded chunks' : 'empty frozen backup'})`,
+    async () => transaction(async () => {
+      const { job, plan } = await prepared();
+      applicable(plan);
+      if (uploaded) await uploadGateChunks(job, plan, false);
+      const backup = await backupState(job);
+      assert.equal(backup.sealed_at, null);
+      assert.equal(backup.chunks.length, uploaded ? 2 : 0);
+      assert.equal(backup.byte_count, uploaded ? gateCipher().length : 0);
+      const before = await businessState();
+      assert.equal((await cancel(job)).cancelled, true);
+      assert.equal((await jobState(job)).status, 'cancelled');
+      assert.equal(await backupCount(job), 0, 'unsealed ciphertext must be deleted, not merely hidden by the read RPC');
+      assert.deepEqual(await stagingState(job), []);
+      await assert.rejects(saved(job.job_id), /unavailable/);
+      assert.equal((await cancel(job)).cancelled, false);
+      assert.deepEqual(await businessState(), before);
+    }));
+}
+
+for (const sealed of [false, true]) {
+  for (const owner of ['same', 'different']) {
+    test(`begin abandons a stale ${sealed ? 'sealed' : 'unsealed'} task owned by ${owner} admin and ${sealed ? 'retains' : 'deletes'} its ciphertext`,
+      async () => transaction(async () => {
+        const { job, plan } = await prepared();
+        applicable(plan);
+        const bytes = await uploadGateChunks(job, plan, sealed);
+        const backup = await backupState(job);
+        const before = await businessState();
+        // Same-owner jobs are reclaimed after two minutes; another super admin needs the
+        // global three-hour expiry. Use the real begin path, not a direct status update.
+        await db.query(`UPDATE private.employee_transfer_jobs SET last_activity_at=now()-$2::interval WHERE id=$1`,
+          [job.job_id, owner === 'same' ? '3 minutes' : '4 hours']);
+        const next = await begin(pkg, owner === 'same' ? session : otherSession);
+        assert.equal(next.success, true);
+        assert.notEqual(next.job_id, job.job_id);
+        assert.equal((await jobState(job)).status, 'abandoned');
+        assert.equal((await jobState(next)).status, 'running');
+        assert.deepEqual(await stagingState(job), []);
+        if (sealed) {
+          assert.deepEqual(await backupState(job), backup, 'sealed backup metadata and both chunks survive task abandonment');
+          for (const [no, chunk] of [bytes.subarray(0, 47), bytes.subarray(47)].entries()) {
+            const recovered = await saved(job.job_id, no);
+            assert.equal(recovered.hex, chunk.toString('hex'));
+            assert.equal(recovered.sha256, hash(bytes));
+            assert.equal(recovered.chunks, 2);
+          }
+        } else {
+          assert.equal(await backupCount(job), 0, 'begin-triggered abandonment must delete the unsealed backup and chunks');
+          await assert.rejects(saved(job.job_id), /unavailable/);
+        }
+        await assert.rejects(append(job, plan, 2, Buffer.from('late')), /invalid or expired/);
+        assert.deepEqual(await businessState(), before);
+        assert.equal((await cancel(next, owner === 'same' ? session : otherSession)).cancelled, true);
+        if (sealed) assert.deepEqual(await backupState(job), backup, 'cancelling a different task cannot delete an older sealed backup');
+      }));
+  }
+
+  for (const action of ['cancel', 'abandon-on-begin']) {
+    test(`failed ${action} transaction restores a ${sealed ? 'sealed' : 'unsealed'} backup, chunks, staging and task status`,
+      async () => transaction(async () => {
+        const { job, plan } = await prepared();
+        applicable(plan);
+        await uploadGateChunks(job, plan, sealed);
+        if (action === 'abandon-on-begin') {
+          await db.query(`UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '3 minutes' WHERE id=$1`, [job.job_id]);
+        }
+        const backup = await backupState(job);
+        const staged = await stagingState(job);
+        const tasks = await rows(db, 'SELECT to_jsonb(item) AS value FROM private.employee_transfer_jobs AS item ORDER BY id');
+        const audit = await events(job);
+        const before = await businessState();
+        // The event insert happens after the status UPDATE, cleanup trigger and staging
+        // deletion. Failure here must roll back all of those earlier effects together.
+        await failTransferEvent(action === 'cancel' ? 'import_cancelled' : 'import_begin');
+        await assert.rejects(action === 'cancel' ? cancel(job) : begin(), /fixture transfer event failure/);
+        assert.deepEqual(await backupState(job), backup, 'a failed terminal transition cannot leave ciphertext deleted');
+        assert.deepEqual(await stagingState(job), staged);
+        assert.deepEqual(await rows(db, 'SELECT to_jsonb(item) AS value FROM private.employee_transfer_jobs AS item ORDER BY id'), tasks);
+        assert.deepEqual(await events(job), audit);
+        assert.deepEqual(await businessState(), before);
+        if (sealed) {
+          const recovered = await saved(job.job_id);
+          assert.equal(recovered.sha256, hash(gateCipher()));
+          assert.equal(recovered.chunks, 2);
+        }
+      }));
+  }
+}
 
 test('new RPCs validate invalid/non-super/foreign-owner sessions, and private backups/helpers deny direct browser access',
   async () => transaction(async () => {
@@ -854,6 +999,85 @@ for (const [name, setup, reason] of [
     await assert.rejects(apply(job, plan), /saved and sealed|conflicts/);
     assert.deepEqual(await businessState(), before);
   }));
+}
+
+for (const name of ['guard_content_audit_public_media_reference', 'guard_employee_chat_image_reference']) {
+  test(`an admin_groups BEFORE UPDATE trigger named ${name} cannot impersonate an approved media guard`,
+    async () => transaction(async () => {
+      const input = changed('admin_groups', items => {
+        items.find(item => item.id === ids.sourceGroup).updated_at = '2024-04-05T06:07:08Z';
+      });
+      const { job, plan } = await prepared(input);
+      await gateBackup(job, plan);
+      assert.equal(await scalar(db, `SELECT count(*)::int FROM pg_trigger
+        WHERE tgrelid='public.admin_groups'::regclass AND tgname=$1`, [name]), 0);
+      await db.exec(`CREATE SEQUENCE public.fixture_shared_guard_calls;
+        CREATE FUNCTION public.fixture_shared_guard_spoof() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM nextval('public.fixture_shared_guard_calls');
+          RAISE EXCEPTION 'fixture spoof media guard executed';
+        END; $$;
+        CREATE TRIGGER ${name} BEFORE UPDATE ON public.admin_groups
+        FOR EACH ROW EXECUTE FUNCTION public.fixture_shared_guard_spoof()`);
+      const before = await businessState();
+      const task = await jobState(job);
+      const audit = await events(job);
+      const backup = await backupState(job);
+      const triggers = await triggerState();
+      await assert.rejects(apply(job, plan), error => {
+        assert.match(error.message, /unreviewed write trigger/);
+        assert.doesNotMatch(error.message, /fixture spoof media guard executed/);
+        return true;
+      });
+      assert.equal(await scalar(db, 'SELECT is_called FROM public.fixture_shared_guard_calls'), false,
+        'sequence calls survive subtransaction rollback, so a fired guard cannot hide behind rollback');
+      assert.deepEqual(await businessState(), before);
+      assert.deepEqual(await jobState(job), task);
+      assert.deepEqual(await events(job), audit);
+      assert.deepEqual(await backupState(job), backup);
+      assert.deepEqual(await triggerState(), triggers);
+    }));
+}
+
+for (const state of ['empty', 'paused']) {
+  test(`automation AFTER UPDATE statement trigger is rejected before firing with zero active plans (${state} target)`,
+    async () => transaction(async () => {
+      if (state === 'paused') {
+        await db.query(`INSERT INTO public.notification_automation_plans(owner_admin_id,name,status)
+          VALUES ($1,'local paused statement-trigger fixture','paused')`, [NEW.branch]);
+      }
+      assert.equal(await scalar(db, "SELECT count(*)::int FROM public.notification_automation_plans WHERE status='active'"), 0);
+      assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.notification_automation_plans'), state === 'empty' ? 0 : 1);
+      const { job, plan } = await prepared();
+      await gateBackup(job, plan);
+      // The reviewed admins.is_active trigger executes an UPDATE against this table even
+      // when it matches no rows. PostgreSQL still fires an AFTER ... FOR EACH STATEMENT.
+      await db.exec(`CREATE SEQUENCE public.fixture_shared_automation_calls;
+        CREATE FUNCTION public.fixture_shared_automation_statement() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM nextval('public.fixture_shared_automation_calls');
+          RAISE EXCEPTION 'fixture automation statement trigger executed';
+        END; $$;
+        CREATE TRIGGER fixture_shared_automation_statement AFTER UPDATE ON public.notification_automation_plans
+        FOR EACH STATEMENT EXECUTE FUNCTION public.fixture_shared_automation_statement()`);
+      const before = await businessState();
+      const task = await jobState(job);
+      const audit = await events(job);
+      const backup = await backupState(job);
+      const triggers = await triggerState();
+      await assert.rejects(apply(job, plan), error => {
+        assert.match(error.message, /unreviewed write trigger/);
+        assert.doesNotMatch(error.message, /fixture automation statement trigger executed/);
+        return true;
+      });
+      assert.equal(await scalar(db, 'SELECT is_called FROM public.fixture_shared_automation_calls'), false,
+        'even an otherwise rolled-back statement trigger must not have run');
+      assert.deepEqual(await businessState(), before);
+      assert.deepEqual(await jobState(job), task);
+      assert.deepEqual(await events(job), audit);
+      assert.deepEqual(await backupState(job), backup);
+      assert.deepEqual(await triggerState(), triggers);
+    }));
 }
 
 // Only operations actually executed by replacement are relevant: UPDATEs plus membership DELETE.

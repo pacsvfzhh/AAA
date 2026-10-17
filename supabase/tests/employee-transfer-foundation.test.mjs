@@ -21,6 +21,7 @@ const criticalMigrations = [
   '20261102000004_harden_employee_transfer_triggers.sql',
   '20261102000005_export_shared_site_settings.sql',
   '20261102000006_import_shared_site_settings.sql',
+  '20261102000007_replace_shared_site_settings.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -51,6 +52,7 @@ function resource({ exec = async () => {}, dump = async () => new Blob(), ready 
 const transferTables = [
   'employee_transfer_site', 'employee_transfer_jobs', 'employee_transfer_events',
   'employee_transfer_staging', 'employee_transfer_excluded_columns', 'employee_transfer_trigger_policy',
+  'employee_transfer_shared_backups',
 ];
 const publicFunctions = [
   'employee_transfer_cancel(uuid,uuid)', 'get_employee_transfer_log(uuid,integer)',
@@ -70,6 +72,10 @@ const publicFunctions = [
   'employee_import_finish(uuid,uuid,jsonb)',
   'employee_import_shared_begin(uuid,text,uuid,jsonb)', 'employee_import_shared_stage(uuid,uuid,text,integer,text)',
   'get_employee_import_shared_dry_run(uuid,uuid)', 'employee_import_shared_apply(uuid,uuid,text)',
+  'employee_import_shared_replace_begin(uuid,text,uuid,jsonb)', 'get_employee_import_shared_replace_dry_run(uuid,uuid)',
+  'get_employee_import_shared_backup(uuid,uuid)', 'get_employee_import_shared_backup_page(uuid,uuid,text,text,integer)',
+  'employee_import_shared_backup_append(uuid,uuid,text,integer,text)', 'employee_import_shared_backup_seal(uuid,uuid,text,text,integer)',
+  'get_employee_shared_saved_backup_chunk(uuid,uuid,integer)', 'employee_import_shared_replace_apply(uuid,uuid,text)',
 ];
 
 async function checkCatalog(db) {

@@ -2,6 +2,7 @@ import { getAdminFinancialSessionToken } from '../auth';
 import { formatSupabaseError, supabase } from '../supabase';
 import { validateSharedExportCatalog, type SharedExportCatalog, type SharedExportSource } from './sharedExport';
 import type { SharedImportTarget } from './sharedImport';
+import type { ReplacementBackupDescriptor, ReplacementBackupReceiver } from './replacementBackup';
 
 export interface SharedImportSession {
   target: SharedImportTarget;
@@ -9,7 +10,23 @@ export interface SharedImportSession {
   identity(): { jobId: string; jobToken: string } | null;
 }
 
+export interface SharedReplacementSession extends SharedImportSession {
+  backup(signal?: AbortSignal): Promise<{
+    descriptor: ReplacementBackupDescriptor;
+    source: SharedExportSource;
+    receiver: ReplacementBackupReceiver;
+  }>;
+}
+
 export function createSharedSettingsImportSession(packageId: string, adminPassword: string): SharedImportSession {
+  return createSharedImportSession(packageId, adminPassword, false);
+}
+
+export function createSharedSettingsReplacementSession(packageId: string, adminPassword: string): SharedReplacementSession {
+  return createSharedImportSession(packageId, adminPassword, true);
+}
+
+function createSharedImportSession(packageId: string, adminPassword: string, replace: boolean): SharedReplacementSession {
   const session = getAdminFinancialSessionToken();
   let job: { jobId: string; jobToken: string } | null = null;
   let started = false;
@@ -24,7 +41,7 @@ export function createSharedSettingsImportSession(packageId: string, adminPasswo
         if (started) throw new Error('The import begin request cannot be retried automatically. Reconcile the task first.');
         started = true;
         try {
-          const query = supabase.rpc('employee_import_shared_begin', {
+          const query = supabase.rpc(replace ? 'employee_import_shared_replace_begin' : 'employee_import_shared_begin', {
             p_admin_session_token: session, p_admin_password: adminPassword, p_package_id: packageId,
             p_catalog: { ...catalog },
           });
@@ -49,17 +66,74 @@ export function createSharedSettingsImportSession(packageId: string, adminPasswo
         return data;
       },
       async dryRun(signal) {
-        const query = supabase.rpc('get_employee_import_shared_dry_run', args());
+        const query = supabase.rpc(replace ? 'get_employee_import_shared_replace_dry_run' : 'get_employee_import_shared_dry_run', args());
         const { data, error } = await (signal ? query.abortSignal(signal) : query);
         if (error) throw new Error(formatSupabaseError(error));
         return data;
       },
     },
     async apply(planHash, signal) {
-      const query = supabase.rpc('employee_import_shared_apply', { ...args(), p_plan_hash: planHash });
+      const query = supabase.rpc(replace ? 'employee_import_shared_replace_apply' : 'employee_import_shared_apply', { ...args(), p_plan_hash: planHash });
       const { data, error } = await (signal ? query.abortSignal(signal) : query);
       if (error) throw new Error(formatSupabaseError(error));
       return data;
+    },
+    async backup(signal) {
+      if (!replace) throw new Error('Create-only tasks do not permit replacement backups.');
+      const readDescriptor = async (readSignal?: AbortSignal) => {
+        const query = supabase.rpc('get_employee_import_shared_backup', args());
+        const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+        if (error) throw new Error(formatSupabaseError(error));
+        if (!data || data.backup_id !== job?.jobId || typeof data.plan_hash !== 'string'
+          || !/^[0-9a-f]{64}$/.test(data.plan_hash) || typeof data.target_hash !== 'string'
+          || !/^[0-9a-f]{64}$/.test(data.target_hash)) throw new Error('Invalid replacement backup descriptor.');
+        return { backup_id: data.backup_id as string, plan_hash: data.plan_hash, target_hash: data.target_hash,
+          catalog: validateSharedExportCatalog(data.catalog) };
+      };
+      const descriptor = await readDescriptor(signal);
+      return {
+        descriptor,
+        source: {
+          catalog: async () => descriptor.catalog,
+          async page(key, after, readSignal) {
+            const query = supabase.rpc('get_employee_import_shared_backup_page', {
+              ...args(), p_table_key: key, p_after: after, p_limit: 200,
+            });
+            const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+            if (error) throw new Error(formatSupabaseError(error));
+            return data;
+          },
+          async verify(readSignal) {
+            const current = await readDescriptor(readSignal);
+            if (JSON.stringify(current) !== JSON.stringify(descriptor)) throw new Error('The frozen backup identity changed.');
+            return { verified: true, scope: 'shared-settings', full_site_complete: false };
+          },
+        },
+        receiver: {
+          async append(chunkNo, hex, writeSignal) {
+            const query = supabase.rpc('employee_import_shared_backup_append', {
+              ...args(), p_plan_hash: descriptor.plan_hash, p_chunk_no: chunkNo, p_hex: hex,
+            });
+            const { data, error } = await (writeSignal ? query.abortSignal(writeSignal) : query);
+            if (error) throw new Error(formatSupabaseError(error));
+            if (!data || data.success !== true || typeof data.bytes !== 'number'
+              || typeof data.sha256 !== 'string' || typeof data.repeated !== 'boolean') throw new Error('Invalid backup chunk acknowledgement.');
+            return { success: true, bytes: data.bytes, sha256: data.sha256, repeated: data.repeated };
+          },
+          async seal(sha256, bytes, writeSignal) {
+            const query = supabase.rpc('employee_import_shared_backup_seal', {
+              ...args(), p_plan_hash: descriptor.plan_hash, p_sha256: sha256, p_bytes: bytes,
+            });
+            const { data, error } = await (writeSignal ? query.abortSignal(writeSignal) : query);
+            if (error) throw new Error(formatSupabaseError(error));
+            if (!data || data.success !== true || data.backup_id !== descriptor.backup_id || data.sha256 !== sha256
+              || data.bytes !== bytes || data.full_site_complete !== false || typeof data.repeated !== 'boolean') {
+              throw new Error('The encrypted replacement backup seal was not confirmed.');
+            }
+            return data;
+          },
+        },
+      };
     },
   };
 }
