@@ -18,6 +18,7 @@ const criticalMigrations = [
   '20261102000001_employee_data_export.sql',
   '20261102000002_employee_data_import_prepare.sql',
   '20261102000003_employee_data_import_write.sql',
+  '20261102000004_harden_employee_transfer_triggers.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));

@@ -1546,10 +1546,38 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
   },
 ]);
 
+const productionAbsentTables = new Set([
+  'private.employee_transfer_events', 'private.employee_transfer_excluded_columns',
+  'private.employee_transfer_jobs', 'private.employee_transfer_site',
+  'private.employee_transfer_staging', 'private.employee_transfer_trigger_policy',
+  'public.notification_automation_date_runs',
+]);
+const productionNullable = new Map([
+  ['public.users.created_by', true], ['private.content_audit_events.actor_admin_id', true],
+  ['public.bulk_import_log.table_name', false], ['public.bulk_import_log.import_type', false],
+  ['public.bulk_import_log.total_records', false], ['public.group_configs.group_id', false],
+  ['public.group_configs.config_type', false], ['public.group_configs.config_value', false],
+]);
+
+// 与正式库只读目录指纹独立核对；不是把未知差异都当成可选项。
+export const TRANSFER_PRODUCTION_COVERAGE_INVENTORY = freezeInventory(
+  TRANSFER_SCOPE_COVERAGE_INVENTORY.filter(table => !productionAbsentTables.has(`${table.schema}.${table.name}`))
+    .map(table => ({
+      ...table,
+      columns: table.columns.map(column => ({
+        ...column,
+        nullable: productionNullable.get(`${table.schema}.${table.name}.${column.name}`) ?? column.nullable,
+      })),
+    })),
+);
+export const TRANSFER_PRODUCTION_SCHEMA_FINGERPRINT = 'cc05ccfbec83f315554f6e598a80c4ca442169e8911089ce4fb081d5ae0db128';
+
 // actualTables只接受根表结构描述；不连接数据库、不更新库存，也不授权导出任何字段。
-export function assertTransferScopeCoverage(actualTables) {
+export function assertTransferScopeCoverage(actualTables, { profile = 'local-replay' } = {}) {
   if (!Array.isArray(actualTables)) throw new TypeError('actualTables must be an array of root table descriptors');
-  const expected = new Map(TRANSFER_SCOPE_COVERAGE_INVENTORY.map(table => [`${table.schema}.${table.name}`, table]));
+  if (!['local-replay', 'production-2026-10-17'].includes(profile)) throw new TypeError('Unknown transfer schema profile');
+  const inventory = profile === 'local-replay' ? TRANSFER_SCOPE_COVERAGE_INVENTORY : TRANSFER_PRODUCTION_COVERAGE_INVENTORY;
+  const expected = new Map(inventory.map(table => [`${table.schema}.${table.name}`, table]));
   const seen = new Set();
   const issues = [];
   for (const [index, table] of actualTables.entries()) {
@@ -1610,8 +1638,8 @@ export function assertTransferScopeCoverage(actualTables) {
     throw error;
   }
   return Object.freeze({
-    tableCount: TRANSFER_SCOPE_COVERAGE_INVENTORY.length,
-    columnCount: TRANSFER_SCOPE_COVERAGE_INVENTORY.reduce((count, table) => count + table.columns.length, 0),
+    tableCount: inventory.length,
+    columnCount: inventory.reduce((count, table) => count + table.columns.length, 0),
     exportAuthorized: false,
   });
 }

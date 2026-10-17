@@ -15,6 +15,11 @@ export interface TransferEncryptionOptions {
   signal?: AbortSignal;
 }
 
+export interface TransferDecryptionOptions {
+  signal?: AbortSignal;
+  expectedMetadata?: TransferMetadata;
+}
+
 export type TransferByteSource = AsyncIterable<Uint8Array>;
 export type TransferByteStream = AsyncGenerator<Uint8Array, void, unknown>;
 
@@ -143,6 +148,7 @@ class ByteReader {
 }
 
 interface ContainerHeader {
+  metadata: TransferMetadata;
   bytes: Uint8Array;
   salt: Uint8Array;
   nonceBase: Uint8Array;
@@ -169,7 +175,7 @@ function createHeader(metadata: TransferMetadata, chunkSize: number): ContainerH
   view.setUint16(48, volumeId.length);
   bytes.set(exportId, 50);
   bytes.set(volumeId, 50 + exportId.length);
-  return { bytes, salt, nonceBase, chunkSize };
+  return { metadata, bytes, salt, nonceBase, chunkSize };
 }
 
 async function readHeader(reader: ByteReader): Promise<ContainerHeader> {
@@ -186,9 +192,10 @@ async function readHeader(reader: ByteReader): Promise<ContainerHeader> {
     || !validChunkSize(chunkSize) || exportLength < 1 || exportLength > 256
     || volumeLength < 1 || volumeLength > 256
     || size !== FIXED_HEADER_SIZE + exportLength + volumeLength) throw invalidFormat();
+  let metadata: TransferMetadata;
   try {
     const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
-    validateMetadata({
+    metadata = validateMetadata({
       exportId: decoder.decode(payload.subarray(38, 38 + exportLength)),
       volumeId: decoder.decode(payload.subarray(38 + exportLength)),
     });
@@ -196,6 +203,7 @@ async function readHeader(reader: ByteReader): Promise<ContainerHeader> {
     throw invalidFormat();
   }
   return {
+    metadata,
     bytes: concatenate(prefix, payload),
     salt: payload.slice(10, 26),
     nonceBase: payload.slice(26, 34),
@@ -277,12 +285,19 @@ export async function* encryptTransferStream(
 export async function* decryptTransferStream(
   source: TransferByteSource,
   passphrase: string,
+  options: TransferDecryptionOptions = {},
 ): TransferByteStream {
+  checkAbort(options.signal);
+  const expected = options.expectedMetadata === undefined ? undefined : validateMetadata(options.expectedMetadata);
   const passphraseBytes = validatePassphrase(passphrase);
-  const reader = new ByteReader(source);
+  const reader = new ByteReader(source, options.signal);
   try {
     const header = await readHeader(reader);
+    if (expected && (header.metadata.exportId !== expected.exportId || header.metadata.volumeId !== expected.volumeId)) {
+      throw new Error('Transfer package or volume identity does not match.');
+    }
     const key = await deriveKey(passphraseBytes, header.salt);
+    checkAbort(options.signal);
     let index = 0;
     let total = 0n;
     let shortBlock = false;
@@ -304,6 +319,7 @@ export async function* decryptTransferStream(
       } catch {
         throw new Error('Transfer authentication failed or container is damaged.');
       }
+      checkAbort(options.signal);
       if (flag === 1) {
         if ((await reader.readUpTo(1)).length !== 0) throw invalidFormat();
         return;
