@@ -44,7 +44,8 @@
 | `employeeTransfer/crypto.ts` | WebCrypto 流式分块认证，解密可绑定预期包/卷和取消信号；须等整卷 EOF/结束认证后才可提交业务资料；独立解密工具为 `scripts/decrypt-employee-export.mjs` |
 | `employeeTransfer/container.ts`、`manifest.ts`、`sha256.ts` | 双遍读取不可变临时文件，生成标准 STORED ZIP32；流式校验文件哈希/清单/卷集合/中央目录及外层结束认证，受大小与路径白名单限制。sink 仅写临时隔离区，abort 须阻断包括迟到完成在内的全部写入；真实临时文件适配器、媒体传输、业务导入导出及页面尚未接入 |
 | `employeeTransfer/sharedExport.ts`、`api.ts` | 管理员/共享设置七表的固定协议分页导出，原始 NDJSON 哈希、写入后真实计数及源快照核对；清理失败显式标记不可复用。仅子阶段、不标全站完成，尚无浏览器磁盘适配或后台页面，未部署 |
-| `employeeTransfer/sharedImport.ts`、`api.ts` | 七表先全量校验、再重开只读临时文件按行分块暂存，核对回执后计数并取得干跑；业务 apply 必须另行明确确认，不自动执行。失败可能留下服务器暂存，不假回滚/重试；账号启用、全站核对/续接及页面仍待实现 |
+| `employeeTransfer/sharedImport.ts`、`api.ts` | 七表两遍校验/暂存并取得干跑；create-only 与同名来源 replacement 分入口，业务 apply 独立确认、不自动执行。replacement 冻结备份 descriptor/计划与接收器，公开对象副本不能改变内部绑定；账号启用、全站协调/续接与页面仍待实现 |
+| `employeeTransfer/replacementBackup.ts` | 七表冻结快照写临时文件→加密保存独立文件→重读完整认证及清单对照→重读密文按128KiB上传/回执→封存；最大9MiB，不自动apply/重试。失败清临时明文、不删除独立密文；封存结果不明须核对，真实浏览器磁盘适配/恢复向导仍待接入 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |

@@ -9,7 +9,6 @@ import { build } from 'esbuild';
 import { createSites, adminLogin, rpc as baseRpc, scalar, rows } from './support/transfer-harness.mjs';
 import { buildNewSite, OLD, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 
-// Only local PGlite sites are used. No Supabase client, credentials or network access.
 const migration = '20261102000007_replace_shared_site_settings.sql';
 const keys = ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members',
   'admin_configs', 'system_configs', 'history_cleanup_config'];
@@ -58,8 +57,6 @@ before(async () => {
   assert.equal(sites.validation.freshDatabaseVerified, false, 'known historical replay gaps remain explicit');
   // dump clones share the original site identity; model two independent sites explicitly.
   await db.query('UPDATE private.employee_transfer_site SET site_id=$1', [randomUUID()]);
-  // Match the shared-import fixture: real administrator rows and exported seven-table pages,
-  // without the unrelated orders/wallet/chat fixture used by whole-employee transfer tests.
   for (const [id, name, role, password] of [[OLD.root, 'root', 'super_admin', PASSWORDS.root],
     [OLD.branch, 'branch', 'secondary_admin', PASSWORDS.branch],
     [OLD.emergency, 'emergency', 'emergency_admin', PASSWORDS.emergency]]) {
@@ -69,7 +66,6 @@ before(async () => {
       VALUES ($1,extensions.crypt($2,extensions.gen_salt('bf',4)))`, [id, password]);
   }
   await buildNewSite(db);
-  // Same usernames, different UUIDs, roles, parents and both credential hashes.
   await oldSite.query(`UPDATE public.admins SET role='emergency_admin',parent_id=$2,is_pinned=true,
     created_at=$3,updated_at=$3 WHERE id=$1`, [OLD.branch, OLD.root, sourceTime]);
   await oldSite.query(`UPDATE public.admins SET role='secondary_admin',parent_id=$2,is_active=NULL,
@@ -162,8 +158,7 @@ async function transaction(fn) {
   await db.exec('BEGIN');
   try { await fn(); } finally { await db.exec('ROLLBACK'); }
 }
-// Keep failures isolated without losing the surrounding fixture transaction. Every browser RPC
-// executes as anon, including negative cases; postgres is used only for fixture setup/assertions.
+// SAVEPOINT keeps expected RPC failures from aborting the fixture transaction.
 async function asRole(role, fn) {
   await db.exec('SAVEPOINT replace_rpc');
   try {
@@ -245,9 +240,7 @@ async function prepared(input = pkg) {
 function applicable(plan) {
   assert.equal(plan.can_apply, true, JSON.stringify(plan.conflicts));
 }
-// Deliberately NOT valid AES-GCM/container ciphertext. The server checks only EDXSTRM1 magic,
-// byte count and SHA-256; it cannot decrypt/authenticate the catalog or bind plaintext to a task.
-// Use this ONLY for server gate tests. The disk test below uses the real client crypto pipeline.
+// Invalid ciphertext tests only server hash gates; the disk test verifies real encryption.
 const gateCipher = () => Buffer.concat([Buffer.from('EDXSTRM1'), Buffer.alloc(88, 0xa5)]);
 async function gateBackup(job, plan) {
   applicable(plan);
@@ -839,8 +832,7 @@ for (const sealed of [false, true]) {
         const bytes = await uploadGateChunks(job, plan, sealed);
         const backup = await backupState(job);
         const before = await businessState();
-        // Same-owner jobs are reclaimed after two minutes; another super admin needs the
-        // global three-hour expiry. Use the real begin path, not a direct status update.
+        // Same-owner reclamation is two minutes; cross-owner expiry is three hours.
         await db.query(`UPDATE private.employee_transfer_jobs SET last_activity_at=now()-$2::interval WHERE id=$1`,
           [job.job_id, owner === 'same' ? '3 minutes' : '4 hours']);
         const next = await begin(pkg, owner === 'same' ? session : otherSession);
@@ -882,8 +874,7 @@ for (const sealed of [false, true]) {
         const tasks = await rows(db, 'SELECT to_jsonb(item) AS value FROM private.employee_transfer_jobs AS item ORDER BY id');
         const audit = await events(job);
         const before = await businessState();
-        // The event insert happens after the status UPDATE, cleanup trigger and staging
-        // deletion. Failure here must roll back all of those earlier effects together.
+        // Audit insertion fails after cleanup, so rollback must restore backup and staging.
         await failTransferEvent(action === 'cancel' ? 'import_cancelled' : 'import_begin');
         await assert.rejects(action === 'cancel' ? cancel(job) : begin(), /fixture transfer event failure/);
         assert.deepEqual(await backupState(job), backup, 'a failed terminal transition cannot leave ciphertext deleted');
@@ -1050,8 +1041,7 @@ for (const state of ['empty', 'paused']) {
       assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.notification_automation_plans'), state === 'empty' ? 0 : 1);
       const { job, plan } = await prepared();
       await gateBackup(job, plan);
-      // The reviewed admins.is_active trigger executes an UPDATE against this table even
-      // when it matches no rows. PostgreSQL still fires an AFTER ... FOR EACH STATEMENT.
+      // Zero affected rows still invoke statement-level triggers.
       await db.exec(`CREATE SEQUENCE public.fixture_shared_automation_calls;
         CREATE FUNCTION public.fixture_shared_automation_statement() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -1080,8 +1070,6 @@ for (const state of ['empty', 'paused']) {
     }));
 }
 
-// Only operations actually executed by replacement are relevant: UPDATEs plus membership DELETE.
-// No DELETE on administrators, credentials or sessions is performed or required by this protocol.
 for (const [table, operation] of [['admins', 'UPDATE'],
   ['financial_admin_credentials', 'UPDATE'], ['admin_financial_sessions', 'UPDATE'],
   ['admin_groups', 'UPDATE'], ['admin_group_members', 'UPDATE'], ['admin_group_members', 'DELETE'],

@@ -18,7 +18,7 @@
 | `src/components/employee/` | 员工端各页面（`docs/employee-portal.md`） |
 | `src/components/*.tsx` | 共用组件：ErrorBoundary、LanguageSwitcher、AnnouncementDetailModal、背景装饰 |
 | `src/lib/` | 登录会话、Supabase client、上传/净化/设备等工具（`docs/architecture.md`） |
-| `src/lib/employeeTransfer/` | 加密流、ZIP/清单验证、SHA-256、管理员/共享设置七表导出及受控导入子阶段已实现；同名来源覆盖/成员替换、全站协调、媒体、多卷与页面仍待实现（未部署），详见迁移计划 |
+| `src/lib/employeeTransfer/` | 单卷加密/ZIP/清单、七表导出/导入、专用同名覆盖与独立密文备份/回读校验已实现；派单员工分组/交单/自动化、全站协调、媒体、多卷与页面仍待实现（未部署），详见迁移计划 |
 | `scripts/decrypt-employee-export.mjs` | Node 20 独立解密迁移加密容器（应急工具，不覆盖现有输出） |
 | `src/lib/i18n/` | 员工端与登录页的 10 种语言 |
 | `src/types/database.ts` | 手工维护的 Supabase 类型（新增表/RPC 要同步） |
@@ -47,7 +47,7 @@
 11. Realtime 只对 publication 中的表有效（清单见 `docs/database.md`），订阅清单外的表收不到事件。
 12. 写操作不要加自动重试；`src/lib/supabase.ts` 只对 GET 与白名单只读 RPC 重试。
 
-**资料迁移约定（待完整实现）**：同名非超管、派单/交单分组及设置、自动化方案按旧站导入资料覆盖，成员按源名单精确替换，不取并集；匹配须限定对应管理员/父级，覆盖前独立备份校验与整体确认。保留新站超管、既定聊天合并和财务去重/留证保护，不全库清空。现有七表 RPC 仍会阻断同名/不同配置，不能当作已实现覆盖；细则见迁移计划第 2、5、6 节。
+**资料迁移约定（待完整实现）**：同名非超管、派单/交单分组及设置、自动化方案按旧站覆盖，成员精确替换、不取并集，匹配限定对应管理员/父级；覆盖前独立备份校验与整体确认。保留新超管、既定聊天合并及财务/媒体留证，不全库清空。七表专用 replacement 协议已实现覆盖/备份（旧 create-only 不得旁路）；不是派单员工分组或全站完成，细则见迁移计划第 2、5、6、20 节。
 
 **界面**
 13. 管理员后台文字直接写繁体中文（不走 i18n）；员工端与登录页文字走 `useLanguage()`，新增键先加 `src/lib/i18n/locales/en.ts`，再补齐其余 9 个语言文件。

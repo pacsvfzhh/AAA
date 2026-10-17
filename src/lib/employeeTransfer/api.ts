@@ -92,9 +92,9 @@ function createSharedImportSession(packageId: string, adminPassword: string, rep
       };
       const descriptor = await readDescriptor(signal);
       return {
-        descriptor,
+        descriptor: structuredClone(descriptor),
         source: {
-          catalog: async () => descriptor.catalog,
+          catalog: async () => structuredClone(descriptor.catalog),
           async page(key, after, readSignal) {
             const query = supabase.rpc('get_employee_import_shared_backup_page', {
               ...args(), p_table_key: key, p_after: after, p_limit: 200,
