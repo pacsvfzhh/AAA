@@ -288,6 +288,36 @@ test('cancel/expired sessions/expired tasks revoke access and cancellation clear
   await assert.rejects(page(job, 'admins'), /session is invalid or expired/);
 }));
 
+test('all shared capture helpers share one STABLE query snapshot rather than advancing snapshots between tables', async () => transaction(async () => {
+  for (const signature of ['employee_transfer_shared_validate()', 'employee_transfer_shared_rows(text)',
+    'employee_transfer_shared_snapshot(text)', 'employee_transfer_shared_capture()']) {
+    assert.equal(await scalar(db, 'SELECT provolatile FROM pg_proc WHERE oid = to_regprocedure($1)', [`private.${signature}`]), 's');
+  }
+  const capture = await scalar(db, 'SELECT private.employee_transfer_shared_capture()');
+  assert.deepEqual(Object.keys(capture).sort(), [...keys].sort());
+  const job = await begin();
+  for (const key of keys) {
+    const descriptor = job.catalog.tables.find(item => item.key === key);
+    assert.equal(descriptor.sha256, capture[key].sha256);
+    assert.equal(descriptor.bytes, capture[key].bytes);
+    assert.equal(descriptor.rows, capture[key].count);
+  }
+}));
+
+test('shared row and byte limits reject oversized settings before a task or sensitive staging can commit', async () => transaction(async () => {
+  await db.query(`INSERT INTO public.admin_groups (name, created_by)
+    SELECT repeat('x', 61000) || number, $1 FROM generate_series(1, 140) AS number`, [NEW.root]);
+  await assert.rejects(begin(), /size limit/);
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM private.employee_transfer_jobs WHERE status = 'running'"), 0);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_staging'), 0);
+}));
+
+test('the fixed shared table row bound is enforced independently of the total byte bound', async () => transaction(async () => {
+  await db.query(`INSERT INTO public.admin_groups (name, created_by)
+    SELECT 'group-' || number, $1 FROM generate_series(1, 10001) AS number`, [NEW.root]);
+  await assert.rejects(begin(), /row limit/);
+}));
+
 test('shared credentials require their own protocol and cannot be exposed by an old employee-only task', async () => transaction(async () => {
   const legacy = await rpc(db, 'employee_export_begin', { p_admin_session_token: session, p_admin_password: PASSWORDS.root });
   await assert.rejects(page(legacy, 'financial_admin_credentials'), /not a shared settings export/);

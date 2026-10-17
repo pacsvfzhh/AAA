@@ -12,6 +12,7 @@ const MAX_TABLE_ROWS = 10000;
 const MAX_PAGE_ROWS = 200;
 const MAX_PAGE_BYTES = 256 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
+const EXCLUDED_SYSTEM_KEYS = ['ios_config', 'auto_cleanup_schedule', 'auto_cleanup_history'];
 const encoder = new TextEncoder();
 
 export interface SharedTableCatalog {
@@ -38,13 +39,11 @@ export interface SharedExportPage {
 export interface SharedExportSource {
   catalog(signal?: AbortSignal): Promise<unknown>;
   page(key: SharedTableKey, after: string | null, signal?: AbortSignal): Promise<unknown>;
-  // The backend must compare current source contents with the frozen snapshot, rejecting changes.
   verify(signal?: AbortSignal): Promise<unknown>;
 }
 export interface SharedExportProgress {
   scope: 'shared-settings';
   tableKey: SharedTableKey;
-  // Successfully appended totals only; neither durable ZIP output nor verified full-site success.
   rows: number;
   bytes: number;
   fullSiteComplete: false;
@@ -59,6 +58,17 @@ export interface SharedExportEntry {
   sha256: string;
   kind: 'ndjson';
 }
+export class SharedExportCleanupError extends Error {
+  readonly cleanupRequired = true;
+  readonly originalError: unknown;
+
+  constructor(originalError: unknown) {
+    super('Shared-settings export failed and temporary cleanup could not be confirmed. Do not reuse the temporary workspace.');
+    this.name = 'SharedExportCleanupError';
+    this.originalError = originalError;
+  }
+}
+
 export interface SharedExportResult {
   catalog: SharedExportCatalog;
   entries: SharedExportEntry[];
@@ -112,7 +122,8 @@ export function validateSharedExportCatalog(value: unknown): SharedExportCatalog
     || typeof record.site_id !== 'string'
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(record.site_id)
     || !Array.isArray(record.tables) || record.tables.length !== SHARED_TABLE_KEYS.length
-    || !Array.isArray(record.excluded_system_keys)) invalid('catalog');
+    || !Array.isArray(record.excluded_system_keys)
+    || record.excluded_system_keys.length > EXCLUDED_SYSTEM_KEYS.length) invalid('catalog');
   const tables: SharedTableCatalog[] = [];
   const seen = new Set<SharedTableKey>();
   let totalBytes = 0;
@@ -127,10 +138,11 @@ export function validateSharedExportCatalog(value: unknown): SharedExportCatalog
     if (totalBytes > MAX_TOTAL_BYTES) invalid('total byte limit');
     tables.push({ key, rows, bytes, sha256: sha256(entry.sha256) });
   }
-  // Seven distinct members of the fixed key set imply exact coverage. Never trust catalog order.
   const excludedKeys: string[] = [];
   for (const key of record.excluded_system_keys) {
-    if (typeof key !== 'string') invalid('excluded system keys');
+    if (typeof key !== 'string' || !EXCLUDED_SYSTEM_KEYS.includes(key) || excludedKeys.includes(key)) {
+      invalid('excluded system keys');
+    }
     excludedKeys.push(key);
   }
   return {
@@ -142,7 +154,8 @@ export function validateSharedExportCatalog(value: unknown): SharedExportCatalog
 function validatePage(value: unknown, key: SharedTableKey): SharedExportPage {
   const record = object(value, ['table_key', 'count', 'ndjson', 'next_after', 'sha256']);
   if (record.table_key !== key || typeof record.ndjson !== 'string'
-    || (record.next_after !== null && (typeof record.next_after !== 'string' || record.next_after.length === 0))) {
+    || (record.next_after !== null && (typeof record.next_after !== 'string'
+      || record.next_after.length === 0 || record.next_after.length > 128))) {
     invalid('page');
   }
   return {
@@ -159,7 +172,6 @@ function validateVerification(value: unknown): void {
 }
 
 function checkAbort(signal?: AbortSignal): void {
-  // Do not echo signal.reason, which may contain caller-supplied sensitive data.
   if (signal?.aborted) throw new DOMException('Shared-settings export cancelled.', 'AbortError');
 }
 
@@ -197,9 +209,7 @@ function checkObjectLine(line: string): void {
   try { parsed = JSON.parse(line); } catch { invalid('NDJSON syntax'); }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) invalid('NDJSON object row');
 
-  // JSON.parse validates grammar, but loses duplicate keys. Scan the original tokens with one key
-  // set per object (including nested objects). Decode only key tokens to catch escaped aliases.
-  // This is iterative so deeply nested, otherwise valid JSON does not overflow the call stack.
+  // JSON.parse loses duplicate keys; scan iteratively to reject escaped aliases without recursive stack growth.
   const stack: (Set<string> | null)[] = [];
   for (let index = 0; index < line.length; index++) {
     const char = line[index];
@@ -247,8 +257,6 @@ function pageBytes(page: SharedExportPage): Uint8Array {
   return bytes;
 }
 
-// Only isolated temporary writes are allowed. The sink owns reopening immutable files for ZIP;
-// this stage never re-queries the source or retains whole tables to manufacture reopenable inputs.
 export async function exportSharedSettings(
   source: SharedExportSource,
   sink: TemporaryTransferSink,
@@ -304,7 +312,7 @@ export async function exportSharedSettings(
     return { catalog, entries, rows, bytes, fullSiteComplete: false };
   } catch (error) {
     // abort must invalidate pending/late appends as well as delete already written files.
-    try { await sink.abort(error); } catch { /* Never turn a failed export into success. */ }
+    try { await sink.abort(error); } catch { throw new SharedExportCleanupError(error); }
     throw error;
   }
 }

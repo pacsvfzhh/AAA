@@ -37,7 +37,7 @@ function fixture(texts = defaults) {
       const body = pages[key].map(page => page.ndjson).join('');
       return { key, rows: pages[key].reduce((sum, page) => sum + page.count, 0), bytes: Buffer.byteLength(body), sha256: hash(body) };
     }),
-    excluded_system_keys: ['technical_endpoint', 'session_settings'], full_site_complete: false,
+    excluded_system_keys: ['ios_config', 'auto_cleanup_schedule'], full_site_complete: false,
   };
   const calls = { catalog: 0, pages: [], verify: 0 };
   const events = [];
@@ -191,6 +191,9 @@ const catalogCases = [
   ['short SHA', c => { c.tables[0].sha256 = 'a'.repeat(63); }],
   ['excluded key type', c => { c.excluded_system_keys = ['safe', null]; }],
   ['excluded keys not array', c => { c.excluded_system_keys = 'key'; }],
+  ['unknown excluded key', c => { c.excluded_system_keys = ['unknown']; }],
+  ['duplicate excluded key', c => { c.excluded_system_keys = ['ios_config', 'ios_config']; }],
+  ['excluded metadata cap', c => { c.excluded_system_keys = Array(10000).fill('ios_config'); }],
   ['sparse excluded keys', c => { c.excluded_system_keys = new Array(1); }],
   ['sparse tables', c => { delete c.tables[1]; }],
   ['symbol property', c => { c[Symbol('unexpected')] = 1; }],
@@ -239,6 +242,7 @@ const pageCases = [
   ['missing field', p => { delete p.next_after; }],
   ['undefined cursor', p => { p.next_after = undefined; }],
   ['empty cursor', p => { p.next_after = ''; }],
+  ['cursor length cap', p => { p.next_after = 'x'.repeat(129); }],
   ['non-string cursor', p => { p.next_after = 1; }],
   ['non-string NDJSON', p => { p.ndjson = {}; }],
   ['accessor', p => { Object.defineProperty(p, 'ndjson', { get() { throw new Error('must not run'); } }); }],
@@ -510,16 +514,21 @@ test('sink failure is never retried; failed append has no progress and all tempo
   assert.equal(sink.aborts[0], failure);
 });
 
-test('a cleanup error cannot replace the original failure or produce success', async () => {
+test('a failed cleanup exposes a non-reusable workspace and retains the original error', async () => {
   const value = fixture();
   const failure = new Error('verify failure');
   value.source.verify = async () => { throw failure; };
   const sink = temporarySink();
-  const baseAbort = sink.abort.bind(sink);
-  sink.abort = async reason => { await baseAbort(reason); throw new Error('cleanup failed'); };
-  await assert.rejects(api.exportSharedSettings(value.source, sink), error => error === failure);
+  sink.abort = async reason => { sink.aborts.push(reason); throw new Error('sensitive-cleanup-detail'); };
+  await assert.rejects(api.exportSharedSettings(value.source, sink), error => {
+    assert.ok(error instanceof api.SharedExportCleanupError);
+    assert.equal(error.cleanupRequired, true);
+    assert.equal(error.originalError, failure);
+    assert.doesNotMatch(error.message, /sensitive-cleanup-detail|local-only-sensitive-hash/);
+    return true;
+  });
   assert.equal(sink.aborts.length, 1);
-  assert.equal(sink.files.size, 0);
+  assert.ok(sink.files.size > 0, 'the failure must not pretend that sensitive files were deleted');
 });
 
 test('pre-cancelled export never invokes the source and still aborts temporary sink', async () => {

@@ -45,7 +45,7 @@ END;
 $$;
 
 CREATE FUNCTION private.employee_transfer_shared_validate()
-RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM public.system_configs WHERE key NOT IN (
@@ -138,7 +138,7 @@ END;
 $$;
 
 CREATE FUNCTION private.employee_transfer_shared_snapshot(p_table_key text)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_rows jsonb; v_text text; v_count integer; v_bytes bigint; v_max_line integer;
 BEGIN
@@ -157,21 +157,36 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION public.employee_export_shared_begin(p_admin_session_token uuid, p_admin_password text)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+-- STABLE keeps validation, all seven tables and both size scans on the caller's one MVCC snapshot.
+CREATE FUNCTION private.employee_transfer_shared_capture()
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
-DECLARE
-  v_begin jsonb; v_key text; v_snapshot jsonb; v_tables jsonb := '[]'::jsonb;
-  v_total integer := 0; v_catalog jsonb; v_excluded jsonb;
+DECLARE v_key text; v_snapshot jsonb; v_total integer := 0; v_result jsonb := '{}'::jsonb;
 BEGIN
-  v_begin := private.employee_transfer_start_job(p_admin_session_token, p_admin_password, 'export',
-    '{"export_protocol":"shared-settings-v1","scope":"shared-settings"}'::jsonb);
-  IF NOT COALESCE((v_begin->>'success')::boolean, false) THEN RETURN v_begin; END IF;
   PERFORM private.employee_transfer_shared_validate();
   FOREACH v_key IN ARRAY private.employee_transfer_shared_keys() LOOP
     v_snapshot := private.employee_transfer_shared_snapshot(v_key);
     v_total := v_total + (v_snapshot->>'bytes')::integer;
     IF v_total > 8388608 THEN RAISE EXCEPTION 'Shared settings exceed the supported total size limit.'; END IF;
+    v_result := v_result || jsonb_build_object(v_key, v_snapshot);
+  END LOOP;
+  RETURN v_result;
+END;
+$$;
+
+CREATE FUNCTION public.employee_export_shared_begin(p_admin_session_token uuid, p_admin_password text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE
+  v_begin jsonb; v_key text; v_snapshot jsonb; v_tables jsonb := '[]'::jsonb;
+  v_capture jsonb; v_catalog jsonb; v_excluded jsonb;
+BEGIN
+  v_begin := private.employee_transfer_start_job(p_admin_session_token, p_admin_password, 'export',
+    '{"export_protocol":"shared-settings-v1","scope":"shared-settings"}'::jsonb);
+  IF NOT COALESCE((v_begin->>'success')::boolean, false) THEN RETURN v_begin; END IF;
+  v_capture := private.employee_transfer_shared_capture();
+  FOREACH v_key IN ARRAY private.employee_transfer_shared_keys() LOOP
+    v_snapshot := v_capture->v_key;
     INSERT INTO private.employee_transfer_staging (job_id, employee_id, table_key, chunk_no, row_count, payload)
     VALUES ((v_begin->>'job_id')::uuid, '00000000-0000-0000-0000-000000000000', 'shared:' || v_key, 0,
       (v_snapshot->>'count')::integer, v_snapshot);
@@ -246,18 +261,18 @@ $$;
 CREATE FUNCTION public.employee_export_shared_verify(p_admin_session_token uuid, p_job_token uuid)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
-DECLARE v_job private.employee_transfer_jobs%ROWTYPE; v_key text; v_expected jsonb; v_actual jsonb;
+DECLARE v_job private.employee_transfer_jobs%ROWTYPE; v_key text; v_expected jsonb; v_actual jsonb; v_capture jsonb;
 BEGIN
   v_job := private.employee_transfer_job(p_admin_session_token, p_job_token, 'export');
   IF v_job.options->>'export_protocol' IS DISTINCT FROM 'shared-settings-v1' THEN
     RAISE EXCEPTION 'The task is not a shared settings export.';
   END IF;
-  PERFORM private.employee_transfer_shared_validate();
+  v_capture := private.employee_transfer_shared_capture();
   FOREACH v_key IN ARRAY private.employee_transfer_shared_keys() LOOP
     SELECT payload INTO v_expected FROM private.employee_transfer_staging
     WHERE job_id = v_job.id AND employee_id = '00000000-0000-0000-0000-000000000000'
       AND table_key = 'shared:' || v_key AND chunk_no = 0;
-    v_actual := private.employee_transfer_shared_snapshot(v_key);
+    v_actual := v_capture->v_key;
     IF v_expected IS NULL OR v_expected->'count' IS DISTINCT FROM v_actual->'count'
       OR v_expected->'bytes' IS DISTINCT FROM v_actual->'bytes'
       OR v_expected->'sha256' IS DISTINCT FROM v_actual->'sha256' THEN
@@ -290,6 +305,7 @@ REVOKE ALL ON FUNCTION private.employee_transfer_shared_setting_valid(text, json
 REVOKE ALL ON FUNCTION private.employee_transfer_shared_validate() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION private.employee_transfer_shared_rows(text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION private.employee_transfer_shared_snapshot(text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION private.employee_transfer_shared_capture() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.employee_export_shared_begin(uuid, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.get_employee_export_shared_catalog(uuid, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.get_employee_export_shared_page(uuid, uuid, text, text, integer) FROM PUBLIC, anon, authenticated;
