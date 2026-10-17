@@ -51,7 +51,8 @@ BEGIN
       OR jsonb_typeof(v_row->'id') IS DISTINCT FROM 'string'
       OR (v_row->>'id') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       OR jsonb_typeof(v_row->'name') IS DISTINCT FROM 'string'
-      OR nullif(btrim(v_row->>'name'), '') IS NULL
+      OR nullif(btrim(v_row->>'name',E' \t\n\r\f\013'), '') IS NULL
+      OR (v_row->>'name') ~ U&'[\202A-\202E\2066-\2069\061C\200E\200F\FEFF]'
       OR jsonb_typeof(v_row->'is_active') NOT IN ('boolean','null')
       OR jsonb_typeof(v_row->'sort_order') IS DISTINCT FROM 'number'
       OR (v_row->>'sort_order') !~ '^-?(0|[1-9][0-9]{0,9})$'
@@ -67,7 +68,9 @@ BEGIN
         END IF;
         BEGIN
           v_timestamp := (v_row->>v_key)::timestamptz;
-          IF NOT isfinite(v_timestamp) THEN RAISE EXCEPTION 'Invalid timestamp'; END IF;
+          IF NOT isfinite(v_timestamp) OR substring(v_row->>v_key FROM 12 FOR 2)::integer>23
+            OR substring(v_row->>v_key FROM 15 FOR 2)::integer>59
+            OR substring(v_row->>v_key FROM 18 FOR 2)::integer>59 THEN RAISE EXCEPTION 'Invalid timestamp'; END IF;
         EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'Invalid product catalog timestamp.' USING ERRCODE = '22023';
         END;
       END IF;

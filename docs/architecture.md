@@ -46,6 +46,7 @@
 | `employeeTransfer/sharedExport.ts`、`api.ts` | 管理员/共享设置七表的固定协议分页导出，原始 NDJSON 哈希、写入后真实计数及源快照核对；清理失败显式标记不可复用。仅子阶段、不标全站完成，尚无浏览器磁盘适配或后台页面，未部署 |
 | `employeeTransfer/sharedImport.ts`、`api.ts` | 七表两遍校验/暂存并取得干跑；create-only 与同名来源 replacement 分入口，业务 apply 独立确认、不自动执行。replacement 冻结备份 descriptor/计划与接收器，公开对象副本不能改变内部绑定；账号启用、全站协调/续接与页面仍待实现 |
 | `employeeTransfer/replacementBackup.ts` | 七表冻结快照写临时文件→加密保存独立文件→重读完整认证及清单对照→重读密文按128KiB上传/回执→封存；最大9MiB，不自动apply/重试。失败清临时明文、不删除独立密文；封存结果不明须核对，真实浏览器磁盘适配/恢复向导仍待接入 |
+| `employeeTransfer/productTransfer.ts`、`productBackup.ts`、`api.ts` | 产品专用固定单表协议，分页背压导出、两遍验证后暂存、真实回执计数；密文整卷认证后才开始导入，覆盖前独立密文保存/回读认证/上传封存。任务、备份、计划绑定且公开副本不改变内部值；不自动apply/close/重试，最大1万行/8MiB、密文9MiB。仅产品子阶段，未接全站协调、续传或后台页面，未部署 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |

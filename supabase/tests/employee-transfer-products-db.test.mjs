@@ -11,6 +11,8 @@ import { buildNewSite, OLD, NEW, PASSWORDS } from './support/transfer-fixtures.m
 
 // Local PGlite only. Every historical SQL is really replayed; do not patch the migration or guards here.
 const migration = '20261102000008_transfer_product_catalog.sql';
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const apiPath = `${root}src/lib/employeeTransfer/api.ts`;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const PATH = 'data/products.ndjson';
 const PASSPHRASE = 'local-only-product-db-backup-passphrase';
@@ -162,6 +164,42 @@ async function exportOn(site, token, limit = 2) {
   return { job, catalog: job.catalog, text, packageId: randomUUID() };
 }
 
+function productSqlBridge(site, token, siteKey, trace) {
+  return {
+    token,
+    rpc(name, args) {
+      assert.ok(publicNames.includes(name), `the API must use a dedicated product endpoint: ${name}`);
+      assert.equal(args.p_admin_session_token, token, 'the real API must pass the captured fixture session token');
+      const entry = { site: siteKey, name, argumentNames: Object.keys(args).sort(), response: null, role: null, signal: false };
+      trace.push(entry);
+      let pending, signal;
+      const execute = async () => {
+        try {
+          if (signal?.aborted) throw new DOMException('Local product request cancelled.', 'AbortError');
+          const data = await isolated(site, async () => {
+            entry.role = await scalar(site, 'SELECT current_user');
+            assert.equal(entry.role, 'anon', 'SQL must execute as anon, not the fixture owner');
+            return baseRpc(site, name, args, { role: null });
+          }, 'anon');
+          // Only the normal Supabase envelope is added. Never remove/add/normalize SQL JSON fields.
+          entry.response = structuredClone(data);
+          return { data, error: null };
+        } catch (error) {
+          entry.error = { message: error.message, code: error.code };
+          return { data: null, error: entry.error };
+        }
+      };
+      const query = {
+        abortSignal(value) {
+          assert.ok(value instanceof AbortSignal); signal = value; entry.signal = true; return query;
+        },
+        then(resolve, reject) { pending ??= execute(); return pending.then(resolve, reject); },
+      };
+      return query;
+    },
+  };
+}
+
 before(async () => {
   replay = await createSites({ upTo: migration });
   oldSite = replay.oldSite; db = replay.newSite;
@@ -224,11 +262,35 @@ before(async () => {
   const compiled = await build({
     stdin: { contents: `export * from './src/lib/employeeTransfer/productTransfer.ts';
       export * from './src/lib/employeeTransfer/productBackup.ts';
-      export { verifyEncryptedVolume } from './src/lib/employeeTransfer/container.ts';`,
-    resolveDir: fileURLToPath(new URL('../../', import.meta.url)), sourcefile: 'product-db-local-entry.mjs', loader: 'js' },
+      export * from './src/lib/employeeTransfer/api.ts';
+      export { verifyEncryptedVolume } from './src/lib/employeeTransfer/container.ts';
+      export { setProductDbBridge } from 'product-db:bridge';`,
+    resolveDir: root, sourcefile: 'product-db-local-entry.mjs', loader: 'js' },
     bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', metafile: true,
+    plugins: [{ name: 'product-db-local-auth-and-transport', setup(builder) {
+      builder.onResolve({ filter: /^product-db:bridge$/ }, () => ({ path: 'bridge', namespace: 'product-db' }));
+      builder.onResolve({ filter: /^\.\.\/(auth|supabase)$/ }, args => {
+        assert.equal(args.importer, apiPath, 'only API auth/transport dependencies may be substituted');
+        return { path: args.path.slice(3), namespace: 'product-db' };
+      });
+      builder.onLoad({ filter: /.*/, namespace: 'product-db' }, ({ path }) => {
+        if (path === 'bridge') return { contents: `let bridge;
+          export const setProductDbBridge = value => { bridge = value; };
+          export const current = () => { if (!bridge) throw new Error('Local product SQL bridge is not configured.'); return bridge; };` };
+        if (path === 'auth') return { contents: `import { current } from 'product-db:bridge';
+          export const getAdminFinancialSessionToken = () => current().token;` };
+        assert.equal(path, 'supabase');
+        return { contents: `import { current } from 'product-db:bridge';
+          export const supabase = { rpc: (...args) => current().rpc(...args) };
+          export const formatSupabaseError = error => error.message;` };
+      });
+    } }],
   });
-  assert.equal(Object.keys(compiled.metafile.inputs).some(path => /src\/lib\/(supabase|auth)\.ts$/.test(path)), false);
+  const bundledInputs = Object.keys(compiled.metafile.inputs);
+  assert.equal(bundledInputs.some(path => /src\/lib\/(supabase|auth)\.ts$/.test(path)), false);
+  for (const name of ['api', 'productTransfer', 'productBackup', 'container', 'crypto', 'sha256']) {
+    assert.ok(bundledInputs.some(path => path.endsWith(`/employeeTransfer/${name}.ts`)), `real ${name}.ts must be bundled`);
+  }
   modules = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
   mock.method(globalThis, 'fetch', () => assert.fail('product DB tests forbid all network access'));
 }, { timeout: 180000 });
@@ -381,6 +443,168 @@ test('real dual-site export/page/verify -> client stage/dry-run -> independent e
     } finally { await rm(directory, { recursive: true, force: true }); }
   }));
 
+test('bundled real api.ts -> anon PGlite SQL golden path: export/verify/close -> stage/dry-run -> independent disk backup -> session apply/repeat/close',
+  { timeout: 60000 }, async t => transaction(async () => transaction(async () => {
+    // More than one real page on BOTH sites, without changing schemas, functions or triggers.
+    for (const [site, prefix, date] of [[oldSite, '40000000', '2024-03-04T05:06:07Z'], [db, '50000000', '2026-03-04T05:06:07Z']]) {
+      await site.query(`INSERT INTO public.product_types(id,name,is_active,sort_order,created_at,updated_at)
+        SELECT ($1||'-0000-4000-8000-'||lpad(n::text,12,'0'))::uuid,'API golden product '||n,
+          n%2=0,1000+n,$2::timestamptz,$2::timestamptz FROM generate_series(1,201) AS fixture(n)`, [prefix, date]);
+    }
+    const sourceRows = await productState(oldSite), before = await productState(), keep = await unaffected();
+    const triggers = await triggerState();
+    const sourceLastExport = (await callOn(oldSite, 'get_employee_transfer_log', { p_admin_session_token: sourceSession })).last_export_at;
+    const targetLastExport = (await rpc('get_employee_transfer_log', { p_admin_session_token: session })).last_export_at;
+    const trace = [], signal = new AbortController().signal;
+    const sourceBridge = productSqlBridge(oldSite, sourceSession, 'source', trace);
+    const targetBridge = productSqlBridge(db, session, 'target', trace);
+    const directory = await mkdtemp(join(tmpdir(), 'products-api-sql-'));
+    const exportPath = join(directory, 'source-products.ndjson');
+    const backupPath = join(directory, 'target-before-import.ndjson');
+    const cipherPath = join(directory, 'independent-target-before-import.edx');
+    const temporary = file => {
+      const stats = { opens: 0, appends: 0, aborts: 0 };
+      return {
+        stats,
+        async append(path, bytes) {
+          assert.equal(path, PATH);
+          const handle = await open(file, 'a');
+          try { await handle.writeFile(bytes); stats.appends++; } finally { await handle.close(); }
+        },
+        open(path) { assert.equal(path, PATH); stats.opens++; return diskSource(file); },
+        async abort() { stats.aborts++; await rm(file, { force: true }); },
+      };
+    };
+    const exportedFiles = temporary(exportPath), backupFiles = temporary(backupPath);
+    try {
+      modules.setProductDbBridge(sourceBridge);
+      const exported = await modules.beginProductsExport(PASSWORDS.root, signal);
+      const rawExport = trace.find(item => item.name === 'employee_export_products_begin').response;
+      assert.deepEqual(Object.keys(rawExport).sort(), ['success', 'job_id', 'job_token', 'site_id', 'catalog', 'scope', 'full_site_complete'].sort(),
+        'the actual SQL response, not a stub-shaped replacement, must match the real strict API decoder');
+      assert.equal(exported.jobId, rawExport.job_id); assert.equal(exported.jobToken, rawExport.job_token);
+      assert.equal(exported.catalog.site_id, await scalar(oldSite, 'SELECT site_id FROM private.employee_transfer_site'));
+      const exportProgress = [];
+      const productExport = await modules.exportProducts(exported.source, exportedFiles, {
+        signal, onProgress: progress => exportProgress.push(progress),
+      });
+      assert.equal(productExport.rows, sourceRows.length); assert.equal(productExport.fullSiteComplete, false);
+      const sourceFile = await readFile(exportPath);
+      assert.equal(hash(sourceFile), exported.catalog.tables[0].sha256);
+      assert.deepEqual(values({ text: sourceFile.toString() }), sourceRows);
+      assert.ok(exportProgress.length >= 2); assert.equal(exportedFiles.stats.aborts, 0);
+      const sourceJob = await scalar(oldSite, 'SELECT to_jsonb(item) FROM private.employee_transfer_jobs AS item WHERE id=$1', [exported.jobId]);
+      assert.equal(sourceJob.status, 'running'); assert.equal(sourceJob.summary.products_verified, true);
+      assert.equal(trace.filter(item => item.name === 'get_employee_export_products_page').length, 2);
+      assert.equal(trace.filter(item => item.name === 'employee_export_products_verify').length, 1);
+      assert.deepEqual(await exported.close(signal), { success: true, scope: 'product-catalog', full_site_complete: false });
+      assert.equal((await callOn(oldSite, 'get_employee_transfer_log', { p_admin_session_token: sourceSession })).last_export_at, sourceLastExport);
+      assert.equal(await scalar(oldSite, 'SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1', [exported.jobId]), 0);
+
+      modules.setProductDbBridge(targetBridge);
+      const packageId = randomUUID();
+      const imported = modules.createProductsImportSession(packageId, PASSWORDS.root);
+      assert.equal(imported.identity(), null);
+      const importProgress = [];
+      const stagedResult = await modules.stageProductsImport(productExport.catalog, exportedFiles, imported.target, {
+        signal, onProgress: progress => importProgress.push(progress),
+      });
+      const plan = stagedResult.dryRun;
+      applicable(plan); assert.equal(stagedResult.rows, sourceRows.length); assert.equal(stagedResult.fullSiteComplete, false);
+      const identity = imported.identity(), job = { job_id: identity.jobId, job_token: identity.jobToken };
+      const rawImport = trace.find(item => item.name === 'employee_import_products_begin').response;
+      assert.deepEqual(Object.keys(rawImport).sort(), ['success', 'job_id', 'job_token', 'scope', 'full_site_complete'].sort());
+      assert.deepEqual(identity, { jobId: rawImport.job_id, jobToken: rawImport.job_token });
+      assert.equal((await jobState(job)).options.package_id, packageId);
+      assert.equal(exportedFiles.stats.opens, 2, 'stageProductsImport validates and rereads the actual exported file');
+      assert.equal(trace.filter(item => item.name === 'employee_import_products_stage').length, 2);
+      assert.deepEqual([...new Set(importProgress.map(item => item.phase))], ['validate', 'stage', 'dry-run']);
+      assert.equal(trace.some(item => item.site === 'target' && ['employee_import_products_apply', 'employee_products_close'].includes(item.name)), false,
+        'staging and dry-run do not automatically apply or close');
+      assert.deepEqual(await productState(), before);
+
+      const backup = await imported.backup(signal);
+      assert.equal(backup.descriptor.backup_id, job.job_id); assert.equal(backup.descriptor.plan_hash, plan.plan_hash);
+      assert.equal(backup.descriptor.catalog.site_id, await scalar(db, 'SELECT site_id FROM private.employee_transfer_site'));
+      assert.notEqual(backup.descriptor.catalog.site_id, exported.catalog.site_id);
+      const fileStats = { writes: 0, opens: 0, eof: [] }, backupProgress = [];
+      const backupResult = await modules.createProductBackup(backup.descriptor, backup.source, backupFiles, {
+        async write(source) {
+          const handle = await open(cipherPath, 'wx');
+          try { for await (const chunk of source) await handle.writeFile(chunk); await handle.sync(); fileStats.writes++; }
+          finally { await handle.close(); }
+        },
+        open() {
+          const read = ++fileStats.opens;
+          return (async function* () { yield* diskSource(cipherPath); fileStats.eof.push(read); })();
+        },
+      }, backup.receiver, PASSPHRASE, { signal, onProgress: progress => backupProgress.push(progress.phase) });
+      assert.equal(fileStats.writes, 1); assert.equal(fileStats.opens, 2); assert.deepEqual(fileStats.eof, [1, 2]);
+      assert.equal(backupFiles.stats.aborts, 1);
+      assert.deepEqual([...new Set(backupProgress)], ['snapshot', 'save', 'verify', 'upload', 'seal']);
+      assert.equal(trace.filter(item => item.name === 'get_employee_import_products_backup_page').length, 2);
+      await assert.rejects(stat(backupPath), { code: 'ENOENT' });
+      const cipher = await readFile(cipherPath);
+      assert.equal(hash(cipher), backupResult.cipherSha256); assert.equal(cipher.length, backupResult.bytes);
+      const sealed = await backupState(job);
+      assert.equal(sealed.sealed_sha256, hash(cipher)); assert.ok(sealed.sealed_at);
+      const recovered = [];
+      for (let no = 0; no < backupResult.chunks; no++) {
+        const { data, error } = await targetBridge.rpc('get_employee_products_saved_backup_chunk', {
+          p_admin_session_token: session, p_backup_id: job.job_id, p_chunk_no: no,
+        }).abortSignal(signal);
+        assert.equal(error, null); assert.equal(data.sha256, hash(cipher)); assert.equal(data.bytes, cipher.length);
+        recovered.push(Buffer.from(data.hex, 'hex'));
+      }
+      assert.deepEqual(Buffer.concat(recovered), cipher);
+      const plaintext = [];
+      const manifest = await modules.verifyEncryptedVolume((async function* () { yield Buffer.concat(recovered); })(), PASSPHRASE, {
+        async append(path, bytes) { assert.equal(path, PATH); plaintext.push(Buffer.from(bytes)); },
+        async abort() { assert.fail('API-persisted backup must authenticate and match the actual pre-import target'); },
+      }, { expectedMetadata: { exportId: job.job_id, volumeId: job.job_id }, signal });
+      assert.equal(manifest.sourceSiteId, backup.descriptor.catalog.site_id);
+      assert.equal(manifest.scope, 'replacement-backup');
+      assert.deepEqual(values({ text: Buffer.concat(plaintext).toString() }), before);
+      assert.deepEqual(await productState(), before, 'real API backup does not silently apply');
+      assert.deepEqual(await unaffected(), keep);
+
+      const applied = await imported.apply(plan.plan_hash, signal);
+      assert.equal(applied.success, true); assert.equal(applied.full_site_complete, false); assert.equal(applied.repeated, false);
+      assert.equal(applied.product_map[OLD.product], NEW.product);
+      const after = await productState();
+      const expected = [...sourceRows.map(item => ({ ...item, id: applied.product_map[item.id] })),
+        ...before.filter(item => !sourceRows.some(source => source.name === item.name))].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      assert.deepEqual(after, expected, 'SQL applies all source columns, preserves matched target IDs and retains target-only products');
+      const audit = await events(job);
+      assert.equal(audit.filter(item => item.action === 'products_applied').length, 1);
+      assert.deepEqual(await imported.apply(plan.plan_hash, signal), { ...applied, repeated: true });
+      assert.deepEqual(await productState(), after); assert.deepEqual(await events(job), audit);
+      assert.deepEqual(await imported.close(signal), { success: true, scope: 'product-catalog', full_site_complete: false });
+      assert.equal((await jobState(job)).summary.full_site_complete, false); assert.deepEqual(await staged(job), []);
+      assert.deepEqual(await backupState(job), sealed, 'sealed ciphertext survives API close independently of staging');
+      assert.deepEqual(await readFile(cipherPath), cipher);
+      assert.equal((await saved(job.job_id)).sha256, hash(cipher));
+      assert.deepEqual(await unaffected(), keep); assert.deepEqual(await triggerState(), triggers);
+      assert.deepEqual(await productState(oldSite), sourceRows);
+      assert.equal((await rpc('get_employee_transfer_log', { p_admin_session_token: session })).last_export_at, targetLastExport);
+      assert.deepEqual([...new Set(trace.map(item => item.name))].sort(), [...publicNames].sort());
+      assert.ok(trace.every(item => item.role === 'anon' && item.signal && !item.error && item.response !== null));
+      assert.equal(trace.filter(item => item.name === 'employee_export_products_begin').length, 1);
+      assert.equal(trace.filter(item => item.name === 'employee_import_products_begin').length, 1);
+      assert.equal(trace.filter(item => item.name === 'employee_import_products_backup_seal').length, 1);
+      t.diagnostic(`Real API/SQL golden path completed: ${sourceRows.length} source products, two source and two backup pages, ${cipher.length} independent ciphertext bytes, all 13 RPCs executed as anon; raw SQL response shapes accepted without filtering.`);
+      await exportedFiles.abort(); assert.equal(exportedFiles.stats.aborts, 1);
+      await assert.rejects(stat(exportPath), { code: 'ENOENT' });
+    } catch (error) {
+      const failed = trace.filter(item => item.error).map(item => ({ site: item.site, name: item.name, error: item.error }));
+      if (failed.length) t.diagnostic(`Actual local SQL failures: ${JSON.stringify(failed)}`);
+      throw error;
+    } finally {
+      modules.setProductDbBridge(null);
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, oldSite)));
+
 test('same global name reuses target ID, source all six columns/nulls overwrite, nonpositive sort survives insert and target-only/case variants remain', async () => transaction(async () => {
   const before = await productState(), keep = await unaffected(), triggers = await triggerState();
   const { job, plan } = await prepared();
@@ -449,6 +673,11 @@ for (const [label, mutate] of [
   ['uppercase UUID', row => { row.id = OLD.product.toUpperCase(); }],
   ['empty name', row => { row.name = '   '; }],
   ['name number', row => { row.name = 1; }],
+  ['whitespace name', row => { row.name = '\t\r\n'; }],
+  ['bidi name', row => { row.name = 'name\u202e'; }],
+  ['BOM name', row => { row.name = 'name\ufeff'; }],
+  ['normalized midnight timestamp', row => { row.updated_at = '2024-01-01T24:00:00Z'; }],
+  ['normalized leap-second timestamp', row => { row.updated_at = '2024-01-01T23:59:60Z'; }],
   ['activation string', row => { row.is_active = 'true'; }],
   ['sort null', row => { row.sort_order = null; }],
   ['sort string', row => { row.sort_order = '1'; }],

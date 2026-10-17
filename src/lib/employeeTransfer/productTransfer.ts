@@ -7,7 +7,7 @@ const MAX_INPUT_BYTES = 1024 * 1024;
 export const PRODUCT_ENTRY_PATH = 'data/products.ndjson';
 export const PRODUCT_MAX_BYTES = 8 * 1024 * 1024;
 export const PRODUCT_MAX_PAGE_BYTES = 256 * 1024;
-export const PRODUCT_MAX_LINE_BYTES = 64 * 1024; // Excludes the LF delimiter, like the SQL exporter/container.
+export const PRODUCT_MAX_LINE_BYTES = 64 * 1024;
 export const PRODUCT_MAX_ROWS = 10000;
 export const PRODUCT_MAX_PAGE_ROWS = 200;
 export const PRODUCT_CONTAINER_LIMITS: Readonly<Partial<ContainerLimits>> = Object.freeze({
@@ -151,7 +151,7 @@ function unicode(text: string): void {
 function timestamp(value: unknown): void {
   if (value === null) return;
   if (typeof value !== 'string') invalid();
-  const match = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?(Z|[+-](\d\d):(\d\d))$/.exec(value);
+  const match = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d{1,6})?(Z|[+-](\d\d):(\d\d))$/.exec(value);
   if (!match) invalid();
   const [, y, m, d, h, minute, s, , zh, zm] = match;
   const year = Number(y), month = Number(m), day = Number(d);
@@ -221,7 +221,7 @@ export async function exportProducts(
       let start = 0, actualRows = 0;
       for (let end = 0; end < chunk.length; end++) {
         if (chunk[end] !== 10) continue;
-        if (end - start > PRODUCT_MAX_LINE_BYTES) invalid();
+        if (end - start + 1 > PRODUCT_MAX_LINE_BYTES) invalid();
         rowsCheck.read(decoder().decode(chunk.subarray(start, end)));
         actualRows++;
         start = end + 1;
@@ -260,7 +260,7 @@ async function scanProducts(
   else if (source && Symbol.asyncIterator in source && typeof source[Symbol.asyncIterator] === 'function') {
     iterator = source[Symbol.asyncIterator]();
   } else invalid();
-  const line = new Uint8Array(PRODUCT_MAX_LINE_BYTES + 1);
+  const line = new Uint8Array(PRODUCT_MAX_LINE_BYTES);
   const digest = new Sha256();
   const rowsCheck = new ProductRows();
   let used = 0, rows = 0, bytes = 0;

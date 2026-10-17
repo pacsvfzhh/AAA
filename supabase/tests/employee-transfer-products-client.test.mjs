@@ -219,6 +219,7 @@ const badRows = [
   ['sort fraction', { ...row(1), sort_order: 1.5 }], ['name null', { ...row(1), name: null }],
   ['empty name', { ...row(1), name: '  ' }], ['uppercase id', { ...row(1), id: 'ABCDEF00-0000-4000-8000-000000000000' }],
   ['timezone missing', { ...row(1), created_at: '2024-01-01T00:00:00' }],
+  ['excessive timestamp precision', { ...row(1), created_at: '2024-01-01T00:00:00.1234567Z' }],
   ['invalid date normalization', { ...row(1), created_at: '2024-02-30T00:00:00Z' }],
   ['infinite date', { ...row(1), updated_at: 'infinity' }], ['invalid hour', { ...row(1), updated_at: '2024-01-01T24:00:00Z' }],
   ['NUL escape', { ...row(1), name: 'a\u0000b' }], ['unpaired high surrogate', { ...row(1), name: '\ud800' }],
@@ -298,7 +299,7 @@ test('line, page and total bounds are byte-based; exactly 8MiB is accepted and >
   assert.equal(result.bytes, 8388608); assert.equal(v.calls.stage.length, 32);
   assert.ok(v.calls.stage.every(p => Buffer.byteLength(p.ndjson) === 262144));
   const exported = fixture(body); assert.equal((await exportRun(exported)).bytes, 8388608);
-  const bad = fixture(sizedLine(1, 65538));
+  const bad = fixture(sizedLine(1, 65537));
   await assert.rejects(stageRun(bad)); noWrites(bad); await assert.rejects(exportRun(bad));
 });
 for (const [name, mutate] of [

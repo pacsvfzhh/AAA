@@ -22,6 +22,7 @@ const criticalMigrations = [
   '20261102000005_export_shared_site_settings.sql',
   '20261102000006_import_shared_site_settings.sql',
   '20261102000007_replace_shared_site_settings.sql',
+  '20261102000008_transfer_product_catalog.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -76,6 +77,13 @@ const publicFunctions = [
   'get_employee_import_shared_backup(uuid,uuid)', 'get_employee_import_shared_backup_page(uuid,uuid,text,text,integer)',
   'employee_import_shared_backup_append(uuid,uuid,text,integer,text)', 'employee_import_shared_backup_seal(uuid,uuid,text,text,integer)',
   'get_employee_shared_saved_backup_chunk(uuid,uuid,integer)', 'employee_import_shared_replace_apply(uuid,uuid,text)',
+  'employee_export_products_begin(uuid,text)', 'get_employee_export_products_page(uuid,uuid,text,integer)',
+  'employee_export_products_verify(uuid,uuid)', 'employee_import_products_begin(uuid,text,uuid,jsonb)',
+  'employee_import_products_stage(uuid,uuid,integer,text)', 'get_employee_import_products_dry_run(uuid,uuid)',
+  'get_employee_import_products_backup(uuid,uuid)', 'get_employee_import_products_backup_page(uuid,uuid,text,integer)',
+  'employee_import_products_backup_append(uuid,uuid,text,integer,text)', 'employee_import_products_backup_seal(uuid,uuid,text,text,integer)',
+  'get_employee_products_saved_backup_chunk(uuid,uuid,integer)', 'employee_import_products_apply(uuid,uuid,text)',
+  'employee_products_close(uuid,uuid)',
 ];
 
 async function checkCatalog(db) {
