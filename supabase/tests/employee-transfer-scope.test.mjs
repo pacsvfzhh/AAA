@@ -232,7 +232,7 @@ test('inventory retains business settings, content, financial state, login histo
   const businessRoots = [
     'private.notification_delivery_operations',
     ...[
-      'admin_group_members', 'admin_groups', 'announcement_categories', 'announcements', 'broadcast_messages',
+      'admin_group_members', 'admin_groups', 'broadcast_messages',
       'broadcast_recipients', 'ccc_conversation_annotations', 'cs_message_templates', 'customer_auto_message_logs',
       'customer_auto_messages', 'customer_employee_conversations', 'customer_service_sessions', 'data_retention_policies',
       'dispatch_config', 'dispatch_group_members', 'dispatch_groups', 'employee_login_history',
@@ -255,6 +255,23 @@ test('inventory retains business settings, content, financial state, login histo
     assertIntent(key, 'transform', [/人工审核/, /映射/]);
   }
   assertIntent('public.message_recipients', 'transform', [/保留通知已读/, /清除delivery_claim_token/, /delivery_completed_claim_token/, /不复用源领取租约/]);
+});
+
+test('inventory excludes announcements without excluding notifications or broadcast delivery', () => {
+  for (const key of ['public.announcements', 'public.announcement_categories']) {
+    assertIntent(key, 'exclude', [/用户明确不迁移公告/, /不导出、不导入、不覆盖/, /保留新站现有/]);
+  }
+  assertIntent('public.announcements', 'exclude', [/created_by/, /轮播和素材/, /仅供公告使用的文件排除/, /仍被通知\/聊天引用/]);
+  for (const name of ['broadcast_messages', 'broadcast_recipients', 'messages', 'message_recipients', 'notification_automation_plans']) {
+    assert.equal(descriptor(`public.${name}`).mode, 'transform');
+  }
+});
+
+test('inventory requires global product-name matching and source replacement without rebuilding target history', () => {
+  assertIntent('public.product_types', 'transform', [
+    /全站唯一名称/, /同名复用目标ID/, /来源覆盖排序、启停和业务时间/, /重写来源引用/,
+    /不删除重建/, /目标既有订单历史/, /无同名新增/, /目标不同名保留/, /同ID异名称冲突阻断/, /覆盖前备份校验/,
+  ]);
 });
 
 test('inventory rebuilds or excludes sessions, security locks, tooling, cron queues, realtime and live dispatch leases', () => {

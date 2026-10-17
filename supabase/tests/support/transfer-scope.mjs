@@ -357,8 +357,8 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
     ],
   },
   {
-    schema: 'public', name: 'announcement_categories', mode: 'transfer',
-    reason: '公告分类、图标键、排序、启停和时间属于业务配置；保留其业务语义，目标同ID异内容冲突须审核。',
+    schema: 'public', name: 'announcement_categories', mode: 'exclude',
+    reason: '用户明确不迁移公告，两站已一致；公告分类不导出、不导入、不覆盖，保留新站现有分类、图标、排序和启停，不扩大为排除通知或广播。',
     columns: [
       { name: 'id', type: 'uuid', nullable: false },
       { name: 'name', type: 'text', nullable: false },
@@ -371,8 +371,8 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
     ],
   },
   {
-    schema: 'public', name: 'announcements', mode: 'transform',
-    reason: '保留公告正文、分类、发布/隐藏/置顶/全局状态和时间；映射created_by并净化HTML、迁移媒体后改写URL。',
+    schema: 'public', name: 'announcements', mode: 'exclude',
+    reason: '用户明确不迁移公告，两站已一致；公告不导出、不导入、不覆盖，保留新站现有正文、分类、created_by、发布/隐藏/置顶、轮播和素材；仅供公告使用的文件排除，仍被通知/聊天引用的文件按实际用途迁移。',
     columns: [
       { name: 'id', type: 'uuid', nullable: false },
       { name: 'title', type: 'text', nullable: false },
@@ -1179,8 +1179,8 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
     ],
   },
   {
-    schema: 'public', name: 'product_types', mode: 'transfer',
-    reason: '产品目录名称、排序与启停是继续营业所需业务配置，不是已完成订单的产品详情；同ID异内容须审核。',
+    schema: 'public', name: 'product_types', mode: 'transform',
+    reason: '产品目录是继续营业配置，不是已完成订单的产品详情；按全站唯一名称匹配，同名复用目标ID并以来源覆盖排序、启停和业务时间，重写来源引用，不删除重建或修改目标既有订单历史；无同名新增，目标不同名保留，同ID异名称冲突阻断，覆盖前备份校验。',
     columns: [
       { name: 'id', type: 'uuid', nullable: false },
       { name: 'name', type: 'text', nullable: false },
