@@ -2346,6 +2346,22 @@ export interface Database {
       };
     };
     Functions: {
+      employee_import_shared_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string; p_catalog: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_shared_dry_run: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_apply: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: Record<string, unknown>;
+      };
       employee_export_shared_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string };
         Returns: Record<string, unknown>;

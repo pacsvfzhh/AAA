@@ -20,6 +20,7 @@ const criticalMigrations = [
   '20261102000003_employee_data_import_write.sql',
   '20261102000004_harden_employee_transfer_triggers.sql',
   '20261102000005_export_shared_site_settings.sql',
+  '20261102000006_import_shared_site_settings.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -67,6 +68,8 @@ const publicFunctions = [
   'employee_import_chat_batch(uuid,uuid,uuid,text,jsonb)',
   'employee_import_finalize_employee(uuid,uuid,uuid,jsonb)', 'get_employee_import_verify(uuid,uuid,uuid[])',
   'employee_import_finish(uuid,uuid,jsonb)',
+  'employee_import_shared_begin(uuid,text,uuid,jsonb)', 'employee_import_shared_stage(uuid,uuid,text,integer,text)',
+  'get_employee_import_shared_dry_run(uuid,uuid)', 'employee_import_shared_apply(uuid,uuid,text)',
 ];
 
 async function checkCatalog(db) {
