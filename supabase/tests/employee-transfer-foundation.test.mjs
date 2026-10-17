@@ -19,6 +19,7 @@ const criticalMigrations = [
   '20261102000002_employee_data_import_prepare.sql',
   '20261102000003_employee_data_import_write.sql',
   '20261102000004_harden_employee_transfer_triggers.sql',
+  '20261102000005_export_shared_site_settings.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -53,6 +54,8 @@ const transferTables = [
 const publicFunctions = [
   'employee_transfer_cancel(uuid,uuid)', 'get_employee_transfer_log(uuid,integer)',
   'employee_export_begin(uuid,text,jsonb)', 'get_employee_export_directory(uuid,uuid)',
+  'employee_export_shared_begin(uuid,text)', 'get_employee_export_shared_catalog(uuid,uuid)',
+  'get_employee_export_shared_page(uuid,uuid,text,text,integer)', 'employee_export_shared_verify(uuid,uuid)',
   'get_employee_export_preflight(uuid,uuid,uuid[],uuid[])',
   'get_employee_export_employee_list(uuid,uuid,uuid,integer,uuid[],uuid[])',
   'get_employee_export_core(uuid,uuid,uuid)', 'get_employee_export_rows(uuid,uuid,uuid,text,text,integer)',

@@ -2346,6 +2346,22 @@ export interface Database {
       };
     };
     Functions: {
+      employee_export_shared_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_export_shared_catalog: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_export_shared_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_shared_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
       cancel_audit_deletion_confirmation: {
         Args: { p_admin_session_token: string; p_job_kind: 'content' | 'employee'; p_job_id: string };
         Returns: { success: boolean; cancelled: boolean };
