@@ -28,6 +28,10 @@ const MAX_TABLE_BYTES = 256 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MAX_PAGE_BYTES = 256 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
+export const DISPATCH_TRANSFER_LIMITS = Object.freeze({
+  maxRows: MAX_ROWS, maxTableBytes: MAX_TABLE_BYTES, maxTotalBytes: MAX_TOTAL_BYTES,
+  maxPageRows: 200, maxPageBytes: MAX_PAGE_BYTES, maxLineBytes: MAX_LINE_BYTES,
+});
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
@@ -99,7 +103,7 @@ async function withSignal<T>(operation: () => PromiseLike<T>, signal?: AbortSign
     );
   });
 }
-export const dispatchTransferChecks = Object.freeze({ object, uuid, checkAbort, withSignal });
+export const dispatchTransferChecks = Object.freeze({ object, count, uuid, hash, rowIdentity, checkAbort, withSignal });
 
 export function validateDispatchCatalog(value: unknown): DispatchExportCatalog {
   const record = object(value, ['version', 'scope', 'site_id', 'tables', 'processing_orders', 'full_site_complete']);
