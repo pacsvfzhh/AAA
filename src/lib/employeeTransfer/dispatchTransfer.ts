@@ -209,7 +209,7 @@ export async function exportDispatchData(
 
 const PREFLIGHT_KEYS = Object.freeze(['orders', 'orders_history', 'used_submissions', 'submission_usage',
   'assignments', 'pool_selections', 'dispatch_sessions', 'wallet_transactions', 'ledger_entries', 'withdrawals',
-  'wallet_funds', 'income', 'baseline_funds', 'work_sessions', 'legacy_dispatch_content'] as const);
+  'wallet_funds', 'income', 'baseline_funds', 'work_sessions', 'legacy_dispatch_content', 'reconciliation_audit'] as const);
 export interface DispatchPreflight {
   scope: 'dispatch-submission'; site_id: string; counts: Record<typeof PREFLIGHT_KEYS[number], number>;
   blockers: { code: typeof PREFLIGHT_KEYS[number]; count: number }[];

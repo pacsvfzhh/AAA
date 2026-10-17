@@ -209,7 +209,7 @@ test('mutating validated catalog copies cannot alter source descriptor', () => {
 
 const preflightKeys = ['orders', 'orders_history', 'used_submissions', 'submission_usage', 'assignments',
   'pool_selections', 'dispatch_sessions', 'wallet_transactions', 'ledger_entries', 'withdrawals',
-  'wallet_funds', 'income', 'baseline_funds', 'work_sessions', 'legacy_dispatch_content'];
+  'wallet_funds', 'income', 'baseline_funds', 'work_sessions', 'legacy_dispatch_content', 'reconciliation_audit'];
 function preflight() {
   return { scope: 'dispatch-submission', site_id: SITE, counts: Object.fromEntries(preflightKeys.map(key => [key, 0])),
     blockers: [], eligible_for_empty_target_mode: true, replacement_ready: false, full_site_complete: false };

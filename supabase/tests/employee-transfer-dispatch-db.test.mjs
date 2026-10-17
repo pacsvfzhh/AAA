@@ -12,7 +12,7 @@ const id = n => `10000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const keys = ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders',
   'dispatch_group_members', 'valid_order_data', 'used_order_data'];
 const names = ['employee_export_dispatch_begin', 'get_employee_export_dispatch_page',
-  'employee_export_dispatch_verify', 'employee_export_dispatch_close', 'get_employee_import_dispatch_preflight'];
+  'employee_export_dispatch_verify', 'employee_export_dispatch_close', 'get_employee_import_dispatch_preflight', 'employee_transfer_cancel'];
 let source, target, session, targetSession, branch, sourceGroup, sourcePool, modules, sequence = 0;
 async function transaction(fn, db = source) {
   await db.exec('BEGIN');
@@ -65,6 +65,8 @@ async function createEmployee(db, number = 1) {
     VALUES($1,$2,'unused-password-hash',$3,$4,false)`, [id(number), `dispatch-employee-${number}`, `D-${number}`, NEW.root]);
 }
 async function createOrder(db, status = 'failure') {
+  await db.query(`INSERT INTO public.dispatch_group_members(group_id,user_id)
+    SELECT id,$1 FROM public.dispatch_groups WHERE is_default ON CONFLICT(user_id) DO NOTHING`, [id(1)]);
   await db.query(`INSERT INTO public.product_types(id,name) VALUES($1,'Dispatch fixture product')`, [id(900)]);
   await db.query(`INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,order_number,transaction_id,status)
     VALUES($1,$2,'dispatch-employee-1',$3,1,'local-order','local-order-tx',$4)`, [id(901), id(1), id(900), status]);
@@ -175,6 +177,11 @@ test('real bundled API calls anon SQL without reshaping responses; only acknowle
   assert.equal(trace.filter(name => name === 'get_employee_export_dispatch_page').length, 9);
   assert.ok(!trace.includes('employee_export_dispatch_close'));
   assert.deepEqual(await task.close(), { success: true, scope: 'dispatch-submission', full_site_complete: false });
+  const next = await modules.beginDispatchExport(PASSWORDS.root);
+  assert.deepEqual(await next.cancel(), { success: true, cancelled: true });
+  await assert.rejects(next.source.page('dispatch_groups', null));
+  const afterCancel = await modules.beginDispatchExport(PASSWORDS.root);
+  assert.deepEqual(await afterCancel.cancel(), { success: true, cancelled: true });
 }));
 
 for (const mutate of [
@@ -286,6 +293,9 @@ for (const [label, change, code] of [
   ['wallet funds', () => target.query('UPDATE public.wallets SET available_balance=1 WHERE user_id=$1', [id(1)]), 'wallet_funds'],
   ['employee income', () => target.query('UPDATE public.users SET total_income=1 WHERE id=$1', [id(1)]), 'income'],
   ['baseline funds', () => target.query('UPDATE public.wallet_balance_baselines SET available_balance=1 WHERE user_id=$1', [id(1)]), 'baseline_funds'],
+  ['reconciliation audit', () => target.query(`INSERT INTO public.wallet_reconciliation_audit(user_id,available_before,available_after,
+    frozen_before,frozen_after,income_before,income_after,pending_amount,ledger_total,reason)
+    VALUES($1,1,0,0,0,0,0,0,0,'prior target business')`, [id(1)]), 'reconciliation_audit'],
   ['previous usage', () => target.query("INSERT INTO public.valid_order_data(product_value,transaction_id,created_by,usage_count) VALUES(1,'target-used',$1,1)", [NEW.root]), 'submission_usage'],
   ['previous use time', () => target.query("INSERT INTO public.valid_order_data(product_value,transaction_id,created_by,last_used_at) VALUES(1,'target-used',$1,now())", [NEW.root]), 'submission_usage'],
   ['offline session', () => target.query("INSERT INTO public.dispatch_sessions(user_id,status,ended_at) VALUES($1,'offline',now())", [id(1)]), 'dispatch_sessions'],

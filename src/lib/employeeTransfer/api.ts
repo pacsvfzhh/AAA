@@ -16,6 +16,7 @@ import {
 export interface DispatchExportTask {
   jobId: string; jobToken: string; catalog: DispatchExportCatalog; source: DispatchExportSource;
   close(signal?: AbortSignal): Promise<unknown>;
+  cancel(signal?: AbortSignal): Promise<{ success: true; cancelled: boolean }>;
 }
 export async function beginDispatchExport(adminPassword: string, signal?: AbortSignal): Promise<DispatchExportTask> {
   const session = getAdminFinancialSessionToken();
@@ -75,6 +76,18 @@ export async function beginDispatchExport(adminPassword: string, signal?: AbortS
         }
         return data;
       }, closeSignal);
+    },
+    async cancel(cancelSignal) {
+      return withSignal(async () => {
+        const query = supabase.rpc('employee_transfer_cancel', args());
+        const { data, error } = await (cancelSignal ? query.abortSignal(cancelSignal) : query);
+        if (error) throw new Error('Dispatch cancellation outcome is uncertain; reconcile before retrying.');
+        const receipt = object(data, ['success', 'cancelled']);
+        if (receipt.success !== true || typeof receipt.cancelled !== 'boolean') {
+          throw new Error('Dispatch task cancellation was not confirmed.');
+        }
+        return { success: true, cancelled: receipt.cancelled };
+      }, cancelSignal);
     },
   };
 }

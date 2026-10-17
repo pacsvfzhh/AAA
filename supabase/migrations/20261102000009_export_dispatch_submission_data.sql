@@ -236,6 +236,7 @@ BEGIN
     'dispatch_sessions',(SELECT count(*) FROM public.dispatch_sessions),
     'wallet_transactions',(SELECT count(*) FROM public.wallet_transactions),
     'ledger_entries',(SELECT count(*) FROM public.wallet_ledger_entries),
+    'reconciliation_audit',(SELECT count(*) FROM public.wallet_reconciliation_audit),
     'withdrawals',(SELECT count(*) FROM public.withdrawals),
     'wallet_funds',(SELECT count(*) FROM public.wallets WHERE COALESCE(available_balance,0)<>0 OR COALESCE(frozen_balance,0)<>0),
     'income',(SELECT count(*) FROM public.users WHERE COALESCE(total_income,0)<>0),

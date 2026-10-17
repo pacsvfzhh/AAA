@@ -2346,6 +2346,10 @@ export interface Database {
       };
     };
     Functions: {
+      employee_transfer_cancel: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { success: boolean; cancelled: boolean };
+      };
       employee_export_dispatch_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string };
         Returns: Record<string, unknown>;
