@@ -165,7 +165,7 @@ BEGIN
   INSERT INTO private.employee_transfer_staging(job_id,employee_id,table_key,chunk_no,row_count,payload)
   VALUES((v_begin->>'job_id')::uuid,'00000000-0000-0000-0000-000000000000','products-export',0,(v_snapshot->>'count')::integer,v_snapshot);
   UPDATE private.employee_transfer_jobs SET summary=jsonb_build_object('product_catalog',v_catalog) WHERE id=(v_begin->>'job_id')::uuid;
-  RETURN v_begin||jsonb_build_object('catalog',v_catalog,'scope','product-catalog','full_site_complete',false);
+  RETURN (v_begin-'server_time')||jsonb_build_object('catalog',v_catalog,'scope','product-catalog','full_site_complete',false);
 END;
 $$;
 
@@ -205,7 +205,7 @@ BEGIN
   IF p_package_id IS NULL OR (p_catalog->>'site_id')::uuid=(SELECT site_id FROM private.employee_transfer_site) THEN RAISE EXCEPTION 'Invalid product import source identity.'; END IF;
   v_result:=private.employee_transfer_start_job(p_admin_session_token,p_admin_password,'import',jsonb_build_object(
     'import_protocol','products-v1','scope','product-catalog','package_id',p_package_id,'catalog',p_catalog));
-  RETURN v_result||'{"scope":"product-catalog","full_site_complete":false}'::jsonb;
+  RETURN (v_result-ARRAY['site_id','server_time'])||'{"scope":"product-catalog","full_site_complete":false}'::jsonb;
 END;
 $$;
 
@@ -410,7 +410,7 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_count integer; v_invalid boolean;
 BEGIN
   SELECT count(*)::integer,COALESCE(bool_or(trigger.tgname<>'assign_product_type_sort_order' OR trigger.tgenabled NOT IN ('O','A')
-    OR pg_get_triggerdef(trigger.oid) IS DISTINCT FROM 'CREATE TRIGGER assign_product_type_sort_order BEFORE INSERT ON public.product_types FOR EACH ROW EXECUTE FUNCTION private.assign_product_type_sort_order()'
+    OR pg_get_triggerdef(trigger.oid) IS DISTINCT FROM 'CREATE TRIGGER assign_product_type_sort_order BEFORE INSERT ON public.product_types FOR EACH ROW EXECUTE FUNCTION assign_product_type_sort_order()'
     OR procedure.pronamespace<>'private'::regnamespace OR pg_get_userbyid(procedure.proowner)<>'postgres'
     OR procedure.prosecdef IS DISTINCT FROM true OR procedure.prolang<>(SELECT oid FROM pg_language WHERE lanname='plpgsql')
     OR procedure.proconfig IS DISTINCT FROM ARRAY['search_path=public, private, pg_temp']::text[]
@@ -476,6 +476,24 @@ BEGIN
     OR (v_job.kind='import' AND NOT COALESCE((v_job.summary->>'products_applied')::boolean,false)) THEN RAISE EXCEPTION 'The product stage has not been verified.'; END IF;
   PERFORM private.employee_transfer_end_job(v_job,'finished',COALESCE(v_job.summary,'{}')||'{"scope":"product-catalog","full_site_complete":false}'::jsonb);
   RETURN '{"success":true,"scope":"product-catalog","full_site_complete":false}'::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.get_employee_transfer_log(p_admin_session_token uuid, p_limit integer DEFAULT 100)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE v_limit integer := LEAST(GREATEST(COALESCE(p_limit,100),1),500);
+BEGIN
+  PERFORM 1 FROM private.employee_transfer_admin(p_admin_session_token);
+  RETURN jsonb_build_object(
+    'site_id',(SELECT site_id FROM private.employee_transfer_site),
+    'last_export_at',(SELECT max(finished_at) FROM private.employee_transfer_jobs WHERE kind='export' AND status='finished'
+      AND options->>'export_protocol' IS DISTINCT FROM 'products-v1'),
+    'running',(SELECT to_jsonb(running) FROM (SELECT job.id,job.kind,job.admin_username,job.started_at,job.last_activity_at
+      FROM private.employee_transfer_jobs AS job WHERE job.status='running' LIMIT 1) AS running),
+    'events',COALESCE((SELECT jsonb_agg(to_jsonb(event) ORDER BY event.id DESC) FROM (
+      SELECT item.id,item.job_id,item.occurred_at,item.admin_username,item.kind,item.action,item.details
+      FROM private.employee_transfer_events AS item ORDER BY item.id DESC LIMIT v_limit) AS event),'[]'::jsonb));
 END;
 $$;
 

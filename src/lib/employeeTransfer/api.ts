@@ -287,7 +287,7 @@ export function createProductsImportSession(packageId: string, adminPassword: st
         try {
           return await withSignal(async () => {
             const query = supabase.rpc('employee_import_products_begin', {
-              p_admin_session_token: session, p_admin_password: adminPassword, p_package_id: packageId, p_catalog: catalog,
+              p_admin_session_token: session, p_admin_password: adminPassword, p_package_id: packageId, p_catalog: { ...catalog },
             });
             const { data, error } = await (signal ? query.abortSignal(signal) : query);
             if (error) throw new Error('Product import begin outcome is uncertain; reconcile before retrying.');
