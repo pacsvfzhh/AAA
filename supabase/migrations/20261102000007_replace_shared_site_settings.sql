@@ -47,7 +47,7 @@ DECLARE
   v_row jsonb; v_target jsonb; v_mapped jsonb; v_key text; v_id text; v_target_id text;
   v_reason text; v_action text; v_natural text; v_count integer; v_exact boolean;
   v_admin_map jsonb:='{}'; v_group_map jsonb:='{}'; v_admins jsonb:='[]'; v_records jsonb:='[]';
-  v_conflicts jsonb:='[]'; v_seen text[]:='{}'; v_plan jsonb; v_target_hash text;
+  v_conflicts jsonb:='[]'; v_seen text[]:='{}'; v_precise text[]:='{}'; v_plan jsonb; v_target_hash text;
 BEGIN
   PERFORM private.employee_transfer_check_shared_input(p_data);
   FOR v_row IN SELECT value FROM jsonb_array_elements(p_data->'admins') ORDER BY value->>'id' LOOP
@@ -57,7 +57,7 @@ BEGIN
       SELECT body INTO v_target FROM private.employee_transfer_shared_rows('admins') WHERE body->>'username'=v_row->>'username';
       IF v_target IS NOT NULL THEN v_target_id:=v_target->>'id'; v_action:='replace'; END IF;
       IF v_target->>'role'='super_admin' THEN v_reason:='target_super_identity_protected';
-      ELSIF EXISTS(SELECT 1 FROM public.admins WHERE id=v_id::uuid AND id<>v_target_id::uuid) THEN v_reason:='administrator_id_conflict';
+      ELSIF EXISTS(SELECT 1 FROM public.admins WHERE id=v_id::uuid AND (v_target IS NULL OR id<>v_target_id::uuid)) THEN v_reason:='administrator_id_conflict';
       ELSIF EXISTS(SELECT 1 FROM public.users WHERE username=v_row->>'username') THEN v_reason:='username_matches_employee';
       ELSIF EXISTS(SELECT 1 FROM public.notification_automation_plans WHERE owner_admin_id=v_target_id::uuid AND status='active') THEN
         v_reason:='target_automation_maintenance_required';
@@ -70,7 +70,7 @@ BEGIN
     v_admins:=v_admins||jsonb_build_array(jsonb_build_object('source_id',v_id,'target_id',v_target_id,'username',v_row->'username','role',v_row->'role','action',v_action));
   END LOOP;
   FOREACH v_key IN ARRAY ARRAY['admin_groups','admin_group_members','admin_configs','system_configs','history_cleanup_config'] LOOP
-    v_seen:='{}';
+    v_seen:='{}'; v_precise:='{}';
     FOR v_row IN SELECT value FROM jsonb_array_elements(p_data->v_key) ORDER BY COALESCE(value->>'id',value->>'key',value->>'table_name') LOOP
       v_id:=COALESCE(v_row->>'id',v_row->>'key',v_row->>'table_name'); v_target_id:=v_id;
       v_target:=NULL; v_reason:=NULL; v_mapped:=v_row; v_exact:=false; v_natural:=NULL;
@@ -80,7 +80,7 @@ BEGIN
         IF v_count>1 THEN v_reason:='ambiguous_target_group'; END IF;
         SELECT body INTO v_target FROM private.employee_transfer_shared_rows(v_key) WHERE body->>'name'=v_row->>'name' AND body->>'created_by'=v_mapped->>'created_by' ORDER BY cursor LIMIT 1;
         IF v_target IS NOT NULL THEN v_target_id:=v_target->>'id'; END IF;
-        IF EXISTS(SELECT 1 FROM public.admin_groups WHERE id=v_id::uuid AND id<>v_target_id::uuid) THEN v_reason:='group_id_conflict'; END IF;
+        IF EXISTS(SELECT 1 FROM public.admin_groups WHERE id=v_id::uuid AND (v_target IS NULL OR id<>v_target_id::uuid)) THEN v_reason:='group_id_conflict'; END IF;
         v_natural:=(v_mapped->>'created_by')||':'||(v_row->>'name');
         v_group_map:=v_group_map||jsonb_build_object(v_id,v_target_id);
         v_mapped:=jsonb_set(v_mapped,'{id}',to_jsonb(v_target_id));
@@ -116,8 +116,12 @@ BEGIN
         IF v_key='history_cleanup_config' AND (v_target IS NULL OR v_target IS DISTINCT FROM v_row) THEN v_reason:='retention_maintenance_required'; END IF;
       END IF;
       IF v_natural IS NOT NULL THEN
-        IF v_natural=ANY(v_seen) AND NOT (v_key='admin_configs' AND v_row->>'admin_id' IS NULL AND v_exact AND v_target=v_mapped) THEN
-          v_reason:='mapped_source_identity_collision';
+        IF v_natural=ANY(v_seen) THEN
+          IF NOT (v_key='admin_configs' AND v_row->>'admin_id' IS NULL AND v_natural=ANY(v_precise) AND v_exact AND v_target=v_mapped) THEN
+            v_reason:='mapped_source_identity_collision';
+          END IF;
+        ELSIF v_key='admin_configs' AND v_row->>'admin_id' IS NULL AND v_exact AND v_target=v_mapped THEN
+          v_precise:=array_append(v_precise,v_natural);
         END IF;
         v_seen:=array_append(v_seen,v_natural);
       END IF;
