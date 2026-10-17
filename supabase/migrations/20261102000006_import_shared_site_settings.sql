@@ -290,7 +290,9 @@ BEGIN
       IF v_type <> 'string' OR (p_row->>v_field) !~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$' THEN RAISE EXCEPTION 'Invalid credential'; END IF;
     ELSIF v_field IN ('created_at','updated_at') THEN
       IF v_type = 'null' AND p_key <> 'financial_admin_credentials' THEN CONTINUE; END IF;
-      IF v_type <> 'string' THEN RAISE EXCEPTION 'Invalid timestamp'; END IF;
+      IF v_type <> 'string' OR (p_row->>v_field) !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' THEN
+        RAISE EXCEPTION 'Invalid timestamp';
+      END IF;
       v_time := (p_row->>v_field)::timestamptz;
       IF NOT isfinite(v_time) THEN RAISE EXCEPTION 'Invalid timestamp'; END IF;
     END IF;
@@ -355,7 +357,7 @@ RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp
 SET timezone = 'UTC' SET datestyle = 'ISO, YMD' AS $$
 DECLARE
-  v_row jsonb; v_mapped jsonb; v_target jsonb; v_key text; v_id text; v_reason text; v_action text;
+  v_row jsonb; v_mapped jsonb; v_target jsonb; v_key text; v_id text; v_reason text; v_action text; v_exact_target boolean;
   v_admin_map jsonb := '{}'::jsonb; v_admins jsonb := '[]'::jsonb; v_conflicts jsonb := '[]'::jsonb;
   v_records jsonb := '[]'::jsonb; v_seen text[] := '{}'; v_natural text; v_plan jsonb;
 BEGIN
@@ -385,7 +387,7 @@ BEGIN
   FOREACH v_key IN ARRAY ARRAY['admin_groups','admin_group_members','admin_configs','system_configs','history_cleanup_config'] LOOP
     v_seen := '{}';
     FOR v_row IN SELECT value FROM jsonb_array_elements(p_data->v_key) LOOP
-      v_reason := NULL; v_target := NULL; v_mapped := v_row;
+      v_reason := NULL; v_target := NULL; v_mapped := v_row; v_exact_target := false;
       v_id := COALESCE(v_row->>'id',v_row->>'key',v_row->>'table_name');
       IF v_key = 'admin_groups' THEN
         v_mapped := jsonb_set(v_row, '{created_by}', v_admin_map->(v_row->>'created_by'));
@@ -394,6 +396,7 @@ BEGIN
       ELSIF v_key = 'admin_group_members' THEN
         v_mapped := jsonb_set(v_row,'{admin_id}',v_admin_map->(v_row->>'admin_id'));
         SELECT body INTO v_target FROM private.employee_transfer_shared_rows(v_key) WHERE cursor = v_id;
+        v_exact_target := v_target IS NOT NULL;
         IF v_target IS NULL AND EXISTS (SELECT 1 FROM public.admin_group_members
           WHERE group_id = (v_row->>'group_id')::uuid AND admin_id = (v_mapped->>'admin_id')::uuid) THEN
           v_reason := 'group_membership_conflict';
@@ -401,11 +404,18 @@ BEGIN
         v_natural := (v_row->>'group_id') || ':' || (v_mapped->>'admin_id');
       ELSIF v_key = 'admin_configs' THEN
         IF v_row->>'admin_id' IS NOT NULL THEN v_mapped := jsonb_set(v_row,'{admin_id}',v_admin_map->(v_row->>'admin_id')); END IF;
-        SELECT body INTO v_target FROM private.employee_transfer_shared_rows(v_key)
-          WHERE (body->>'admin_id') IS NOT DISTINCT FROM (v_mapped->>'admin_id') AND body->>'config_type' = v_row->>'config_type';
-        IF (SELECT count(*) FROM public.admin_configs WHERE admin_id IS NOT DISTINCT FROM (v_mapped->>'admin_id')::uuid
-          AND config_type = v_row->>'config_type') > 1 THEN v_reason := 'ambiguous_target_setting'; END IF;
-        IF v_target IS NULL AND EXISTS (SELECT 1 FROM public.admin_configs WHERE id = v_id::uuid) THEN v_reason := 'setting_id_conflict'; END IF;
+        SELECT body INTO v_target FROM private.employee_transfer_shared_rows(v_key) WHERE cursor = v_id;
+        v_exact_target := v_target IS NOT NULL;
+        IF v_target IS NULL THEN
+          SELECT body INTO v_target FROM private.employee_transfer_shared_rows(v_key)
+            WHERE (body->>'admin_id') IS NOT DISTINCT FROM (v_mapped->>'admin_id') AND body->>'config_type' = v_row->>'config_type';
+          IF (SELECT count(*) FROM public.admin_configs WHERE admin_id IS NOT DISTINCT FROM (v_mapped->>'admin_id')::uuid
+            AND config_type = v_row->>'config_type') > 1 THEN v_reason := 'ambiguous_target_setting'; END IF;
+        END IF;
+        IF EXISTS (SELECT 1 FROM public.admin_configs WHERE id = v_id::uuid
+          AND (admin_id IS DISTINCT FROM (v_mapped->>'admin_id')::uuid OR config_type IS DISTINCT FROM v_row->>'config_type')) THEN
+          v_reason := 'setting_id_conflict';
+        END IF;
         IF COALESCE(v_row->>'icon_custom_url','') <> '' THEN v_reason := 'media_rewrite_required'; END IF;
         IF v_target IS NOT NULL THEN
           v_target := v_target - ARRAY['id','created_at','updated_at'];
@@ -419,7 +429,9 @@ BEGIN
         IF v_target IS NULL THEN v_reason := 'target_retention_definition_missing'; END IF;
       END IF;
       IF v_key IN ('admin_configs','admin_group_members') THEN
-        IF v_natural = ANY(v_seen) THEN v_reason := 'mapped_source_identity_collision'; END IF;
+        IF v_natural = ANY(v_seen) AND NOT (v_exact_target AND v_target = v_mapped) THEN
+          v_reason := 'mapped_source_identity_collision';
+        END IF;
         v_seen := array_append(v_seen,v_natural);
       END IF;
       IF v_target IS NULL THEN v_action := 'create';
@@ -454,12 +466,33 @@ $$;
 CREATE FUNCTION private.employee_transfer_assert_shared_insert_triggers()
 RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE v_count integer; v_invalid boolean;
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_trigger AS trigger JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
-    WHERE relation.relnamespace = 'public'::regnamespace AND relation.relname = ANY(private.employee_transfer_shared_keys())
-      AND NOT trigger.tgisinternal AND (trigger.tgtype::integer & 4) <> 0) THEN
-    RAISE EXCEPTION 'An unreviewed INSERT trigger prevents shared import.';
-  END IF;
+  WITH expected(table_name,trigger_name,definition,function_hash) AS (VALUES
+    ('admin_configs','guard_content_audit_public_media_reference',
+      'CREATE TRIGGER guard_content_audit_public_media_reference BEFORE INSERT OR UPDATE ON public.admin_configs FOR EACH ROW EXECUTE FUNCTION guard_content_audit_public_media_reference()',
+      '2bbad610ca87b9e02c2f9cf7b45429b5c3469ea8ff9a1b661666a372a6a28ea5'),
+    ('system_configs','guard_content_audit_public_media_reference',
+      'CREATE TRIGGER guard_content_audit_public_media_reference BEFORE INSERT OR UPDATE ON public.system_configs FOR EACH ROW EXECUTE FUNCTION guard_content_audit_public_media_reference()',
+      '2bbad610ca87b9e02c2f9cf7b45429b5c3469ea8ff9a1b661666a372a6a28ea5'),
+    ('admin_configs','guard_employee_chat_image_reference',
+      'CREATE TRIGGER guard_employee_chat_image_reference BEFORE INSERT OR UPDATE OF icon_custom_url, config_value ON public.admin_configs FOR EACH ROW EXECUTE FUNCTION guard_employee_chat_image_reference()',
+      'ef9a064740ce2f154afba63c2b6830ac3e249e7bff66460000d796c0064736a0'),
+    ('system_configs','guard_employee_chat_image_reference',
+      'CREATE TRIGGER guard_employee_chat_image_reference BEFORE INSERT OR UPDATE OF value ON public.system_configs FOR EACH ROW EXECUTE FUNCTION guard_employee_chat_image_reference()',
+      'ef9a064740ce2f154afba63c2b6830ac3e249e7bff66460000d796c0064736a0')
+  )
+  SELECT count(*)::integer,COALESCE(bool_or(expected.trigger_name IS NULL OR trigger.tgenabled NOT IN ('O','A')
+    OR pg_get_triggerdef(trigger.oid) IS DISTINCT FROM expected.definition OR pg_get_userbyid(procedure.proowner) <> 'postgres'
+    OR NOT procedure.prosecdef OR namespace.nspname <> 'private' OR procedure.proname <> trigger.tgname
+    OR encode(extensions.digest(convert_to(pg_get_functiondef(procedure.oid),'UTF8'),'sha256'),'hex') IS DISTINCT FROM expected.function_hash),false)
+  INTO v_count,v_invalid
+  FROM pg_trigger AS trigger JOIN pg_class AS relation ON relation.oid=trigger.tgrelid
+    JOIN pg_proc AS procedure ON procedure.oid=trigger.tgfoid JOIN pg_namespace AS namespace ON namespace.oid=procedure.pronamespace
+    LEFT JOIN expected ON expected.table_name=relation.relname AND expected.trigger_name=trigger.tgname
+  WHERE relation.relnamespace='public'::regnamespace AND relation.relname=ANY(private.employee_transfer_shared_keys())
+    AND NOT trigger.tgisinternal AND (trigger.tgtype::integer & 4)<>0;
+  IF v_count <> 4 OR v_invalid THEN RAISE EXCEPTION 'An unreviewed INSERT trigger prevents shared import.'; END IF;
 END;
 $$;
 
@@ -530,6 +563,8 @@ BEGIN
   PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','shared_applied',
     jsonb_build_object('created_admins',v_receipt->'created_admins','created_records',v_receipt->'created_records','full_site_complete',false));
   RETURN v_receipt;
+EXCEPTION WHEN unique_violation OR foreign_key_violation OR check_violation OR not_null_violation OR data_exception THEN
+  RAISE EXCEPTION 'Shared import was rolled back by a target constraint or data validation failure.' USING ERRCODE = '22023';
 END;
 $$;
 

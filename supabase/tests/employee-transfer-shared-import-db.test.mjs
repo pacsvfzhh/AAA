@@ -209,6 +209,7 @@ for (const [name,change] of [
   ['unknown account field', input=>changed('admins',items=>{items[0].session_token='forbidden';})],
   ['missing credential', input=>changed('financial_admin_credentials',items=>items.slice(1))],
   ['invalid role', input=>changed('admins',items=>{items.find(i=>i.id===OLD.branch).role='owner';})],
+  ['relative timestamp', input=>changed('admins',items=>{items[0].created_at='today';})],
   ['parent cycle', input=>changed('admins',items=>{items.find(i=>i.id===OLD.branch).parent_id=OLD.emergency;items.find(i=>i.id===OLD.emergency).parent_id=OLD.branch;})],
   ['missing parent', input=>changed('admins',items=>{items.find(i=>i.id===OLD.branch).parent_id=randomUUID();})],
   ['duplicate identity', input=>changed('admins',items=>[...items,items[0]])],
@@ -262,11 +263,35 @@ test('changed global settings and retention policies block rather than overwriti
   await assert.rejects(apply(second.job,second.plan),/conflicts/);
 }));
 
-test('unmapped media, collapsed super-admin setting collisions and duplicate memberships cannot be silently reused',async()=>transaction(async()=>{
+test('unmapped media cannot be silently reused',async()=>transaction(async()=>{
   const input=changed('admin_configs',items=>{items[0].icon_custom_url='https://source.invalid/storage/v1/object/public/website-icons/a.png';});
   const {job,plan}=await prepared(input);
   assert.ok(plan.conflicts.some(i=>i.reason==='media_rewrite_required'));
   await assert.rejects(apply(job,plan),/conflicts/);
+}));
+
+test('natural-key reuse never hides an incoming setting ID occupied by another setting',async()=>transaction(async()=>{
+  const occupied=randomUUID();
+  await db.query(`INSERT INTO public.admin_configs (id,admin_id,config_type,config_value) VALUES ($1,$2,'company_name','target brand')
+    ON CONFLICT (admin_id,config_type) DO UPDATE SET id=EXCLUDED.id,config_value=EXCLUDED.config_value`,[occupied,NEW.root]);
+  await db.query(`INSERT INTO public.admin_configs (admin_id,config_type,config_value) VALUES ($1,'theme','dark')
+    ON CONFLICT (admin_id,config_type) DO UPDATE SET config_value=EXCLUDED.config_value`,[NEW.root]);
+  const input=changed('admin_configs',items=>{items[0].id=occupied;items[0].admin_id=OLD.root;items[0].config_type='theme';items[0].config_value='dark';});
+  const {job,plan}=await prepared(input);
+  assert.equal(plan.can_apply,false);
+  assert.ok(plan.conflicts.some(item=>item.reason==='setting_id_conflict'));
+  await assert.rejects(apply(job,plan),/conflicts/);
+}));
+
+test('changed or disabled approved media guards block import instead of silently weakening protection',async()=>transaction(async()=>{
+  const {job,plan}=await prepared();
+  await db.exec('ALTER TABLE public.admin_configs DISABLE TRIGGER guard_employee_chat_image_reference');
+  await assert.rejects(apply(job,plan),/unreviewed INSERT trigger/);
+  await db.exec('ALTER TABLE public.admin_configs ENABLE TRIGGER guard_employee_chat_image_reference');
+  await db.exec(`CREATE OR REPLACE FUNCTION private.guard_employee_chat_image_reference() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path=pg_catalog,public,private,pg_temp AS $$ BEGIN RETURN NEW; END; $$`);
+  await assert.rejects(apply(job,plan),/unreviewed INSERT trigger/);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.admins WHERE id=$1',[OLD.branch]),0);
 }));
 
 test('apply requires the server-recorded dry run and rechecks changed target contents under table locks',async()=>transaction(async()=>{
@@ -287,7 +312,11 @@ test('unknown INSERT triggers are rejected, and a database constraint failure ro
   assert.equal(await scalar(db,'SELECT count(*)::int FROM public.admins WHERE id=$1',[OLD.branch]),0);
   await db.exec('DROP TRIGGER fixture_shared_insert ON public.admin_configs');
   await db.exec(`ALTER TABLE public.admin_configs ADD CONSTRAINT fixture_import_failure CHECK (config_value <> 'source brand')`);
-  await assert.rejects(apply(job,plan),/fixture_import_failure/);
+  await assert.rejects(apply(job,plan),error=>{
+    assert.match(error.message,/rolled back by a target constraint/);
+    assert.doesNotMatch(JSON.stringify(error),/\$2[aby]\$|source brand|fixture_import_failure/);
+    return true;
+  });
   assert.equal(await scalar(db,'SELECT count(*)::int FROM public.admins WHERE id=$1',[OLD.branch]),0);
   assert.equal(await scalar(db,'SELECT count(*)::int FROM public.financial_admin_credentials WHERE admin_id=$1',[OLD.branch]),0);
   assert.equal(await scalar(db,'SELECT count(*)::int FROM private.employee_transfer_events WHERE job_id=$1 AND action=\'shared_applied\'',[job.job_id]),0);
