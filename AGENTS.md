@@ -91,5 +91,5 @@
 | `docs/service-chat.md` | 「模擬客戶」「經理」聊天工作区、富卡与快捷消息、评分打赏、员工端聊天 |
 | `docs/content-audit.md` | 隐藏稽核页、「內容稽核總覽」与「已刪員工紀錄」、留证与永久删除流程 |
 | `docs/database.md` | 核心表、RPC 与安全约定、正式环境安全现状、迁移、定时任务、存储桶、Realtime、Edge Function、测试 |
-| `docs/employee-data-transfer-plan.md` | 员工资料迁移实施计划：范围、替换/合并、加密、真实进度、恢复、分阶段验收与部署确认（待实施） |
+| `docs/employee-data-transfer-plan.md` | 全站业务迁移计划：默认全部导出、保留新站超管、迁移二级/员工及配置、精简历史订单、自动化续接、真实进度与验收（待实施） |
 | `docs/CHANGELOG.md` | 每次修改的更新记录（新的在最上面） |
