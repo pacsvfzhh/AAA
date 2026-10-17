@@ -106,7 +106,9 @@ BEGIN
     RAISE EXCEPTION 'The task is not a shared settings import.';
   END IF;
   PERFORM private.employee_transfer_check_shared_catalog(v_job.options->'catalog');
-  IF v_job.options->>'package_id' IS NULL OR (v_job.options #>> '{catalog,site_id}')::uuid = (SELECT site_id FROM private.employee_transfer_site) THEN
+  IF COALESCE(v_job.options->>'package_id','') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    OR v_job.options->>'source_site_id' IS DISTINCT FROM v_job.options #>> '{catalog,site_id}'
+    OR (v_job.options #>> '{catalog,site_id}')::uuid = (SELECT site_id FROM private.employee_transfer_site) THEN
     RAISE EXCEPTION 'Invalid shared import source identity.';
   END IF;
   RETURN v_job;
@@ -359,7 +361,7 @@ SET timezone = 'UTC' SET datestyle = 'ISO, YMD' AS $$
 DECLARE
   v_row jsonb; v_mapped jsonb; v_target jsonb; v_key text; v_id text; v_reason text; v_action text; v_exact_target boolean;
   v_admin_map jsonb := '{}'::jsonb; v_admins jsonb := '[]'::jsonb; v_conflicts jsonb := '[]'::jsonb;
-  v_records jsonb := '[]'::jsonb; v_seen text[] := '{}'; v_natural text; v_plan jsonb;
+  v_records jsonb := '[]'::jsonb; v_seen text[] := '{}'; v_precise_global text[] := '{}'; v_natural text; v_plan jsonb;
 BEGIN
   PERFORM private.employee_transfer_check_shared_input(p_data);
   FOR v_row IN SELECT value FROM jsonb_array_elements(p_data->'admins') LOOP
@@ -385,7 +387,7 @@ BEGIN
       'role',v_row->'role','action',v_action,'target_id',v_admin_map->v_id));
   END LOOP;
   FOREACH v_key IN ARRAY ARRAY['admin_groups','admin_group_members','admin_configs','system_configs','history_cleanup_config'] LOOP
-    v_seen := '{}';
+    v_seen := '{}'; v_precise_global := '{}';
     FOR v_row IN SELECT value FROM jsonb_array_elements(p_data->v_key) LOOP
       v_reason := NULL; v_target := NULL; v_mapped := v_row; v_exact_target := false;
       v_id := COALESCE(v_row->>'id',v_row->>'key',v_row->>'table_name');
@@ -429,8 +431,11 @@ BEGIN
         IF v_target IS NULL THEN v_reason := 'target_retention_definition_missing'; END IF;
       END IF;
       IF v_key IN ('admin_configs','admin_group_members') THEN
-        IF v_natural = ANY(v_seen) AND NOT (v_exact_target AND v_target = v_mapped) THEN
-          v_reason := 'mapped_source_identity_collision';
+        IF v_natural = ANY(v_seen) THEN
+          IF NOT (v_key='admin_configs' AND v_row->>'admin_id' IS NULL AND v_natural=ANY(v_precise_global)
+            AND v_exact_target AND v_target=v_mapped) THEN v_reason := 'mapped_source_identity_collision'; END IF;
+        ELSIF v_key='admin_configs' AND v_row->>'admin_id' IS NULL AND v_exact_target AND v_target=v_mapped THEN
+          v_precise_global := array_append(v_precise_global,v_natural);
         END IF;
         v_seen := array_append(v_seen,v_natural);
       END IF;
@@ -565,6 +570,50 @@ BEGIN
   RETURN v_receipt;
 EXCEPTION WHEN unique_violation OR foreign_key_violation OR check_violation OR not_null_violation OR data_exception THEN
   RAISE EXCEPTION 'Shared import was rolled back by a target constraint or data validation failure.' USING ERRCODE = '22023';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.employee_import_begin(
+  p_admin_session_token uuid,p_admin_password text,p_decisions jsonb,p_summary jsonb DEFAULT '{}'::jsonb
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path=pg_catalog,public,private,pg_temp SET statement_timeout='120s' AS $$
+DECLARE
+  v_admin_map jsonb:=COALESCE(p_decisions->'admin_map','{}'::jsonb);
+  v_group_map jsonb:=COALESCE(p_decisions->'group_map','{}'::jsonb);
+  v_default_admin uuid:=NULLIF(p_decisions->>'default_admin_id','')::uuid;
+  v_site uuid; v_result jsonb; v_job_id uuid; v_product uuid;
+BEGIN
+  PERFORM 1 FROM private.employee_transfer_admin(p_admin_session_token);
+  IF p_summary ?| ARRAY['import_protocol','export_protocol','catalog','package_id'] THEN
+    RAISE EXCEPTION 'Reserved transfer protocol fields require the dedicated task initializer.';
+  END IF;
+  SELECT site_id INTO v_site FROM private.employee_transfer_site;
+  IF NULLIF(p_summary->>'source_site_id','')::uuid IS NOT DISTINCT FROM v_site THEN
+    RAISE EXCEPTION 'The export file was created by this same site and cannot be imported into it.';
+  END IF;
+  PERFORM private.employee_transfer_assert_triggers_reviewed();
+  IF v_default_admin IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.admins WHERE id=v_default_admin AND is_active) THEN
+    RAISE EXCEPTION 'The default administrator does not exist on this site.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_each_text(v_admin_map) AS entry(old_id,new_id) WHERE NULLIF(entry.new_id,'') IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM public.admins WHERE id=entry.new_id::uuid AND is_active)) THEN
+    RAISE EXCEPTION 'An administrator mapping points to an administrator that does not exist on this site.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_each_text(v_group_map) AS entry(old_id,new_id) WHERE NULLIF(entry.new_id,'') IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM public.dispatch_groups WHERE id=entry.new_id::uuid AND archived_at IS NULL)) THEN
+    RAISE EXCEPTION 'A dispatch group mapping points to a group that does not exist on this site.';
+  END IF;
+  v_result:=private.employee_transfer_start_job(p_admin_session_token,p_admin_password,'import',COALESCE(p_summary,'{}'::jsonb),v_admin_map,v_group_map,v_default_admin);
+  IF NOT COALESCE((v_result->>'success')::boolean,false) THEN RETURN v_result; END IF;
+  v_job_id:=(v_result->>'job_id')::uuid;
+  SELECT id INTO v_product FROM public.product_types WHERE name='舊站匯入（精簡訂單）';
+  IF v_product IS NULL THEN
+    INSERT INTO public.product_types (name,is_active) VALUES ('舊站匯入（精簡訂單）',false) RETURNING id INTO v_product;
+  ELSIF EXISTS (SELECT 1 FROM public.product_types WHERE id=v_product AND is_active) THEN
+    RAISE EXCEPTION 'The placeholder product for imported orders must stay disabled.';
+  END IF;
+  UPDATE private.employee_transfer_jobs SET placeholder_product_id=v_product WHERE id=v_job_id;
+  RETURN v_result || jsonb_build_object('placeholder_product_id',v_product);
 END;
 $$;
 

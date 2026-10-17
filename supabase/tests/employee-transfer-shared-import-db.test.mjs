@@ -83,8 +83,8 @@ const apply = (job,plan) => rpc('employee_import_shared_apply',{...auth(job),p_p
 async function stageAll(job,input = pkg) {
   for (const key of keys) await stage(job,key,0,input.texts[key]);
 }
-function changed(key,mutate) {
-  const result = structuredClone(pkg);
+function changed(key,mutate,base=pkg) {
+  const result = structuredClone(base);
   let values = result.texts[key].trimEnd().split('\n').filter(Boolean).map(line => JSON.parse(line));
   values = mutate(values) ?? values;
   result.texts[key] = values.map(row => JSON.stringify(row)+'\n').join('');
@@ -270,6 +270,55 @@ test('unmapped media cannot be silently reused',async()=>transaction(async()=>{
   await assert.rejects(apply(job,plan),/conflicts/);
 }));
 
+test('multiple source super-admin settings collide deterministically in both row orders',async()=>transaction(async()=>{
+  const secondRoot=randomUUID();
+  const sourceA=randomUUID();
+  const sourceB=randomUUID();
+  let input=changed('admins',items=>[...items,{...items.find(i=>i.role==='super_admin'),id:secondRoot,username:'second-source-root'}]);
+  input=changed('admin_configs',items=>[
+    {...items[0],id:sourceA,admin_id:OLD.root,config_type:'theme',config_value:'dark'},
+    {...items[0],id:sourceB,admin_id:secondRoot,config_type:'theme',config_value:'dark'},
+  ],input);
+  await db.query(`INSERT INTO public.admin_configs (id,admin_id,config_type,config_value) VALUES ($1,$2,'theme','dark')`,[sourceB,NEW.root]);
+  for (const ordering of [input,changed('admin_configs',items=>items.reverse(),input)]) {
+    const {job,plan}=await prepared(ordering);
+    assert.equal(plan.can_apply,false);
+    assert.ok(plan.conflicts.some(item=>item.reason==='mapped_source_identity_collision'));
+    await assert.rejects(apply(job,plan),/conflicts/);
+    await rpc('employee_transfer_cancel',auth(job));
+  }
+}));
+
+test('source duplicate global settings require exact ID and contents on every reused target row',async()=>transaction(async()=>{
+  const {job,plan}=await prepared();
+  assert.equal(plan.can_apply,true,'the two historical global USDC rows have exact source/target identities');
+  await rpc('employee_transfer_cancel',auth(job));
+  const input=changed('admin_configs',items=>{const rows=items.filter(i=>i.admin_id===null && i.config_type==='currency_unit');rows[0].id=randomUUID();return items;});
+  const changedRun=await prepared(input);
+  assert.equal(changedRun.plan.can_apply,false);
+  assert.ok(changedRun.plan.conflicts.some(item=>['ambiguous_target_setting','mapped_source_identity_collision'].includes(item.reason)));
+}));
+
+test('multi-level administrator parents and nullable attributes are preserved while all new accounts stay disabled',async()=>transaction(async()=>{
+  const input=changed('admins',items=>{
+    const child=items.find(i=>i.id===OLD.emergency);
+    child.parent_id=OLD.branch; child.created_at=null; child.updated_at=null; child.is_pinned=null; child.is_active=null;
+  });
+  const {job,plan}=await prepared(input);
+  const receipt=await apply(job,plan);
+  assert.equal(receipt.success,true);
+  const child=(await rows(db,'SELECT parent_id,is_active,is_pinned,created_at,updated_at FROM public.admins WHERE id=$1',[OLD.emergency]))[0];
+  assert.deepEqual(child,{parent_id:OLD.branch,is_active:false,is_pinned:null,created_at:null,updated_at:null});
+}));
+
+test('legacy import initialization cannot mint the reserved shared protocol or bypass package binding',async()=>transaction(async()=>{
+  await assert.rejects(rpc('employee_import_begin',{
+    p_admin_session_token:session,p_admin_password:PASSWORDS.root,p_decisions:{},
+    p_summary:{source_site_id:pkg.catalog.site_id,import_protocol:'shared-import-v1',catalog:pkg.catalog,package_id:'not-a-uuid'},
+  }),/Reserved transfer protocol fields/);
+  assert.equal(await scalar(db,"SELECT count(*)::int FROM private.employee_transfer_jobs WHERE status='running'"),0);
+}));
+
 test('natural-key reuse never hides an incoming setting ID occupied by another setting',async()=>transaction(async()=>{
   const occupied=randomUUID();
   await db.query(`INSERT INTO public.admin_configs (id,admin_id,config_type,config_value) VALUES ($1,$2,'company_name','target brand')
@@ -302,6 +351,15 @@ test('apply requires the server-recorded dry run and rechecks changed target con
   await db.query(`INSERT INTO public.admins (username,password_hash,role) VALUES ('source-branch','fixture-hash','secondary_admin')`);
   await assert.rejects(apply(job,plan),/target changed/);
   assert.equal(await scalar(db,'SELECT count(*)::int FROM public.admins WHERE id=$1',[OLD.emergency]),0);
+}));
+
+test('approved media guards still reject reserved references and roll back earlier account inserts',async()=>transaction(async()=>{
+  const input=changed('admin_configs',items=>{items[0].config_value='chat/reserved.png';});
+  const {job,plan}=await prepared(input);
+  assert.equal(plan.can_apply,true);
+  await db.query(`INSERT INTO private.employee_chat_image_deletion_claims (path,filename) VALUES ('chat/reserved.png','reserved.png')`);
+  await assert.rejects(apply(job,plan),/image.*reserved for permanent deletion/i);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.admins WHERE id=$1',[OLD.branch]),0);
 }));
 
 test('unknown INSERT triggers are rejected, and a database constraint failure rolls back all new accounts',async()=>transaction(async()=>{

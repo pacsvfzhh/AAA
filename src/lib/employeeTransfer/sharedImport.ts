@@ -51,11 +51,14 @@ export interface SharedImportResult {
 export class SharedImportStagingMayExistError extends Error {
   readonly stagingMayExist = true;
   readonly cancelled: boolean;
+  readonly originalError: unknown;
 
-  constructor(cancelled = false) {
+  constructor(originalError: unknown, cancelled = false) {
     super('Shared-settings import stopped. Server staging may already exist; reconcile it before rerunning. No rollback or apply was performed.');
     this.name = 'SharedImportStagingMayExistError';
     this.cancelled = cancelled;
+    this.originalError = originalError;
+    Object.defineProperty(this, 'originalError', { enumerable: false });
   }
 }
 
@@ -285,7 +288,7 @@ export async function stageSharedSettingsImport(
     checkAbort(signal);
     return { dryRun, rows, bytes, fullSiteComplete: false };
   } catch (error) {
-    if (stagingMayExist) throw new SharedImportStagingMayExistError(signal?.aborted === true);
+    if (stagingMayExist) throw new SharedImportStagingMayExistError(error, signal?.aborted === true);
     checkAbort(signal);
     if (error instanceof SharedImportValidationError) throw error;
     // Upstream parser, transport and callback errors can contain credentials; do not expose them.
