@@ -354,10 +354,10 @@ test('apply requires the server-recorded dry run and rechecks changed target con
 }));
 
 test('approved media guards still reject reserved references and roll back earlier account inserts',async()=>transaction(async()=>{
-  const input=changed('admin_configs',items=>{items[0].config_value='chat/reserved.png';});
+  const input=changed('admin_configs',items=>{items.find(item=>item.admin_id===OLD.branch && item.config_type==='company_name').config_value='chat/reserved.png';});
   const {job,plan}=await prepared(input);
   assert.equal(plan.can_apply,true);
-  await db.query(`INSERT INTO private.employee_chat_image_deletion_claims (path,filename) VALUES ('chat/reserved.png','reserved.png')`);
+  await db.query(`INSERT INTO private.employee_chat_image_deletion_claims (path) VALUES ('chat/reserved.png')`);
   await assert.rejects(apply(job,plan),/image.*reserved for permanent deletion/i);
   assert.equal(await scalar(db,'SELECT count(*)::int FROM public.admins WHERE id=$1',[OLD.branch]),0);
 }));

@@ -18,7 +18,7 @@
 | `src/components/employee/` | 员工端各页面（`docs/employee-portal.md`） |
 | `src/components/*.tsx` | 共用组件：ErrorBoundary、LanguageSwitcher、AnnouncementDetailModal、背景装饰 |
 | `src/lib/` | 登录会话、Supabase client、上传/净化/设备等工具（`docs/architecture.md`） |
-| `src/lib/employeeTransfer/` | 加密流、ZIP/清单验证、SHA-256、管理员/共享设置七表分页导出子阶段已实现；全站导入导出、媒体、多卷调度与页面仍在实施（未部署），详见迁移计划 |
+| `src/lib/employeeTransfer/` | 加密流、ZIP/清单验证、SHA-256、管理员/共享设置七表分页导出及受控暂存/干跑/原子导入子阶段已实现；全站导入导出、媒体、多卷调度与页面仍在实施（未部署），详见迁移计划 |
 | `scripts/decrypt-employee-export.mjs` | Node 20 独立解密迁移加密容器（应急工具，不覆盖现有输出） |
 | `src/lib/i18n/` | 员工端与登录页的 10 种语言 |
 | `src/types/database.ts` | 手工维护的 Supabase 类型（新增表/RPC 要同步） |

@@ -289,7 +289,9 @@ BEGIN
     ELSIF v_field IN ('is_active','is_pinned') THEN
       IF v_type NOT IN ('boolean','null') THEN RAISE EXCEPTION 'Invalid boolean'; END IF;
     ELSIF v_field = 'password_hash' THEN
-      IF v_type <> 'string' OR (p_row->>v_field) !~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$' THEN RAISE EXCEPTION 'Invalid credential'; END IF;
+      IF v_type <> 'string' OR (p_row->>v_field) !~ '^\$2[aby]\$(0[4-9]|[12][0-9]|3[01])\$[./A-Za-z0-9]{53}$' THEN
+        RAISE EXCEPTION 'Invalid credential';
+      END IF;
     ELSIF v_field IN ('created_at','updated_at') THEN
       IF v_type = 'null' AND p_key <> 'financial_admin_credentials' THEN CONTINUE; END IF;
       IF v_type <> 'string' OR (p_row->>v_field) !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' THEN
