@@ -3,6 +3,11 @@ import { formatSupabaseError, supabase } from '../supabase';
 import { validateSharedExportCatalog, type SharedExportCatalog, type SharedExportSource } from './sharedExport';
 import type { SharedImportTarget } from './sharedImport';
 import type { ReplacementBackupDescriptor, ReplacementBackupReceiver } from './replacementBackup';
+import {
+  productTransferChecks, validateProductExportCatalog, validateProductVerification,
+  type ProductExportCatalog, type ProductExportSource, type ProductImportTarget,
+} from './productTransfer';
+import type { ProductBackupDescriptor } from './productBackup';
 
 export interface SharedImportSession {
   target: SharedImportTarget;
@@ -186,5 +191,215 @@ export async function beginSharedSettingsExport(adminPassword: string, signal?: 
   return {
     jobId: data.job_id, jobToken: data.job_token, catalog: validateSharedExportCatalog(data.catalog),
     source: createSharedExportSource(session, data.job_token),
+  };
+}
+
+export interface ProductsExportTask {
+  jobId: string;
+  jobToken: string;
+  catalog: ProductExportCatalog;
+  source: ProductExportSource;
+  close(signal?: AbortSignal): Promise<unknown>;
+}
+export interface ProductsImportSession {
+  target: ProductImportTarget;
+  identity(): { jobId: string; jobToken: string } | null;
+  backup(signal?: AbortSignal): Promise<{
+    descriptor: ProductBackupDescriptor; source: ProductExportSource; receiver: ReplacementBackupReceiver;
+  }>;
+  apply(planHash: string, signal?: AbortSignal): Promise<unknown>;
+  close(signal?: AbortSignal): Promise<unknown>;
+}
+// Separate product-only endpoints: never route a one-table catalog through seven-table shared RPCs.
+export async function beginProductsExport(adminPassword: string, signal?: AbortSignal): Promise<ProductsExportTask> {
+  const session = getAdminFinancialSessionToken();
+  const { object, uuid, withSignal } = productTransferChecks;
+  let response: unknown;
+  try {
+    response = await withSignal(async () => {
+      const query = supabase.rpc('employee_export_products_begin', {
+        p_admin_session_token: session, p_admin_password: adminPassword,
+      });
+      const { data, error } = await (signal ? query.abortSignal(signal) : query);
+      if (error) throw new Error('Product export begin outcome is uncertain; reconcile the task before retrying.');
+      return data;
+    }, signal);
+  } finally { adminPassword = ''; }
+  const record = object(response, ['success', 'job_id', 'job_token', 'site_id', 'catalog', 'scope', 'full_site_complete']);
+  if (record.success !== true || record.scope !== 'product-catalog' || record.full_site_complete !== false) {
+    throw new Error('Product export task creation was not confirmed; reconcile before retrying.');
+  }
+  const jobId = uuid(record.job_id), jobToken = uuid(record.job_token);
+  const catalog = validateProductExportCatalog(record.catalog);
+  if (uuid(record.site_id) !== catalog.site_id) throw new Error('Product export site identity mismatch.');
+  const args = () => ({ p_admin_session_token: session, p_job_token: jobToken });
+  return {
+    jobId, jobToken, catalog: structuredClone(catalog),
+    source: {
+      async catalog(readSignal) { productTransferChecks.checkAbort(readSignal); return structuredClone(catalog); },
+      async page(after, readSignal) {
+        if (after !== null) uuid(after);
+        return withSignal(async () => {
+          const query = supabase.rpc('get_employee_export_products_page', { ...args(), p_after: after, p_limit: 200 });
+          const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+          if (error) throw new Error('Product export page read failed.');
+          return data;
+        }, readSignal);
+      },
+      async verify(readSignal) {
+        return withSignal(async () => {
+          const query = supabase.rpc('employee_export_products_verify', args());
+          const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+          if (error) throw new Error('Product export verification failed.');
+          validateProductVerification(data);
+          return data;
+        }, readSignal);
+      },
+    },
+    async close(closeSignal) {
+      return withSignal(async () => {
+        const query = supabase.rpc('employee_products_close', args());
+        const { data, error } = await (closeSignal ? query.abortSignal(closeSignal) : query);
+        if (error) throw new Error('Product close outcome is uncertain; reconcile before retrying.');
+        return data;
+      }, closeSignal);
+    },
+  };
+}
+export function createProductsImportSession(packageId: string, adminPassword: string): ProductsImportSession {
+  const { object, uuid, hash, checkAbort, withSignal } = productTransferChecks;
+  uuid(packageId);
+  const session = getAdminFinancialSessionToken();
+  let job: { jobId: string; jobToken: string } | null = null;
+  let started = false;
+  const args = () => {
+    if (!job) throw new Error('The product import task has not been confirmed by the server.');
+    return { p_admin_session_token: session, p_job_token: job.jobToken };
+  };
+  return {
+    identity: () => job && { ...job },
+    target: {
+      async begin(input, signal) {
+        checkAbort(signal);
+        const catalog = validateProductExportCatalog(input);
+        if (started) throw new Error('Product begin cannot be retried automatically; reconcile the task first.');
+        started = true;
+        try {
+          return await withSignal(async () => {
+            const query = supabase.rpc('employee_import_products_begin', {
+              p_admin_session_token: session, p_admin_password: adminPassword, p_package_id: packageId, p_catalog: catalog,
+            });
+            const { data, error } = await (signal ? query.abortSignal(signal) : query);
+            if (error) throw new Error('Product import begin outcome is uncertain; reconcile before retrying.');
+            const record = object(data, ['success', 'job_id', 'job_token', 'scope', 'full_site_complete']);
+            if (record.success !== true || record.scope !== 'product-catalog' || record.full_site_complete !== false) {
+              throw new Error('Product import task creation was not confirmed.');
+            }
+            checkAbort(signal);
+            job = { jobId: uuid(record.job_id), jobToken: uuid(record.job_token) };
+            return { success: true, scope: 'product-catalog', full_site_complete: false };
+          }, signal);
+        } finally { adminPassword = ''; }
+      },
+      async stage(chunkNo, ndjson, signal) {
+        return withSignal(async () => {
+          const query = supabase.rpc('employee_import_products_stage', { ...args(), p_chunk_no: chunkNo, p_ndjson: ndjson });
+          const { data, error } = await (signal ? query.abortSignal(signal) : query);
+          if (error) throw new Error('Product staging outcome is uncertain; reconcile before retrying.');
+          return data;
+        }, signal);
+      },
+      async dryRun(signal) {
+        return withSignal(async () => {
+          const query = supabase.rpc('get_employee_import_products_dry_run', args());
+          const { data, error } = await (signal ? query.abortSignal(signal) : query);
+          if (error) throw new Error('Product dry-run failed.');
+          return data;
+        }, signal);
+      },
+    },
+    async backup(signal) {
+      const readDescriptor = async (readSignal?: AbortSignal) => withSignal(async () => {
+        const query = supabase.rpc('get_employee_import_products_backup', args());
+        const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+        if (error) throw new Error('Product backup descriptor read failed.');
+        const record = object(data, ['backup_id', 'plan_hash', 'target_hash', 'catalog']);
+        const descriptor: ProductBackupDescriptor = { backup_id: uuid(record.backup_id), plan_hash: hash(record.plan_hash),
+          target_hash: hash(record.target_hash), catalog: validateProductExportCatalog(record.catalog) };
+        if (descriptor.backup_id !== job?.jobId) throw new Error('Product backup task identity mismatch.');
+        return descriptor;
+      }, readSignal);
+      const frozen = await readDescriptor(signal);
+      return {
+        descriptor: structuredClone(frozen),
+        source: {
+          async catalog(readSignal) { checkAbort(readSignal); return structuredClone(frozen.catalog); },
+          async page(after, readSignal) {
+            if (after !== null) uuid(after);
+            return withSignal(async () => {
+              const query = supabase.rpc('get_employee_import_products_backup_page', { ...args(), p_after: after, p_limit: 200 });
+              const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+              if (error) throw new Error('Product backup page read failed.');
+              return data;
+            }, readSignal);
+          },
+          async verify(readSignal) {
+            const current = await readDescriptor(readSignal);
+            if (JSON.stringify(current) !== JSON.stringify(frozen)) throw new Error('The frozen product backup descriptor changed.');
+            return { verified: true, scope: 'product-catalog', full_site_complete: false };
+          },
+        },
+        receiver: {
+          async append(chunkNo, hex, writeSignal) {
+            return withSignal(async () => {
+              const query = supabase.rpc('employee_import_products_backup_append', {
+                ...args(), p_plan_hash: frozen.plan_hash, p_chunk_no: chunkNo, p_hex: hex,
+              });
+              const { data, error } = await (writeSignal ? query.abortSignal(writeSignal) : query);
+              if (error) throw new Error('Product backup append outcome is uncertain; reconcile before retrying.');
+              const ack = object(data, ['success', 'bytes', 'sha256', 'repeated']);
+              if (ack.success !== true || typeof ack.repeated !== 'boolean') throw new Error('Invalid product backup acknowledgement.');
+              return { success: true, bytes: productTransferChecks.count(ack.bytes, 128 * 1024), sha256: hash(ack.sha256), repeated: ack.repeated };
+            }, writeSignal);
+          },
+          async seal(sha256, bytes, writeSignal) {
+            return withSignal(async () => {
+              const query = supabase.rpc('employee_import_products_backup_seal', {
+                ...args(), p_plan_hash: frozen.plan_hash, p_sha256: sha256, p_bytes: bytes,
+              });
+              const { data, error } = await (writeSignal ? query.abortSignal(writeSignal) : query);
+              if (error) throw new Error('Product backup seal outcome is uncertain; reconcile before retrying.');
+              const ack = object(data, ['success', 'backup_id', 'sha256', 'bytes', 'repeated', 'full_site_complete']);
+              if (ack.success !== true || ack.backup_id !== frozen.backup_id || ack.sha256 !== sha256 || ack.bytes !== bytes
+                || typeof ack.repeated !== 'boolean' || ack.full_site_complete !== false) throw new Error('Product backup seal was not confirmed.');
+              return structuredClone(data);
+            }, writeSignal);
+          },
+        },
+      };
+    },
+    async apply(planHash, signal) {
+      hash(planHash);
+      return withSignal(async () => {
+        const query = supabase.rpc('employee_import_products_apply', { ...args(), p_plan_hash: planHash });
+        const { data, error } = await (signal ? query.abortSignal(signal) : query);
+        if (error) throw new Error('Product apply outcome is uncertain; reconcile before retrying.');
+        const ack = object(data, ['success', 'scope', 'full_site_complete', 'product_map', 'repeated']);
+        if (ack.success !== true || ack.scope !== 'product-catalog' || ack.full_site_complete !== false
+          || typeof ack.repeated !== 'boolean' || !ack.product_map || typeof ack.product_map !== 'object' || Array.isArray(ack.product_map)) {
+          throw new Error('Product apply was not confirmed.');
+        }
+        for (const [source, target] of Object.entries(ack.product_map)) { uuid(source); uuid(target); }
+        return structuredClone(data);
+      }, signal);
+    },
+    async close(signal) {
+      return withSignal(async () => {
+        const query = supabase.rpc('employee_products_close', args());
+        const { data, error } = await (signal ? query.abortSignal(signal) : query);
+        if (error) throw new Error('Product close outcome is uncertain; reconcile before retrying.');
+        return data;
+      }, signal);
+    },
   };
 }
