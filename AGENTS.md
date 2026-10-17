@@ -18,6 +18,8 @@
 | `src/components/employee/` | 员工端各页面（`docs/employee-portal.md`） |
 | `src/components/*.tsx` | 共用组件：ErrorBoundary、LanguageSwitcher、AnnouncementDetailModal、背景装饰 |
 | `src/lib/` | 登录会话、Supabase client、上传/净化/设备等工具（`docs/architecture.md`） |
+| `src/lib/employeeTransfer/` | 迁移加密基础（已实现）；全站导入导出、媒体与页面仍在实施，详见迁移计划 |
+| `scripts/decrypt-employee-export.mjs` | Node 20 独立解密迁移加密容器（应急工具，不覆盖现有输出） |
 | `src/lib/i18n/` | 员工端与登录页的 10 种语言 |
 | `src/types/database.ts` | 手工维护的 Supabase 类型（新增表/RPC 要同步） |
 | `src/index.css` | 全局样式与可复用滚动条类 |
@@ -91,5 +93,5 @@
 | `docs/service-chat.md` | 「模擬客戶」「經理」聊天工作区、富卡与快捷消息、评分打赏、员工端聊天 |
 | `docs/content-audit.md` | 隐藏稽核页、「內容稽核總覽」与「已刪員工紀錄」、留证与永久删除流程 |
 | `docs/database.md` | 核心表、RPC 与安全约定、正式环境安全现状、迁移、定时任务、存储桶、Realtime、Edge Function、测试 |
-| `docs/employee-data-transfer-plan.md` | 全站业务迁移计划：默认全部导出、保留新站超管、迁移二级/员工及配置、精简历史订单、自动化续接、真实进度与验收（待实施） |
+| `docs/employee-data-transfer-plan.md` | 全站业务迁移计划与进度：已开始基础实现，完整功能未完成/未部署；默认全部、保留新超管、精简历史订单、配置/自动化、真实进度与验收 |
 | `docs/CHANGELOG.md` | 每次修改的更新记录（新的在最上面） |

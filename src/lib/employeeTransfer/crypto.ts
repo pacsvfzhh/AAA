@@ -273,6 +273,7 @@ export async function* encryptTransferStream(
   }
 }
 
+// 逐块认证不代表整卷完整；调用方须等流正常结束后再提交业务资料。
 export async function* decryptTransferStream(
   source: TransferByteSource,
   passphrase: string,

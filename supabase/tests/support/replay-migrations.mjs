@@ -7,10 +7,7 @@ import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 const migrationDir = new URL('../../migrations/', import.meta.url);
 const supportDir = new URL('./', import.meta.url);
 
-// 本地逐项核对的历史缺口，不是跳过清单：每份 SQL 仍实际执行。
-// blocksFreshDatabase 表示按现有历史从空库顺序建库的阻断风险，不能据此声称正式
-// PostgreSQL 已验证。platform.sql 模拟 Storage/Auth/cron；baseline.sql 还含历史对象
-// 和函数替身。严格匹配只证明这些已知失败没有变化，不证明全迁移通过或可正式建库。
+// 每份 SQL 仍执行；匹配已知缺口仅验证替身基线未漂移，不代表真实空库建库成功。
 export const EXPECTED_REPLAY_FAILURES = Object.freeze([
   {
     file: '20251031230000_add_admins_update_policy.sql',
@@ -100,8 +97,7 @@ export const EXPECTED_REPLAY_FAILURES = Object.freeze([
 
 const withinScope = (file, upTo) => !upTo || file <= upTo;
 
-// 显式可调用的纯校验器。期望集合来自审核记录和截止范围，绝不从实际 failures/files
-// 反推，因此删除文件、失败变成功或提前截断回放都不会悄悄缩小期望集合。
+// 期望集合不能从实际失败反推，否则缺文件或失败变化会被默默接受。
 export function assertExpectedReplayFailures({ files, failures }, { upTo = null } = {}) {
   const expected = EXPECTED_REPLAY_FAILURES.filter(item => withinScope(item.file, upTo));
   const byFile = new Map(expected.map(item => [item.file, item]));
@@ -143,8 +139,7 @@ export function assertExpectedReplayFailures({ files, failures }, { upTo = null 
   return { expected, matched, freshDatabaseVerified: false };
 }
 
-// baseline.sql is split on "-- @before <migration file prefix>" markers; the first segment runs
-// right after the first migration, the others run immediately before the named migration.
+// 首段基线紧随首次迁移执行，其余段落在指定历史迁移之前补入。
 function parseBaseline(text) {
   const segments = [{ before: null, sql: '' }];
   for (const line of text.split('\n')) {
@@ -155,8 +150,7 @@ function parseBaseline(text) {
   return segments;
 }
 
-// 默认仍收集失败供诊断；strict: true 才执行审核门槛。第二参数仅用于资源生命周期测试，
-// 正常回放和集成测试始终用真实 PGlite / platform.sql / 历史 SQL，不扩充替身或跳过文件。
+// strict 模式核对已知缺口；可注入构造器用于验证异常时的资源释放。
 export async function replayMigrations(
   { log = () => {}, upTo = null, strict = false } = {},
   { createDatabase = options => new PGlite(options) } = {},

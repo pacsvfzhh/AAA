@@ -2,17 +2,12 @@ import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
-import { EXPECTED_REPLAY_FAILURES, assertExpectedReplayFailures, replayMigrations } from './replay-migrations.mjs';
+import { assertExpectedReplayFailures, replayMigrations } from './replay-migrations.mjs';
 
 const extensions = { pgcrypto, pg_trgm, uuid_ossp };
 const signatures = new WeakMap();
 
-// 仅为旧诊断调用保留文件名索引；严格校验绝不使用这个可变 Set 作白名单。
-export const KNOWN_REPLAY_FAILURES = new Set(EXPECTED_REPLAY_FAILURES.map(item => item.file));
-
-// 始终严格验证后才 dump/克隆；诊断请直接调用 replayMigrations。第二参数仅用于
-// 隔离测试资源释放。两份克隆的 site_id 必然相同，测试必须显式模拟新站身份，
-// 本助手不改身份、触发器审核、同站拒绝或任何正式 SQL 校验。
+// dump 克隆保留相同 site_id；测试须显式模拟独立站点，不能在辅助函数内绕过同站校验。
 export async function createSites(
   options = {},
   { replay = replayMigrations, createDatabase = config => new PGlite(config) } = {},
@@ -31,7 +26,6 @@ export async function createSites(
     const newSite = createDatabase({ loadDataDir: dump, extensions });
     opened.add(newSite);
     await newSite.waitReady;
-    // 成功交付后由调用方关闭两站。
     return { failures, files, validation, oldSite, newSite };
   } catch (error) {
     const closed = await Promise.allSettled([...opened].map(async db => db.close()));

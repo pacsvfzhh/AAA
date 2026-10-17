@@ -9,7 +9,7 @@ import {
   EXPECTED_REPLAY_FAILURES, assertExpectedReplayFailures, replayMigrations,
 } from './support/replay-migrations.mjs';
 import {
-  KNOWN_REPLAY_FAILURES, adminLogin, createSites, rows, rpc, scalar,
+  adminLogin, createSites, rows, rpc, scalar,
 } from './support/transfer-harness.mjs';
 import { NEW, PASSWORDS, buildNewSite } from './support/transfer-fixtures.mjs';
 
@@ -114,8 +114,7 @@ async function checkCatalog(db) {
   }
 }
 
-// 真实的 530 份历史迁移（以及未来新增迁移）只回放一次，再从严格核对后的 dump 建两站。
-// 不验证全站搬迁完成，不改旧 SQL，也不执行 fixtures 中的整批员工/资金/聊天演示资料。
+// 仅验证真实 SQL 基线与权限，不等同于全站搬迁验收。
 async function exerciseRealReplay() {
   const sites = await createSites({ log: console.log });
   const { oldSite, newSite, files, failures, validation } = sites;
@@ -220,7 +219,6 @@ if (process.argv.includes(workerFlag)) {
     assert.equal(validation.expected.length, 12);
     assert.equal(validation.matched.length, 12);
     assert.equal(validation.freshDatabaseVerified, false);
-    assert.deepEqual([...KNOWN_REPLAY_FAILURES], expectedFiles);
     assert.ok(Object.isFrozen(EXPECTED_REPLAY_FAILURES));
     for (const item of EXPECTED_REPLAY_FAILURES) {
       assert.ok(Object.isFrozen(item));

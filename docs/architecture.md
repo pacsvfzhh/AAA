@@ -41,6 +41,7 @@
 | 文件 | 用途 |
 |---|---|
 | `contentAudit.ts` | 调用 Edge Function `content-audit` 的全部封装（留证改删、永久删除、私有附件读取） |
+| `employeeTransfer/crypto.ts` | 全站迁移加密基础：WebCrypto 流式分块认证与解密；尚未接入页面、ZIP 或媒体流程，须等解密流完整结束后才可提交业务资料；独立解密工具为 `scripts/decrypt-employee-export.mjs` |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |
