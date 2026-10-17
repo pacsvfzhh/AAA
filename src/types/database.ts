@@ -2346,6 +2346,26 @@ export interface Database {
       };
     };
     Functions: {
+      employee_export_dispatch_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_export_dispatch_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_dispatch_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_dispatch_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_dispatch_preflight: {
+        Args: { p_admin_session_token: string };
+        Returns: Record<string, unknown>;
+      };
       employee_export_products_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string };
         Returns: Record<string, unknown>;

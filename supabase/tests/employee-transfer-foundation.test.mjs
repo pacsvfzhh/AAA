@@ -23,6 +23,7 @@ const criticalMigrations = [
   '20261102000006_import_shared_site_settings.sql',
   '20261102000007_replace_shared_site_settings.sql',
   '20261102000008_transfer_product_catalog.sql',
+  '20261102000009_export_dispatch_submission_data.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -84,6 +85,9 @@ const publicFunctions = [
   'employee_import_products_backup_append(uuid,uuid,text,integer,text)', 'employee_import_products_backup_seal(uuid,uuid,text,text,integer)',
   'get_employee_products_saved_backup_chunk(uuid,uuid,integer)', 'employee_import_products_apply(uuid,uuid,text)',
   'employee_products_close(uuid,uuid)',
+  'employee_export_dispatch_begin(uuid,text)', 'get_employee_export_dispatch_page(uuid,uuid,text,uuid,integer)',
+  'employee_export_dispatch_verify(uuid,uuid)', 'employee_export_dispatch_close(uuid,uuid)',
+  'get_employee_import_dispatch_preflight(uuid)',
 ];
 
 async function checkCatalog(db) {

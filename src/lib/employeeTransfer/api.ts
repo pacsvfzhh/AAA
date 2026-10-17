@@ -8,6 +8,86 @@ import {
   type ProductExportCatalog, type ProductExportSource, type ProductImportTarget,
 } from './productTransfer';
 import type { ProductBackupDescriptor } from './productBackup';
+import {
+  dispatchTransferChecks, validateDispatchCatalog, validateDispatchVerification, validateDispatchPreflight,
+  type DispatchExportCatalog, type DispatchExportSource, type DispatchPreflight,
+} from './dispatchTransfer';
+
+export interface DispatchExportTask {
+  jobId: string; jobToken: string; catalog: DispatchExportCatalog; source: DispatchExportSource;
+  close(signal?: AbortSignal): Promise<unknown>;
+}
+export async function beginDispatchExport(adminPassword: string, signal?: AbortSignal): Promise<DispatchExportTask> {
+  const session = getAdminFinancialSessionToken();
+  const { object, uuid, withSignal, checkAbort } = dispatchTransferChecks;
+  let response: unknown;
+  try {
+    response = await withSignal(async () => {
+      const query = supabase.rpc('employee_export_dispatch_begin', {
+        p_admin_session_token: session, p_admin_password: adminPassword,
+      });
+      const { data, error } = await (signal ? query.abortSignal(signal) : query);
+      if (error) throw new Error('Dispatch export begin outcome is uncertain; reconcile before retrying.');
+      return data;
+    }, signal);
+  } finally { adminPassword = ''; }
+  const record = object(response, ['success', 'job_id', 'job_token', 'site_id', 'catalog', 'scope', 'full_site_complete']);
+  if (record.success !== true || record.scope !== 'dispatch-submission' || record.full_site_complete !== false) {
+    throw new Error('Dispatch export task creation was not confirmed; reconcile before retrying.');
+  }
+  const jobId = uuid(record.job_id), jobToken = uuid(record.job_token);
+  const catalog = validateDispatchCatalog(record.catalog);
+  if (uuid(record.site_id) !== catalog.site_id) throw new Error('Dispatch export site identity mismatch.');
+  const args = () => ({ p_admin_session_token: session, p_job_token: jobToken });
+  return {
+    jobId, jobToken, catalog: structuredClone(catalog),
+    source: {
+      async catalog(readSignal) { checkAbort(readSignal); return structuredClone(catalog); },
+      async page(key, after, readSignal) {
+        if (after !== null) uuid(after);
+        return withSignal(async () => {
+          const query = supabase.rpc('get_employee_export_dispatch_page', {
+            ...args(), p_table_key: key, p_after: after, p_limit: 200,
+          });
+          const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+          if (error) throw new Error('Dispatch export page read failed.');
+          return data;
+        }, readSignal);
+      },
+      async verify(readSignal) {
+        return withSignal(async () => {
+          const query = supabase.rpc('employee_export_dispatch_verify', args());
+          const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+          if (error) throw new Error('Dispatch export verification failed.');
+          validateDispatchVerification(data);
+          return data;
+        }, readSignal);
+      },
+    },
+    async close(closeSignal) {
+      return withSignal(async () => {
+        const query = supabase.rpc('employee_export_dispatch_close', args());
+        const { data, error } = await (closeSignal ? query.abortSignal(closeSignal) : query);
+        if (error) throw new Error('Dispatch export close outcome is uncertain; reconcile before retrying.');
+        const receipt = object(data, ['success', 'scope', 'full_site_complete']);
+        if (receipt.success !== true || receipt.scope !== 'dispatch-submission' || receipt.full_site_complete !== false) {
+          throw new Error('Dispatch export close was not confirmed.');
+        }
+        return data;
+      }, closeSignal);
+    },
+  };
+}
+export async function getDispatchImportPreflight(signal?: AbortSignal): Promise<DispatchPreflight> {
+  return dispatchTransferChecks.withSignal(async () => {
+    const query = supabase.rpc('get_employee_import_dispatch_preflight', {
+      p_admin_session_token: getAdminFinancialSessionToken(),
+    });
+    const { data, error } = await (signal ? query.abortSignal(signal) : query);
+    if (error) throw new Error('Dispatch/submission target preflight failed.');
+    return validateDispatchPreflight(data);
+  }, signal);
+}
 
 export interface SharedImportSession {
   target: SharedImportTarget;
