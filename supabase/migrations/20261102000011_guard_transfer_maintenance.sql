@@ -147,6 +147,10 @@ BEGIN
   )) THEN
     RAISE EXCEPTION 'Business writes are paused for employee transfer maintenance.' USING ERRCODE = '55000';
   END IF;
+  IF v_job IS NOT NULL AND TG_TABLE_SCHEMA='public' AND TG_TABLE_NAME='dispatch_assignments'
+    AND (TG_OP<>'UPDATE' OR EXISTS(SELECT 1 FROM public.dispatch_assignments)) THEN
+    RAISE EXCEPTION 'Business writes are paused for employee transfer maintenance.' USING ERRCODE='55000';
+  END IF;
   RETURN NULL;
 END;
 $$;
@@ -190,7 +194,7 @@ BEGIN
   IF v_job IS NULL THEN RAISE EXCEPTION 'A running maintenance owner task is required.'; END IF;
   INSERT INTO private.employee_transfer_write_permits(transaction_id, job_id, table_names)
     VALUES(pg_current_xact_id(), v_job, ARRAY['public.dispatch_config','public.dispatch_groups',
-      'public.dispatch_order_pools','public.dispatch_group_orders','public.dispatch_group_members']);
+      'public.dispatch_order_pools','public.dispatch_group_orders','public.dispatch_group_members','public.dispatch_assignments']);
   UPDATE private.employee_transfer_maintenance SET dirty = true WHERE singleton AND job_id = v_job;
   -- Both permit and dirty roll back with a failed apply. On success the caller MUST invoke
   -- clear_write_permit before returning, and also in its exception/finally cleanup path.
