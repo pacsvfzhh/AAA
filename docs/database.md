@@ -223,13 +223,22 @@ NOTIFY pgrst, 'reload schema';
 - 新资金双站49/49、客户端520/520、完整迁移4115/4115及typecheck/lint/build、聊天6/稽核48/工时6通过，涵盖原文高精度/bigint/NULL/微秒、游标前中后、全部提款状态、单员工额外1001行账本与流水、其他员工账本不变、唯一键/权限/过期/取消、逐字段漂移及跨真实事务提交续接。实际对账无金额修正，legacy首次建基准不改钱；每日统计/累计数及旧佣金检查结果与来源相同，不自动修平既有差异。独立复审发现分页动态record类型缓存问题，已修复/回归并复核未发现其他高置信缺陷。545份SQL仍保留原12历史失败、106表/937列不变，非干净建库证明。
 - 原生PostgreSQL/PostgREST多连接、anon3秒上限、大员工单事务时延和全站放行未验收；PGlite规模冒烟不证明真实执行上限。无正式库访问/资料修改/SQL、Edge Function或前端部署，无Storage/权限/cron调整，无UI或浏览器整站实测。同名员工备份/现有封存、聊天/通知/实名/活动/自动化与档案、全站协调/核对/任务恢复和dirty解除、媒体/多卷/公告轮播排除及迁移页面仍待完成。
 
+## 同包登录与工时历史恢复（2026-10-19，本地未部署）
+
+- 新迁移`20261102000019_export_stage_employee_activity.sql`固定employee-activity-v1三表：employee_login_history、work_sessions、private.employee_work_stop_markers（协议键work_stop_markers、额外id=user_id）。目录绑定来源站/包和完整identity_catalog，源前后核验；固定页200行/256KiB、行64KiB、表50万行/256MiB/总1GiB，超限不截断。导入复用原派单任务bind/stage，不创建第二活跃任务，不接受调用方映射。
+- 登录协议含10个真实列及device_info_is_sql_null布尔投影，区分SQL NULL与JSON null；恢复device_info时直接使用原始JSONB，不经record把JSON null变成SQL NULL。嵌套设备JSON/原始数值、NULL/微秒、历史姓名/员工号、设备/IP原样保留；非空session_id导出为history-加SHA-256(来源站:员工:原会话)，相同员工旧登录/登出仍可关联，不携带有效会话。目标核验不再次散列。
+- 新迁移`20261102000020_restore_employee_activity.sql`提供保存计划的get_employee_import_activity_plan和显式employee_import_activity_apply/verify，每次重核前置身份/配置/valid/成员/used/资金实际内容、独立封存备份与持续维护，不只信verified标记。源员工缺失、目标历史残留/跨员工UUID碰撞或派生工时分钟超int32会列冲突并阻断；计划后碰撞也拒绝，不覆盖/静默跳过。
+- 单员工三表事务恢复：仅end_time=NULL的工时，结束时刻=GREATEST(start_time,COALESCE(last_heartbeat_at,start_time))，分钟=非负四舍五入；不按导入时间扩张，也不采用正常在线统计的一分钟宽限。已结束工时的end/duration/心跳/空值不改，停工标记原值恢复，不复制派单或登录会话。七个登录/工时副作用触发器严格审核、事务内精确旁路/原O或A模式恢复，保留外键/ALWAYS维护/延迟提交门禁；无自动化入队或实时信号，资金及其他业务表不写。
+- 每员工提交前核对全字段/数量；逐员工完成记录绑定计划，重复apply/plan/verify重验实际内容，跨事务/新客户端显式续接。失败仅回滚该员工，已提交记录仍维护保护；本地取消不冒充服务器回滚，临时明文成功/失败均清理，清理期间取消仍携带stagingMayExist提示。账号仍停用、dirty维护不解除，所有pending标记/全站完成边界不变。
+- 活动双站61/61、客户端456/456，完整29文件分组4634/4634、typecheck/lint/build、聊天6/稽核48/工时6及格式检查通过。修复并复审确认设备两种空值与清理期间取消边界；547份SQL严格保留12旧失败、106表/937列及正式独立基线不变。未访问或部署正式环境，无UI/浏览器整站/原生PG多连接、anon3秒和大员工事务性能验收；实名/通知/聊天、媒体/自动化、全站协调及放行仍待接，不可正式使用。
+
 ## 类型与测试
 - `src/types/database.ts` 手工维护（没有生成脚本）：新增 RPC 时补充 `Functions` 的 `Args` / `Returns`；改表时同步 `Row` / `Insert` / `Update`。
 - `supabase/tests/audit-cleanup.test.mjs`：用 PGlite 加载缩减版 schema，再执行指定的真实迁移；每个测试在事务中执行后回滚。运行 `npm run test:audit-cleanup`。
 - `supabase/tests/service-chat-scale.test.mjs`：先装入正式库现行的会话摘要与分组 RPC（取自旧迁移），在混合数据（跨组旧会话、已归档员工、停用/紧急组、富卡、空时间消息、空聊天表）上记录结果，再执行 `20261101000002` 并逐行对比；另验证 `get_admin_chat_unread_counts` 的范围、无效/停用会话拒绝与执行权限。运行 `npm run test:service-chat`。
 - `supabase/tests/work-session-stop.test.mjs`：装入现行的开工/停工/恢复 RPC，先复现「主动停工后刷新被自动恢复」，再执行 `20261101000003` 验证主动停工不再恢复、刷新（beacon 停工）仍会恢复、停工后重新开工再刷新仍会恢复，以及权限。运行 `npm run test:work-session`。
-- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对当前 545 份 SQL 回放中的 12 项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名 RPC 和私有表权限；新增/变化/缺失失败阻断。测试使用 platform/baseline 替身，**不是全部迁移成功或真实空库建库证明**。
+- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对当前 547 份 SQL 回放中的 12 项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名 RPC 和私有表权限；新增/变化/缺失失败阻断。测试使用 platform/baseline 替身，**不是全部迁移成功或真实空库建库证明**。
 - `supabase/tests/support/transfer-scope.mjs` 与 `employee-transfer-scope.test.mjs`：固化本地 106 张根表、937 列及业务迁移意图，拒绝未知/缺失表列、类型/空值性漂移；不是导出授权清单，也不表示转换已实现。根表覆盖不含独立分区，实际目标库仍须重新核对。
 - `employee-transfer-production-scope.test.mjs` 单独核对正式 96 根表/871 列及独立目录 SHA-256，与本地 106 表配置不可混用；`employee-transfer-triggers.test.mjs` 验证真实迁移 SQL 的精确状态恢复、回执和提交门禁（使用 PGlite，不是原生多连接测试）。
-- `npm run test:employee-transfer` 运行加密、ZIP 清单/容器、增量 SHA-256、基础回放、双结构库存、触发器、共享设置导出/导入、来源覆盖与备份/API、产品专用数据库/客户端、派单交单导出/目标预检及导入准备/独立备份、持续维护、派单配置、交单原文/使用计数及同包员工身份/精简订单及来源成员/used防双计数及资金六表原文/事务恢复测试；全站往返、管理员/配置/自动化/实际媒体及界面验收尚未完成。专项命令为 `test:employee-transfer:crypto`、`:foundation`、`:scope`。
+- `npm run test:employee-transfer` 运行加密、ZIP 清单/容器、增量 SHA-256、基础回放、双结构库存、触发器、共享设置导出/导入、来源覆盖与备份/API、产品专用数据库/客户端、派单交单导出/目标预检及导入准备/独立备份、持续维护、派单配置、交单原文/使用计数及同包员工身份/精简订单及来源成员/used防双计数及资金六表和登录/工时/停工标记三表原文/事务恢复测试；全站往返、管理员/配置/自动化/实际媒体及界面验收尚未完成。专项命令为 `test:employee-transfer:crypto`、`:foundation`、`:scope`。
 - `supabase/config.toml` 只配置了 `process-orders`、`cleanup-dispatch`；`supabase/health_check.sql` 是为新部署准备的只读检查，期望的定时任务与存储桶清单已过时。

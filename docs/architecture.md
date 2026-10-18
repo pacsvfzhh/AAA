@@ -53,6 +53,7 @@
 | `employeeTransfer/identityTransfer.ts`、`identityApi.ts` | employee-identity-v1三表固定原文分页/行摘要/源前后核对；已认证隔离文件先全验证再bind到原派单任务、第二遍stage及真实回执计数，显式plan→begin→chunk→verify，不新建导入任务、不自动执行/重试/启用。保留账号14业务列/凭据4列/订单7列，业务归属只取同包共享服务器映射；逐行/数量/全部占位值核验后才提供私有身份对应。无冲突分支实际建停用员工与零钱包、不建财务基准或重复发佣金；资金待接，成员/used后续依赖阶段见下一行，full_site_complete=false。轻量API不加载ZIP/crypto，无UI，未部署 |
 | `employeeTransfer/dependencyApi.ts` | 复用原派单任务显式plan→begin→chunk→verify及新工厂重取计划/进度，不传客户端ID图/行；服务端重核同包身份、来源配置和valid完整内容后恢复来源成员和used，used计数触发器精确旁路/恢复，valid计数/最后使用时间不变。冻结严格回执、互斥/取消/结果不明不自动重试，真实提交后才计进度；资金/其他历史待处理、维护继续，无UI，未部署 |
 | `employeeTransfer/financeTransfer.ts`、`financeApi.ts` | employee-finance-v1固定六表原文流式导出、双遍验证后同任务bind/stage/plan，目录须匹配已恢复的完整identity_catalog；bigint ID/游标用十进制字符串、按数值排序，金额不经浮点重序列化。显式逐员工apply/全量verify、服务端真实提交后计数及新工厂幂等续接；六表一个事务、账本/审计重编号与基准换算、pending冻结/账本收入公式及全字段重验，不重复发佣金或改写旧差异。临时明文清理与结果不明显式提示，不自动重试/启用/解除维护；其余历史/自动化/页面及原生PG时延验收待做，未部署 |
+| `employeeTransfer/activityTransfer.ts`、`activityApi.ts` | employee-activity-v1固定登录/工时/停工标记三表，完整绑定identity目录及已核验身份/成员/资金的真实内容；原始NDJSON、嵌套JSON精度与SQL NULL/JSON null区分保真，旧session_id按来源站/员工脱敏。显式bind/stage/plan→逐员工事务apply→verify，不自动重试/启用/解除维护；未结束工时严格最后心跳收尾、无心跳用开始时间，已结束原值不变。真实提交进度/幂等续接/清理期间取消暂存提示、冲突和漂移阻断；实名/通知需媒体及自动化关联后另接，无UI/浏览器或原生PG验收，未部署 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |
