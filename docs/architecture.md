@@ -49,7 +49,7 @@
 | `employeeTransfer/productTransfer.ts`、`productBackup.ts`、`api.ts` | 产品专用固定单表协议，分页背压导出、两遍验证后暂存、真实回执计数；密文整卷认证后才开始导入，覆盖前独立密文保存/回读认证/上传封存。任务、备份、计划绑定且公开副本不改变内部值；不自动apply/close/重试，最大1万行/8MiB、密文9MiB。仅产品子阶段，未接全站协调、续传或后台页面，未部署 |
 | `employeeTransfer/dispatchTransfer.ts`、`api.ts` | 派单/交单七表固定投影、主键游标分页导出；页SHA-256、逐行原始字节SHA-256串摘要与源前后核对，保留高精度原文，不经浮点重序列化；写临时区确认后才计数，清理失败显式报错。专用任务提供显式close/cancel，不自动结束/重试；目标只读预检始终replacement_ready=false，整批导入、浏览器磁盘/多卷/页面未接入，未部署 |
 | `employeeTransfer/dispatchImport.ts`、`dispatchBackup.ts`、`api.ts` | 七表先全验证再begin、二遍原文校验/分块暂存与真实确认进度；干跑只准备、不提供apply。冻结目标备份实际独立加密保存→回读认证/行摘要/清单及文件哈希→再读密文上传封存，明文8MiB/密文9MiB超限阻断，来源暂存仍总1GiB；公开descriptor不改变闭包绑定。本地Abort不自动发取消RPC，失败明确暂存/封存结果不明并清临时明文；轻量API不加载ZIP/加密依赖。独立维护/配置阶段见下行；同站恢复和页面未实现，未部署 |
-| `employeeTransfer/api.ts`（维护/配置） | 显式enterMaintenance→configurationPlan→applyConfiguration，不自动执行或重试；严格不可变回执保留dependencies_pending/maintenance=true、全站完成false。新会话可查询维护或撤回未写入且未变化的原任务，dirty禁止解除；实际来源恢复四配置表/默认组Base和内容，目标成员清空、源成员/交单/员工订单依赖待接。数据库守卫跨请求持续，不代表停用cron/Storage，无法替代完整恢复核对或页面；未部署 |
+| `employeeTransfer/api.ts`（维护/配置/交单原文） | 显式enterMaintenance→configurationPlan→applyConfiguration，再显式beginValidData→applyValidDataChunk→verifyValidData，不自动执行或重试；严格冻结回执校验数量、分块游标及verified，dependencies_pending/maintenance=true、全站完成false。新会话可查询维护或撤回未写入且未变化的原任务，dirty禁止解除；来源四配置表/默认组Base和内容及valid原文/计数已可恢复，目标成员清空、源成员/used/员工订单可信映射待接。每块服务器提交后才有进度，结果不明不假回滚。屏障不代表停用cron/Storage，无法替代完整恢复核对或页面；未部署 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |
