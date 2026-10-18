@@ -31,6 +31,8 @@ const criticalMigrations = [
   '20261102000014_export_stage_employee_identities.sql',
   '20261102000015_restore_employee_identities.sql',
   '20261102000016_restore_dispatch_dependencies.sql',
+  '20261102000017_export_stage_employee_finance.sql',
+  '20261102000018_restore_employee_finance.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -112,6 +114,10 @@ const publicFunctions = [
   'employee_import_identity_chunk(uuid,uuid,text,integer)', 'employee_import_identity_verify(uuid,uuid)',
   'get_employee_import_dispatch_dependency_plan(uuid,uuid)', 'employee_import_dispatch_dependency_begin(uuid,uuid,text)',
   'employee_import_dispatch_dependency_chunk(uuid,uuid,text,integer)', 'employee_import_dispatch_dependency_verify(uuid,uuid)',
+  'employee_export_finance_begin(uuid,text,uuid)', 'get_employee_export_finance_page(uuid,uuid,text,text,integer)',
+  'employee_export_finance_verify(uuid,uuid)', 'employee_export_finance_close(uuid,uuid)',
+  'employee_import_finance_bind(uuid,uuid,jsonb)', 'employee_import_finance_stage(uuid,uuid,text,integer,text)',
+  'get_employee_import_finance_plan(uuid,uuid)', 'employee_import_finance_apply(uuid,uuid,uuid,text)', 'employee_import_finance_verify(uuid,uuid)',
 ];
 
 async function checkCatalog(db) {
