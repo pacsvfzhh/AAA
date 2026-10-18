@@ -577,6 +577,36 @@ for (const [label, change] of [
   assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active(task)); assert.equal(await permitCount(), 0);
 }));
 
+for (const [table, occupied, owner, group] of [
+  ['dispatch_groups', T.only, T.default, null],
+  ['dispatch_order_pools', T.extra, T.base, T.default],
+]) test(`legal target ${table} retirement-name collision is a plan conflict before any configuration write`, () => transaction(async () => {
+  await cancel(job);
+  const field = table === 'dispatch_groups' ? 'group_name' : 'pool_name';
+  const reserved = `transfer-retired-${owner}`;
+  // Legal target business rows, not forged source input or a private receipt. The pool
+  // fixture must occupy the generated retirement name inside the SAME target group.
+  await db.query(`UPDATE public.${table} SET ${field}=$1 WHERE id=$2`, [reserved, occupied]);
+  assert.equal(await scalar(db, `SELECT ${field} FROM public.${table} WHERE id=$1`, [occupied]), reserved);
+  assert.notEqual(occupied, owner);
+  if (group) assert.equal(await scalar(db, `SELECT count(*)::int FROM public.dispatch_order_pools
+    WHERE id=ANY($1::uuid[]) AND group_id=$2`, [[occupied, owner], group]), 2);
+  const before = await businessState();
+  const { task, dry } = await prepare(); await sealBackup('dispatch', task, dry); await enter(task, dry);
+  const plan = await configPlan(task), state = await taskState(task);
+  assert.equal(plan.can_apply_configuration, false);
+  assert.deepEqual(plan.conflicts, ['reserved_retirement_name']);
+  assert.equal(plan.replacement_ready, false); assert.equal(plan.full_site_complete, false);
+  assert.deepEqual(await configPlan(task), plan);
+  await assert.rejects(apply(plan, task), error => {
+    assert.match(error.message, /contains conflicts/);
+    assert.equal(error.code, 'P0001', 'reject the plan conflict, not a delayed SQL 23505 uniqueness violation');
+    return true;
+  });
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await taskState(task), state);
+  assert.deepEqual(await status(), active(task)); assert.equal(await permitCount(), 0);
+}));
+
 for (const table of ['dispatch_groups', 'dispatch_order_pools']) test(`reserved retirement names in source ${table} block configuration restoration`, () => transaction(async () => {
   await cancel(job);
   const input = await transaction(async () => {
@@ -589,6 +619,26 @@ for (const table of ['dispatch_groups', 'dispatch_order_pools']) test(`reserved 
   assert.equal(plan.can_apply_configuration, false); assert.ok(plan.conflicts.includes('reserved_retirement_name'));
   await assert.rejects(apply(plan, task), /contains conflicts/);
   assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active(task)); assert.equal(await permitCount(), 0);
+}));
+
+test('empty assignments with an unknown BEFORE UPDATE statement trigger reject plan/apply before its body executes', () => transaction(async () => {
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_assignments'), 0);
+  await enter(); const plan = await configPlan(), before = await businessState(), state = await taskState(job);
+  // nextval is deliberately non-transactional: rolling an RPC back to a savepoint cannot
+  // hide an executed trigger body. An ordinary table counter could produce a false pass.
+  await db.exec(`CREATE SEQUENCE public.configuration_assignment_trigger_probe;
+    CREATE FUNCTION public.configuration_assignment_unreviewed() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN PERFORM nextval('public.configuration_assignment_trigger_probe'::regclass); RETURN NULL; END $$;
+    CREATE TRIGGER aa_configuration_assignment_unreviewed BEFORE UPDATE ON public.dispatch_assignments
+      FOR EACH STATEMENT EXECUTE FUNCTION public.configuration_assignment_unreviewed()`);
+  const called = () => scalar(db, 'SELECT is_called FROM public.configuration_assignment_trigger_probe');
+  assert.equal(await called(), false);
+  await assert.rejects(configPlan(), /Unreviewed dispatch configuration triggers/);
+  assert.equal(await called(), false, 'planning must reject the unknown trigger without executing its body');
+  await assert.rejects(apply(plan), /Unreviewed dispatch configuration triggers/);
+  assert.equal(await called(), false, 'apply must reject before an FK action can execute the empty-table statement trigger');
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await taskState(job), state);
+  assert.deepEqual(await status(), active()); assert.equal(await permitCount(), 0);
 }));
 
 for (const [label, sql] of [
