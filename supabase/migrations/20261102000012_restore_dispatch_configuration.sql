@@ -80,7 +80,13 @@ BEGIN
   IF EXISTS(SELECT 1 FROM private.employee_transfer_dispatch_input(p_job.id,'dispatch_groups')
     WHERE body->>'group_name' LIKE 'transfer-retired-%') OR EXISTS(
     SELECT 1 FROM private.employee_transfer_dispatch_input(p_job.id,'dispatch_order_pools')
-    WHERE body->>'pool_name' LIKE 'transfer-retired-%') THEN
+    WHERE body->>'pool_name' LIKE 'transfer-retired-%') OR EXISTS(
+    SELECT 1 FROM public.dispatch_groups AS owner JOIN public.dispatch_groups AS occupied
+      ON occupied.group_name='transfer-retired-'||owner.id::text AND occupied.id<>owner.id
+  ) OR EXISTS(
+    SELECT 1 FROM public.dispatch_order_pools AS owner JOIN public.dispatch_order_pools AS occupied
+      ON occupied.group_id=owner.group_id AND occupied.pool_name='transfer-retired-'||owner.id::text AND occupied.id<>owner.id
+  ) THEN
     v_conflicts:=v_conflicts||jsonb_build_array('reserved_retirement_name');
   END IF;
   v_plan:=jsonb_build_object('scope','dispatch-configuration','can_apply_configuration',jsonb_array_length(v_conflicts)=0,
@@ -114,8 +120,9 @@ BEGIN
   SELECT jsonb_agg(jsonb_build_array(c.relname,t.tgname) ORDER BY c.relname,t.tgname) INTO v_names
     FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
     WHERE c.relnamespace='public'::regnamespace AND c.relname IN
-      ('dispatch_config','dispatch_groups','dispatch_order_pools','dispatch_group_orders','dispatch_group_members') AND NOT t.tgisinternal;
+      ('dispatch_config','dispatch_groups','dispatch_order_pools','dispatch_group_orders','dispatch_group_members','dispatch_assignments') AND NOT t.tgisinternal;
   IF v_names IS DISTINCT FROM '[
+    ["dispatch_assignments","zz_employee_transfer_maintenance"],
     ["dispatch_config","zz_employee_transfer_maintenance"],
     ["dispatch_group_members","zz_employee_transfer_maintenance"],
     ["dispatch_group_orders","trigger_check_pool_health_on_deactivate"],
@@ -146,7 +153,7 @@ BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,jsonb_build_object('mode',t.tgenabled::text,'digest',private.employee_transfer_trigger_digest(t.oid)))
     INTO v_expected FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
     WHERE c.relnamespace='public'::regnamespace AND c.relname IN
-      ('dispatch_config','dispatch_groups','dispatch_order_pools','dispatch_group_orders','dispatch_group_members') AND NOT t.tgisinternal;
+      ('dispatch_config','dispatch_groups','dispatch_order_pools','dispatch_group_orders','dispatch_group_members','dispatch_assignments') AND NOT t.tgisinternal;
   EXECUTE format($definition$
     CREATE FUNCTION private.employee_transfer_assert_dispatch_config_triggers()
     RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
@@ -157,7 +164,7 @@ BEGIN
       SELECT jsonb_object_agg(c.relname||'.'||t.tgname,jsonb_build_object('mode',t.tgenabled::text,'digest',private.employee_transfer_trigger_digest(t.oid)))
         INTO v_actual FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
         WHERE c.relnamespace='public'::regnamespace AND c.relname IN
-          ('dispatch_config','dispatch_groups','dispatch_order_pools','dispatch_group_orders','dispatch_group_members') AND NOT t.tgisinternal;
+          ('dispatch_config','dispatch_groups','dispatch_order_pools','dispatch_group_orders','dispatch_group_members','dispatch_assignments') AND NOT t.tgisinternal;
       IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each(v_actual) WHERE value->>'mode' NOT IN ('O','A')) THEN
         RAISE EXCEPTION 'Unreviewed dispatch configuration triggers.';
       END IF;

@@ -1589,6 +1589,7 @@ const productionAbsentTables = new Set([
   'private.employee_transfer_jobs', 'private.employee_transfer_site',
   'private.employee_transfer_staging', 'private.employee_transfer_trigger_policy',
   'private.employee_transfer_shared_backups',
+  'private.employee_transfer_maintenance', 'private.employee_transfer_write_permits',
   'public.notification_automation_date_runs',
 ]);
 const productionNullable = new Map([
