@@ -24,6 +24,7 @@ const criticalMigrations = [
   '20261102000007_replace_shared_site_settings.sql',
   '20261102000008_transfer_product_catalog.sql',
   '20261102000009_export_dispatch_submission_data.sql',
+  '20261102000010_prepare_dispatch_submission_import.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -88,6 +89,11 @@ const publicFunctions = [
   'employee_export_dispatch_begin(uuid,text)', 'get_employee_export_dispatch_page(uuid,uuid,text,uuid,integer)',
   'employee_export_dispatch_verify(uuid,uuid)', 'employee_export_dispatch_close(uuid,uuid)',
   'get_employee_import_dispatch_preflight(uuid)',
+  'employee_import_dispatch_begin(uuid,text,uuid,jsonb)', 'employee_import_dispatch_stage(uuid,uuid,text,integer,text)',
+  'get_employee_import_dispatch_dry_run(uuid,uuid)', 'get_employee_import_dispatch_backup(uuid,uuid)',
+  'get_employee_import_dispatch_backup_page(uuid,uuid,text,text,integer)',
+  'employee_import_dispatch_backup_append(uuid,uuid,text,integer,text)',
+  'employee_import_dispatch_backup_seal(uuid,uuid,text,text,integer)', 'get_employee_dispatch_saved_backup_chunk(uuid,uuid,integer)',
 ];
 
 async function checkCatalog(db) {
