@@ -161,7 +161,8 @@ export function validateFinancePlan(value: unknown): FinancePlan {
   });
   const restored = counts(record.counts), employees = count(record.employees, limits.maxRows);
   const withdrawals = object(record.pending_withdrawals, ['count', 'amount']);
-  if (record.can_restore !== (conflicts.length === 0) || restored.wallets !== employees
+  if (record.can_restore !== (conflicts.length === 0)
+    || (restored.wallets !== employees && !conflicts.includes('source_employee_missing'))
     || typeof withdrawals.amount !== 'string' || withdrawals.amount.length > limits.maxLineBytes
     || !/^(0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(withdrawals.amount)) invalid();
   return { scope: 'employee-finance', can_restore: record.can_restore, counts: restored, employees,

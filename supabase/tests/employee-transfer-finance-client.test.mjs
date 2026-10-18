@@ -184,6 +184,10 @@ for (const [label, make, validate] of [
 for (const reason of ['financial_target_not_empty', 'financial_uuid_collision', 'financial_unique_collision', 'unmapped_administrator', 'inconsistent_source_finance', 'source_employee_missing']) {
   test(`plan accepts exact conflict ${reason}`, () => { const p = plan(); p.can_restore = false; p.conflicts = [reason]; assert.deepEqual(api.validateFinancePlan(p), p); });
 }
+test('a missing-wallet source plan remains readable but cannot restore', () => {
+  const p = plan(); p.can_restore = false; p.conflicts = ['source_employee_missing']; p.counts.wallets = 0;
+  assert.deepEqual(api.validateFinancePlan(p), p);
+});
 for (const [label, edit] of [
   ['false conflictfree', p => { p.can_restore = false; }], ['fake restore', p => { p.conflicts = ['source_employee_missing']; }],
   ['unknown reason', p => { p.can_restore = false; p.conflicts = ['backend raw text']; }], ['object conflict', p => { p.can_restore = false; p.conflicts = [{ reason: 'source_employee_missing' }]; }],

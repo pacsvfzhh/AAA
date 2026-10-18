@@ -144,11 +144,11 @@ BEGIN
     EXECUTE 'SELECT id::text FROM ('||v_query||') AS r WHERE id=$1::'||v_type INTO v_cursor USING p_after;
     IF v_cursor IS NULL OR v_cursor IS DISTINCT FROM p_after THEN RAISE EXCEPTION 'Finance cursor disappeared or is not canonical.'; END IF;
   END IF;
-  FOR v_row IN EXECUTE 'SELECT id,body FROM ('||v_query||') AS r WHERE ($1::'||v_type||' IS NULL OR id>$1::'||v_type||') ORDER BY id LIMIT $2' USING p_after,p_limit+1 LOOP
+  FOR v_row IN EXECUTE 'SELECT id::text AS cursor_id,body FROM ('||v_query||') AS r WHERE ($1::'||v_type||' IS NULL OR id>$1::'||v_type||') ORDER BY id LIMIT $2' USING p_after,p_limit+1 LOOP
     v_line:=v_row.body::text||E'\n';
     IF octet_length(v_line)>65536 THEN RAISE EXCEPTION 'Finance export row exceeds limits.'; END IF;
     IF v_count=p_limit OR octet_length(v_text)+octet_length(v_line)>262144 THEN v_more:=true;EXIT;END IF;
-    v_text:=v_text||v_line;v_count:=v_count+1;v_cursor:=v_row.id::text;
+    v_text:=v_text||v_line;v_count:=v_count+1;v_cursor:=v_row.cursor_id;
   END LOOP;
   RETURN jsonb_build_object('table_key',p_table_key,'count',v_count,'ndjson',v_text,'next_after',CASE WHEN v_more THEN v_cursor ELSE NULL END,
     'sha256',encode(extensions.digest(convert_to(v_text,'UTF8'),'sha256'),'hex'));

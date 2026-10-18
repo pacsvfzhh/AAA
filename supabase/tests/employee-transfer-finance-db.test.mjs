@@ -23,7 +23,7 @@ let source,db,replay,sourceSession,session,branch,emergency,other,modules,packag
 let sequence=0;
 async function transaction(fn,site=db,commit=false){await site.exec('BEGIN');try{const value=await fn();await site.exec(commit?'COMMIT':'ROLLBACK');return value;}catch(e){await site.exec('ROLLBACK');throw e;}}
 async function isolated(site,fn){const point=`finance_${++sequence}`;await site.exec(`SAVEPOINT ${point}`);try{const value=await fn();await site.exec(`RESET ROLE;RELEASE SAVEPOINT ${point}`);return value;}catch(e){await site.exec(`ROLLBACK TO SAVEPOINT ${point};RELEASE SAVEPOINT ${point}`);throw e;}}
-const on=(site,name,args)=>isolated(site,()=>baseRpc(site,name,args));
+const on=(site,name,args)=>isolated(site,async()=>{await site.exec('SET LOCAL ROLE anon');return baseRpc(site,name,args,{role:null});});
 const auth=(job=task,token=session)=>({p_admin_session_token:token,p_job_token:job.job_token});
 const rpc=(name,args)=>on(db,name,args);
 const permits=()=>scalar(db,'SELECT count(*)::int FROM private.employee_transfer_write_permits');
@@ -83,7 +83,11 @@ const apply=(p,employee=F.e1,extra={})=>rpc('employee_import_finance_apply',{...
 const verify=(extra={})=>rpc('employee_import_finance_verify',{...auth(),...extra});
 async function stage(input=finance){await bind(input);for(const key of FINANCE)for(const[n,text]of chunks(input.texts[key]).entries())await rpc('employee_import_finance_stage',{...auth(),p_table_key:key,p_chunk_no:n,p_ndjson:text});return plan();}
 async function restore(p){for(const employee of [F.e1,F.e2,F.e3])await apply(p,employee);return verify();}
-async function corrupt(table,sql,args=[]){await db.exec(`ALTER TABLE public.${table} DISABLE TRIGGER zz_employee_transfer_maintenance`);await db.query(sql,args);await db.exec(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance`);}
+async function corrupt(table,sql,args=[]){
+  const disabled=['wallets','wallet_transactions','withdrawals'].includes(table)?await scalar(db,'SELECT private.employee_transfer_bypass_triggers($1::text[])',[[table]]):null;
+  await db.exec(`ALTER TABLE public.${table} DISABLE TRIGGER zz_employee_transfer_maintenance`);await db.query(sql,args);await db.exec(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance`);
+  if(disabled)await db.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)',[JSON.stringify(disabled)]);
+}
 
 before(async()=>{
   mock.method(globalThis,'fetch',()=>assert.fail('financial tests prohibit network and production access'));
@@ -121,6 +125,7 @@ before(async()=>{
     await source.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)',[JSON.stringify(disabled)]);
   },source,true);
   await db.query("INSERT INTO public.admins(id,username,password_hash,role,is_active) VALUES($1,'finance-other-root',extensions.crypt($2,extensions.gen_salt('bf',4)),'super_admin',true)",[id(900),PASSWORDS.root]);
+  await db.query('INSERT INTO public.financial_admin_credentials(admin_id,password_hash) SELECT id,password_hash FROM public.admins WHERE id=$1',[id(900)]);
   session=await adminLogin(db,'root',PASSWORDS.root);sourceSession=await adminLogin(source,'root',PASSWORDS.root);branch=await adminLogin(db,'branch',PASSWORDS.branch);emergency=await adminLogin(db,'emergency',PASSWORDS.emergency);other=await adminLogin(db,'finance-other-root',PASSWORDS.root);
   guarded=await scalar(db,'SELECT private.employee_transfer_guarded_tables()');packageId=randomUUID();
   const root=fileURLToPath(new URL('../../',import.meta.url)),compiled=await build({stdin:{contents:`export {createReplacementBackup}from './src/lib/employeeTransfer/replacementBackup.ts';export {createDispatchBackup}from './src/lib/employeeTransfer/dispatchBackup.ts';export * from './src/lib/employeeTransfer/financeApi.ts';export * from './src/lib/employeeTransfer/financeTransfer.ts';export {setHarness}from'finance-db:state';`,resolveDir:root},bundle:true,write:false,platform:'browser',format:'esm',target:'es2020',plugins:[{name:'local-finance-sql',setup(builder){
@@ -201,7 +206,7 @@ for(const [label,sql]of [
   ['replica withdrawal side effect','ALTER TABLE public.withdrawals ENABLE REPLICA TRIGGER trigger_track_withdrawal_ledger'],
   ['changed ledger function','ALTER FUNCTION public.track_wallet_transaction_in_ledger() SECURITY INVOKER'],
 ])test(`finance refuses ${label} without touching money`,()=>transaction(async()=>{
-  await ready();const p=await stage();await db.exec(sql);const before=await business();await assert.rejects(apply(p),/Unreviewed employee finance triggers/);assert.deepEqual(await business(),before);assert.equal(await permits(),0);
+  await ready();const p=await stage();await db.exec(sql);const before=await business();await assert.rejects(apply(p),/Unreviewed employee (finance|identity).*triggers/);assert.deepEqual(await business(),before);assert.equal(await permits(),0);
 }));
 
 for(const [label,token]of [['secondary',()=>branch],['emergency',()=>emergency],['other super-admin',()=>other],['unknown',()=>randomUUID()]])test(`finance write and preparation reject ${label}`,()=>transaction(async()=>{
@@ -238,6 +243,97 @@ test('source changes with unchanged counts invalidate finance export and protoco
   },source);
   await ready();const p=await stage();await apply(p);
   for(const name of ['employee_import_finish','employee_import_finalize_employee'])await assert.rejects(rpc(name,{...auth(),...(name.endsWith('finish')?{p_summary:{}}:{p_employee_id:F.e1,p_expected:{}})}),/protocol/);
+}));
+
+test('UUID and bigint pages share a pooled connection safely across repeated export tasks and cursors',()=>transaction(async()=>{
+  await transaction(async()=>{
+    const exp=await on(source,'employee_export_finance_begin',{p_admin_session_token:sourceSession,p_admin_password:PASSWORDS.root,p_package_id:packageId});
+    for(let round=0;round<2;round++)for(const key of ['wallets','wallet_ledger_entries','wallet_transactions','wallet_reconciliation_audit','wallet_balance_baselines']){
+      let after=null,n=0;do{const page=await on(source,'get_employee_export_finance_page',{...auth(exp,sourceSession),p_table_key:key,p_after:after,p_limit:1});n+=page.count;
+        if(key==='wallet_ledger_entries'&&page.next_after!==null)assert.match(page.next_after,/^[1-9][0-9]*$/);after=page.next_after;
+      }while(after!==null);assert.equal(n,finance.catalog.tables.find(t=>t.key===key).rows);
+    }
+    await on(source,'employee_export_finance_verify',auth(exp,sourceSession));await on(source,'employee_export_finance_close',auth(exp,sourceSession));
+  },source);
+}));
+
+test('bigint cursor above all source entries maps to the last new entry; no eligible entry maps to zero',()=>transaction(async()=>{
+  await ready();const input=await transaction(async()=>{await source.query('UPDATE public.wallet_balance_baselines SET last_ledger_id=9223372036854775807 WHERE user_id=$1',[F.e3]);return capture('finance');},source);
+  const p=await stage(input);await apply(p,F.e3);assert.equal(await scalar(db,'SELECT last_ledger_id=(SELECT max(id) FROM public.wallet_ledger_entries WHERE user_id=$1) FROM public.wallet_balance_baselines WHERE user_id=$1',[F.e3]),true);
+}));
+
+test('high precision wallet and ledger deltas survive source pages/staging/writes and the reconciliation formula',()=>transaction(async()=>{
+  await ready();const input=await transaction(async()=>{
+    const disabled=await scalar(source,"SELECT private.employee_transfer_bypass_triggers(ARRAY['wallets'])");
+    await source.query('UPDATE public.wallets SET available_balance=102.12345678901234567890123456789 WHERE user_id=$1',[F.e1]);
+    await source.query('UPDATE public.wallet_ledger_entries SET available_delta=5.12345678901234567890123456789 WHERE id=9007199254740994');
+    await source.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)',[JSON.stringify(disabled)]);return capture('finance');
+  },source);
+  const p=await stage(input);assert.equal(p.can_restore,true);await apply(p);assert.equal(await scalar(db,'SELECT available_balance::text FROM public.wallets WHERE user_id=$1',[F.e1]),'102.12345678901234567890123456789');
+  assert.equal(await scalar(db,"SELECT available_delta::text FROM public.wallet_ledger_entries WHERE user_id=$1 AND event_type='after'",[F.e1]),'5.12345678901234567890123456789');
+}));
+
+test('single employee with 1001 additional ledger/transaction rows stages multiple pages and commits its financial core atomically',()=>transaction(async()=>{
+  await ready();const input=await transaction(async()=>{
+    const disabled=await scalar(source,"SELECT private.employee_transfer_bypass_triggers(ARRAY['wallet_transactions'])");
+    await source.query(`INSERT INTO public.wallet_transactions(id,user_id,type,amount,balance_before,balance_after,created_at)
+      SELECT ('71000000-0000-4000-8000-'||lpad(to_hex(10000+n),12,'0'))::uuid,$1,'manual_adjustment',0,0,0,'2020-01-02T03:04:05.123456Z' FROM generate_series(1,1001) AS x(n)`,[F.e1]);
+    await source.query(`INSERT INTO public.wallet_ledger_entries(id,user_id,operation_id,source_type,source_id,event_type,available_delta,income_delta)
+      SELECT 10000+n,$1,gen_random_uuid(),'wallet_transaction',('71000000-0000-4000-8000-'||lpad(to_hex(10000+n),12,'0'))::uuid,'history',0,0 FROM generate_series(1,1001) AS x(n)`,[F.e1]);
+    await source.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)',[JSON.stringify(disabled)]);return capture('finance');
+  },source);
+  const before=await triggers(),p=await stage(input),r=await apply(p);assert.equal(r.counts.wallet_ledger_entries,1004);assert.equal(r.counts.wallet_transactions,1003);
+  assert.deepEqual(await apply(p),{...r,repeated:true});assert.equal(await permits(),0);assert.deepEqual(await triggers(),before);
+}));
+
+test('existing unrelated target ledger IDs remain unchanged and imported IDs are freshly allocated',()=>transaction(async()=>{
+  await ready();await corrupt('wallet_ledger_entries',`INSERT INTO public.wallet_ledger_entries(user_id,operation_id,source_type,source_id,event_type,available_delta) VALUES($1,$2,'wallet_transaction',$3,'unrelated',19)`,[id(999),id(998),id(997)]);
+  const existing=await scalar(db,"SELECT to_jsonb(r) FROM public.wallet_ledger_entries AS r WHERE user_id=$1",[id(999)]),p=await stage();assert.equal(p.can_restore,true);await restore(p);
+  assert.deepEqual(await scalar(db,"SELECT to_jsonb(r) FROM public.wallet_ledger_entries AS r WHERE user_id=$1",[id(999)]),existing);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.wallet_ledger_entries'),5);
+}));
+
+for(const [label,change,reason]of [
+  ['nonzero target wallet',()=>corrupt('wallets','UPDATE public.wallets SET available_balance=1 WHERE user_id=$1',[F.e1]),'financial_target_not_empty'],
+  ['existing transaction UUID',async()=>{await corrupt('wallet_transactions',`INSERT INTO public.wallet_transactions(id,user_id,type,amount,balance_before,balance_after) VALUES($1,$2,'manual_adjustment',0,0,0)`,[F.tx,F.e2]);},'financial_uuid_collision'],
+  ['existing operation/type',async()=>{await corrupt('wallet_transactions',`INSERT INTO public.wallet_transactions(id,user_id,type,amount,balance_before,balance_after,reference_id,operation_id) VALUES($1,$2,'commission',32,0,32,$3,$4)`,[id(777),F.e2,F.o,id(201)]);},'financial_unique_collision'],
+  ['existing ledger operation key',async()=>{await corrupt('wallet_ledger_entries',`INSERT INTO public.wallet_ledger_entries(user_id,operation_id,source_type,source_id,event_type) VALUES($1,$2,'wallet_transaction',$3,'before')`,[F.e2,id(401),F.tx]);},'financial_unique_collision'],
+])test(`finance plan reports ${label} and refuses silent skipping/overwriting`,()=>transaction(async()=>{
+  await ready();await change();const before=await business(),p=await stage();assert.equal(p.can_restore,false);assert.ok(p.conflicts.includes(reason));await assert.rejects(apply(p),/conflict-free/);assert.deepEqual(await business(),before);
+}));
+
+for(const [label,sql,args]of [
+  ['expired session',"UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1",()=>[NEW.root]],
+  ['expired task',"UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1",()=>[task.job_id]],
+  ['lost backup seal','UPDATE private.employee_transfer_shared_backups SET sealed_at=NULL WHERE id=$1',()=>[task.job_id]],
+])test(`finance continuation rechecks ${label} after another employee committed`,()=>transaction(async()=>{
+  await ready();const p=await stage();await apply(p,F.e2);await db.query(sql,args());const before=await business();
+  for(const action of [()=>plan(),()=>apply(p,F.e1),()=>verify()])await assert.rejects(action(),/invalid or expired|running dispatch owner/);
+  assert.deepEqual(await business(),before);assert.equal(await permits(),0);
+}));
+
+test('cancelled finance task retains committed money and dirty maintenance but cannot continue or finish',()=>transaction(async()=>{
+  await ready();const p=await stage();await apply(p,F.e2);await rpc('employee_transfer_cancel',auth());
+  await assert.rejects(apply(p,F.e1),/invalid or expired/);await assert.rejects(verify(),/invalid or expired/);
+  assert.equal(await scalar(db,'SELECT available_balance::text FROM public.wallets WHERE user_id=$1',[F.e2]),'40');
+  assert.equal((await rpc('get_employee_transfer_maintenance',{p_admin_session_token:session})).dirty,true);assert.equal(await permits(),0);
+}));
+
+test('finance private functions stay inaccessible and table/field/duplicate-key staging is rejected',()=>transaction(async()=>{
+  await ready();await bind();const functions=await rows(db,"SELECT oid,proname FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_%finance%'");
+  for(const fn of functions)for(const role of ['anon','authenticated','service_role'])assert.equal(await scalar(db,"SELECT has_function_privilege($1,$2::oid,'EXECUTE')",[role,fn.oid]),false,fn.proname);
+  for(const key of ['orders','finance-done','wallets;DROP TABLE users',null])await assert.rejects(rpc('employee_import_finance_stage',{...auth(),p_table_key:key,p_chunk_no:0,p_ndjson:''}),/Unsupported/);
+  const line=lines(finance.texts.wallets)[0];for(const text of [line.replace('{','{"user_id":"'+F.e1+'",'),line.replace('{','{"unexpected":1,'),line.slice(0,-1)])
+    await assert.rejects(rpc('employee_import_finance_stage',{...auth(),p_table_key:'wallets',p_chunk_no:0,p_ndjson:text}),/Invalid finance/);
+  assert.equal(await permits(),0);
+}));
+
+test('finance empty/missing-wallet source produces an explicit blocked plan without synthesizing balances',()=>transaction(async()=>{
+  await ready();const input=await transaction(async()=>{
+    await source.exec("SET LOCAL app.in_user_cleanup='true'");await source.query('DELETE FROM public.wallets WHERE user_id=$1',[F.e3]);return capture('finance');
+  },source);
+  const p=await stage(input);assert.equal(p.can_restore,false);assert.ok(p.conflicts.includes('source_employee_missing'));assert.equal(p.counts.wallets,2);
+  assert.deepEqual(modules.validateFinancePlan(p),p);await assert.rejects(apply(p,F.e3),/conflict-free/);
 }));
 
 test('reconciliation after import performs zero money repairs and legacy accounts establish a baseline without changing balances',()=>transaction(async()=>{
