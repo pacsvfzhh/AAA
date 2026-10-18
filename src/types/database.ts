@@ -1,4 +1,18 @@
 type EmployeeFinanceCounts = Record<'wallets' | 'wallet_balance_baselines' | 'wallet_ledger_entries' | 'wallet_transactions' | 'withdrawals' | 'wallet_reconciliation_audit', number>;
+type EmployeeVerificationCounts = { verification_requests: number };
+type EmployeeVerificationCatalog = {
+  version: 1; scope: 'employee-verification'; site_id: string; package_id: string; identity_catalog: EmployeeIdentityCatalog;
+  tables: { key: 'verification_requests'; rows: number; bytes: number; row_hashes_sha256: string }[]; full_site_complete: false;
+};
+type EmployeeVerificationReceipt = EmployeeIdentityPending & {
+  success: true; scope: 'employee-verification'; counts: EmployeeVerificationCounts; completed_employees: number; total_employees: number;
+  verified: true; repeated: boolean;
+};
+type EmployeeVerificationMediaFile = {
+  key: string; source_url: string; bytes: number; sha256: string;
+  content_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'application/pdf';
+};
+type EmployeeVerificationMediaAction = 'download' | 'recheck-export' | 'upload' | 'recheck-import';
 type EmployeeActivityCounts = Record<'employee_login_history' | 'work_sessions' | 'work_stop_markers', number>;
 type EmployeeActivityCatalog = {
   version: 1; scope: 'employee-activity'; site_id: string; package_id: string; identity_catalog: EmployeeIdentityCatalog;
@@ -2384,6 +2398,66 @@ export interface Database {
       };
     };
     Functions: {
+      employee_export_verification_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
+        Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeVerificationCatalog; scope: 'employee-verification'; full_site_complete: false }
+          | { success: false; error: 'Invalid credentials' }
+          | { success: false; error: 'Account is temporarily locked.'; locked_until: string };
+      };
+      get_employee_export_verification_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: 'verification_requests'; p_after?: string | null; p_limit?: number };
+        Returns: { table_key: 'verification_requests'; count: number; ndjson: string; next_after: string | null; sha256: string };
+      };
+      employee_export_verification_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { verified: true; scope: 'employee-verification'; full_site_complete: false };
+      };
+      employee_export_verification_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { success: true; scope: 'employee-verification'; full_site_complete: false };
+      };
+      employee_import_verification_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog: EmployeeVerificationCatalog };
+        Returns: { success: true; scope: 'employee-verification'; full_site_complete: false; repeated: boolean };
+      };
+      employee_import_verification_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: 'verification_requests'; p_chunk_no: number; p_ndjson: string };
+        Returns: { success: true; rows: number; bytes: number; sha256: string; repeated: boolean };
+      };
+      get_employee_transfer_verification_media: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_direction: 'export' | 'import' };
+        Returns: { scope: 'employee-verification-media'; direction: 'export' | 'import';
+          files: { key: string; source_url: string; bucket: 'verification-documents'; path: string; file: EmployeeVerificationMediaFile | null }[];
+          full_site_complete: false };
+      };
+      employee_import_verification_media_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_files: EmployeeVerificationMediaFile[] };
+        Returns: { success: true; scope: 'employee-verification-media'; files: number; bytes: number; repeated: boolean; full_site_complete: false };
+      };
+      // Service-only RPCs. Declaring the SQL contract does not grant browser execution.
+      employee_transfer_verification_media_authorize: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: EmployeeVerificationMediaAction; p_object_key: string };
+        Returns: { direction: 'export' | 'import'; key: string; bucket: 'verification-documents'; path: string; source_url: string;
+          file: EmployeeVerificationMediaFile | null };
+      };
+      employee_transfer_verification_media_commit: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: EmployeeVerificationMediaAction; p_object_key: string;
+          p_bytes: number; p_sha256: string; p_content_type: EmployeeVerificationMediaFile['content_type']; p_storage_origin: string };
+        Returns: { success: true; key: string; bytes: number; sha256: string; content_type: EmployeeVerificationMediaFile['content_type']; full_site_complete: false };
+      };
+      get_employee_import_verification_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: EmployeeIdentityPending & { scope: 'employee-verification'; can_restore: boolean; counts: EmployeeVerificationCounts; employees: number;
+          conflicts: ('verification_target_not_empty' | 'verification_uuid_collision' | 'source_employee_missing' | 'verification_admin_unmapped' | 'media_incomplete')[]; plan_hash: string };
+      };
+      employee_import_verification_apply: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_employee_id: string; p_plan_hash: string };
+        Returns: EmployeeVerificationReceipt & { employee_id: string };
+      };
+      employee_import_verification_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: EmployeeVerificationReceipt;
+      };
       employee_export_activity_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeActivityCatalog; scope: 'employee-activity'; full_site_complete: false };
