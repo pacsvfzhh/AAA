@@ -119,7 +119,7 @@ $$;
 CREATE FUNCTION public.employee_import_dispatch_valid_begin(p_admin_session_token uuid,p_job_token uuid,p_plan_hash text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' SET lock_timeout='2s' AS $$
-DECLARE v_job private.employee_transfer_jobs%ROWTYPE; v_map jsonb; v_expected jsonb; v_state jsonb; v_chunks integer;
+DECLARE v_job private.employee_transfer_jobs%ROWTYPE; v_map jsonb; v_expected jsonb; v_state jsonb; v_chunks integer; v_rows jsonb;
 BEGIN
   PERFORM private.employee_transfer_lock_maintenance_tables();
   v_job:=private.employee_transfer_job(p_admin_session_token,p_job_token,'dispatch-import');
@@ -130,6 +130,16 @@ BEGIN
   v_state:=v_job.summary->'valid_restore';
   IF v_state IS NOT NULL THEN
     IF v_state->'admin_map' IS DISTINCT FROM v_map THEN RAISE EXCEPTION 'Submission administrator mapping changed.'; END IF;
+    IF (SELECT count(*) FROM public.valid_order_data)<>(v_state->>'rows')::integer THEN
+      RAISE EXCEPTION 'Submission committed progress changed.';
+    END IF;
+    IF (v_state->>'verified')::boolean THEN
+      PERFORM private.employee_transfer_dispatch_check_input(v_job);
+      FOR v_rows IN SELECT payload->'rows' FROM private.employee_transfer_staging WHERE job_id=v_job.id
+        AND employee_id='00000000-0000-0000-0000-000000000000' AND table_key='dispatch-in:valid_order_data' ORDER BY chunk_no LOOP
+        PERFORM private.employee_transfer_check_valid_rows(v_rows,v_map);
+      END LOOP;
+    END IF;
     RETURN private.employee_transfer_valid_receipt(v_state,true);
   END IF;
   PERFORM private.employee_transfer_dispatch_check_input(v_job);
@@ -204,6 +214,13 @@ BEGIN
     v_state:=v_state||jsonb_build_object('rows',(v_state->>'rows')::integer+v_count,'next_chunk',p_chunk_no+1);
   END IF;
   PERFORM private.employee_transfer_check_valid_rows(v_rows,v_map);
+  IF (v_state->>'verified')::boolean THEN
+    PERFORM private.employee_transfer_dispatch_check_input(v_job);
+    FOR v_rows IN SELECT payload->'rows' FROM private.employee_transfer_staging WHERE job_id=v_job.id
+      AND employee_id='00000000-0000-0000-0000-000000000000' AND table_key='dispatch-in:valid_order_data' ORDER BY chunk_no LOOP
+      PERFORM private.employee_transfer_check_valid_rows(v_rows,v_map);
+    END LOOP;
+  END IF;
   IF NOT v_repeated THEN
     UPDATE private.employee_transfer_jobs SET summary=summary||jsonb_build_object('valid_restore',v_state) WHERE id=v_job.id;
     PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','valid_restore_chunk',

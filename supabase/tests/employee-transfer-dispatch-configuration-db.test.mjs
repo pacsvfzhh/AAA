@@ -830,6 +830,21 @@ for (const [label, sql] of [
   assert.deepEqual(await businessState(),keep); assert.deepEqual(await taskState(job),state); assert.equal(await permitCount(),0);
 }));
 
+for (const [label,sql,params] of [
+  ['idle task',"UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1",()=>[job.job_id]],
+  ['absolute task',"UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1",()=>[job.job_id]],
+  ['expired admin',"UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1",()=>[NEW.root]],
+  ['revoked admin',"UPDATE public.admin_financial_sessions SET revoked_at=now() WHERE admin_id=$1",()=>[NEW.root]],
+  ['removed backup seal','UPDATE private.employee_transfer_shared_backups SET sealed_at=NULL WHERE id=$1',()=>[job.job_id]],
+  ['removed shared mapping',"UPDATE private.employee_transfer_jobs SET summary=summary-'shared_receipt' WHERE id=$1",()=>[sharedJob.job_id]],
+]) test(`valid restore rechecks ${label} on each explicit operation`,()=>transaction(async()=>{
+  const plan=await configured(); await validBegin(plan); await validChunk(0); await db.query(sql,params());
+  const keep=await businessState(), state=await taskState(job);
+  for(const action of [()=>validBegin(plan),()=>validChunk(1),()=>validVerify()]) await assert.rejects(action(),/invalid or expired|Verified configuration|server-verified/i);
+  assert.deepEqual(await businessState(),keep); assert.deepEqual(await taskState(job),state); assert.equal(await permitCount(),0);
+  assert.equal(await scalar(db,'SELECT dirty FROM private.employee_transfer_maintenance'),true);
+}));
+
 test('changed target since sealed backup is refused, even after configuration committed', () => transaction(async () => {
   const plan = await configured();
   await db.exec('ALTER TABLE public.valid_order_data DISABLE TRIGGER zz_employee_transfer_maintenance');
@@ -842,12 +857,13 @@ test('changed target since sealed backup is refused, even after configuration co
 for (const action of ['valid_restore_started','valid_restore_chunk','valid_restore_verified']) test(`failure at ${action} rolls back only that request, preserving prior progress and maintenance`, () => transaction(async () => {
   const plan = await configured();
   if (action !== 'valid_restore_started') await validBegin(plan);
+  if (action === 'valid_restore_chunk') await validChunk(0);
   if (action === 'valid_restore_verified') for (let no=0;no<3;no++) await validChunk(no);
   const keep = await businessState(), state = await taskState(job);
   await db.exec(`CREATE FUNCTION public.valid_event_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
     IF NEW.action='${action}' THEN RAISE EXCEPTION 'valid fixture event failure'; END IF; RETURN NEW; END $$;
     CREATE TRIGGER valid_event_failure BEFORE INSERT ON private.employee_transfer_events FOR EACH ROW EXECUTE FUNCTION public.valid_event_failure()`);
-  await assert.rejects(action==='valid_restore_started'?validBegin(plan):action==='valid_restore_chunk'?validChunk(0):validVerify(),/valid fixture event failure/);
+  await assert.rejects(action==='valid_restore_started'?validBegin(plan):action==='valid_restore_chunk'?validChunk(1):validVerify(),/valid fixture event failure/);
   assert.deepEqual(await businessState(),keep); assert.deepEqual(await taskState(job),state);
   assert.deepEqual(await status(),active(job,true)); assert.equal(await permitCount(),0);
 }));
@@ -858,6 +874,8 @@ test('repeat chunks and final verify reject a changed committed row rather than 
   await db.query('UPDATE public.valid_order_data SET usage_count=8 WHERE id=$1',[S.valid]);
   await db.exec('ALTER TABLE public.valid_order_data ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance');
   await assert.rejects(validChunk(0),/post-write verification/); await assert.rejects(validVerify(),/post-write verification/);
+  await assert.rejects(validBegin(plan),/post-write verification/);
+  await assert.rejects(validChunk(2),/post-write verification/);
   assert.equal(await permitCount(),0); assert.deepEqual(await status(),active(job,true));
 }));
 
@@ -893,9 +911,20 @@ test('committed real configuration receipt survives separate requests; cancellat
     assert.deepEqual(await unaffected(), before); assert.deepEqual(await apply(plan), { ...receipt, repeated: true });
     await blocked('DELETE FROM public.dispatch_config WHERE false'); await assert.rejects(leave(), /committed writes/);
   });
+  await transaction(async () => { await validBegin(plan); },db,true);
+  await transaction(async () => { assert.equal((await validChunk(0)).rows,200); },db,true);
+  await transaction(async () => {
+    assert.equal((await validChunk(0)).repeated,true);
+    assert.equal((await validChunk(1)).rows,400);
+  },db,true);
+  await transaction(async () => { await validChunk(2); assert.equal((await validVerify()).verified,true); },db,true);
   await transaction(async () => { await cancel(job); }, db, true);
   await transaction(async () => {
-    assert.deepEqual(await status(), active(job, true)); assert.equal(await permitCount(), 0);
+    assert.deepEqual(await status(), active(job, true));
+    await assert.rejects(validChunk(0),/invalid or expired/);
+    await assert.rejects(validVerify(),/invalid or expired/);
+    await assert.rejects(validBegin(plan),/invalid or expired/);
+    assert.equal(await scalar(db,'SELECT count(*)::int FROM public.valid_order_data'),403); assert.equal(await permitCount(), 0);
     await assert.rejects(leave(), /committed writes/); await assert.rejects(configPlan(), /invalid or expired/);
     await blocked('DELETE FROM public.valid_order_data WHERE false'); await blocked('DELETE FROM public.announcements WHERE false');
     assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_shared_backups WHERE id=$1 AND sealed_at IS NOT NULL', [job.job_id]), 1);
