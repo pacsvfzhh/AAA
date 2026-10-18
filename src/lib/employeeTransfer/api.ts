@@ -16,9 +16,166 @@ import {
 import { validateDispatchImportDryRun, type DispatchImportTarget } from './dispatchImport';
 import type { DispatchBackupDescriptor } from './dispatchBackup';
 
+export type DispatchConfigurationConflict = 'group_mapping_collision' | 'pool_mapping_collision' | 'reserved_retirement_name';
+export interface DispatchConfigurationPlan {
+  readonly scope: 'dispatch-configuration';
+  readonly can_apply_configuration: boolean;
+  readonly full_site_complete: false;
+  readonly replacement_ready: false;
+  readonly conflicts: readonly DispatchConfigurationConflict[];
+  readonly group_map: Readonly<Record<string, string>>;
+  readonly pool_map: Readonly<Record<string, string>>;
+  readonly preparation_plan_hash: string;
+  readonly plan_hash: string;
+}
+export interface DispatchConfigurationReceipt {
+  readonly success: true;
+  readonly scope: 'dispatch-configuration';
+  readonly configuration_applied: true;
+  readonly maintenance: true;
+  readonly dependencies_pending: true;
+  readonly replacement_ready: false;
+  readonly full_site_complete: false;
+  readonly repeated: boolean;
+  readonly group_map: Readonly<Record<string, string>>;
+  readonly pool_map: Readonly<Record<string, string>>;
+}
+export interface DispatchMaintenanceReceipt {
+  readonly success: true; readonly maintenance: true; readonly dirty: false;
+  readonly repeated: boolean; readonly full_site_complete: false;
+}
+export interface TransferMaintenance {
+  readonly active: boolean; readonly job_id: string | null; readonly dirty: boolean; readonly full_site_complete: false;
+}
+export interface TransferMaintenanceLeaveReceipt {
+  readonly success: true; readonly maintenance: false; readonly full_site_complete: false;
+}
+const ENTER_DISPATCH_MAINTENANCE = '確認暫停業務並導入派單資料';
+const LEAVE_TRANSFER_MAINTENANCE = '確認取消尚未寫入的遷移';
+function invalidDispatchConfiguration(): never { throw new Error('Invalid dispatch configuration or maintenance response.'); }
+
+// Snapshot own data descriptors, never read response getters or re-read fields through a proxy.
+// These validators intentionally have no container/crypto dependency.
+function dispatchUuidMap(value: unknown): Readonly<Record<string, string>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalidDispatchConfiguration();
+  const keys = Reflect.ownKeys(value);
+  if (keys.some(key => typeof key !== 'string')) invalidDispatchConfiguration();
+  const record = dispatchTransferChecks.object(value, keys as string[]);
+  const copy: Record<string, string> = {};
+  for (const key of keys as string[]) copy[dispatchTransferChecks.uuid(key)] = dispatchTransferChecks.uuid(record[key]);
+  return Object.freeze(copy);
+}
+function dispatchConfigurationConflicts(value: unknown): readonly DispatchConfigurationConflict[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) invalidDispatchConfiguration();
+  const length = Object.getOwnPropertyDescriptor(value, 'length');
+  if (!length || !('value' in length) || typeof length.value !== 'number'
+    || !Number.isSafeInteger(length.value) || length.value < 0 || length.value > 1000001) invalidDispatchConfiguration();
+  const keys = Array.from({ length: length.value }, (_, index) => String(index));
+  const expected = new Set([...keys, 'length']);
+  const own = Reflect.ownKeys(value);
+  if (own.length !== expected.size || own.some(key => typeof key !== 'string' || !expected.has(key))) {
+    invalidDispatchConfiguration();
+  }
+  const copy: DispatchConfigurationConflict[] = [];
+  for (const key of keys) {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    if (!field?.enumerable || !('value' in field)) invalidDispatchConfiguration();
+    const conflict: unknown = field.value;
+    if (conflict !== 'group_mapping_collision' && conflict !== 'pool_mapping_collision' && conflict !== 'reserved_retirement_name') {
+      invalidDispatchConfiguration();
+    }
+    copy.push(conflict);
+  }
+  return Object.freeze(copy);
+}
+export function validateDispatchConfigurationPlan(value: unknown): DispatchConfigurationPlan {
+  const record = dispatchTransferChecks.object(value, ['scope', 'can_apply_configuration', 'full_site_complete',
+    'replacement_ready', 'conflicts', 'group_map', 'pool_map', 'preparation_plan_hash', 'plan_hash']);
+  if (record.scope !== 'dispatch-configuration' || typeof record.can_apply_configuration !== 'boolean'
+    || record.full_site_complete !== false || record.replacement_ready !== false) invalidDispatchConfiguration();
+  const conflicts = dispatchConfigurationConflicts(record.conflicts);
+  if (record.can_apply_configuration !== (conflicts.length === 0)) invalidDispatchConfiguration();
+  return Object.freeze({ scope: 'dispatch-configuration', can_apply_configuration: record.can_apply_configuration,
+    full_site_complete: false, replacement_ready: false, conflicts,
+    group_map: dispatchUuidMap(record.group_map), pool_map: dispatchUuidMap(record.pool_map),
+    preparation_plan_hash: dispatchTransferChecks.hash(record.preparation_plan_hash), plan_hash: dispatchTransferChecks.hash(record.plan_hash) });
+}
+export function validateDispatchConfigurationReceipt(value: unknown): DispatchConfigurationReceipt {
+  const record = dispatchTransferChecks.object(value, ['success', 'scope', 'configuration_applied', 'maintenance',
+    'dependencies_pending', 'replacement_ready', 'full_site_complete', 'repeated', 'group_map', 'pool_map']);
+  if (record.success !== true || record.scope !== 'dispatch-configuration' || record.configuration_applied !== true
+    || record.maintenance !== true || record.dependencies_pending !== true || record.replacement_ready !== false
+    || record.full_site_complete !== false || typeof record.repeated !== 'boolean') invalidDispatchConfiguration();
+  return Object.freeze({ success: true, scope: 'dispatch-configuration', configuration_applied: true, maintenance: true,
+    dependencies_pending: true, replacement_ready: false, full_site_complete: false, repeated: record.repeated,
+    group_map: dispatchUuidMap(record.group_map), pool_map: dispatchUuidMap(record.pool_map) });
+}
+export function validateDispatchMaintenanceReceipt(value: unknown): DispatchMaintenanceReceipt {
+  const record = dispatchTransferChecks.object(value, ['success', 'maintenance', 'dirty', 'repeated', 'full_site_complete']);
+  if (record.success !== true || record.maintenance !== true || record.dirty !== false
+    || typeof record.repeated !== 'boolean' || record.full_site_complete !== false) invalidDispatchConfiguration();
+  return Object.freeze({ success: true, maintenance: true, dirty: false, repeated: record.repeated, full_site_complete: false });
+}
+export function validateTransferMaintenance(value: unknown): TransferMaintenance {
+  const record = dispatchTransferChecks.object(value, ['active', 'job_id', 'dirty', 'full_site_complete']);
+  if (typeof record.active !== 'boolean' || typeof record.dirty !== 'boolean' || record.full_site_complete !== false
+    || (!record.active && (record.job_id !== null || record.dirty))) invalidDispatchConfiguration();
+  return Object.freeze({ active: record.active, job_id: record.active ? dispatchTransferChecks.uuid(record.job_id) : null,
+    dirty: record.dirty, full_site_complete: false });
+}
+export function validateTransferMaintenanceLeaveReceipt(value: unknown): TransferMaintenanceLeaveReceipt {
+  const record = dispatchTransferChecks.object(value, ['success', 'maintenance', 'full_site_complete']);
+  if (record.success !== true || record.maintenance !== false || record.full_site_complete !== false) invalidDispatchConfiguration();
+  return Object.freeze({ success: true, maintenance: false, full_site_complete: false });
+}
+async function dispatchConfigurationResponse<T>(
+  operation: () => PromiseLike<{ data: unknown; error: unknown }>, validate: (value: unknown) => T,
+  failure: string, signal?: AbortSignal,
+): Promise<T> {
+  try {
+    const { data, error } = await dispatchTransferChecks.withSignal(operation, signal);
+    dispatchTransferChecks.checkAbort(signal);
+    if (error) throw new Error(failure);
+    const result = validate(data);
+    dispatchTransferChecks.checkAbort(signal);
+    return result;
+  } catch {
+    dispatchTransferChecks.checkAbort(signal);
+    // Do not echo backend/request exceptions: they may contain credentials or business data.
+    throw new Error(failure);
+  }
+}
+export async function getTransferMaintenance(signal?: AbortSignal): Promise<TransferMaintenance> {
+  return dispatchConfigurationResponse(() => {
+    const query = supabase.rpc('get_employee_transfer_maintenance', {
+      p_admin_session_token: getAdminFinancialSessionToken(),
+    });
+    return signal ? query.abortSignal(signal) : query;
+  }, validateTransferMaintenance, 'Transfer maintenance status was not confirmed.', signal);
+}
+export async function leaveTransferMaintenance(
+  jobId: string, adminPassword: string, confirmation: string, signal?: AbortSignal,
+): Promise<TransferMaintenanceLeaveReceipt> {
+  try {
+    dispatchTransferChecks.checkAbort(signal);
+    dispatchTransferChecks.uuid(jobId);
+    if (confirmation !== LEAVE_TRANSFER_MAINTENANCE) throw new Error('The maintenance cancellation confirmation does not match.');
+    return await dispatchConfigurationResponse(() => {
+      const query = supabase.rpc('employee_transfer_leave_maintenance', {
+        p_admin_session_token: getAdminFinancialSessionToken(), p_job_id: jobId,
+        p_admin_password: adminPassword, p_confirmation: confirmation,
+      });
+      return signal ? query.abortSignal(signal) : query;
+    }, validateTransferMaintenanceLeaveReceipt, 'Maintenance cancellation outcome is uncertain; reconcile before retrying.', signal);
+  } finally { adminPassword = ''; }
+}
+
 export interface DispatchImportSession {
   identity(): { jobId: string; jobToken: string } | null;
   target: DispatchImportTarget;
+  enterMaintenance(planHash: string, confirmation: string, adminPassword: string, signal?: AbortSignal): Promise<DispatchMaintenanceReceipt>;
+  configurationPlan(signal?: AbortSignal): Promise<DispatchConfigurationPlan>;
+  applyConfiguration(planHash: string, signal?: AbortSignal): Promise<DispatchConfigurationReceipt>;
   backup(signal?: AbortSignal): Promise<{
     descriptor: DispatchBackupDescriptor; source: DispatchExportSource; receiver: ReplacementBackupReceiver;
   }>;
@@ -29,6 +186,7 @@ export function createDispatchImportSession(packageId: string, adminPassword: st
   const { object, uuid, withSignal, checkAbort } = dispatchTransferChecks;
   uuid(packageId);
   let started = false;
+  let configuration: DispatchConfigurationPlan | null = null;
   let job: { jobId: string; jobToken: string } | null = null;
   const args = () => {
     if (!job) throw new Error('Dispatch preparation has not been confirmed by the server.');
@@ -77,6 +235,44 @@ export function createDispatchImportSession(packageId: string, adminPassword: st
           return validateDispatchImportDryRun(data);
         }, signal);
       },
+    },
+    async enterMaintenance(planHash, confirmation, adminPassword, signal) {
+      try {
+        checkAbort(signal);
+        const auth = args();
+        dispatchTransferChecks.hash(planHash);
+        if (confirmation !== ENTER_DISPATCH_MAINTENANCE) throw new Error('The maintenance confirmation does not match.');
+        configuration = null;
+        return await dispatchConfigurationResponse(() => {
+          const query = supabase.rpc('employee_import_dispatch_enter_maintenance', {
+            ...auth, p_plan_hash: planHash, p_confirmation: confirmation, p_admin_password: adminPassword,
+          });
+          return signal ? query.abortSignal(signal) : query;
+        }, validateDispatchMaintenanceReceipt, 'Maintenance entry outcome is uncertain; reconcile before retrying.', signal);
+      } finally { adminPassword = ''; }
+    },
+    async configurationPlan(signal) {
+      configuration = null;
+      const auth = args();
+      const plan = await dispatchConfigurationResponse(() => {
+        const query = supabase.rpc('get_employee_import_dispatch_configuration_plan', auth);
+        return signal ? query.abortSignal(signal) : query;
+      }, validateDispatchConfigurationPlan, 'Dispatch configuration plan was not confirmed.', signal);
+      checkAbort(signal);
+      configuration = plan;
+      return plan;
+    },
+    async applyConfiguration(planHash, signal) {
+      checkAbort(signal);
+      const auth = args();
+      dispatchTransferChecks.hash(planHash);
+      if (!configuration?.can_apply_configuration || configuration.plan_hash !== planHash) {
+        throw new Error('A matching conflict-free configuration plan must be explicitly confirmed first.');
+      }
+      return dispatchConfigurationResponse(() => {
+        const query = supabase.rpc('employee_import_dispatch_apply_configuration', { ...auth, p_plan_hash: planHash });
+        return signal ? query.abortSignal(signal) : query;
+      }, validateDispatchConfigurationReceipt, 'Dispatch configuration apply outcome is uncertain; reconcile before retrying.', signal);
     },
     async backup(signal) {
       const read = async (readSignal?: AbortSignal) => withSignal(async () => {

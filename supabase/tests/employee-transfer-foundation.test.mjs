@@ -25,6 +25,8 @@ const criticalMigrations = [
   '20261102000008_transfer_product_catalog.sql',
   '20261102000009_export_dispatch_submission_data.sql',
   '20261102000010_prepare_dispatch_submission_import.sql',
+  '20261102000011_guard_transfer_maintenance.sql',
+  '20261102000012_restore_dispatch_configuration.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -55,7 +57,7 @@ function resource({ exec = async () => {}, dump = async () => new Blob(), ready 
 const transferTables = [
   'employee_transfer_site', 'employee_transfer_jobs', 'employee_transfer_events',
   'employee_transfer_staging', 'employee_transfer_excluded_columns', 'employee_transfer_trigger_policy',
-  'employee_transfer_shared_backups',
+  'employee_transfer_shared_backups', 'employee_transfer_maintenance', 'employee_transfer_write_permits',
 ];
 const publicFunctions = [
   'employee_transfer_cancel(uuid,uuid)', 'get_employee_transfer_log(uuid,integer)',
@@ -94,6 +96,9 @@ const publicFunctions = [
   'get_employee_import_dispatch_backup_page(uuid,uuid,text,text,integer)',
   'employee_import_dispatch_backup_append(uuid,uuid,text,integer,text)',
   'employee_import_dispatch_backup_seal(uuid,uuid,text,text,integer)', 'get_employee_dispatch_saved_backup_chunk(uuid,uuid,integer)',
+  'employee_import_dispatch_enter_maintenance(uuid,uuid,text,text,text)',
+  'get_employee_transfer_maintenance(uuid)', 'employee_transfer_leave_maintenance(uuid,uuid,text,text)',
+  'get_employee_import_dispatch_configuration_plan(uuid,uuid)', 'employee_import_dispatch_apply_configuration(uuid,uuid,text)',
 ];
 
 async function checkCatalog(db) {

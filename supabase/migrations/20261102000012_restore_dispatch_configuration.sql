@@ -125,6 +125,24 @@ BEGIN
     ["dispatch_order_pools","guard_dispatch_pool_base"],
     ["dispatch_order_pools","guard_weighted_dispatch_pool_archive"],
     ["dispatch_order_pools","zz_employee_transfer_maintenance"]]'::jsonb THEN RAISE EXCEPTION 'Unreviewed dispatch configuration triggers.'; END IF;
+  IF EXISTS(
+    SELECT 1 FROM (VALUES
+      ('dispatch_group_orders','trigger_check_pool_health_on_deactivate','5ec5f2d879115b8b3669dfa30fb4dd5c343018cf34f8b0dd5a4e68f7a17641ea',
+        'CREATE TRIGGER trigger_check_pool_health_on_deactivate AFTER UPDATE ON public.dispatch_group_orders REFERENCING OLD TABLE AS old_dispatch_group_orders NEW TABLE AS new_dispatch_group_orders FOR EACH STATEMENT EXECUTE FUNCTION auto_check_pool_health()'),
+      ('dispatch_groups','create_dispatch_base_pool','c341897ffe59eaed4ae914ee120c448f4d4b701542a233d0967de413e3b254f8',
+        'CREATE TRIGGER create_dispatch_base_pool AFTER INSERT ON public.dispatch_groups FOR EACH ROW EXECUTE FUNCTION private.create_dispatch_base_pool()'),
+      ('dispatch_order_pools','guard_dispatch_pool_base','8897f7ca194e1d1458be6427bf8bf0911e1c6bef2fb23e3a942713d93e117a46',
+        'CREATE TRIGGER guard_dispatch_pool_base BEFORE DELETE OR UPDATE ON public.dispatch_order_pools FOR EACH ROW EXECUTE FUNCTION private.guard_dispatch_pool_base()'),
+      ('dispatch_order_pools','guard_weighted_dispatch_pool_archive','3e7f8b209c746a947a726225829345666066633e5d8ed1ae3c1267dccef3a6f5',
+        'CREATE TRIGGER guard_weighted_dispatch_pool_archive BEFORE UPDATE OF archived_at ON public.dispatch_order_pools FOR EACH ROW EXECUTE FUNCTION private.guard_weighted_dispatch_pool_archive()')
+    ) AS expected(table_name,trigger_name,function_hash,definition)
+    LEFT JOIN pg_class AS c ON c.relnamespace='public'::regnamespace AND c.relname=expected.table_name
+    LEFT JOIN pg_trigger AS t ON t.tgrelid=c.oid AND t.tgname=expected.trigger_name
+    LEFT JOIN pg_proc AS p ON p.oid=t.tgfoid
+    WHERE t.oid IS NULL OR t.tgenabled NOT IN ('O','A') OR NOT p.prosecdef OR pg_get_userbyid(p.proowner)<>'postgres'
+      OR pg_get_triggerdef(t.oid) IS DISTINCT FROM expected.definition
+      OR encode(extensions.digest(convert_to(pg_get_functiondef(p.oid),'UTF8'),'sha256'),'hex') IS DISTINCT FROM expected.function_hash
+  ) THEN RAISE EXCEPTION 'Unreviewed dispatch configuration trigger definitions.'; END IF;
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,jsonb_build_object('mode',t.tgenabled::text,'digest',private.employee_transfer_trigger_digest(t.oid)))
     INTO v_expected FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
     WHERE c.relnamespace='public'::regnamespace AND c.relname IN

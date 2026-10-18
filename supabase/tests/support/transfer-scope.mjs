@@ -205,6 +205,19 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
     ],
   },
   {
+    schema: 'private', name: 'employee_transfer_maintenance', mode: 'exclude',
+    reason: '目标持续维护屏障和原操作者/计划/指纹属于站点本地运行状态，不导出或从源站恢复；过期取消不自动释放，已写入必须核对完成后恢复业务。',
+    columns: [
+      { name: 'singleton', type: 'boolean', nullable: false },
+      { name: 'job_id', type: 'uuid', nullable: false },
+      { name: 'admin_id', type: 'uuid', nullable: false },
+      { name: 'plan_hash', type: 'text', nullable: false },
+      { name: 'target_hash', type: 'text', nullable: false },
+      { name: 'entered_at', type: 'timestamp with time zone', nullable: false },
+      { name: 'dirty', type: 'boolean', nullable: false },
+    ],
+  },
+  {
     schema: 'private', name: 'employee_transfer_shared_backups', mode: 'exclude',
     reason: '目标独立加密覆盖前备份及封存回执属于本地安全恢复资料，不迁入另一站或作为源任务成功证明；密文不随任务取消删除已封存文件。',
     columns: [
@@ -250,6 +263,15 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
       { name: 'trigger_name', type: 'text', nullable: false },
       { name: 'action', type: 'text', nullable: false },
       { name: 'reason', type: 'text', nullable: false },
+    ],
+  },
+  {
+    schema: 'private', name: 'employee_transfer_write_permits', mode: 'exclude',
+    reason: '目标当前事务的固定表迁移写授权，只由私有函数建立并清除；不迁移、不接受浏览器或源包授权，不能以可伪造设置旁路维护保护。',
+    columns: [
+      { name: 'transaction_id', type: 'xid8', nullable: false },
+      { name: 'job_id', type: 'uuid', nullable: false },
+      { name: 'table_names', type: 'text[]', nullable: false },
     ],
   },
   {

@@ -2462,6 +2462,34 @@ export interface Database {
         Args: { p_admin_session_token: string; p_backup_id: string; p_chunk_no: number };
         Returns: Record<string, unknown>;
       };
+      employee_import_dispatch_enter_maintenance: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_confirmation: string; p_admin_password: string };
+        Returns: { success: true; maintenance: true; dirty: false; repeated: boolean; full_site_complete: false };
+      };
+      get_employee_transfer_maintenance: {
+        Args: { p_admin_session_token: string };
+        Returns: { active: boolean; job_id: string | null; dirty: boolean; full_site_complete: false };
+      };
+      employee_transfer_leave_maintenance: {
+        Args: { p_admin_session_token: string; p_job_id: string; p_admin_password: string; p_confirmation: string };
+        Returns: { success: true; maintenance: false; full_site_complete: false };
+      };
+      get_employee_import_dispatch_configuration_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: {
+          scope: 'dispatch-configuration'; can_apply_configuration: boolean; full_site_complete: false; replacement_ready: false;
+          conflicts: ('group_mapping_collision' | 'pool_mapping_collision' | 'reserved_retirement_name')[];
+          group_map: Record<string, string>; pool_map: Record<string, string>; preparation_plan_hash: string; plan_hash: string;
+        };
+      };
+      employee_import_dispatch_apply_configuration: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: {
+          success: true; scope: 'dispatch-configuration'; configuration_applied: true; maintenance: true; dependencies_pending: true;
+          replacement_ready: false; full_site_complete: false; repeated: boolean;
+          group_map: Record<string, string>; pool_map: Record<string, string>;
+        };
+      };
       get_employee_import_shared_backup: {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: Record<string, unknown>;
