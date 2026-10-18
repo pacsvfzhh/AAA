@@ -1115,17 +1115,29 @@ for(const [label,extra]of [
 for(const nullableTarget of [false,true]) test(`source NULL employee owner is ${nullableTarget?'preserved by nullable target':'blocked by strict target without assigning a default'}`,()=>transaction(async()=>{
   await configured();
   const input=await transaction(async()=>{
-    await source.exec('ALTER TABLE public.users ALTER COLUMN created_by DROP NOT NULL');
+    await source.exec('ALTER TABLE public.users DROP CONSTRAINT users_created_by_required; ALTER TABLE public.users ALTER COLUMN created_by DROP NOT NULL');
     await source.query('UPDATE public.users SET created_by=NULL WHERE id=$1',[S.employee]);return capture('identity',dispatchPackage.packageId);
   },source);
-  if(nullableTarget)await db.exec('ALTER TABLE public.users ALTER COLUMN created_by DROP NOT NULL');
+  if(nullableTarget)await db.exec('ALTER TABLE public.users DROP CONSTRAINT users_created_by_required; ALTER TABLE public.users ALTER COLUMN created_by DROP NOT NULL');
   const plan=await identityStage(input);assert.equal(plan.can_restore,nullableTarget);
   if(nullableTarget){await identityRestore(plan);assert.equal(await scalar(db,'SELECT created_by FROM public.users WHERE id=$1',[S.employee]),null);}
   else {assert.ok(plan.conflicts.some(c=>c.reason==='unmapped_administrator'));await assert.rejects(identityBegin(plan),/unresolved conflicts/);}
   assert.equal(await permitCount(),0);
 }));
 
+test('nullable owner column with a retained required-owner CHECK blocks NULL source before inserts',()=>transaction(async()=>{
+  await configured();const input=await transaction(async()=>{
+    await source.exec('ALTER TABLE public.users DROP CONSTRAINT users_created_by_required; ALTER TABLE public.users ALTER COLUMN created_by DROP NOT NULL');
+    await source.query('UPDATE public.users SET created_by=NULL WHERE id=$1',[S.employee]);return capture('identity',dispatchPackage.packageId);
+  },source);
+  await db.exec('ALTER TABLE public.users ALTER COLUMN created_by DROP NOT NULL');
+  const keep=await businessState(),plan=await identityStage(input);assert.equal(plan.can_restore,false);
+  assert.ok(plan.conflicts.some(c=>c.reason==='unmapped_administrator'));await assert.rejects(identityBegin(plan),/unresolved conflicts/);
+  assert.deepEqual(await businessState(),keep);assert.equal(await permitCount(),0);
+}));
+
 test('same order UUID in target blocks identity plan without silently skipping historical content',()=>transaction(async()=>{
+  await db.query("INSERT INTO public.product_types(id,name,is_active) VALUES($1,'Identity conflict target fixture',false)",[NEW.product]);
   await configured();
   const disabled=await scalar(db,"SELECT private.employee_transfer_bypass_triggers(ARRAY['orders'])");
   await db.exec('ALTER TABLE public.orders DISABLE TRIGGER zz_employee_transfer_maintenance');
@@ -1172,7 +1184,7 @@ test('identity source changes with identical row counts invalidate final export 
     await assert.rejects(on(source,'employee_export_identity_verify',auth(task,sourceSession)),/source changed/);
     for(const name of ['get_employee_export_core','employee_export_dispatch_verify'])await assert.rejects(on(source,name,{...auth(task,sourceSession),...(name.endsWith('_core')?{p_employee_id:S.employee}:{})}),/protocol/);
   },source);
-  const log=await on(source,'get_employee_transfer_log',{p_admin_session_token:sourceSession});assert.equal(log.last_export_at,null);
+  const log=await transaction(()=>on(source,'get_employee_transfer_log',{p_admin_session_token:sourceSession}),source);assert.equal(log.last_export_at,null);
 }));
 
 test('committed real configuration receipt survives separate requests; cancellation never releases dirty maintenance', async () => {

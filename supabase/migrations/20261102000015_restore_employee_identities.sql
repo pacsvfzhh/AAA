@@ -78,7 +78,8 @@ BEGIN
     UNION ALL SELECT a.id,'administrator_username_conflict' FROM accounts AS a JOIN public.admins AS u ON u.username=a.body->>'username'
     UNION ALL SELECT a.id,'unmapped_administrator' FROM accounts AS a LEFT JOIN public.admins AS u ON u.id=(v_map->>(a.body->>'created_by'))::uuid
       WHERE (a.body->>'created_by' IS NOT NULL AND u.id IS NULL) OR (a.body->>'created_by' IS NULL AND
-        (SELECT attnotnull FROM pg_attribute WHERE attrelid='public.users'::regclass AND attname='created_by'))
+        ((SELECT attnotnull FROM pg_attribute WHERE attrelid='public.users'::regclass AND attname='created_by') OR EXISTS(
+          SELECT 1 FROM pg_constraint WHERE conrelid='public.users'::regclass AND conname='users_created_by_required' AND contype='c')))
     UNION ALL SELECT o.id,'order_id_conflict' FROM orders AS o JOIN public.orders AS target ON target.id=o.id
     UNION ALL SELECT v_product,'placeholder_product_active' WHERE EXISTS(SELECT 1 FROM public.product_types WHERE id=v_product AND is_active IS DISTINCT FROM false)
     UNION ALL SELECT m.id,'dispatch_employee_missing' FROM private.employee_transfer_dispatch_input(p_job.id,'dispatch_group_members') AS m
