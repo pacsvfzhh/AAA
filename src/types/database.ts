@@ -2490,6 +2490,30 @@ export interface Database {
           group_map: Record<string, string>; pool_map: Record<string, string>;
         };
       };
+      employee_import_dispatch_valid_begin: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: {
+          success: true; scope: 'dispatch-valid-data'; rows: number; total_rows: number; next_chunk: number; chunks: number;
+          verified: boolean; repeated: boolean; maintenance: true; dependencies_pending: true;
+          replacement_ready: false; full_site_complete: false;
+        };
+      };
+      employee_import_dispatch_valid_chunk: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_chunk_no: number };
+        Returns: {
+          success: true; scope: 'dispatch-valid-data'; rows: number; total_rows: number; next_chunk: number; chunks: number;
+          verified: boolean; repeated: boolean; maintenance: true; dependencies_pending: true;
+          replacement_ready: false; full_site_complete: false;
+        };
+      };
+      employee_import_dispatch_valid_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: {
+          success: true; scope: 'dispatch-valid-data'; rows: number; total_rows: number; next_chunk: number; chunks: number;
+          verified: boolean; repeated: boolean; maintenance: true; dependencies_pending: true;
+          replacement_ready: false; full_site_complete: false;
+        };
+      };
       get_employee_import_shared_backup: {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: Record<string, unknown>;

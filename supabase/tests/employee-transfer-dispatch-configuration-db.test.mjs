@@ -12,7 +12,7 @@ import { buildNewSite, NEW, OLD, PASSWORDS } from './support/transfer-fixtures.m
 // Local PGlite + real migrations/public anon RPCs + real saved/authenticated ciphertext.
 // No network, fabricated jobs/receipts, public apply substitutes, or trigger bypasses in the
 // success path. Privileged corruption below is confined to explicitly negative transactions.
-const migration = '20261102000012_restore_dispatch_configuration.sql';
+const migration = '20261102000013_restore_valid_submission_data.sql';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const SHARED = ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members',
   'admin_configs', 'system_configs', 'history_cleanup_config'];
@@ -291,6 +291,18 @@ before(async () => {
     VALUES($1,12345678901234567890.1234567890123456789,'來源已用依賴-é-𠮷',$2,6,ARRAY['來源','已用'])`, [S.valid, OLD.root]);
   await source.query(`INSERT INTO public.used_order_data(id,user_id,valid_order_data_id,order_id,created_at)
     VALUES($1,$2,$3,$4,'2024-05-06T07:08:09.123456Z')`, [S.used, S.employee, S.valid, S.order]);
+  await source.query(`INSERT INTO public.valid_order_data(id,product_value,transaction_id,is_active,created_by,
+      created_at,updated_at,usage_count,last_used_at,deactivated_at,deactivation_reason,priority,tags)
+    SELECT ('12000000-0000-4000-8000-'||lpad(to_hex(1000+n),12,'0'))::uuid,
+      98765432109876543210.9876543210987654321,'來源多批原文 '||n||E'\\n𠮷 é é',
+      CASE WHEN n%3=0 THEN NULL ELSE n%3=1 END,CASE WHEN n%2=0 THEN $1::uuid ELSE $2::uuid END,
+      '2022-03-04T05:06:07.123456Z'::timestamptz,'2023-04-05T06:07:08.654321Z'::timestamptz,
+      CASE WHEN n%2=0 THEN 2147483647 ELSE NULL END,
+      CASE WHEN n%2=0 THEN '2023-03-04T05:06:07.123456Z'::timestamptz ELSE NULL END,
+      CASE WHEN n%3=2 THEN '2023-03-04T05:06:07.123456Z'::timestamptz ELSE NULL END,
+      CASE WHEN n%3=2 THEN 'manual' ELSE NULL END,NULL,
+      CASE WHEN n%2=0 THEN ARRAY['來源',NULL,'標籤'] ELSE NULL END
+    FROM generate_series(1,402) AS x(n)`, [OLD.root,OLD.branch]);
   await db.query(`INSERT INTO public.valid_order_data(id,product_value,transaction_id,created_by)
     VALUES($1,98765432109876543210.9876543210987654321,'目標未使用原文',$2)`, [T.valid, NEW.root]);
   await source.exec(`UPDATE public.dispatch_config SET config_value=CASE config_key WHEN 'dispatch_interval_min' THEN '7'
@@ -329,8 +341,8 @@ before(async () => {
 }, { timeout: 180000 });
 after(async () => { mock.restoreAll(); await Promise.all([source?.close(), db?.close()]); });
 
-test('539 real migrations through 12 retain exactly 12 known old failures, never a fresh native PostgreSQL claim', () => {
-  assert.equal(replay.files.length, 539); assert.equal(replay.files.at(-1), migration);
+test('540 real migrations through 13 retain exactly 12 known old failures, never a fresh native PostgreSQL claim', () => {
+  assert.equal(replay.files.length, 540); assert.equal(replay.files.at(-1), migration);
   assert.equal(replay.failures.length, 12); assert.equal(replay.validation.matched.length, 12);
   assert.equal(replay.validation.freshDatabaseVerified, false);
   assert.ok(!replay.failures.some(f => f.file >= '20261102000011'));
@@ -718,6 +730,158 @@ test('failure AFTER real configuration writes rolls back target, receipt/event, 
   assert.deepEqual(await triggerState(), triggers);
   // A caller can still explicitly leave because no partial configuration write committed.
   assert.equal((await leave()).maintenance, false);
+}));
+
+const validBegin = (plan, task = job, extra = {}) => rpc('employee_import_dispatch_valid_begin', {
+  ...auth(task), p_plan_hash: plan.plan_hash, ...extra,
+});
+const validChunk = (no, task = job, extra = {}) => rpc('employee_import_dispatch_valid_chunk', { ...auth(task), p_chunk_no: no, ...extra });
+const validVerify = (task = job, extra = {}) => rpc('employee_import_dispatch_valid_verify', { ...auth(task), ...extra });
+async function configured() { await enter(); const plan = await configPlan(); await apply(plan); return plan; }
+const exceptValid = () => businessState(guarded.filter(key => key !== 'public.valid_order_data'));
+async function restoreValid(plan) {
+  const start = await validBegin(plan);
+  for (let no = 0; no < start.chunks; no++) await validChunk(no);
+  return validVerify();
+}
+
+for (const [name, parameters] of [
+  ['employee_import_dispatch_valid_begin', ['p_admin_session_token','p_job_token','p_plan_hash']],
+  ['employee_import_dispatch_valid_chunk', ['p_admin_session_token','p_job_token','p_chunk_no']],
+  ['employee_import_dispatch_valid_verify', ['p_admin_session_token','p_job_token']],
+]) test(`${name} has fixed authenticated super-admin RPC entry and no caller table/rows/maps`, () => transaction(async () => {
+  const fn = (await rows(db, `SELECT proargnames,prosecdef,proconfig,has_function_privilege('anon',oid,'EXECUTE') AS anon,
+    EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS everyone
+    FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=$1`, [name]))[0];
+  assert.deepEqual(fn.proargnames, parameters); assert.equal(fn.prosecdef,true); assert.equal(fn.anon,true); assert.equal(fn.everyone,false);
+  assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+}));
+
+test('real source valid data is restored across three explicit batches with exact original counters, precision, NULLs and administrator mapping', () => transaction(async () => {
+  const plan = await configured(), keep = await exceptValid(), triggers = await triggerState();
+  const start = await validBegin(plan);
+  assert.deepEqual(start,{success:true,scope:'dispatch-valid-data',rows:0,total_rows:403,next_chunk:0,chunks:3,
+    verified:false,repeated:false,maintenance:true,dependencies_pending:true,replacement_ready:false,full_site_complete:false});
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.valid_order_data'),0);
+  assert.deepEqual(await validBegin(plan),{...start,repeated:true});
+  let progress = 0;
+  for (let no = 0; no < start.chunks; no++) {
+    const ack = await validChunk(no); progress += no < 2 ? 200 : 3;
+    assert.equal(ack.rows,progress); assert.equal(ack.next_chunk,no+1); assert.equal(ack.verified,false);
+    assert.equal(ack.maintenance,true); assert.equal(ack.full_site_complete,false); assert.equal(await permitCount(),0);
+    assert.deepEqual(await validChunk(no),{...ack,repeated:true});
+  }
+  const verified = await validVerify(); assert.equal(verified.verified,true); assert.equal(verified.rows,403);
+  assert.deepEqual(await validVerify(),{...verified,repeated:true});
+  assert.deepEqual(await validChunk(0),{...verified,repeated:true});
+  assert.deepEqual(await validBegin(plan),{...verified,repeated:true});
+  const query = await scalar(db,"SELECT private.employee_transfer_dispatch_query('valid_order_data')");
+  assert.equal(await scalar(db,`WITH expected AS (SELECT id,body||jsonb_build_object('created_by',$2::jsonb->(body->>'created_by')) AS body
+    FROM private.employee_transfer_dispatch_input($1,'valid_order_data'))
+    SELECT count(*)::int FROM expected FULL JOIN (${query}) AS actual USING(id) WHERE actual.body IS DISTINCT FROM expected.body`,
+    [job.job_id,JSON.stringify(sharedReceipt.admin_map)]),0);
+  assert.equal(await scalar(db,'SELECT usage_count FROM public.valid_order_data WHERE id=$1',[S.valid]),7);
+  assert.equal(await scalar(db,'SELECT product_value::text FROM public.valid_order_data WHERE id=$1',[S.valid]),'12345678901234567890.1234567890123456789');
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.valid_order_data WHERE id=$1',[T.valid]),0);
+  assert.deepEqual(await exceptValid(),keep); assert.deepEqual(await triggerState(),triggers);
+  assert.deepEqual(await status(),active(job,true)); assert.equal(await permitCount(),0);
+  await assert.rejects(leave(),/committed writes/);
+  for (const name of ['users','orders','used_order_data','dispatch_group_members']) await blocked(`DELETE FROM public.${name} WHERE false`);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.used_order_data'),0);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.orders'),0);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.users WHERE id=$1',[S.employee]),0);
+}));
+
+test('valid-data begin/chunks/verify require actual committed configuration, matching plan and explicit cursor', () => transaction(async () => {
+  const before = await businessState();
+  await assert.rejects(validBegin(preparation),/Verified configuration/); await assert.rejects(validChunk(0),/Verified configuration/);
+  await enter(); const plan = await configPlan(); await assert.rejects(validBegin(plan),/Verified configuration/); await apply(plan);
+  const configuredState = await businessState();
+  for (const bad of [null,preparation.plan_hash,hash('wrong')]) await assert.rejects(validBegin({plan_hash:bad}),/confirmation/);
+  await assert.rejects(validChunk(0),/Begin a bound/); await assert.rejects(validVerify(),/incomplete/);
+  assert.deepEqual(await businessState(),configuredState); assert.notDeepEqual(configuredState,before);
+  await validBegin(plan); await assert.rejects(validVerify(),/incomplete/);
+  for (const bad of [null,-1,1,3,500001]) await assert.rejects(validChunk(bad),/cursor/);
+  await validChunk(0); await assert.rejects(validChunk(2),/cursor/); await assert.rejects(validVerify(),/incomplete/);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.valid_order_data'),200); assert.equal(await permitCount(),0);
+}));
+
+for (const [label, extra] of [
+  ['secondary',()=>({p_admin_session_token:branch})],['emergency',()=>({p_admin_session_token:emergency})],
+  ['other super-admin',()=>({p_admin_session_token:otherSession})],['unknown session',()=>({p_admin_session_token:randomUUID()})],
+  ['unknown job',()=>({p_job_token:randomUUID()})],['null job',()=>({p_job_token:null})],
+]) test(`all valid-data operations reject ${label} without writes`, () => transaction(async () => {
+  const plan = await configured(); await validBegin(plan); const keep = await businessState(), state = await taskState(job);
+  await assert.rejects(validBegin(plan,job,extra()),/Super administrator|invalid or expired/i);
+  await assert.rejects(validChunk(0,job,extra()),/Super administrator|invalid or expired/i);
+  await assert.rejects(validVerify(job,extra()),/Super administrator|invalid or expired/i);
+  assert.deepEqual(await businessState(),keep); assert.deepEqual(await taskState(job),state); assert.equal(await permitCount(),0);
+}));
+
+for (const [label, sql] of [
+  ['disabled manual marker','ALTER TABLE public.valid_order_data DISABLE TRIGGER mark_manual_valid_order_deactivation'],
+  ['disabled used counter','ALTER TABLE public.used_order_data DISABLE TRIGGER trigger_update_valid_data_usage'],
+  ['changed function','ALTER FUNCTION public.update_valid_data_usage_stats() SECURITY DEFINER'],
+  ['unknown valid trigger','CREATE TRIGGER valid_unknown BEFORE DELETE ON public.valid_order_data FOR EACH STATEMENT EXECUTE FUNCTION private.employee_transfer_guard_write()'],
+  ['unknown used trigger','CREATE TRIGGER valid_unknown BEFORE DELETE ON public.used_order_data FOR EACH STATEMENT EXECUTE FUNCTION private.employee_transfer_guard_write()'],
+]) test(`valid begin/chunk/verify refuse ${label} before changing target`, () => transaction(async () => {
+  const plan = await configured(); await validBegin(plan); await db.exec(sql); const keep = await businessState(), state = await taskState(job);
+  for (const action of [()=>validBegin(plan),()=>validChunk(0),()=>validVerify()]) await assert.rejects(action(),/Unreviewed submission/);
+  assert.deepEqual(await businessState(),keep); assert.deepEqual(await taskState(job),state); assert.equal(await permitCount(),0);
+}));
+
+test('changed target since sealed backup is refused, even after configuration committed', () => transaction(async () => {
+  const plan = await configured();
+  await db.exec('ALTER TABLE public.valid_order_data DISABLE TRIGGER zz_employee_transfer_maintenance');
+  await db.query("UPDATE public.valid_order_data SET transaction_id='negative-fixture-target-drift' WHERE id=$1",[T.valid]);
+  await db.exec('ALTER TABLE public.valid_order_data ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance');
+  const before = await businessState(); await assert.rejects(validBegin(plan),/target changed/);
+  assert.deepEqual(await businessState(),before); assert.equal(await permitCount(),0);
+}));
+
+for (const action of ['valid_restore_started','valid_restore_chunk','valid_restore_verified']) test(`failure at ${action} rolls back only that request, preserving prior progress and maintenance`, () => transaction(async () => {
+  const plan = await configured();
+  if (action !== 'valid_restore_started') await validBegin(plan);
+  if (action === 'valid_restore_verified') for (let no=0;no<3;no++) await validChunk(no);
+  const keep = await businessState(), state = await taskState(job);
+  await db.exec(`CREATE FUNCTION public.valid_event_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.action='${action}' THEN RAISE EXCEPTION 'valid fixture event failure'; END IF; RETURN NEW; END $$;
+    CREATE TRIGGER valid_event_failure BEFORE INSERT ON private.employee_transfer_events FOR EACH ROW EXECUTE FUNCTION public.valid_event_failure()`);
+  await assert.rejects(action==='valid_restore_started'?validBegin(plan):action==='valid_restore_chunk'?validChunk(0):validVerify(),/valid fixture event failure/);
+  assert.deepEqual(await businessState(),keep); assert.deepEqual(await taskState(job),state);
+  assert.deepEqual(await status(),active(job,true)); assert.equal(await permitCount(),0);
+}));
+
+test('repeat chunks and final verify reject a changed committed row rather than accepting an ID-only duplicate', () => transaction(async () => {
+  const plan = await configured(); await restoreValid(plan);
+  await db.exec('ALTER TABLE public.valid_order_data DISABLE TRIGGER zz_employee_transfer_maintenance');
+  await db.query('UPDATE public.valid_order_data SET usage_count=8 WHERE id=$1',[S.valid]);
+  await db.exec('ALTER TABLE public.valid_order_data ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance');
+  await assert.rejects(validChunk(0),/post-write verification/); await assert.rejects(validVerify(),/post-write verification/);
+  assert.equal(await permitCount(),0); assert.deepEqual(await status(),active(job,true));
+}));
+
+test('empty source valid data still requires one confirmed empty batch and removes target-only data', () => transaction(async () => {
+  await cancel(job);
+  const input = await transaction(async () => { await source.exec('DELETE FROM public.used_order_data; DELETE FROM public.valid_order_data'); return capture('dispatch',sharedPackage.packageId); },source);
+  const {task,dry} = await prepare('dispatch',input); await sealBackup('dispatch',task,dry); await enter(task,dry);
+  const plan = await configPlan(task); await apply(plan,task); const begin = await validBegin(plan,task);
+  assert.equal(begin.total_rows,0); assert.equal(begin.chunks,1); assert.equal(begin.verified,false);
+  await assert.rejects(validVerify(task),/incomplete/); assert.equal((await validChunk(0,task)).next_chunk,1);
+  assert.equal((await validVerify(task)).verified,true); assert.equal(await scalar(db,'SELECT count(*)::int FROM public.valid_order_data'),0);
+  assert.deepEqual(await status(),active(task,true)); assert.equal(await permitCount(),0);
+}));
+
+test('valid creator absent from actual same-package shared receipt blocks begin rather than trusting a client/default ID', () => transaction(async () => {
+  await cancel(job);
+  const input = await transaction(async () => {
+    await source.query("INSERT INTO public.admins(id,username,password_hash,role,is_active) VALUES($1,'valid-unmapped-source','local-only','secondary_admin',false)",[id(999)]);
+    await source.query('UPDATE public.valid_order_data SET created_by=$1 WHERE id=$2',[id(999),S.valid]); return capture('dispatch',sharedPackage.packageId);
+  },source);
+  const {task,dry} = await prepare('dispatch',input); await sealBackup('dispatch',task,dry); await enter(task,dry);
+  const plan = await configPlan(task); await apply(plan,task); const keep = await businessState();
+  await assert.rejects(validBegin(plan,task),/submission administrator mapping/);
+  assert.deepEqual(await businessState(),keep); assert.equal(await permitCount(),0);
 }));
 
 test('committed real configuration receipt survives separate requests; cancellation never releases dirty maintenance', async () => {

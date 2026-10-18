@@ -40,6 +40,20 @@ export interface DispatchConfigurationReceipt {
   readonly group_map: Readonly<Record<string, string>>;
   readonly pool_map: Readonly<Record<string, string>>;
 }
+export interface DispatchValidDataReceipt {
+  readonly success: true;
+  readonly scope: 'dispatch-valid-data';
+  readonly rows: number;
+  readonly total_rows: number;
+  readonly next_chunk: number;
+  readonly chunks: number;
+  readonly verified: boolean;
+  readonly repeated: boolean;
+  readonly maintenance: true;
+  readonly dependencies_pending: true;
+  readonly replacement_ready: false;
+  readonly full_site_complete: false;
+}
 export interface DispatchMaintenanceReceipt {
   readonly success: true; readonly maintenance: true; readonly dirty: false;
   readonly repeated: boolean; readonly full_site_complete: false;
@@ -110,6 +124,22 @@ export function validateDispatchConfigurationReceipt(value: unknown): DispatchCo
     dependencies_pending: true, replacement_ready: false, full_site_complete: false, repeated: record.repeated,
     group_map: dispatchUuidMap(record.group_map), pool_map: dispatchUuidMap(record.pool_map) });
 }
+export function validateDispatchValidDataReceipt(value: unknown): DispatchValidDataReceipt {
+  const record = dispatchTransferChecks.object(value, ['success', 'scope', 'rows', 'total_rows', 'next_chunk',
+    'chunks', 'verified', 'repeated', 'maintenance', 'dependencies_pending', 'replacement_ready', 'full_site_complete']);
+  if (record.success !== true || record.scope !== 'dispatch-valid-data' || typeof record.verified !== 'boolean'
+    || typeof record.repeated !== 'boolean' || record.maintenance !== true || record.dependencies_pending !== true
+    || record.replacement_ready !== false || record.full_site_complete !== false) invalidDispatchConfiguration();
+  const rows = dispatchTransferChecks.count(record.rows, 500000);
+  const totalRows = dispatchTransferChecks.count(record.total_rows, 500000);
+  const nextChunk = dispatchTransferChecks.count(record.next_chunk, 500001);
+  const chunks = dispatchTransferChecks.count(record.chunks, 500001);
+  if (chunks < 1 || rows > totalRows || nextChunk > chunks || (nextChunk === 0 && rows !== 0)
+    || (record.verified && (rows !== totalRows || nextChunk !== chunks))) invalidDispatchConfiguration();
+  return Object.freeze({ success: true, scope: 'dispatch-valid-data', rows, total_rows: totalRows,
+    next_chunk: nextChunk, chunks, verified: record.verified, repeated: record.repeated, maintenance: true,
+    dependencies_pending: true, replacement_ready: false, full_site_complete: false });
+}
 export function validateDispatchMaintenanceReceipt(value: unknown): DispatchMaintenanceReceipt {
   const record = dispatchTransferChecks.object(value, ['success', 'maintenance', 'dirty', 'repeated', 'full_site_complete']);
   if (record.success !== true || record.maintenance !== true || record.dirty !== false
@@ -176,6 +206,9 @@ export interface DispatchImportSession {
   enterMaintenance(planHash: string, confirmation: string, adminPassword: string, signal?: AbortSignal): Promise<DispatchMaintenanceReceipt>;
   configurationPlan(signal?: AbortSignal): Promise<DispatchConfigurationPlan>;
   applyConfiguration(planHash: string, signal?: AbortSignal): Promise<DispatchConfigurationReceipt>;
+  beginValidData(planHash: string, signal?: AbortSignal): Promise<DispatchValidDataReceipt>;
+  applyValidDataChunk(chunkNo: number, signal?: AbortSignal): Promise<DispatchValidDataReceipt>;
+  verifyValidData(signal?: AbortSignal): Promise<DispatchValidDataReceipt>;
   backup(signal?: AbortSignal): Promise<{
     descriptor: DispatchBackupDescriptor; source: DispatchExportSource; receiver: ReplacementBackupReceiver;
   }>;
@@ -273,6 +306,43 @@ export function createDispatchImportSession(packageId: string, adminPassword: st
         const query = supabase.rpc('employee_import_dispatch_apply_configuration', { ...auth, p_plan_hash: planHash });
         return signal ? query.abortSignal(signal) : query;
       }, validateDispatchConfigurationReceipt, 'Dispatch configuration apply outcome is uncertain; reconcile before retrying.', signal);
+    },
+    async beginValidData(planHash, signal) {
+      checkAbort(signal);
+      const auth = args();
+      dispatchTransferChecks.hash(planHash);
+      if (!configuration?.can_apply_configuration || configuration.plan_hash !== planHash) {
+        throw new Error('A matching conflict-free configuration plan must be explicitly confirmed first.');
+      }
+      return dispatchConfigurationResponse(() => {
+        const query = supabase.rpc('employee_import_dispatch_valid_begin', { ...auth, p_plan_hash: planHash });
+        return signal ? query.abortSignal(signal) : query;
+      }, validateDispatchValidDataReceipt, 'Dispatch valid data begin outcome is uncertain; reconcile before retrying.', signal);
+    },
+    async applyValidDataChunk(chunkNo, signal) {
+      checkAbort(signal);
+      const auth = args();
+      dispatchTransferChecks.count(chunkNo, 500000);
+      return dispatchConfigurationResponse(() => {
+        const query = supabase.rpc('employee_import_dispatch_valid_chunk', { ...auth, p_chunk_no: chunkNo });
+        return signal ? query.abortSignal(signal) : query;
+      }, value => {
+        const receipt = validateDispatchValidDataReceipt(value);
+        if (receipt.next_chunk < chunkNo + 1) invalidDispatchConfiguration();
+        return receipt;
+      }, 'Dispatch valid data chunk outcome is uncertain; reconcile before retrying.', signal);
+    },
+    async verifyValidData(signal) {
+      checkAbort(signal);
+      const auth = args();
+      return dispatchConfigurationResponse(() => {
+        const query = supabase.rpc('employee_import_dispatch_valid_verify', auth);
+        return signal ? query.abortSignal(signal) : query;
+      }, value => {
+        const receipt = validateDispatchValidDataReceipt(value);
+        if (!receipt.verified) invalidDispatchConfiguration();
+        return receipt;
+      }, 'Dispatch valid data verification was not confirmed.', signal);
     },
     async backup(signal) {
       const read = async (readSignal?: AbortSignal) => withSignal(async () => {

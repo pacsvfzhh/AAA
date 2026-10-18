@@ -27,6 +27,7 @@ const criticalMigrations = [
   '20261102000010_prepare_dispatch_submission_import.sql',
   '20261102000011_guard_transfer_maintenance.sql',
   '20261102000012_restore_dispatch_configuration.sql',
+  '20261102000013_restore_valid_submission_data.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -99,6 +100,8 @@ const publicFunctions = [
   'employee_import_dispatch_enter_maintenance(uuid,uuid,text,text,text)',
   'get_employee_transfer_maintenance(uuid)', 'employee_transfer_leave_maintenance(uuid,uuid,text,text)',
   'get_employee_import_dispatch_configuration_plan(uuid,uuid)', 'employee_import_dispatch_apply_configuration(uuid,uuid,text)',
+  'employee_import_dispatch_valid_begin(uuid,uuid,text)', 'employee_import_dispatch_valid_chunk(uuid,uuid,integer)',
+  'employee_import_dispatch_valid_verify(uuid,uuid)',
 ];
 
 async function checkCatalog(db) {

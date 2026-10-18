@@ -28,6 +28,11 @@ const plan = () => ({ scope: 'dispatch-configuration', can_apply_configuration: 
 const applied = () => ({ success: true, scope: 'dispatch-configuration', configuration_applied: true, maintenance: true,
   dependencies_pending: true, replacement_ready: false, full_site_complete: false, repeated: false,
   group_map: { [JOB]: OTHER }, pool_map: { [TOKEN]: SITE } });
+const validData = () => ({ success: true, scope: 'dispatch-valid-data', rows: 0, total_rows: 2, next_chunk: 0,
+  chunks: 2, verified: false, repeated: false, maintenance: true, dependencies_pending: true,
+  replacement_ready: false, full_site_complete: false });
+const validChunk = () => ({ ...validData(), rows: 1, next_chunk: 1 });
+const validVerified = () => ({ ...validData(), rows: 2, next_chunk: 2, verified: true });
 const entered = () => ({ success: true, maintenance: true, dirty: false, repeated: false, full_site_complete: false });
 const inactive = () => ({ active: false, job_id: null, dirty: false, full_site_complete: false });
 const active = dirty => ({ active: true, job_id: JOB, dirty, full_site_complete: false });
@@ -112,6 +117,12 @@ describe('dispatch configuration client: real bundled API with transport-only st
       async setup() { const s = await begin(); return signal => s.configurationPlan(signal); } },
     apply: { response: applied, name: 'employee_import_dispatch_apply_configuration',
       async setup() { const s = await planned(); return signal => s.applyConfiguration(PLAN, signal); } },
+    validBegin: { response: validData, name: 'employee_import_dispatch_valid_begin',
+      async setup() { const s = await planned(); return signal => s.beginValidData(PLAN, signal); } },
+    validChunk: { response: validChunk, name: 'employee_import_dispatch_valid_chunk',
+      async setup() { const s = await begin(); return signal => s.applyValidDataChunk(0, signal); } },
+    validVerify: { response: validVerified, name: 'employee_import_dispatch_valid_verify',
+      async setup() { const s = await begin(); return signal => s.verifyValidData(signal); } },
     status: { response: inactive, name: 'get_employee_transfer_maintenance',
       async setup() { return signal => api.getTransferMaintenance(signal); } },
     leave: { response: left, name: 'employee_transfer_leave_maintenance',
@@ -126,7 +137,8 @@ describe('dispatch configuration client: real bundled API with transport-only st
   });
   test('factory is lazy, captures one financial token, exposes only explicit operations', () => {
     const s = create(); assert.equal(s.identity(), null); assert.equal(h.calls.length, 0); assert.equal(h.sessionReads, 1);
-    assert.deepEqual(Object.keys(s).sort(), ['identity', 'target', 'backup', 'cancel', 'enterMaintenance', 'configurationPlan', 'applyConfiguration'].sort());
+    assert.deepEqual(Object.keys(s).sort(), ['identity', 'target', 'backup', 'cancel', 'enterMaintenance', 'configurationPlan',
+      'applyConfiguration', 'beginValidData', 'applyValidDataChunk', 'verifyValidData'].sort());
     assert.deepEqual(Object.keys(s.target).sort(), ['begin', 'dryRun', 'stage']);
   });
   test('both new password parameters have unconditional finally cleanup (not a memory-erasure claim)', () => {
@@ -136,7 +148,8 @@ describe('dispatch configuration client: real bundled API with transport-only st
   });
   test('every new session operation rejects before confirmed begin, without RPC', async () => {
     const s = create();
-    for (const op of [() => s.enterMaintenance(PREPARATION, ENTER, PASSWORD), () => s.configurationPlan(), () => s.applyConfiguration(PLAN)]) {
+    for (const op of [() => s.enterMaintenance(PREPARATION, ENTER, PASSWORD), () => s.configurationPlan(),
+      () => s.applyConfiguration(PLAN), () => s.beginValidData(PLAN), () => s.applyValidDataChunk(0), () => s.verifyValidData()]) {
       await assert.rejects(op(), /not been confirmed/);
     }
     assert.equal(h.calls.length, 0);
@@ -144,7 +157,10 @@ describe('dispatch configuration client: real bundled API with transport-only st
   test('failed begin cannot unlock configuration or be automatically retried', async () => {
     const s = create(); h.respond({ success: false }); await assert.rejects(s.target.begin(catalog()));
     await assert.rejects(s.target.begin(catalog()), /cannot be retried/);
-    await assert.rejects(s.configurationPlan(), /not been confirmed/); assert.equal(h.calls.length, 1);
+    for (const op of [() => s.configurationPlan(), () => s.beginValidData(PLAN), () => s.applyValidDataChunk(0), () => s.verifyValidData()]) {
+      await assert.rejects(op(), /not been confirmed/);
+    }
+    assert.equal(h.calls.length, 1);
   });
   test('explicit begin -> enter -> plan -> apply has exact tokens/parameters and never auto-leaves', async () => {
     const signal = new AbortController().signal, s = await begin();
@@ -165,6 +181,88 @@ describe('dispatch configuration client: real bundled API with transport-only st
     h.respond({ ...applied(), repeated: true }); assert.equal((await s.applyConfiguration(PLAN)).repeated, true);
     assert.equal(h.calls.length, 5, 'only an explicit second apply is sent');
   });
+  test('explicit begin -> enter -> plan -> configuration -> valid begin -> chunks -> verify never advances itself', async () => {
+    const signal = new AbortController().signal, s = await begin(); h.session = OTHER;
+    h.respond(entered()); await s.enterMaintenance(PREPARATION, ENTER, PASSWORD, signal);
+    h.respond(plan()); await s.configurationPlan(signal);
+    h.respond(applied()); await s.applyConfiguration(PLAN, signal); assert.equal(h.calls.length, 4);
+    h.respond(validData()); const initial = await s.beginValidData(PLAN, signal);
+    assert.deepEqual(initial, validData()); assert.equal(initial.verified, false);
+    expectCall(h, operations.validBegin.name, { ...auth(), p_plan_hash: PLAN }, signal);
+    await nextTurn(); assert.equal(h.calls.length, 5, 'begin does not apply any chunk');
+    h.respond(validChunk()); assert.deepEqual(await s.applyValidDataChunk(0, signal), validChunk());
+    expectCall(h, operations.validChunk.name, { ...auth(), p_chunk_no: 0 }, signal);
+    await nextTurn(); assert.equal(h.calls.length, 6, 'one chunk does not apply the next');
+    const complete = { ...validVerified(), verified: false };
+    h.respond(complete); assert.deepEqual(await s.applyValidDataChunk(1, signal), complete);
+    expectCall(h, operations.validChunk.name, { ...auth(), p_chunk_no: 1 }, signal);
+    await nextTurn(); assert.equal(h.calls.length, 7, 'all rows written does not mean verified or auto-verify');
+    h.respond(validVerified()); assert.deepEqual(await s.verifyValidData(signal), validVerified());
+    expectCall(h, operations.validVerify.name, auth(), signal);
+    await nextTurn(); assert.equal(h.calls.length, 8, 'verification never closes the task or leaves maintenance');
+    assert.equal(h.sessionReads, 1);
+    assert.deepEqual(h.calls.map(call => call.name), ['employee_import_dispatch_begin', operations.enter.name,
+      operations.plan.name, operations.apply.name, operations.validBegin.name, operations.validChunk.name,
+      operations.validChunk.name, operations.validVerify.name]);
+  });
+  test('empty valid data still needs an explicit chunk and verification', async () => {
+    const s = await planned(), empty = { ...validData(), total_rows: 0, chunks: 1 };
+    h.respond(empty); assert.deepEqual(await s.beginValidData(PLAN), empty);
+    const written = { ...empty, next_chunk: 1 };
+    h.respond(written); assert.equal((await s.applyValidDataChunk(0)).verified, false);
+    h.respond({ ...written, verified: true }); assert.equal((await s.verifyValidData()).verified, true);
+    assert.deepEqual(h.calls.slice(2).map(call => call.name), [operations.validBegin.name, operations.validChunk.name, operations.validVerify.name]);
+  });
+  test('valid begin uses the cached matching plan without implicitly applying configuration', async () => {
+    const s = await planned(); h.respond(validData()); assert.deepEqual(await s.beginValidData(PLAN), validData());
+    assert.equal(h.calls.length, 3); assert.equal(h.calls.at(-1).name, operations.validBegin.name);
+  });
+  test('a pending target begin cannot unlock any valid-data RPC', async () => {
+    const s = create(), wait = deferred(); h.pending.push({ wait: wait.promise });
+    const task = s.target.begin(catalog()); await nextTurn();
+    for (const op of [() => s.beginValidData(PLAN), () => s.applyValidDataChunk(0), () => s.verifyValidData()]) {
+      await assert.rejects(op(), /not been confirmed/);
+    }
+    assert.equal(h.calls.length, 1); wait.resolve({ data: started(), error: null }); await task;
+  });
+  test('entering maintenance invalidates the cached valid begin gate even if entry fails', async () => {
+    const s = await planned(); h.pending.push({ error: { message: PASSWORD } });
+    await assert.rejects(s.enterMaintenance(PREPARATION, ENTER, PASSWORD));
+    await assert.rejects(s.beginValidData(PLAN), /conflict-free/); assert.equal(h.calls.length, 3);
+  });
+  test('invalid chunk numbers are rejected locally, including nonintegers and both out-of-range bounds', async () => {
+    const s = await begin(), count = h.calls.length;
+    for (const value of [null, undefined, {}, [], true, '', '0', -1, 0.5, NaN, Infinity, -Infinity, 500001,
+      Number.MAX_SAFE_INTEGER + 1, 0n, Symbol('chunk')]) await assert.rejects(s.applyValidDataChunk(value));
+    assert.equal(h.calls.length, count);
+  });
+  for (const chunkNo of [0, 500000]) test(`valid chunk input accepts inclusive boundary ${chunkNo}`, async () => {
+    const s = await begin(), raw = { ...validData(), rows: 500000, total_rows: 500000,
+      next_chunk: chunkNo + 1, chunks: 500001 };
+    h.respond(raw); assert.deepEqual(await s.applyValidDataChunk(chunkNo), raw);
+    expectCall(h, operations.validChunk.name, { ...auth(), p_chunk_no: chunkNo }); assert.equal(h.calls.length, 2);
+  });
+  for (const chunkNo of [0, 1, 500000]) test(`chunk ${chunkNo} cannot report success without confirming that chunk`, async () => {
+    const s = await begin(), count = h.calls.length;
+    h.respond({ ...validData(), next_chunk: chunkNo, chunks: 500001 });
+    let confirmed = 0;
+    await assert.rejects(s.applyValidDataChunk(chunkNo).then(() => { confirmed++; }), /uncertain/);
+    await nextTurn(); assert.equal(confirmed, 0); assert.equal(h.calls.length, count + 1);
+  });
+  test('chunk may confirm a later next_chunk for a repeated already-applied chunk, but never auto-retries', async () => {
+    const s = await planned(), raw = { ...validVerified(), repeated: true };
+    h.respond(raw); assert.deepEqual(await s.beginValidData(PLAN), raw);
+    h.respond(raw); assert.deepEqual(await s.applyValidDataChunk(0), raw);
+    h.respond(raw); assert.deepEqual(await s.verifyValidData(), raw);
+    await nextTurn(); assert.equal(h.calls.length, 5);
+  });
+  for (const raw of [validData(), validChunk(), { ...validVerified(), verified: false }]) {
+    test(`verification rejects unverified success at next_chunk=${raw.next_chunk}, even if counts are complete`, async () => {
+      const s = await begin(), count = h.calls.length; h.respond(raw); let confirmed = 0;
+      await assert.rejects(s.verifyValidData().then(() => { confirmed++; }), /not confirmed/);
+      await nextTurn(); assert.equal(confirmed, 0); assert.equal(h.calls.length, count + 1);
+    });
+  }
   test('independent status/leave read the current financial token every time, without login/job token/cookies', async () => {
     const signal = new AbortController().signal;
     for (const token of [SESSION, OTHER]) {
@@ -194,22 +292,30 @@ describe('dispatch configuration client: real bundled API with transport-only st
     const s = await begin(), count = h.calls.length;
     for (const value of [null, {}, 7, '', 'a'.repeat(63), 'A'.repeat(64), 'g'.repeat(64), `${PLAN}\n`]) {
       await assert.rejects(s.enterMaintenance(value, ENTER, PASSWORD)); await assert.rejects(s.applyConfiguration(value));
+      await assert.rejects(s.beginValidData(value));
     }
     for (const value of [null, {}, '', 'not-a-uuid', `${JOB}\n`, JOB.toUpperCase().replace('3', 'G')]) {
       await assert.rejects(api.leaveTransferMaintenance(value, PASSWORD, LEAVE));
     }
-    await assert.rejects(s.applyConfiguration(PLAN), /conflict-free/); assert.equal(h.calls.length, count);
+    await assert.rejects(s.applyConfiguration(PLAN), /conflict-free/);
+    await assert.rejects(s.beginValidData(PLAN), /conflict-free/); assert.equal(h.calls.length, count);
   });
   for (const conflict of CONFLICTS) test(`false plan gate: ${conflict} is safe to display but cannot apply`, async () => {
     const s = await begin(); h.respond({ ...plan(), conflicts: [conflict, conflict], can_apply_configuration: false });
     const result = await s.configurationPlan(); assert.equal(result.can_apply_configuration, false);
     assert.deepEqual(result.conflicts, [conflict, conflict]);
-    await assert.rejects(s.applyConfiguration(PLAN), /conflict-free/); assert.equal(h.calls.length, 2);
+    await assert.rejects(s.applyConfiguration(PLAN), /conflict-free/);
+    await assert.rejects(s.beginValidData(PLAN), /conflict-free/); assert.equal(h.calls.length, 2);
   });
   test('apply requires matching plan; unsuccessful replan clears the previous local gate', async () => {
     const s = await planned(); await assert.rejects(s.applyConfiguration(PREPARATION), /matching/);
+    await assert.rejects(s.beginValidData(PREPARATION), /matching/);
+    for (const value of [null, {}, 7, '', 'a'.repeat(63), 'A'.repeat(64), 'g'.repeat(64), `${PLAN}\n`]) {
+      await assert.rejects(s.beginValidData(value));
+    }
     h.respond({ ...plan(), full_site_complete: true }); await assert.rejects(s.configurationPlan());
-    await assert.rejects(s.applyConfiguration(PLAN), /conflict-free/); assert.equal(h.calls.length, 3);
+    await assert.rejects(s.applyConfiguration(PLAN), /conflict-free/);
+    await assert.rejects(s.beginValidData(PLAN), /conflict-free/); assert.equal(h.calls.length, 3);
   });
   test('returned plans/maps/conflicts are independent frozen copies, not mutable backend references', async () => {
     const s = await begin(), raw = plan(); h.respond(raw); const result = await s.configurationPlan();
@@ -222,6 +328,8 @@ describe('dispatch configuration client: real bundled API with transport-only st
     assert.deepEqual(result, plan());
     h.respond(applied()); assert.deepEqual(await s.applyConfiguration(PLAN), applied());
     expectCall(h, operations.apply.name, { ...auth(), p_plan_hash: PLAN });
+    h.respond(validData()); assert.deepEqual(await s.beginValidData(PLAN), validData());
+    expectCall(h, operations.validBegin.name, { ...auth(), p_plan_hash: PLAN });
   });
   for (const [label, op] of Object.entries(operations)) {
     test(`${label} returns a frozen defensive copy even for frozen server data`, async () => {
@@ -250,6 +358,8 @@ describe('dispatch configuration client: real bundled API with transport-only st
     for (const [mode, reply] of [
       ['wrong password', { data: { success: false, error: PASSWORD, locked: false } }],
       ['backend error', { error: { message: PASSWORD, details: SESSION } }],
+      ['permission denied', { error: { code: '42501', message: `Permission denied: ${PASSWORD}`, details: SESSION } }],
+      ['expired session', { error: { message: `Session expired: ${SESSION}`, details: PASSWORD } }],
       ['network rejection', { reject: new TypeError(PASSWORD) }],
       ['synchronous RPC throw', { rpcThrow: new Error(PASSWORD) }],
       ['abort attachment throw', { abortThrow: new Error(PASSWORD) }],
@@ -278,19 +388,90 @@ describe('dispatch configuration client: real bundled API with transport-only st
     for (const [key, value] of Object.entries(valid)) {
       if (typeof value !== 'boolean' && key !== 'scope') continue;
       const invalidValues = typeof value === 'boolean' ? [null, 0, 'false', !value] : ['', 'dispatch-submission', null];
-      // repeated is a boolean, not a fixed gate; active/dirty combinations are tested separately.
-      for (const bad of invalidValues.filter(bad => !(['repeated', 'active', 'dirty'].includes(key) && typeof bad === 'boolean'))) {
+      // repeated/verified are booleans, not fixed gates; verification and active/dirty combinations are tested separately.
+      for (const bad of invalidValues.filter(bad => !(['repeated', 'verified', 'active', 'dirty'].includes(key) && typeof bad === 'boolean'))) {
         test(`${label}: rejects invalid ${key}=${String(bad)}`, async () => {
           const run = await op.setup(); h.respond({ ...op.response(), [key]: bad }); await assert.rejects(run());
         });
       }
     }
   }
+  for (const label of ['validBegin', 'validChunk', 'validVerify']) {
+    const op = operations[label];
+    for (const raw of [
+      { ...validVerified(), rows: 0, total_rows: 0, next_chunk: 1, chunks: 1 },
+      { ...validVerified(), rows: 500000, total_rows: 500000, next_chunk: 500001, chunks: 500001 },
+    ]) test(`${label}: accepts inclusive response bounds rows=${raw.rows}, chunks=${raw.chunks}`, async () => {
+      const run = await op.setup(); h.respond(raw); assert.deepEqual(await run(), raw);
+    });
+    for (const [key, max] of [['rows', 500000], ['total_rows', 500000], ['next_chunk', 500001], ['chunks', 500001]]) {
+      test(`${label}: ${key} rejects nonintegers, wrong types and values outside its bounded range`, async () => {
+        const run = await op.setup(), count = h.calls.length;
+        const values = [null, undefined, true, '0', {}, [], 0.5, -1, NaN, Infinity, -Infinity, max + 1,
+          Number.MAX_SAFE_INTEGER + 1, 0n, Symbol('count')];
+        if (key === 'chunks') values.push(0);
+        for (const bad of values) {
+          h.respond({ ...validVerified(), [key]: bad }); await assert.rejects(run());
+        }
+        assert.equal(h.calls.length, count + values.length, 'one explicit RPC per malformed receipt, no retries');
+      });
+    }
+    for (const [name, mutation] of [
+      ['rows greater than total_rows', { rows: 3 }],
+      ['next_chunk greater than chunks', { next_chunk: 3 }],
+      ['nonzero rows before first chunk', { rows: 1, next_chunk: 0, verified: false }],
+      ['verified before all rows', { rows: 1 }],
+      ['verified before all chunks', { next_chunk: 1 }],
+    ]) test(`${label}: rejects false success with ${name}`, async () => {
+      const run = await op.setup(), count = h.calls.length; h.respond({ ...validVerified(), ...mutation });
+      await assert.rejects(run()); await nextTurn(); assert.equal(h.calls.length, count + 1);
+    });
+    for (const key of Object.keys(validData())) {
+      for (const mutation of ['missing', 'getter', 'nonenumerable']) {
+        test(`${label}: validates own enumerable data descriptor for ${key} (${mutation})`, async () => {
+          const run = await op.setup(), raw = op.response(); let reads = 0;
+          if (mutation === 'missing') delete raw[key];
+          if (mutation === 'getter') Object.defineProperty(raw, key, { enumerable: true,
+            get() { reads++; throw new Error(PASSWORD); } });
+          if (mutation === 'nonenumerable') Object.defineProperty(raw, key, { enumerable: false });
+          h.respond(raw); await assert.rejects(run()); assert.equal(reads, 0);
+        });
+      }
+    }
+    test(`${label}: returned receipt is independent of later backend mutations`, async () => {
+      const run = await op.setup(), raw = op.response(), expected = { ...raw }; h.respond(raw); const result = await run();
+      raw.rows = 500001; raw.maintenance = false; raw.full_site_complete = true;
+      assert.deepEqual(result, expected); assert.ok(Object.isFrozen(result));
+      assert.throws(() => { result.next_chunk = 500001; }, TypeError);
+    });
+    test(`${label}: accepts null-prototype data without keeping its object identity`, async () => {
+      const run = await op.setup(), raw = Object.assign(Object.create(null), op.response()); h.respond(raw);
+      const result = await run(); assert.deepEqual(result, op.response()); assert.notStrictEqual(result, raw);
+    });
+    test(`${label}: descriptor snapshots never read response proxy properties`, async () => {
+      const run = await op.setup(); let gets = 0;
+      h.respond(new Proxy(op.response(), { get() { gets++; throw new Error(PASSWORD); } }));
+      assert.deepEqual(await run(), op.response()); assert.equal(gets, 0);
+    });
+    test(`${label}: abort during descriptor inspection cannot return success or follow-up`, async () => {
+      const run = await op.setup(), count = h.calls.length, controller = new AbortController();
+      h.respond(new Proxy(op.response(), { getOwnPropertyDescriptor(target, key) {
+        if (key === 'full_site_complete') controller.abort(); return Reflect.getOwnPropertyDescriptor(target, key);
+      } }));
+      await assert.rejects(run(controller.signal), { name: 'AbortError' });
+      await nextTurn(); assert.equal(h.calls.length, count + 1);
+    });
+    for (const trap of ['ownKeys', 'getOwnPropertyDescriptor']) test(`${label}: sanitizes a throwing ${trap} proxy`, async () => {
+      const run = await op.setup(); h.respond(new Proxy(op.response(), { [trap]() { throw new Error(`${PASSWORD} ${SESSION}`); } }));
+      await assert.rejects(run(), error => { assert.doesNotMatch(error.message, new RegExp(`${PASSWORD}|${SESSION}`)); return true; });
+    });
+  }
   test('late aborted plan never installs the local apply gate', async () => {
     const s = await begin(), controller = new AbortController(), wait = deferred(); h.pending.push({ wait: wait.promise });
     const task = s.configurationPlan(controller.signal); await nextTurn(); const rejection = assert.rejects(task, { name: 'AbortError' });
     controller.abort(); await rejection; wait.resolve({ data: plan(), error: null }); await nextTurn();
-    await assert.rejects(s.applyConfiguration(PLAN), /conflict-free/); assert.equal(h.calls.length, 2);
+    await assert.rejects(s.applyConfiguration(PLAN), /conflict-free/);
+    await assert.rejects(s.beginValidData(PLAN), /conflict-free/); assert.equal(h.calls.length, 2);
   });
   test('abort fired during response descriptor inspection cannot return success or install a plan', async () => {
     const s = await begin(), controller = new AbortController();
@@ -388,14 +569,16 @@ async function realTransport(reply, run) {
   }
 }
 for (const name of ['employee_import_dispatch_enter_maintenance', 'get_employee_transfer_maintenance',
-  'employee_transfer_leave_maintenance', 'get_employee_import_dispatch_configuration_plan', 'employee_import_dispatch_apply_configuration']) {
+  'employee_transfer_leave_maintenance', 'get_employee_import_dispatch_configuration_plan', 'employee_import_dispatch_apply_configuration',
+  'employee_import_dispatch_valid_begin', 'employee_import_dispatch_valid_chunk', 'employee_import_dispatch_valid_verify']) {
   test(`real transport: ${name} receives exactly 120s timeout`, () => realTransport(async () => new Response('{}'), async (fetch, timers, network) => {
     await fetch(`https://local.invalid/rest/v1/rpc/${name}`, { method: 'POST' });
     assert.deepEqual(timers.map(timer => timer.delay), [120000]); assert.equal(network.mock.callCount(), 1);
   }));
 }
 for (const name of ['employee_import_dispatch_enter_maintenance', 'employee_transfer_leave_maintenance',
-  'get_employee_import_dispatch_configuration_plan', 'employee_import_dispatch_apply_configuration']) {
+  'get_employee_import_dispatch_configuration_plan', 'employee_import_dispatch_apply_configuration',
+  'employee_import_dispatch_valid_begin', 'employee_import_dispatch_valid_chunk', 'employee_import_dispatch_valid_verify']) {
   test(`real transport: ${name} never retries a 503`, () => realTransport(async () => new Response('{}', { status: 503 }), async (fetch, timers, network) => {
     assert.equal((await fetch(`https://local.invalid/rest/v1/rpc/${name}`, { method: 'POST' })).status, 503);
     assert.equal(network.mock.callCount(), 1); assert.deepEqual(timers.map(timer => timer.delay), [120000]);
