@@ -76,7 +76,9 @@ BEGIN
     UNION ALL SELECT a.id,'username_requires_archive' FROM accounts AS a JOIN public.users AS u ON u.username=a.body->>'username' AND u.id<>a.id
     UNION ALL SELECT a.id,'employee_number_conflict' FROM accounts AS a JOIN public.users AS u ON u.employee_id=a.body->>'employee_id' AND u.id<>a.id
     UNION ALL SELECT a.id,'administrator_username_conflict' FROM accounts AS a JOIN public.admins AS u ON u.username=a.body->>'username'
-    UNION ALL SELECT a.id,'unmapped_administrator' FROM accounts AS a LEFT JOIN public.admins AS u ON u.id=(v_map->>(a.body->>'created_by'))::uuid WHERE u.id IS NULL
+    UNION ALL SELECT a.id,'unmapped_administrator' FROM accounts AS a LEFT JOIN public.admins AS u ON u.id=(v_map->>(a.body->>'created_by'))::uuid
+      WHERE (a.body->>'created_by' IS NOT NULL AND u.id IS NULL) OR (a.body->>'created_by' IS NULL AND
+        (SELECT attnotnull FROM pg_attribute WHERE attrelid='public.users'::regclass AND attname='created_by'))
     UNION ALL SELECT o.id,'order_id_conflict' FROM orders AS o JOIN public.orders AS target ON target.id=o.id
     UNION ALL SELECT v_product,'placeholder_product_active' WHERE EXISTS(SELECT 1 FROM public.product_types WHERE id=v_product AND is_active IS DISTINCT FROM false)
     UNION ALL SELECT m.id,'dispatch_employee_missing' FROM private.employee_transfer_dispatch_input(p_job.id,'dispatch_group_members') AS m
@@ -222,7 +224,7 @@ CREATE FUNCTION public.employee_import_identity_chunk(p_admin_session_token uuid
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' SET lock_timeout='2s' AS $$
 DECLARE v_job private.employee_transfer_jobs%ROWTYPE; v_map jsonb; v_state jsonb; v_rows jsonb; v_count integer;
-  v_next integer; v_repeated boolean; v_row jsonb; v_disabled jsonb; v_previous text; v_target text;
+  v_next integer; v_repeated boolean; v_row jsonb; v_disabled jsonb; v_previous text;
 BEGIN
   PERFORM private.employee_transfer_lock_maintenance_tables();
   v_job:=private.employee_transfer_job(p_admin_session_token,p_job_token,'dispatch-import');

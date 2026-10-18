@@ -323,7 +323,9 @@ before(async () => {
       NULL,NULL,CASE WHEN n%2=0 THEN ARRAY[]::text[] ELSE NULL END FROM generate_series(1,202) AS x(n)`,[OLD.root,OLD.branch]);
   await source.query(`INSERT INTO public.dispatch_group_members(group_id,user_id,assigned_by)
     SELECT $1,id,$2 FROM public.users WHERE username LIKE 'identity-source-%'`,[S.default,OLD.root]);
-  await source.query(`INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,order_number,transaction_id,
+  await transaction(async()=>{
+    const disabled=await scalar(source,"SELECT private.employee_transfer_bypass_triggers(ARRAY['orders'])");
+    await source.query(`INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,order_number,transaction_id,
       status,commission_amount,commission_rate,created_at,processed_at)
     SELECT ('12000000-0000-4000-8000-'||lpad(to_hex(3000+2*n+k),12,'0'))::uuid,
       ('12000000-0000-4000-8000-'||lpad(to_hex(2000+n),12,'0'))::uuid,'identity-source-'||n,$1,999.99,
@@ -331,6 +333,8 @@ before(async () => {
       CASE WHEN k=0 THEN 'success' ELSE 'failure' END,CASE WHEN k=0 THEN 3.1234567890123456789 ELSE NULL END,
       0.1234567890123456789,'2023-02-03T04:05:06.123456Z','2023-02-04T05:06:07.654321Z'
     FROM generate_series(1,202) AS x(n) CROSS JOIN generate_series(0,1) AS y(k)`,[OLD.product]);
+    await source.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)',[JSON.stringify(disabled)]);
+  },source,true);
   // Announcement-only material is deliberately unrelated to all transfer protocols.
   await db.query(`INSERT INTO public.announcement_categories(name,display_order) VALUES('配置測試保留分類',10)`);
   await db.query(`INSERT INTO public.announcements(title,content,created_by) VALUES('配置測試保留公告','<p>不得更動</p>',$1)`, [NEW.root]);
@@ -343,7 +347,7 @@ before(async () => {
     export { createDispatchBackup } from './src/lib/employeeTransfer/dispatchBackup.ts';
     export { verifyEncryptedVolume } from './src/lib/employeeTransfer/container.ts';`, resolveDir: root, sourcefile: 'dispatch-configuration-backup-entry.mjs' },
   bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020' });
-  modules = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
+  modules = { ...await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`) };
   const identityBuild = await build({stdin:{contents:`export * from './src/lib/employeeTransfer/identityApi.ts';
     export * from './src/lib/employeeTransfer/identityTransfer.ts'; export { setHarness } from 'identity-db:state';`,resolveDir:root},
     bundle:true,write:false,format:'esm',platform:'browser',target:'es2020',plugins:[{name:'identity-local-sql',setup(builder){
@@ -999,8 +1003,8 @@ test('real bound account/credential/order writes preserve all business columns, 
   const start=await identityBegin(plan);assert.equal(start.verified,false);assert.deepEqual(start.chunks,{accounts:2,credentials:1,orders:3});
   await assert.rejects(identityVerify(),/incomplete/);
   await assert.rejects(identityChunk('orders',0),/before dependent orders/);
-  await assert.rejects(db.query(`SELECT * FROM private.employee_transfer_verified_identity_map(
-    (SELECT j FROM private.employee_transfer_jobs AS j WHERE id=$1),'accounts')`,[job.job_id]),/server-verified/);
+  await assert.rejects(isolated(db,()=>db.query(`SELECT * FROM private.employee_transfer_verified_identity_map(
+    (SELECT j FROM private.employee_transfer_jobs AS j WHERE id=$1),'accounts')`,[job.job_id])),/server-verified/);
   for(const key of IDENTITY) for(let no=0;no<start.chunks[key];no++) {
     const ack=await identityChunk(key,no);assert.equal(ack.verified,false);assert.equal(ack.financial_data_pending,true);
     assert.deepEqual(await identityChunk(key,no),{...ack,repeated:true});assert.equal(await permitCount(),0);
@@ -1093,8 +1097,9 @@ for(const action of ['identity_restore_started','identity_restore_chunk','identi
     IF NEW.action='${action}' THEN RAISE EXCEPTION 'identity fixture event failure'; END IF; RETURN NEW; END $$;
     CREATE TRIGGER identity_event_failure BEFORE INSERT ON private.employee_transfer_events FOR EACH ROW EXECUTE FUNCTION public.identity_event_failure()`);
   await assert.rejects(action==='identity_restore_started'?identityBegin(plan):action==='identity_restore_chunk'?identityChunk('accounts',0):identityVerify(),/identity fixture event failure/);
-  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);assert.deepEqual(await triggerState(),triggers);
-  assert.equal(await permitCount(),0);assert.deepEqual(await status(),active(job,true));
+  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);
+  await db.exec('DROP TRIGGER identity_event_failure ON private.employee_transfer_events; DROP FUNCTION public.identity_event_failure()');
+  assert.deepEqual(await triggerState(),triggers);assert.equal(await permitCount(),0);assert.deepEqual(await status(),active(job,true));
 }));
 
 for(const [label,extra]of [
@@ -1105,6 +1110,69 @@ for(const [label,extra]of [
   for(const action of [()=>identityBind(identityPackage,extra()),()=>identityPlan(extra()),()=>identityBegin(plan,extra()),()=>identityChunk('accounts',0,extra()),()=>identityVerify(extra())])
     await assert.rejects(action(),/Super administrator|invalid or expired/i);
   assert.deepEqual(await businessState(),keep);assert.equal(await permitCount(),0);
+}));
+
+for(const nullableTarget of [false,true]) test(`source NULL employee owner is ${nullableTarget?'preserved by nullable target':'blocked by strict target without assigning a default'}`,()=>transaction(async()=>{
+  await configured();
+  const input=await transaction(async()=>{
+    await source.exec('ALTER TABLE public.users ALTER COLUMN created_by DROP NOT NULL');
+    await source.query('UPDATE public.users SET created_by=NULL WHERE id=$1',[S.employee]);return capture('identity',dispatchPackage.packageId);
+  },source);
+  if(nullableTarget)await db.exec('ALTER TABLE public.users ALTER COLUMN created_by DROP NOT NULL');
+  const plan=await identityStage(input);assert.equal(plan.can_restore,nullableTarget);
+  if(nullableTarget){await identityRestore(plan);assert.equal(await scalar(db,'SELECT created_by FROM public.users WHERE id=$1',[S.employee]),null);}
+  else {assert.ok(plan.conflicts.some(c=>c.reason==='unmapped_administrator'));await assert.rejects(identityBegin(plan),/unresolved conflicts/);}
+  assert.equal(await permitCount(),0);
+}));
+
+test('same order UUID in target blocks identity plan without silently skipping historical content',()=>transaction(async()=>{
+  await configured();
+  const disabled=await scalar(db,"SELECT private.employee_transfer_bypass_triggers(ARRAY['orders'])");
+  await db.exec('ALTER TABLE public.orders DISABLE TRIGGER zz_employee_transfer_maintenance');
+  await db.query(`INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,order_number,transaction_id,status)
+    VALUES($1,$2,$3,$4,1,'negative-existing-order','negative-existing-tx','failure')`,[S.order,T.employee,`configuration-${T.employee}`,NEW.product]);
+  await db.exec('ALTER TABLE public.orders ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance');
+  await db.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)',[JSON.stringify(disabled)]);
+  const keep=await businessState(),plan=await identityStage();assert.equal(plan.can_restore,false);assert.ok(plan.conflicts.some(c=>c.reason==='order_id_conflict'));
+  await assert.rejects(identityBegin(plan),/unresolved conflicts/);assert.deepEqual(await businessState(),keep);
+}));
+
+for(const field of ['remarks','is_active','session','order_details'])test(`identity verify/repeated begin/repeated chunk reject changed ${field}, even after success`,()=>transaction(async()=>{
+  await configured();const plan=await identityStage();await identityRestore(plan);
+  const table=field==='order_details'?'orders':'users';await db.exec(`ALTER TABLE public.${table} DISABLE TRIGGER zz_employee_transfer_maintenance`);
+  if(field==='remarks')await db.query("UPDATE public.users SET remarks='negative-drift' WHERE id=$1",[S.employee]);
+  if(field==='is_active')await db.query('UPDATE public.users SET is_active=true WHERE id=$1',[S.employee]);
+  if(field==='session')await db.query('UPDATE public.users SET current_session_token=$2 WHERE id=$1',[S.employee,randomUUID()]);
+  if(field==='order_details')await db.query("UPDATE public.orders SET transaction_id='negative-unapproved-detail' WHERE id=$1",[S.order]);
+  await db.exec(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance`);
+  for(const action of [()=>identityVerify(),()=>identityBegin(plan),()=>identityChunk('credentials',0)])await assert.rejects(action(),/post-write|disabled|historical details/);
+  await assert.rejects(isolated(db,()=>db.query(`SELECT * FROM private.employee_transfer_verified_identity_map(
+    (SELECT j FROM private.employee_transfer_jobs AS j WHERE id=$1),'accounts')`,[job.job_id])),/post-write|disabled|historical details/);
+  assert.equal(await permitCount(),0);
+}));
+
+for(const [label,sql,parameters]of [
+  ['expired session',"UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1",()=>[NEW.root]],
+  ['idle job',"UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1",()=>[job.job_id]],
+  ['absolute job',"UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1",()=>[job.job_id]],
+  ['unsealed backup','UPDATE private.employee_transfer_shared_backups SET sealed_at=NULL WHERE id=$1',()=>[job.job_id]],
+  ['removed shared receipt',"UPDATE private.employee_transfer_jobs SET summary=summary-'shared_receipt' WHERE id=$1",()=>[sharedJob.job_id]],
+])test(`identity restore rechecks ${label} between committed chunks`,()=>transaction(async()=>{
+  await configured();const plan=await identityStage();await identityBegin(plan);await identityChunk('accounts',0);await db.query(sql,parameters());
+  const keep=await businessState(),state=await taskState(job);
+  for(const action of [()=>identityBegin(plan),()=>identityChunk('accounts',1),()=>identityVerify()])await assert.rejects(action(),/invalid or expired|running dispatch owner|server-verified/i);
+  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);assert.equal(await permitCount(),0);
+}));
+
+test('identity source changes with identical row counts invalidate final export verification and never advance full-site export time',()=>transaction(async()=>{
+  await transaction(async()=>{
+    const task=await on(source,'employee_export_identity_begin',{p_admin_session_token:sourceSession,p_admin_password:PASSWORDS.root,p_package_id:dispatchPackage.packageId});
+    await assert.rejects(on(source,'employee_export_identity_close',auth(task,sourceSession)),/not been verified/);
+    await source.query("UPDATE public.users SET remarks='source-same-count-drift' WHERE id=$1",[S.employee]);
+    await assert.rejects(on(source,'employee_export_identity_verify',auth(task,sourceSession)),/source changed/);
+    for(const name of ['get_employee_export_core','employee_export_dispatch_verify'])await assert.rejects(on(source,name,{...auth(task,sourceSession),...(name.endsWith('_core')?{p_employee_id:S.employee}:{})}),/protocol/);
+  },source);
+  const log=await on(source,'get_employee_transfer_log',{p_admin_session_token:sourceSession});assert.equal(log.last_export_at,null);
 }));
 
 test('committed real configuration receipt survives separate requests; cancellation never releases dirty maintenance', async () => {

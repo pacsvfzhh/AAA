@@ -28,6 +28,8 @@ const criticalMigrations = [
   '20261102000011_guard_transfer_maintenance.sql',
   '20261102000012_restore_dispatch_configuration.sql',
   '20261102000013_restore_valid_submission_data.sql',
+  '20261102000014_export_stage_employee_identities.sql',
+  '20261102000015_restore_employee_identities.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -102,6 +104,11 @@ const publicFunctions = [
   'get_employee_import_dispatch_configuration_plan(uuid,uuid)', 'employee_import_dispatch_apply_configuration(uuid,uuid,text)',
   'employee_import_dispatch_valid_begin(uuid,uuid,text)', 'employee_import_dispatch_valid_chunk(uuid,uuid,integer)',
   'employee_import_dispatch_valid_verify(uuid,uuid)',
+  'employee_export_identity_begin(uuid,text,uuid)', 'get_employee_export_identity_page(uuid,uuid,text,uuid,integer)',
+  'employee_export_identity_verify(uuid,uuid)', 'employee_export_identity_close(uuid,uuid)',
+  'employee_import_identity_bind(uuid,uuid,jsonb)', 'employee_import_identity_stage(uuid,uuid,text,integer,text)',
+  'get_employee_import_identity_plan(uuid,uuid)', 'employee_import_identity_begin(uuid,uuid,text)',
+  'employee_import_identity_chunk(uuid,uuid,text,integer)', 'employee_import_identity_verify(uuid,uuid)',
 ];
 
 async function checkCatalog(db) {
