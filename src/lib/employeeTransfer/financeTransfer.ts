@@ -58,8 +58,7 @@ export interface FinanceImportTarget {
   plan(signal?: AbortSignal): Promise<unknown>;
 }
 export interface FinanceImportFiles {
-  // Caller must authenticate the ENTIRE volume including EOF first. Reopen only isolated immutable files.
-  // This module deliberately cannot decrypt, unzip, authenticate or accept a raw encrypted stream.
+  // Only reopen isolated immutable files after authenticating the entire volume through EOF.
   open(path: string): TransferByteSource | ReadableStream<Uint8Array>;
   // Invalidate pending reads/writes and discard all temporary plaintext, including on success.
   abort(reason: unknown): Promise<void>;

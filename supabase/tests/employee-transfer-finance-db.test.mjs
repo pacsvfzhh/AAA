@@ -172,6 +172,10 @@ test('real finance roundtrip restores all fields, renumbers ledger/audit and tra
   assert.equal(await scalar(db,'SELECT last_ledger_id::text FROM public.wallet_balance_baselines WHERE user_id=$1',[F.e1]),mapped[1].new_id);
   assert.equal(await scalar(db,'SELECT last_ledger_id::text FROM public.wallet_balance_baselines WHERE user_id=$1',[F.e3]),'0');assert.ok(!mapped.some(row=>row.new_id===F.ledger2));
   for(const table of ['commission_audit_log','withdrawal_events','wallet_reconciliation_queue','notification_automation_queue'])assert.equal(await scalar(db,`SELECT count(*)::int FROM public.${table}`),0,table);
+  for(const employee of [F.e1,F.e2,F.e3])for(const name of ['get_daily_order_stats','get_user_completed_orders_count'])
+    assert.deepEqual(await rows(db,`SELECT * FROM public.${name}($1)`,[employee]),await rows(source,`SELECT * FROM public.${name}($1)`,[employee]));
+  assert.deepEqual(await rows(db,'SELECT * FROM public.check_commission_consistency() ORDER BY issue_type,user_id'),
+    await rows(source,'SELECT * FROM public.check_commission_consistency() ORDER BY issue_type,user_id'));
   assert.equal(await scalar(db,'SELECT count(*)::int FROM public.users WHERE is_active AND id=ANY($1::uuid[])',[[F.e1,F.e2,F.e3]]),0);assert.deepEqual(await triggers(),before);
   assert.deepEqual(await rpc('get_employee_transfer_maintenance',{p_admin_session_token:session}),{active:true,job_id:task.job_id,dirty:true,full_site_complete:false});
 }));
@@ -345,3 +349,23 @@ test('reconciliation after import performs zero money repairs and legacy account
   await db.exec('SELECT private.employee_transfer_clear_write_permit()');assert.deepEqual(await scalar(db,"SELECT jsonb_agg(jsonb_build_array(user_id,available_balance::text,frozen_balance::text) ORDER BY user_id) FROM public.wallets"),before);
   assert.deepEqual(await rows(db,'SELECT user_id,count(*)::int AS n FROM public.wallet_reconciliation_audit GROUP BY user_id'),counts);
 }));
+
+test('separate committed finance requests persist progress, resume safely and cancellation never releases dirty maintenance',async()=>{
+  let p;
+  await transaction(async()=>{await ready();p=await stage();},db,true);
+  await transaction(async()=>{assert.equal((await apply(p,F.e1)).completed_employees,1);},db,true);
+  await transaction(async()=>{
+    transport();const resume=modules.createFinanceImportSession(task.job_token);await resume.target.bind(finance.catalog);
+    const rp=await resume.plan();assert.deepEqual(rp,p);assert.equal((await resume.apply(F.e1,rp.plan_hash)).repeated,true);
+    await assert.rejects(resume.verify(),/outcome is unknown or unconfirmed/);
+    assert.equal((await resume.apply(F.e2,rp.plan_hash)).completed_employees,2);
+  },db,true);
+  await transaction(async()=>{assert.equal((await apply(p,F.e3)).completed_employees,3);},db,true);
+  await transaction(async()=>{const result=await verify();assert.equal(result.completed_employees,3);assert.equal(result.full_site_complete,false);},db,true);
+  await transaction(async()=>{await rpc('employee_transfer_cancel',auth());},db,true);
+  await transaction(async()=>{
+    assert.equal((await rpc('get_employee_transfer_maintenance',{p_admin_session_token:session})).dirty,true);
+    assert.equal(await scalar(db,'SELECT frozen_balance::text FROM public.wallets WHERE user_id=$1',[F.e1]),'3');
+    await assert.rejects(verify(),/invalid or expired/);assert.equal(await permits(),0);
+  });
+});

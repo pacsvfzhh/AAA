@@ -200,7 +200,7 @@ NOTIFY pgrst, 'reload schema';
 - `20261102000015_restore_employee_identities.sql` 提供保存计划的 `get_employee_import_identity_plan`（不得自动重试）、`employee_import_identity_begin/chunk/verify`。同包管理员服务器回执映射归属，冲突只报告并阻断：同ID、同名需封存、员工号、管理员同用户名、缺管理员、订单ID、启用占位产品或派单/used所需来源身份缺失。仅无冲突分支可实际写入，未新增删除能力，也未串联同名员工备份/现有封存替换；不把原员工草案回执当可信证明。
 - 账号始终停用，会话显式清空，标签/备注/置顶/验证/业务时间等原样保留；凭据保留独立原哈希，不强迫两处哈希相同。目标结构确实允许无归属时保留NULL；NOT NULL或既有required-owner CHECK会提前阻断，不猜默认管理员。订单使用停用占位产品、0.01与IMPORTED-<id>，保留佣金/状态/时间，派单/排程/快照清空，按产品/金额的历史统计不得纳入；当天员工展示标注还未接。
 - 固定审核17个业务触发器及ALWAYS守卫，未知/定义/权限/状态变化拒绝。当前事务仅旁路钱包enqueue（同时避免建零财务基准）及订单6个副作用；保留用户自动建零钱包、财务/封存/订单保护，精确恢复原触发器状态并受延迟提交门禁约束。成功回执只记已提交行数/游标，重复逐字段核验，已verified状态重放时重验全部内容；私有身份对应只取同任务、同包和重新核验后的实际行，不接受客户端ID图。
-- **零钱包与停用身份不代表资金迁移完成。** 来源钱包/基准/账本/提款及其他员工资料尚未接本链，旧apply_core不能直接接替已建立身份；需后续以本任务已核验账号事务回填资金，不能删重建或调用旧finalize提前启用。成员、used和防双计数现已由后续迁移16接入；同名封存、全站核对/dirty解除及UI仍待接。回执financial_data_pending/dependencies_pending/maintenance恒true、replacement_ready/full_site_complete恒false，取消/过期不放行业务。
+- **零钱包与停用身份不代表资金迁移完成。** 身份阶段本身不写来源钱包/基准/账本/提款，后续资金回填见下文新迁移17–18；其他员工资料待接，旧apply_core不能直接接替已建立身份；需后续以本任务已核验账号事务回填资金，不能删重建或调用旧finalize提前启用。成员、used和防双计数现已由后续迁移16接入；同名封存、全站核对/dirty解除及UI仍待接。回执financial_data_pending/dependencies_pending/maintenance恒true、replacement_ready/full_site_complete恒false，取消/过期不放行业务。
 - 配置/交单/身份双站数据库127项（新增45）、新身份客户端263项通过，包含203账号/1独立凭据/405精简订单、真实打包API流式→anon SQL、重复与失败回滚、NULL/微秒/高精度、权限/过期/来源变化/目标漂移及服务器对应。来源历史夹具用既有审计旁路避开原commission_audit_log缺列，不改业务定义；这不验证原站常规发佣金或全站财务。完整迁移2822/2822、聊天6/稽核48/工时6及typecheck/lint/build通过；542份SQL仍保留原12历史回放失败，106表/937列不变。无正式库访问/部署/Storage/权限/cron操作，无UI/浏览器整站或原生PG并发/anon3秒验收。
 
 ## 派单成员与已用交单恢复（2026-10-18，本地未部署）
@@ -210,15 +210,26 @@ NOTIFY pgrst, 'reload schema';
 - 私有触发器名单新增used及唯一计数触发器的已审核旁路策略，沿用原状态/定义/权限指纹校验与延迟提交门禁；不改业务触发器定义。实际写许可只含成员/used两表，不包含valid；仅used INSERT计数触发器临时关闭并精确恢复，ALWAYS维护守卫和外键保留。每块最多200行，账号/valid/资金不写；因此usage_count、last_used_at、启停、原文等全字段原样保持，不按used存量重算。
 - 每次请求核对真实行数和已提交块内容，同ID异内容不接受；收到服务器提交回执才计进度。失败回滚当前请求，已提交块受dirty维护保护，取消/过期不恢复营业。回执仍maintenance/financial_data_pending/dependencies_pending=true、replacement_ready/full_site_complete=false，成员/used核对完成不代表资金、自动化或员工全站迁移完成；13的valid接口在used非空时会安全拒绝，不应倒序调用。
 - 双站数据库169项（新增42）、轻量客户端679项以及完整迁移3544/3544通过，覆盖203来源成员、203 used多批、NULL/最大计数/未来最后使用时间、空集合、逐字段同数量漂移、晚失败、权限/过期/取消、封存回执及真实API跨请求续接。聊天6/稽核48/工时6及typecheck/lint/build通过，独立只读复审未发现其他高置信问题。543份SQL严格回放仍保留原12历史失败、本地106表/937列不变，不是干净建库证明。
-- 无正式库访问、资料修改或SQL/Edge Function/前端/Storage/权限/cron部署；没有UI或浏览器整站实测。原生PG锁/并发/DDL缓存、anon3秒上限与大规模重复全内容核验性能仍未验收；钱包/基准/账本/流水/全状态提款、同名员工封存串联、其他历史、全站核对/任务恢复/dirty解除、多卷/媒体与页面仍待做，不能正式使用。
+- 无正式库访问、资料修改或SQL/Edge Function/前端/Storage/权限/cron部署；没有UI或浏览器整站实测。原生PG锁/并发/DDL缓存、anon3秒上限与大规模重复全内容核验性能仍未验收；资金六表后续进展见下文；同名员工封存串联、其他历史、全站核对/任务恢复/dirty解除、多卷/媒体与页面仍待做，不能正式使用。
+
+## 同包资金六表恢复（2026-10-19，本地未部署）
+
+- `20261102000017_export_stage_employee_finance.sql` 增加employee-finance-v1固定六表：wallets、wallet_balance_baselines、wallet_ledger_entries、wallet_transactions、withdrawals、wallet_reconciliation_audit。导出/核验/关闭及导入bind/stage复用私有任务和暂存；无新增表。页≤200行/256KiB，行≤64KiB，每表≤50万行/256MiB，总≤1GiB；超限阻断，原文金额不经JS浮点重序列化。钱包/基准额外协议id=user_id，自增ID与last_ledger_id用十进制字符串保留bigint，排序和比较仍使用原生编号类型；分页record游标固定text，防连接复用时UUID/bigint缓存类型冲突。
+- 财务目录绑定来源站/包、每表有序原文摘要，以及完整identity_catalog（包括账号/精简订单摘要）；任何阶段源数据变化拒绝核验，资金目录不匹配已恢复身份时拒绝绑定，不把同包名当同内容证明。只导未封存员工的六表；financial_operations请求原文/幂等技术记录及已排除订单详情不携带。可空备注、审核身份、时间原样保留，管理员只从同包真实共享回执映射，不猜用户名或默认归属。
+- `20261102000018_restore_employee_finance.sql` 提供保存计划的get_employee_import_finance_plan、显式employee_import_finance_apply/verify。plan/apply/verify重核身份、派单/valid/成员/used和资金的真实内容及审核触发器；计划列全局数量/待处理提款笔数与十进制金额。金额公式、缺钱包/员工、管理员映射或目标UUID/部分唯一键冲突报告并阻断，不静默跳过或修平；缺钱包的阻断计划仍可显示，但不可执行。
+- 每员工六表单一事务：只更新该任务已创建的零钱包，复制流水/所有提款状态，账本及对账审计按旧ID顺序从目标序列新编号；私有暂存保存每行old→new对应，基准last_ledger_id换成旧ID≤旧游标的最后一个新ID，无则0。目标已有其他员工账本不改；无基准老账号保持无基准，待业务恢复后由正常对账首次建立。用户总收入由已核验身份阶段保留，资金阶段不另写users，不重建账号或复制会话。
+- 固定审核六表全部10个业务触发器与ALWAYS守卫，定义/属主/权限/原O或A状态变化拒绝。事务仅精确旁路6项发账本/佣金稽核/自动化/提款事件/对账入队副作用并恢复原状态，沿用延迟提交门禁；外键、删除保护和维护守卫保留。写许可只六张资金表，不许可users或运行队列。提交前逐字段/行数、冻结=pending合计、钱包总额=基准总额+游标后账本增量、收入=基准收入+收入增量核对，失败只回滚当前员工。
+- 完成记录、实际行与映射绑定原任务/计划/目录；重复apply/plan/verify重新核验已提交内容和计数，不凭旧success跳过。新客户端可绑定同目录取得原计划后续接；取消/过期保留已提交资金且dirty维护不解除。所有子阶段仍financial_data_pending/dependencies_pending/maintenance=true、replacement_ready/full_site_complete=false；这不是整体员工完成或恢复营业许可。
+- 新资金双站49/49、客户端520/520、完整迁移4115/4115及typecheck/lint/build、聊天6/稽核48/工时6通过，涵盖原文高精度/bigint/NULL/微秒、游标前中后、全部提款状态、单员工额外1001行账本与流水、其他员工账本不变、唯一键/权限/过期/取消、逐字段漂移及跨真实事务提交续接。实际对账无金额修正，legacy首次建基准不改钱；每日统计/累计数及旧佣金检查结果与来源相同，不自动修平既有差异。独立复审发现分页动态record类型缓存问题，已修复/回归并复核未发现其他高置信缺陷。545份SQL仍保留原12历史失败、106表/937列不变，非干净建库证明。
+- 原生PostgreSQL/PostgREST多连接、anon3秒上限、大员工单事务时延和全站放行未验收；PGlite规模冒烟不证明真实执行上限。无正式库访问/资料修改/SQL、Edge Function或前端部署，无Storage/权限/cron调整，无UI或浏览器整站实测。同名员工备份/现有封存、聊天/通知/实名/活动/自动化与档案、全站协调/核对/任务恢复和dirty解除、媒体/多卷/公告轮播排除及迁移页面仍待完成。
 
 ## 类型与测试
 - `src/types/database.ts` 手工维护（没有生成脚本）：新增 RPC 时补充 `Functions` 的 `Args` / `Returns`；改表时同步 `Row` / `Insert` / `Update`。
 - `supabase/tests/audit-cleanup.test.mjs`：用 PGlite 加载缩减版 schema，再执行指定的真实迁移；每个测试在事务中执行后回滚。运行 `npm run test:audit-cleanup`。
 - `supabase/tests/service-chat-scale.test.mjs`：先装入正式库现行的会话摘要与分组 RPC（取自旧迁移），在混合数据（跨组旧会话、已归档员工、停用/紧急组、富卡、空时间消息、空聊天表）上记录结果，再执行 `20261101000002` 并逐行对比；另验证 `get_admin_chat_unread_counts` 的范围、无效/停用会话拒绝与执行权限。运行 `npm run test:service-chat`。
 - `supabase/tests/work-session-stop.test.mjs`：装入现行的开工/停工/恢复 RPC，先复现「主动停工后刷新被自动恢复」，再执行 `20261101000003` 验证主动停工不再恢复、刷新（beacon 停工）仍会恢复、停工后重新开工再刷新仍会恢复，以及权限。运行 `npm run test:work-session`。
-- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对当前 543 份 SQL 回放中的 12 项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名 RPC 和私有表权限；新增/变化/缺失失败阻断。测试使用 platform/baseline 替身，**不是全部迁移成功或真实空库建库证明**。
+- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对当前 545 份 SQL 回放中的 12 项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名 RPC 和私有表权限；新增/变化/缺失失败阻断。测试使用 platform/baseline 替身，**不是全部迁移成功或真实空库建库证明**。
 - `supabase/tests/support/transfer-scope.mjs` 与 `employee-transfer-scope.test.mjs`：固化本地 106 张根表、937 列及业务迁移意图，拒绝未知/缺失表列、类型/空值性漂移；不是导出授权清单，也不表示转换已实现。根表覆盖不含独立分区，实际目标库仍须重新核对。
 - `employee-transfer-production-scope.test.mjs` 单独核对正式 96 根表/871 列及独立目录 SHA-256，与本地 106 表配置不可混用；`employee-transfer-triggers.test.mjs` 验证真实迁移 SQL 的精确状态恢复、回执和提交门禁（使用 PGlite，不是原生多连接测试）。
-- `npm run test:employee-transfer` 运行加密、ZIP 清单/容器、增量 SHA-256、基础回放、双结构库存、触发器、共享设置导出/导入、来源覆盖与备份/API、产品专用数据库/客户端、派单交单导出/目标预检及导入准备/独立备份、持续维护、派单配置、交单原文/使用计数及同包员工身份/精简订单及来源成员/used防双计数实际写入测试；全站往返、管理员/配置/自动化/实际媒体及界面验收尚未完成。专项命令为 `test:employee-transfer:crypto`、`:foundation`、`:scope`。
+- `npm run test:employee-transfer` 运行加密、ZIP 清单/容器、增量 SHA-256、基础回放、双结构库存、触发器、共享设置导出/导入、来源覆盖与备份/API、产品专用数据库/客户端、派单交单导出/目标预检及导入准备/独立备份、持续维护、派单配置、交单原文/使用计数及同包员工身份/精简订单及来源成员/used防双计数及资金六表原文/事务恢复测试；全站往返、管理员/配置/自动化/实际媒体及界面验收尚未完成。专项命令为 `test:employee-transfer:crypto`、`:foundation`、`:scope`。
 - `supabase/config.toml` 只配置了 `process-orders`、`cleanup-dispatch`；`supabase/health_check.sql` 是为新部署准备的只读检查，期望的定时任务与存储桶清单已过时。

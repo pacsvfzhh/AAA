@@ -130,8 +130,7 @@ export interface FinanceImportSession {
   apply(employeeId: string, planHash: string, signal?: AbortSignal): Promise<FinanceApplyReceipt>;
   verify(signal?: AbortSignal): Promise<FinanceVerifyReceipt>;
 }
-// Reuses the existing dispatch task. Server alone verifies same-package identity/admin mappings,
-// sealed backup, maintenance and actual financial contents. No client-supplied identity map or new begin.
+// The server owns same-package mappings, backup/maintenance checks and the existing dispatch task.
 export function createFinanceImportSession(dispatchJobToken: string): FinanceImportSession {
   const auth = getAdminFinancialSessionToken();
   uuid(auth); uuid(dispatchJobToken);
