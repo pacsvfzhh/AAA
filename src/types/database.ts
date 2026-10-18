@@ -1,3 +1,18 @@
+type EmployeeIdentityCounts = Record<'accounts' | 'credentials' | 'orders', number>;
+type EmployeeIdentityPending = {
+  maintenance: true; financial_data_pending: true; dependencies_pending: true;
+  replacement_ready: false; full_site_complete: false;
+};
+type EmployeeIdentityCatalog = {
+  version: 1; scope: 'employee-identity'; site_id: string; package_id: string;
+  tables: { key: 'accounts' | 'credentials' | 'orders'; rows: number; bytes: number; row_hashes_sha256: string }[];
+  processing_orders: number; full_site_complete: false;
+};
+type EmployeeIdentityReceipt = EmployeeIdentityPending & {
+  success: true; scope: 'employee-identity'; counts: EmployeeIdentityCounts; next_chunks: EmployeeIdentityCounts;
+  chunks: EmployeeIdentityCounts; totals: EmployeeIdentityCounts; verified: boolean; repeated: boolean;
+};
+
 export interface Database {
   public: {
     Tables: {
@@ -2346,6 +2361,50 @@ export interface Database {
       };
     };
     Functions: {
+      employee_export_identity_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
+        Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeIdentityCatalog;
+          scope: 'employee-identity'; full_site_complete: false };
+      };
+      get_employee_export_identity_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: { table_key: 'accounts' | 'credentials' | 'orders'; count: number; ndjson: string; next_after: string | null; sha256: string };
+      };
+      employee_export_identity_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { verified: true; scope: 'employee-identity'; full_site_complete: false };
+      };
+      employee_export_identity_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { success: true; scope: 'employee-identity'; full_site_complete: false };
+      };
+      employee_import_identity_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog: Record<string, unknown> };
+        Returns: { success: true; scope: 'employee-identity'; full_site_complete: false; repeated: boolean };
+      };
+      employee_import_identity_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: { success: true; rows: number; bytes: number; sha256: string; repeated: boolean };
+      };
+      get_employee_import_identity_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: EmployeeIdentityPending & { scope: 'employee-identity'; can_restore: boolean; counts: EmployeeIdentityCounts;
+          conflicts: { source_id: string; reason: 'employee_id_conflict' | 'username_requires_archive' | 'employee_number_conflict'
+            | 'administrator_username_conflict' | 'unmapped_administrator' | 'order_id_conflict' | 'placeholder_product_active'
+            | 'dispatch_employee_missing' | 'used_order_missing_or_mismatched' }[]; plan_hash: string };
+      };
+      employee_import_identity_begin: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: EmployeeIdentityReceipt;
+      };
+      employee_import_identity_chunk: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number };
+        Returns: EmployeeIdentityReceipt;
+      };
+      employee_import_identity_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: EmployeeIdentityReceipt;
+      };
       employee_transfer_cancel: {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: { success: boolean; cancelled: boolean };
