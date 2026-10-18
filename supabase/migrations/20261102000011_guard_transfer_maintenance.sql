@@ -1,6 +1,3 @@
--- Local draft only. No cron/Storage changes, no dispatch business apply, no full-site finish.
--- This is a DML barrier for the reviewed tables, NOT protection against malicious postgres
--- DDL, Storage writes, or the unknown production-only weekly cleanup function.
 BEGIN;
 SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
@@ -26,9 +23,6 @@ REVOKE ALL ON private.employee_transfer_maintenance, private.employee_transfer_w
 CREATE FUNCTION private.employee_transfer_guarded_tables()
 RETURNS text[] LANGUAGE sql IMMUTABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
-  -- Frozen from the reviewed local 104-root inventory, NOT discovered as an authorization list.
-  -- Seven transfer bookkeeping roots and five admin-login/lock roots are excluded.
-  -- Employee login/session writes, business admins and both credentials tables remain guarded.
   SELECT ARRAY[
     'private.content_audit_delete_jobs',
     'private.content_audit_events',
@@ -132,10 +126,8 @@ RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_job uuid;
 BEGIN
-  -- PostgreSQL already acquired the statement's relation lock before firing this guard.
   PERFORM pg_advisory_xact_lock_shared(hashtextextended('employee-transfer-maintenance', 0));
-  -- An old REPEATABLE READ/SERIALIZABLE snapshot could miss a newly committed maintenance
-  -- row. Fail closed for those write transactions rather than claim snapshot isolation.
+  -- Older transaction snapshots can miss newly committed maintenance.
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'Business writes are paused for employee transfer maintenance.' USING ERRCODE = '55000';
   END IF;
@@ -160,11 +152,7 @@ RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_table text;
 BEGIN
-  -- Do NOT take the exclusive advisory lock first: a writer already holding RowExclusive
-  -- could be waiting for the shared advisory lock inside its BEFORE STATEMENT guard.
-  -- Sorted relation locks first, exclusive advisory last. No ONLY: lock parent descendants.
-  -- Existing multi-table writers may still deadlock with this acquisition; callers use a
-  -- bounded lock_timeout and must fail/roll back, never auto-retry a write RPC.
+  -- Relation locks precede the advisory lock to avoid waiting on an already-blocked writer.
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'Employee transfer maintenance requires read committed isolation.';
   END IF;
@@ -181,8 +169,6 @@ RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_job uuid;
 BEGIN
-  -- The controlled RPC must first lock all maintenance tables, assert the guards, and
-  -- validate session/token/plan. This private helper grants no public import authority.
   PERFORM pg_advisory_xact_lock_shared(hashtextextended('employee-transfer-maintenance', 0));
   SELECT job.id INTO v_job FROM private.employee_transfer_jobs AS job
     JOIN private.employee_transfer_maintenance AS maintenance ON maintenance.job_id = job.id
@@ -196,8 +182,6 @@ BEGIN
     VALUES(pg_current_xact_id(), v_job, ARRAY['public.dispatch_config','public.dispatch_groups',
       'public.dispatch_order_pools','public.dispatch_group_orders','public.dispatch_group_members','public.dispatch_assignments']);
   UPDATE private.employee_transfer_maintenance SET dirty = true WHERE singleton AND job_id = v_job;
-  -- Both permit and dirty roll back with a failed apply. On success the caller MUST invoke
-  -- clear_write_permit before returning, and also in its exception/finally cleanup path.
 END;
 $$;
 
@@ -223,9 +207,7 @@ REVOKE ALL ON FUNCTION private.employee_transfer_guarded_tables(), private.emplo
   private.employee_transfer_lock_maintenance_tables(), private.employee_transfer_allow_config_write(uuid),
   private.employee_transfer_clear_write_permit() FROM PUBLIC, anon, authenticated, service_role;
 
--- Capture the expected definitions from the exact SQL just installed, NOT a runtime
--- caller-writable inventory/GUC. The literal manifest lives in the assert function body.
--- This also pins relation/function identities, owners, ACL and owner security properties.
+-- Pin installed identities and definitions in literals, not caller-writable state.
 DO $install_assert$
 DECLARE v_manifest jsonb; v_functions jsonb;
 BEGIN
@@ -363,14 +345,11 @@ BEGIN
   v_target_hash := encode(extensions.digest(convert_to(private.employee_transfer_dispatch_target(p_admin_session_token)::text,'UTF8'),'sha256'),'hex');
   IF v_target_hash IS DISTINCT FROM v_maintenance.target_hash THEN RAISE EXCEPTION 'The maintenance target changed; cancellation is blocked.'; END IF;
   DELETE FROM private.employee_transfer_maintenance WHERE singleton;
-  -- No task token needed: re-login can recover clean maintenance after expiry/cancellation.
-  -- Never delete the independent sealed backup and never automatically release dirty state.
+  -- A fresh owner login can recover clean maintenance after task expiry.
   RETURN jsonb_build_object('success',true,'maintenance',false,'full_site_complete',false);
 END;
 $$;
 
--- Compatibility with exact legacy transfer-trigger audits: add ONLY this reviewed keep
--- trigger and exclude ONLY it, AFTER independently asserting the full maintenance guard.
 DO $compatibility$
 DECLARE v_name text; v_definition text; v_anchor text; v_replacement text;
 BEGIN
@@ -379,7 +358,6 @@ BEGIN
   IF (length(v_definition)-length(replace(v_definition,v_anchor,'')))/length(v_anchor) <> 1 THEN
     RAISE EXCEPTION 'The fixed trigger policy compatibility anchor changed.';
   END IF;
-  -- Replace the semicolon with a UNION so the original fixed values remain byte-for-byte.
   v_replacement := E'  ) AS policy(table_name, trigger_name, action)\n  UNION ALL\n  SELECT split_part(name,\'.\',2),\'zz_employee_transfer_maintenance\',\'keep\'\n  FROM unnest(private.employee_transfer_guarded_tables()) AS item(name)\n  WHERE split_part(name,\'.\',1)=\'public\' AND split_part(name,\'.\',2)=ANY(private.employee_transfer_trigger_tables());';
   EXECUTE replace(v_definition,v_anchor,v_replacement);
   FOREACH v_name IN ARRAY ARRAY['employee_transfer_assert_shared_insert_triggers',
