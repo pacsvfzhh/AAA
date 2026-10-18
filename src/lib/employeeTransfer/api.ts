@@ -13,6 +13,144 @@ import {
   type DispatchExportCatalog, type DispatchExportSource, type DispatchPreflight,
 } from './dispatchTransfer';
 
+import { validateDispatchImportDryRun, type DispatchImportTarget } from './dispatchImport';
+import { validateDispatchBackupDescriptor, type DispatchBackupDescriptor } from './dispatchBackup';
+
+export interface DispatchImportSession {
+  identity(): { jobId: string; jobToken: string } | null;
+  target: DispatchImportTarget;
+  backup(signal?: AbortSignal): Promise<{
+    descriptor: DispatchBackupDescriptor; source: DispatchExportSource; receiver: ReplacementBackupReceiver;
+  }>;
+  cancel(signal?: AbortSignal): Promise<{ success: true; cancelled: boolean }>;
+}
+export function createDispatchImportSession(packageId: string, adminPassword: string): DispatchImportSession {
+  const session = getAdminFinancialSessionToken();
+  const { object, uuid, withSignal, checkAbort } = dispatchTransferChecks;
+  uuid(packageId);
+  let started = false;
+  let job: { jobId: string; jobToken: string } | null = null;
+  const args = () => {
+    if (!job) throw new Error('Dispatch preparation has not been confirmed by the server.');
+    return { p_admin_session_token: session, p_job_token: job.jobToken };
+  };
+  return {
+    identity: () => job && { ...job },
+    target: {
+      async begin(input, signal) {
+        checkAbort(signal);
+        if (started) throw new Error('Dispatch begin cannot be retried automatically; reconcile the task first.');
+        const catalog = validateDispatchCatalog(input);
+        started = true;
+        try {
+          const response = await withSignal(async () => {
+            const query = supabase.rpc('employee_import_dispatch_begin', {
+              p_admin_session_token: session, p_admin_password: adminPassword, p_package_id: packageId, p_catalog: { ...catalog },
+            });
+            const { data, error } = await (signal ? query.abortSignal(signal) : query);
+            if (error) throw new Error('Dispatch begin outcome is uncertain; reconcile before retrying.');
+            return data;
+          }, signal);
+          const record = object(response, ['success', 'job_id', 'job_token', 'scope', 'full_site_complete']);
+          if (record.success !== true || record.scope !== 'dispatch-submission' || record.full_site_complete !== false) {
+            throw new Error('Dispatch preparation task was not confirmed.');
+          }
+          job = { jobId: uuid(record.job_id), jobToken: uuid(record.job_token) };
+          return { success: true, scope: 'dispatch-submission', full_site_complete: false };
+        } finally { adminPassword = ''; }
+      },
+      async stage(key, chunkNo, ndjson, signal) {
+        return withSignal(async () => {
+          const query = supabase.rpc('employee_import_dispatch_stage', {
+            ...args(), p_table_key: key, p_chunk_no: chunkNo, p_ndjson: ndjson,
+          });
+          const { data, error } = await (signal ? query.abortSignal(signal) : query);
+          if (error) throw new Error('Dispatch staging outcome is uncertain; reconcile before retrying.');
+          return data;
+        }, signal);
+      },
+      async dryRun(signal) {
+        return withSignal(async () => {
+          const query = supabase.rpc('get_employee_import_dispatch_dry_run', args());
+          const { data, error } = await (signal ? query.abortSignal(signal) : query);
+          if (error) throw new Error('Dispatch preparation check failed; no replacement was performed.');
+          return validateDispatchImportDryRun(data);
+        }, signal);
+      },
+    },
+    async backup(signal) {
+      const read = async (readSignal?: AbortSignal) => withSignal(async () => {
+        const query = supabase.rpc('get_employee_import_dispatch_backup', args());
+        const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+        if (error) throw new Error('Dispatch backup descriptor read failed.');
+        const descriptor = validateDispatchBackupDescriptor(data);
+        if (descriptor.backup_id !== job?.jobId) throw new Error('Dispatch backup task mismatch.');
+        return descriptor;
+      }, readSignal);
+      const descriptor = await read(signal);
+      return {
+        descriptor: structuredClone(descriptor),
+        source: {
+          async catalog(readSignal) { checkAbort(readSignal); return structuredClone(descriptor.catalog); },
+          async page(key, after, readSignal) {
+            return withSignal(async () => {
+              const query = supabase.rpc('get_employee_import_dispatch_backup_page', {
+                ...args(), p_table_key: key, p_after: after, p_limit: 200,
+              });
+              const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
+              if (error) throw new Error('Dispatch frozen backup read failed.');
+              return data;
+            }, readSignal);
+          },
+          async verify(readSignal) {
+            if (JSON.stringify(await read(readSignal)) !== JSON.stringify(descriptor)) throw new Error('Dispatch frozen backup identity changed.');
+            return { verified: true, scope: 'dispatch-submission', full_site_complete: false };
+          },
+        },
+        receiver: {
+          async append(chunkNo, hex, writeSignal) {
+            return withSignal(async () => {
+              const query = supabase.rpc('employee_import_dispatch_backup_append', {
+                ...args(), p_plan_hash: descriptor.plan_hash, p_chunk_no: chunkNo, p_hex: hex,
+              });
+              const { data, error } = await (writeSignal ? query.abortSignal(writeSignal) : query);
+              if (error) throw new Error('Dispatch backup upload outcome is uncertain; reconcile before retrying.');
+              const ack = object(data, ['success', 'bytes', 'sha256', 'repeated']);
+              if (ack.success !== true || typeof ack.bytes !== 'number' || typeof ack.sha256 !== 'string'
+                || typeof ack.repeated !== 'boolean') throw new Error('Invalid dispatch backup acknowledgement.');
+              return { success: true as const, bytes: ack.bytes, sha256: ack.sha256, repeated: ack.repeated };
+            }, writeSignal);
+          },
+          async seal(sha256, bytes, writeSignal) {
+            return withSignal(async () => {
+              const query = supabase.rpc('employee_import_dispatch_backup_seal', {
+                ...args(), p_plan_hash: descriptor.plan_hash, p_sha256: sha256, p_bytes: bytes,
+              });
+              const { data, error } = await (writeSignal ? query.abortSignal(writeSignal) : query);
+              if (error) throw new Error('Dispatch backup seal outcome is uncertain; reconcile before retrying.');
+              const ack = object(data, ['success', 'backup_id', 'sha256', 'bytes', 'repeated', 'full_site_complete']);
+              if (ack.success !== true || ack.backup_id !== descriptor.backup_id || ack.sha256 !== sha256 || ack.bytes !== bytes
+                || typeof ack.repeated !== 'boolean' || ack.full_site_complete !== false) throw new Error('Invalid dispatch backup seal.');
+              return { success: true as const, backup_id: descriptor.backup_id, sha256, bytes,
+                repeated: ack.repeated, full_site_complete: false as const };
+            }, writeSignal);
+          },
+        },
+      };
+    },
+    async cancel(signal) {
+      return withSignal(async () => {
+        const query = supabase.rpc('employee_transfer_cancel', args());
+        const { data, error } = await (signal ? query.abortSignal(signal) : query);
+        if (error) throw new Error('Dispatch cancellation outcome is uncertain; reconcile before retrying.');
+        const receipt = object(data, ['success', 'cancelled']);
+        if (receipt.success !== true || typeof receipt.cancelled !== 'boolean') throw new Error('Dispatch cancellation was not confirmed.');
+        return { success: true, cancelled: receipt.cancelled };
+      }, signal);
+    },
+  };
+}
+
 export interface DispatchExportTask {
   jobId: string; jobToken: string; catalog: DispatchExportCatalog; source: DispatchExportSource;
   close(signal?: AbortSignal): Promise<unknown>;

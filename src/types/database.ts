@@ -2430,6 +2430,38 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: Record<string, unknown>;
       };
+      employee_import_dispatch_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string; p_catalog: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_dispatch_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_dispatch_dry_run: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_dispatch_backup: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_dispatch_backup_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_dispatch_backup_append: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_chunk_no: number; p_hex: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_dispatch_backup_seal: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_sha256: string; p_bytes: number };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_dispatch_saved_backup_chunk: {
+        Args: { p_admin_session_token: string; p_backup_id: string; p_chunk_no: number };
+        Returns: Record<string, unknown>;
+      };
       get_employee_import_shared_backup: {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: Record<string, unknown>;
