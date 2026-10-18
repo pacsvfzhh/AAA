@@ -1,3 +1,16 @@
+CREATE OR REPLACE FUNCTION private.employee_transfer_end_job(
+  p_job private.employee_transfer_jobs,p_status text,p_summary jsonb,p_error text DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+BEGIN
+  UPDATE private.employee_transfer_jobs SET status=p_status,finished_at=now(),
+    summary=COALESCE(p_summary,summary),error=p_error WHERE id=p_job.id;
+  DELETE FROM private.employee_transfer_staging WHERE job_id=p_job.id;
+  PERFORM private.employee_transfer_log(p_job.id,p_job.admin_id,p_job.admin_username,p_job.kind,
+    p_job.kind||'_'||p_status,COALESCE(p_summary,'{}'::jsonb)||jsonb_build_object('error',p_error));
+END;
+$$;
+
 CREATE FUNCTION private.employee_transfer_dispatch_admin_map(p_job private.employee_transfer_jobs)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$

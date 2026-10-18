@@ -1,0 +1,692 @@
+import assert from 'node:assert/strict';
+import { after, before, mock, test } from 'node:test';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtemp, open, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+import { createSites, adminLogin, rpc as baseRpc, scalar, rows } from './support/transfer-harness.mjs';
+import { buildNewSite, NEW, OLD, PASSWORDS } from './support/transfer-fixtures.mjs';
+
+// Local PGlite + real migrations/public anon RPCs + real saved/authenticated ciphertext.
+// No network, fabricated jobs/receipts, public apply substitutes, or trigger bypasses in the
+// success path. Privileged corruption below is confined to explicitly negative transactions.
+const migration = '20261102000012_restore_dispatch_configuration.sql';
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const SHARED = ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members',
+  'admin_configs', 'system_configs', 'history_cleanup_config'];
+const CONFIG = ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders'];
+const DISPATCH = [...CONFIG, 'dispatch_group_members', 'valid_order_data', 'used_order_data'];
+const id = n => `12000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const S = { default: id(10), match: id(20), fresh: id(40), base: id(110), matchBase: id(120), freshBase: id(140),
+  normalBase: id(150), extra: id(160), employee: id(301), valid: id(310), used: id(311), order: id(312) };
+const T = { default: id(60), match: id(30), only: id(80), base: id(210), matchBase: id(220), onlyBase: id(230),
+  extra: id(240), employee: id(401), employee2: id(402), valid: id(410), otherRoot: id(900), branch: id(901) };
+const hash = value => createHash('sha256').update(value).digest('hex');
+const lines = text => text.match(/[^\n]*\n/g) ?? [];
+const rowHashes = text => hash(lines(text).map(line => hash(line)).join(''));
+const ENTER = '確認暫停業務並導入派單資料';
+const LEAVE = '確認取消尚未寫入的遷移';
+const PAUSED = 'Business writes are paused for employee transfer maintenance.';
+const PASSPHRASE = 'local-only-configuration-backup-authentication-passphrase';
+let source, db, replay, session, sourceSession, branch, emergency, otherSession;
+let modules, sharedPackage, dispatchPackage, sharedJob, sharedReceipt, job, preparation, backup;
+let originalGroup, guarded, sequence = 0;
+
+async function isolated(site, fn, role = null) {
+  const point = `dispatch_configuration_${++sequence}`;
+  await site.exec(`SAVEPOINT ${point}`);
+  try {
+    if (role) await site.exec(`SET LOCAL ROLE ${role}`);
+    const value = await fn();
+    await site.exec(`RESET ROLE; RELEASE SAVEPOINT ${point}`);
+    return value;
+  } catch (error) {
+    await site.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`);
+    throw error;
+  }
+}
+async function transaction(fn, site = db, commit = false) {
+  await site.exec('BEGIN');
+  try {
+    const value = await fn();
+    await site.exec(commit ? 'COMMIT' : 'ROLLBACK');
+    return value;
+  } catch (error) { await site.exec('ROLLBACK'); throw error; }
+}
+const on = (site, name, args) => isolated(site, () => baseRpc(site, name, args, { role: null }), 'anon');
+const rpc = (name, args) => on(db, name, args);
+const auth = (task = job, token = session) => ({ p_admin_session_token: token, p_job_token: task.job_token });
+const cancel = task => rpc('employee_transfer_cancel', auth(task));
+const status = () => rpc('get_employee_transfer_maintenance', { p_admin_session_token: session });
+const active = (task = job, dirty = false) => ({ active: true, job_id: task.job_id, dirty, full_site_complete: false });
+const inactive = () => ({ active: false, job_id: null, dirty: false, full_site_complete: false });
+const permitCount = () => scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_write_permits');
+const enter = (task = job, dry = preparation, extra = {}) => rpc('employee_import_dispatch_enter_maintenance', {
+  ...auth(task), p_plan_hash: dry.plan_hash, p_confirmation: ENTER, p_admin_password: PASSWORDS.root, ...extra,
+});
+const leave = (task = job) => rpc('employee_transfer_leave_maintenance', {
+  p_admin_session_token: session, p_job_id: task.job_id, p_admin_password: PASSWORDS.root, p_confirmation: LEAVE,
+});
+const configPlan = (task = job, extra = {}) => rpc('get_employee_import_dispatch_configuration_plan', { ...auth(task), ...extra });
+const apply = (plan, task = job, extra = {}) => rpc('employee_import_dispatch_apply_configuration', {
+  ...auth(task), p_plan_hash: plan.plan_hash, ...extra,
+});
+async function blocked(sql, role = null) {
+  await assert.rejects(isolated(db, () => db.exec(sql), role), error => {
+    assert.equal(error.message, PAUSED); assert.equal(error.code, '55000'); return true;
+  });
+}
+async function businessState(tables = guarded, site = db) {
+  return rows(site, tables.map(name => `SELECT '${name}' AS name,count(*)::int AS count,
+    md5(COALESCE(string_agg(to_jsonb(r)::text,E'\n' ORDER BY to_jsonb(r)::text),'')) AS digest FROM ${name} AS r`).join(' UNION ALL '));
+}
+const unaffected = () => businessState(guarded.filter(name => ![...CONFIG, 'dispatch_group_members'].map(key => `public.${key}`).includes(name)));
+const triggerState = () => rows(db, `SELECT n.nspname,c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid) AS definition
+  FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE n.nspname IN ('public','private') AND NOT t.tgisinternal ORDER BY n.nspname,c.relname,t.tgname`);
+const taskState = task => scalar(db, `SELECT jsonb_build_object('summary',summary,'group_map',group_map,'admin_map',admin_map,'status',status)
+  FROM private.employee_transfer_jobs WHERE id=$1`, [task.job_id]);
+
+function chunks(text) {
+  const result = []; let part = '', count = 0;
+  for (const line of lines(text)) {
+    if (count === 200 || Buffer.byteLength(part + line) > 262144) { result.push(part); part = ''; count = 0; }
+    part += line; count++;
+  }
+  if (part || !result.length) result.push(part);
+  return result;
+}
+async function capture(kind, packageId, token = sourceSession) {
+  const keys = kind === 'shared' ? SHARED : DISPATCH;
+  const task = await on(source, `employee_export_${kind}_begin`, { p_admin_session_token: token, p_admin_password: PASSWORDS.root });
+  assert.equal(task.success, true);
+  const texts = {};
+  for (const key of keys) {
+    let text = '', after = null;
+    do {
+      const page = await on(source, `get_employee_export_${kind}_page`, {
+        ...auth(task, token), p_table_key: key, p_after: after, p_limit: 200,
+      });
+      assert.equal(page.sha256, hash(page.ndjson)); text += page.ndjson; after = page.next_after;
+    } while (after !== null);
+    texts[key] = text;
+    const table = task.catalog.tables.find(t => t.key === key);
+    assert.equal(table.rows, lines(text).length); assert.equal(table.bytes, Buffer.byteLength(text));
+    assert.equal(kind === 'shared' ? table.sha256 : table.row_hashes_sha256, kind === 'shared' ? hash(text) : rowHashes(text));
+  }
+  assert.equal((await on(source, `employee_export_${kind}_verify`, auth(task, token))).verified, true);
+  if (kind === 'shared') await on(source, 'employee_transfer_cancel', auth(task, token));
+  else await on(source, 'employee_export_dispatch_close', auth(task, token));
+  return { catalog: task.catalog, texts, packageId };
+}
+async function prepare(kind = 'dispatch', input = dispatchPackage) {
+  const task = await rpc(kind === 'shared' ? 'employee_import_shared_replace_begin' : 'employee_import_dispatch_begin', {
+    p_admin_session_token: session, p_admin_password: PASSWORDS.root, p_package_id: input.packageId, p_catalog: input.catalog,
+  });
+  assert.equal(task.success, true);
+  for (const key of kind === 'shared' ? SHARED : DISPATCH) {
+    for (const [no, text] of chunks(input.texts[key]).entries()) {
+      const ack = await rpc(`employee_import_${kind}_stage`, {
+        ...auth(task), p_table_key: key, p_chunk_no: no, p_ndjson: text,
+      });
+      assert.equal(ack.success, true); assert.equal(ack.rows, lines(text).length); assert.equal(ack.sha256, hash(text));
+    }
+  }
+  const dry = await rpc(kind === 'shared' ? 'get_employee_import_shared_replace_dry_run' : 'get_employee_import_dispatch_dry_run', auth(task));
+  assert.equal(dry.full_site_complete, false);
+  if (kind === 'shared') assert.equal(dry.can_apply, true, JSON.stringify(dry.conflicts));
+  else { assert.equal(dry.preparation_ready, true); assert.equal(dry.can_apply, false); assert.equal(dry.replacement_ready, false); }
+  return { task, dry };
+}
+async function* diskSource(path) {
+  const file = await open(path, 'r');
+  try {
+    const bytes = Buffer.alloc(65521);
+    for (;;) { const result = await file.read(bytes); if (!result.bytesRead) return; yield bytes.subarray(0, result.bytesRead); }
+  } finally { await file.close(); }
+}
+async function sealBackup(kind, task, dry) {
+  const descriptor = await rpc(`get_employee_import_${kind}_backup`, auth(task));
+  const keys = kind === 'shared' ? SHARED : DISPATCH;
+  const directory = await mkdtemp(join(tmpdir(), 'dispatch-configuration-'));
+  const files = new Map(keys.map((key, index) => [`data/${kind}-${key}.ndjson`, join(directory, `plain-${index}`)]));
+  const path = join(directory, 'independent-target.edx');
+  const expected = new Map(); let opens = 0, eof = 0;
+  try {
+    const result = await (kind === 'shared' ? modules.createReplacementBackup : modules.createDispatchBackup)(descriptor, {
+      async catalog() { return (await rpc(`get_employee_import_${kind}_backup`, auth(task))).catalog; },
+      async page(key, after) {
+        const page = await rpc(`get_employee_import_${kind}_backup_page`, {
+          ...auth(task), p_table_key: key, p_after: after, p_limit: 200,
+        });
+        expected.set(key, (expected.get(key) ?? '') + page.ndjson); return page;
+      },
+      async verify() {
+        assert.deepEqual(await rpc(`get_employee_import_${kind}_backup`, auth(task)), descriptor);
+        assert.deepEqual(await rpc(kind === 'shared' ? 'get_employee_import_shared_replace_dry_run' : 'get_employee_import_dispatch_dry_run', auth(task)), dry);
+        return { verified: true, scope: kind === 'shared' ? 'shared-settings' : 'dispatch-submission', full_site_complete: false };
+      },
+    }, {
+      async append(name, bytes) {
+        assert.ok(files.has(name)); const file = await open(files.get(name), 'a');
+        try { await file.writeFile(bytes); } finally { await file.close(); }
+      },
+      open(name) { assert.ok(files.has(name)); return diskSource(files.get(name)); },
+      async abort() { await Promise.all([...files.values()].map(name => rm(name, { force: true }))); },
+    }, {
+      async write(stream) {
+        const file = await open(path, 'wx');
+        try { for await (const bytes of stream) await file.writeFile(bytes); await file.sync(); }
+        finally { await file.close(); }
+      },
+      open() { opens++; return (async function* () { yield* diskSource(path); eof++; })(); },
+    }, {
+      append(no, hex) {
+        assert.equal(opens, 2); assert.ok(eof >= 1, 'saved independent file must authenticate through EOF before upload');
+        return rpc(`employee_import_${kind}_backup_append`, { ...auth(task), p_plan_hash: dry.plan_hash, p_chunk_no: no, p_hex: hex });
+      },
+      seal(sha256, bytes) {
+        return rpc(`employee_import_${kind}_backup_seal`, { ...auth(task), p_plan_hash: dry.plan_hash, p_sha256: sha256, p_bytes: bytes });
+      },
+    }, PASSPHRASE);
+    assert.equal(opens, 2); assert.equal(eof, 2);
+    for (const file of files.values()) await assert.rejects(stat(file), { code: 'ENOENT' });
+    const disk = await readFile(path), saved = [];
+    assert.equal(disk.subarray(0, 8).toString(), 'EDXSTRM1'); assert.equal(hash(disk), result.cipherSha256);
+    assert.equal(disk.length, result.bytes); assert.equal(result.sealReceipt.full_site_complete, false);
+    for (let no = 0; no < result.chunks; no++) {
+      const chunk = await rpc(`get_employee_${kind}_saved_backup_chunk`, {
+        p_admin_session_token: session, p_backup_id: task.job_id, p_chunk_no: no,
+      });
+      assert.equal(chunk.sha256, hash(disk)); assert.equal(chunk.bytes, disk.length); saved.push(Buffer.from(chunk.hex, 'hex'));
+    }
+    assert.deepEqual(Buffer.concat(saved), disk);
+    const plain = new Map();
+    const manifest = await modules.verifyEncryptedVolume(diskSource(path), PASSPHRASE, {
+      async append(name, bytes) { plain.set(name, [...(plain.get(name) ?? []), Buffer.from(bytes)]); },
+      async abort() { assert.fail('real saved backup must authenticate'); },
+    }, { expectedMetadata: { exportId: task.job_id, volumeId: task.job_id } });
+    assert.equal(manifest.scope, 'replacement-backup'); assert.equal(manifest.entries.length, 7);
+    for (const key of keys) assert.equal(Buffer.concat(plain.get(`data/${kind}-${key}.ndjson`)).toString(), expected.get(key));
+    // The server itself has no passphrase: its seal proves ciphertext storage/hash only.
+    return { descriptor, bytes: disk, result, texts: Object.fromEntries(expected) };
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}
+async function addEmployee(site, user, owner) {
+  await site.query(`INSERT INTO public.users(id,username,password_hash,employee_id,created_by,is_active)
+    VALUES($1,$2,'local-fixture-only',$3,$4,false)`, [user, `configuration-${user}`, `CFG-${user}`, owner]);
+}
+async function addGroup(site, group, name, owner, baseId, baseName, isDefault = false) {
+  await site.query(`INSERT INTO public.dispatch_groups(id,group_name,created_by,is_default) VALUES($1,$2,$3,$4)`, [group, name, owner, isDefault]);
+  await site.query(`UPDATE public.dispatch_order_pools SET id=$2,pool_name=$3 WHERE group_id=$1 AND is_base`, [group, baseId, baseName]);
+}
+async function addContent(site, group, pool, number, text, owner) {
+  await site.query(`INSERT INTO public.dispatch_group_orders(id,group_id,pool_id,order_content,created_by,is_active,created_at,updated_at)
+    VALUES($1,$2,$3,$4,$5,true,'2024-03-04T05:06:07.123456Z','2024-04-05T06:07:08.654321Z')`, [id(number), group, pool, text, owner]);
+}
+
+before(async () => {
+  // Deny every accidental fetch before starting any data flow; PGlite uses local files only.
+  mock.method(globalThis, 'fetch', () => assert.fail('configuration DB tests prohibit all network requests'));
+  replay = await createSites({ upTo: migration }); source = replay.oldSite; db = replay.newSite;
+  await db.query('UPDATE private.employee_transfer_site SET site_id=$1', [randomUUID()]);
+  await buildNewSite(db);
+  for (const [site, admin, name, role, password] of [
+    [source, OLD.root, 'root', 'super_admin', PASSWORDS.root], [source, OLD.branch, 'branch', 'secondary_admin', PASSWORDS.branch],
+    [source, OLD.emergency, 'emergency', 'emergency_admin', PASSWORDS.emergency],
+    [db, T.otherRoot, 'configuration-other-root', 'super_admin', PASSWORDS.root],
+    [db, T.branch, 'configuration-target-branch', 'secondary_admin', PASSWORDS.branch],
+  ]) {
+    await site.query(`INSERT INTO public.admins(id,username,password_hash,role,is_active)
+      VALUES($1,$2,extensions.crypt($3,extensions.gen_salt('bf',4)),$4,true)`, [admin, name, password, role]);
+    await site.query('INSERT INTO public.financial_admin_credentials(admin_id,password_hash) SELECT id,password_hash FROM public.admins WHERE id=$1', [admin]);
+  }
+  originalGroup = await scalar(source, 'SELECT id FROM public.dispatch_groups WHERE is_default');
+  for (const [site, owner, label] of [[source, OLD.root, '來源'], [db, NEW.root, '目標']]) {
+    await site.query(`UPDATE public.dispatch_groups SET is_default=false,group_name=$2,created_by=$3 WHERE id=$1`, [originalGroup, `${label}原始非默認組`, owner]);
+    await site.query('UPDATE public.dispatch_order_pools SET created_by=$1 WHERE group_id=$2', [owner, originalGroup]);
+  }
+  await addGroup(source, S.default, '來源真正默認組', OLD.root, S.base, '來源改名Base', true);
+  await addGroup(source, S.match, '同名應覆蓋組', OLD.branch, S.matchBase, '來源空內容Base');
+  await addGroup(source, S.fresh, '來源全新組', OLD.branch, S.freshBase, '來源全新改名Base');
+  await addGroup(db, T.default, '目標初始化默認組', NEW.root, T.base, '目標初始化Base', true);
+  await db.query(`UPDATE public.dispatch_order_pools SET pool_name='目標舊Base' WHERE group_id=$1 AND is_base`, [NEW.groupA]);
+  await db.query('UPDATE public.dispatch_groups SET group_name=$2 WHERE id=$1', [NEW.groupA, '目標獨有Group A']);
+  await addGroup(db, T.match, '同名應覆蓋組', NEW.branch, T.matchBase, '目標同名組舊Base');
+  await addGroup(db, T.only, '目標獨有組', NEW.root, T.onlyBase, 'Base');
+  await source.query(`INSERT INTO public.dispatch_order_pools(id,group_id,pool_name,is_base,trigger_probability,created_by)
+    VALUES($1,$2,'Base',false,30,$3),($4,$2,'來源普通池',false,10,$3)`, [S.normalBase, S.default, OLD.branch, S.extra]);
+  await source.query(`UPDATE public.dispatch_order_pools SET trigger_probability=60 WHERE id=$1`, [S.base]);
+  await source.query(`UPDATE public.dispatch_groups SET description='來源完整配置 é é 𠮷',dispatch_interval_min=7,
+    dispatch_interval_max=19,session_timeout_minutes=3,dispatch_order_mode='sequential',dispatch_success_rate=37,
+    pool_selection_mode='weighted',submit_wait_min_seconds=11,submit_wait_max_seconds=18,commission_rate=0.12345678,
+    withdrawal_amount_threshold=123.45,withdrawal_orders_threshold=17,withdrawal_condition_mode='AND',grab_success_rate=63,
+    created_at='2024-03-04T05:06:07.123456Z',updated_at='2024-04-05T06:07:08.654321Z' WHERE id=$1`, [S.default]);
+  await source.query(`UPDATE public.dispatch_order_pools SET dispatch_interval_min=13,dispatch_interval_max=23,
+    session_timeout_minutes=2,dispatch_order_mode='sequential',dispatch_success_rate=29,created_by=$2,
+    created_at='2023-01-02T03:04:05.123456Z',updated_at='2023-02-03T04:05:06.654321Z' WHERE id=ANY($1::uuid[])`,
+  [[S.base, S.matchBase, S.freshBase, S.normalBase], OLD.branch]);
+  await db.query(`UPDATE public.dispatch_groups SET description='目標不能保留',commission_rate=0.00001001,
+    dispatch_order_mode='random',dispatch_success_rate=91 WHERE id=$1`, [T.default]);
+  await db.query(`UPDATE public.dispatch_order_pools SET dispatch_interval_min=61,dispatch_interval_max=89,dispatch_success_rate=97 WHERE id=$1`, [T.base]);
+  await db.query(`INSERT INTO public.dispatch_order_pools(id,group_id,pool_name,created_by) VALUES($1,$2,'目標獨有普通池',$3)`, [T.extra, T.default, NEW.root]);
+  await addContent(source, S.default, S.base, 501, '來源默認原文\n含換行 é é 𠮷', OLD.branch);
+  await addContent(source, S.default, S.normalBase, 502, '普通池叫Base，不是默認池', OLD.root);
+  await addContent(source, S.fresh, S.freshBase, 503, '新組自動Base必須完整覆蓋', OLD.branch);
+  await addContent(db, T.default, T.base, 601, '目標舊默認內容必須清除', NEW.root);
+  await addContent(db, T.match, T.matchBase, 602, '來源此池空，不能留下此內容', NEW.branch);
+  await addContent(db, T.only, T.onlyBase, 603, '目標獨有組內容也不保留可用', NEW.root);
+  await addContent(db, T.default, T.extra, 604, '目標獨有池內容', NEW.root);
+  await addEmployee(source, S.employee, OLD.branch); await addEmployee(db, T.employee, NEW.root); await addEmployee(db, T.employee2, NEW.branch);
+  for (const [site, group, user, owner] of [[source, S.default, S.employee, OLD.branch],
+    [db, T.default, T.employee, NEW.root], [db, T.only, T.employee2, NEW.branch]])
+    await site.query(`INSERT INTO public.dispatch_group_members(group_id,user_id,assigned_by,assigned_at)
+      VALUES($1,$2,$3,'2024-05-06T07:08:09.123456Z')`, [group, user, owner]);
+  await source.query(`INSERT INTO public.product_types(id,name) VALUES($1,'Configuration source product')`, [OLD.product]);
+  await source.query(`INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,order_number,transaction_id,status)
+    VALUES($1,$2,$3,$4,1,'source-dependency','source-dependency-tx','failure')`, [S.order, S.employee, `configuration-${S.employee}`, OLD.product]);
+  await source.query(`INSERT INTO public.valid_order_data(id,product_value,transaction_id,created_by,usage_count,tags)
+    VALUES($1,12345678901234567890.1234567890123456789,'來源已用依賴-é-𠮷',$2,6,ARRAY['來源','已用'])`, [S.valid, OLD.root]);
+  await source.query(`INSERT INTO public.used_order_data(id,user_id,valid_order_data_id,order_id,created_at)
+    VALUES($1,$2,$3,$4,'2024-05-06T07:08:09.123456Z')`, [S.used, S.employee, S.valid, S.order]);
+  await db.query(`INSERT INTO public.valid_order_data(id,product_value,transaction_id,created_by)
+    VALUES($1,98765432109876543210.9876543210987654321,'目標未使用原文',$2)`, [T.valid, NEW.root]);
+  await source.exec(`UPDATE public.dispatch_config SET config_value=CASE config_key WHEN 'dispatch_interval_min' THEN '7'
+    WHEN 'dispatch_interval_max' THEN '19' WHEN 'session_timeout_minutes' THEN '3' ELSE 'sequential' END,
+    description=NULL,updated_at='2024-03-04T05:06:07.123456Z'`);
+  // Announcement-only material is deliberately unrelated to both transfer protocols.
+  await db.query(`INSERT INTO public.announcement_categories(name,display_order) VALUES('配置測試保留分類',10)`);
+  await db.query(`INSERT INTO public.announcements(title,content,created_by) VALUES('配置測試保留公告','<p>不得更動</p>',$1)`, [NEW.root]);
+  guarded = await scalar(db, 'SELECT private.employee_transfer_guarded_tables()');
+  session = await adminLogin(db, 'root', PASSWORDS.root); sourceSession = await adminLogin(source, 'root', PASSWORDS.root);
+  branch = await adminLogin(db, 'configuration-target-branch', PASSWORDS.branch);
+  emergency = await adminLogin(db, 'emergency', PASSWORDS.emergency);
+  otherSession = await adminLogin(db, 'configuration-other-root', PASSWORDS.root);
+  const compiled = await build({ stdin: { contents: `export { createReplacementBackup } from './src/lib/employeeTransfer/replacementBackup.ts';
+    export { createDispatchBackup } from './src/lib/employeeTransfer/dispatchBackup.ts';
+    export { verifyEncryptedVolume } from './src/lib/employeeTransfer/container.ts';`, resolveDir: root, sourcefile: 'dispatch-configuration-backup-entry.mjs' },
+  bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020' });
+  modules = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
+  const packageId = randomUUID();
+  sharedPackage = await transaction(() => capture('shared', packageId), source, true);
+  await transaction(async () => {
+    const prepared = await prepare('shared', sharedPackage); sharedJob = prepared.task;
+    await sealBackup('shared', sharedJob, prepared.dry);
+    sharedReceipt = await rpc('employee_import_shared_replace_apply', { ...auth(sharedJob), p_plan_hash: prepared.dry.plan_hash });
+    assert.equal(sharedReceipt.success, true); assert.equal(sharedReceipt.full_site_complete, false);
+    assert.equal(sharedReceipt.admin_map[OLD.root], NEW.root); assert.equal(sharedReceipt.admin_map[OLD.branch], NEW.branch);
+    await cancel(sharedJob);
+  }, db, true);
+  // Export AFTER the real shared apply/cancel, with precisely the same package/source site.
+  dispatchPackage = await transaction(() => capture('dispatch', packageId), source, true);
+  assert.equal(dispatchPackage.catalog.site_id, sharedPackage.catalog.site_id);
+  await transaction(async () => {
+    const prepared = await prepare(); job = prepared.task; preparation = prepared.dry;
+    backup = await sealBackup('dispatch', job, preparation);
+  }, db, true);
+}, { timeout: 180000 });
+after(async () => { mock.restoreAll(); await Promise.all([source?.close(), db?.close()]); });
+
+test('539 real migrations through 12 retain exactly 12 known old failures, never a fresh native PostgreSQL claim', () => {
+  assert.equal(replay.files.length, 539); assert.equal(replay.files.at(-1), migration);
+  assert.equal(replay.failures.length, 12); assert.equal(replay.validation.matched.length, 12);
+  assert.equal(replay.validation.freshDatabaseVerified, false);
+  assert.ok(!replay.failures.some(f => f.file >= '20261102000011'));
+});
+
+test('real shared receipt, source site/package and independent sealed backups form the prerequisite chain', () => transaction(async () => {
+  assert.equal(await scalar(db, 'SELECT status FROM private.employee_transfer_jobs WHERE id=$1', [sharedJob.job_id]), 'cancelled');
+  const shared = await scalar(db, 'SELECT to_jsonb(r) FROM private.employee_transfer_jobs AS r WHERE id=$1', [sharedJob.job_id]);
+  assert.equal(shared.summary?.shared_applied, true, 'real apply -> cancel must retain the server shared_applied proof for migration 12');
+  assert.deepEqual(shared.summary.shared_receipt, sharedReceipt, 'cancel must not discard the server receipt needed by the next phase');
+  assert.deepEqual(shared.admin_map, sharedReceipt.admin_map);
+  assert.equal(sharedPackage.packageId, dispatchPackage.packageId);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_shared_backups WHERE id=ANY($1::uuid[]) AND sealed_at IS NOT NULL', [[sharedJob.job_id, job.job_id]]), 2);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.used_order_data'), 0);
+  assert.equal(preparation.dependencies.employees, 1); assert.equal(preparation.dependencies.orders, 1);
+  assert.match(dispatchPackage.texts.valid_order_data, /12345678901234567890\.1234567890123456789/);
+  assert.match(backup.texts.valid_order_data, /98765432109876543210\.9876543210987654321/);
+  assert.equal(lines(dispatchPackage.texts.used_order_data).length, 1);
+  assert.equal(await permitCount(), 0); assert.deepEqual(await status(), inactive());
+}));
+
+test('two public RPCs have fixed security/grants and no client administrator/employee maps; all new helpers remain private', () => transaction(async () => {
+  const result = await rows(db, `SELECT proname,proargnames,prosecdef,proconfig,
+    has_function_privilege('anon',oid,'EXECUTE') AS anon,has_function_privilege('authenticated',oid,'EXECUTE') AS authenticated,
+    EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS public_execute
+    FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=ANY($1::text[])`,
+  [['get_employee_import_dispatch_configuration_plan', 'employee_import_dispatch_apply_configuration']]);
+  assert.equal(result.length, 2);
+  for (const fn of result) {
+    assert.equal(fn.prosecdef, true); assert.equal(fn.anon, true); assert.equal(fn.authenticated, true); assert.equal(fn.public_execute, false);
+    assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+    assert.deepEqual(fn.proargnames, ['p_admin_session_token', 'p_job_token', ...(fn.proname.includes('apply') ? ['p_plan_hash'] : [])]);
+  }
+  for (const name of ['employee_transfer_dispatch_admin_map', 'employee_transfer_dispatch_config_plan',
+    'employee_transfer_write_dispatch_config_row', 'employee_transfer_assert_dispatch_config_triggers']) {
+    for (const role of ['anon', 'authenticated']) assert.equal(await scalar(db, `SELECT has_function_privilege($1,oid,'EXECUTE')
+      FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname=$2`, [role, name]), false);
+  }
+  await assert.rejects(isolated(db, () => db.query('SELECT private.employee_transfer_allow_config_write($1)', [job.job_id]), 'anon'), /permission denied/);
+}));
+
+function checkPlan(plan, task = job, dry = preparation) {
+  assert.deepEqual(Object.keys(plan).sort(), ['scope', 'can_apply_configuration', 'full_site_complete', 'replacement_ready',
+    'conflicts', 'group_map', 'pool_map', 'preparation_plan_hash', 'plan_hash'].sort());
+  assert.equal(plan.scope, 'dispatch-configuration'); assert.equal(plan.can_apply_configuration, true, JSON.stringify(plan.conflicts));
+  assert.equal(plan.full_site_complete, false); assert.equal(plan.replacement_ready, false); assert.deepEqual(plan.conflicts, []);
+  assert.equal(plan.preparation_plan_hash, dry.plan_hash); assert.match(plan.plan_hash, /^[0-9a-f]{64}$/);
+  assert.equal(plan.group_map[S.default], T.default); assert.equal(plan.group_map[S.match], T.match);
+  assert.equal(plan.group_map[S.fresh], S.fresh); assert.equal(plan.pool_map[S.base], T.base);
+  assert.equal(plan.pool_map[S.matchBase], T.matchBase); assert.equal(plan.pool_map[S.freshBase], S.freshBase);
+  assert.equal(plan.pool_map[S.normalBase], S.normalBase); assert.ok(task.job_token);
+}
+async function verifyConfiguration(plan, task = job) {
+  // Compare actual JSONB in SQL, including every declared column, numeric scale, NULL and
+  // microseconds. JS JSON.parse is not allowed to round numeric fields into a false match.
+  for (const key of CONFIG) {
+    const query = await scalar(db, 'SELECT private.employee_transfer_dispatch_query($1)', [key]);
+    const mismatches = await rows(db, `WITH input AS (
+      SELECT id,body FROM private.employee_transfer_dispatch_input($1,$2)
+    ), expected AS (SELECT CASE $2
+      WHEN 'dispatch_groups' THEN body||jsonb_build_object('id',$3::jsonb->'group_map'->id::text,'created_by',$4::jsonb->(body->>'created_by'))
+      WHEN 'dispatch_order_pools' THEN body||jsonb_build_object('id',$3::jsonb->'pool_map'->id::text,'group_id',$3::jsonb->'group_map'->(body->>'group_id'),'created_by',$4::jsonb->(body->>'created_by'))
+      WHEN 'dispatch_group_orders' THEN body||jsonb_build_object('group_id',$3::jsonb->'group_map'->(body->>'group_id'),'pool_id',$3::jsonb->'pool_map'->(body->>'pool_id'),'created_by',$4::jsonb->(body->>'created_by'))
+      ELSE body END AS body FROM input)
+      SELECT expected.body->>'id' AS missing_or_changed FROM expected LEFT JOIN (${query}) AS actual
+        ON actual.id=(expected.body->>'id')::uuid AND actual.body=expected.body WHERE actual.id IS NULL`,
+    [task.job_id, key, JSON.stringify(plan), JSON.stringify(sharedReceipt.admin_map)]);
+    assert.deepEqual(mismatches, [], `${key}: every source column must match after explicit identity/creator/reference mapping`);
+  }
+  for (const key of ['dispatch_config', 'dispatch_group_orders']) assert.equal(await scalar(db, `SELECT count(*)::int FROM public.${key}`),
+    lines(dispatchPackage.texts[key]).length, `${key}: no target-only rows may survive`);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_group_members'), 0, 'source members are NOT restored in this stage');
+  assert.equal(await scalar(db, 'SELECT id FROM public.dispatch_groups WHERE is_default'), T.default);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_order_pools WHERE group_id=$1 AND is_base', [S.fresh]), 1);
+  assert.equal(await scalar(db, 'SELECT pool_name FROM public.dispatch_order_pools WHERE id=$1', [S.normalBase]), 'Base');
+  assert.equal(await scalar(db, 'SELECT is_base FROM public.dispatch_order_pools WHERE id=$1', [S.normalBase]), false);
+  assert.equal(await scalar(db, 'SELECT pool_name FROM public.dispatch_order_pools WHERE id=$1', [T.base]), '來源改名Base');
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_group_orders WHERE pool_id=$1', [T.matchBase]), 0);
+  assert.deepEqual(await rows(db, `SELECT is_active,is_default,archived_at IS NOT NULL AS archived FROM public.dispatch_groups WHERE id=$1`, [T.only]),
+    [{ is_active: false, is_default: false, archived: true }]);
+  assert.deepEqual(await rows(db, `SELECT is_active,is_base,archived_at IS NULL AS not_archived FROM public.dispatch_order_pools WHERE id=$1`, [T.onlyBase]),
+    [{ is_active: false, is_base: true, not_archived: true }]);
+  assert.deepEqual(await rows(db, `SELECT is_active,archived_at IS NOT NULL AS archived,trigger_probability FROM public.dispatch_order_pools WHERE id=$1`, [T.extra]),
+    [{ is_active: false, archived: true, trigger_probability: 0 }]);
+  assert.equal(await scalar(db, `SELECT count(*)::int FROM public.dispatch_group_orders WHERE id=ANY($1::uuid[])`, [[id(601), id(602), id(603), id(604)]]), 0);
+}
+
+test('lightweight plan uses only the server shared receipt; no maintenance/backup is claimed as full-site completion', () => transaction(async () => {
+  await enter(); const before = await businessState(); const plan = await configPlan(); checkPlan(plan);
+  assert.deepEqual(await configPlan(), plan); assert.deepEqual(await businessState(), before);
+  assert.deepEqual(await status(), active()); assert.equal(await permitCount(), 0);
+  assert.notEqual(S.default, T.default); assert.notEqual(S.base, T.base);
+  assert.doesNotMatch(JSON.stringify(plan), /admin_map|password_hash|ndjson|order_content|catalog/);
+}));
+
+test('real four-table configuration restore covers source defaults, renamed/ordinary Base, new auto-Base, exact fields and retired residuals', () => transaction(async () => {
+  await enter(); const plan = await configPlan(); checkPlan(plan);
+  const keep = await unaffected(), triggers = await triggerState();
+  const receipt = await apply(plan);
+  assert.deepEqual(receipt, { success: true, scope: 'dispatch-configuration', configuration_applied: true,
+    maintenance: true, dependencies_pending: true, replacement_ready: false, full_site_complete: false,
+    repeated: false, group_map: plan.group_map, pool_map: plan.pool_map });
+  await verifyConfiguration(plan);
+  assert.deepEqual(await unaffected(), keep, 'all other guarded tables, financial/audit/health logs, users/orders, valid/used and announcements are untouched');
+  assert.deepEqual(await triggerState(), triggers); assert.equal(await permitCount(), 0);
+  await db.exec('SELECT private.employee_transfer_assert_maintenance_guards(),private.employee_transfer_assert_dispatch_config_triggers()');
+  assert.deepEqual(await status(), active(job, true));
+  for (const table of ['public.dispatch_config', 'public.dispatch_group_orders', 'public.valid_order_data', 'public.used_order_data',
+    'public.orders', 'public.users', 'public.wallets', 'public.announcements']) await blocked(`DELETE FROM ${table} WHERE false`);
+  await assert.rejects(leave(), /committed writes/);
+}));
+
+test('idempotent apply returns original receipt with repeated=true and creates no extra pool/content/member/audit/event rows', () => transaction(async () => {
+  await enter(); const plan = await configPlan(), receipt = await apply(plan);
+  const before = await businessState(), state = await taskState(job);
+  const events = await rows(db, 'SELECT action,details FROM private.employee_transfer_events WHERE job_id=$1 ORDER BY id', [job.job_id]);
+  assert.deepEqual(await apply(plan), { ...receipt, repeated: true });
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await taskState(job), state);
+  assert.deepEqual(await rows(db, 'SELECT action,details FROM private.employee_transfer_events WHERE job_id=$1 ORDER BY id', [job.job_id]), events);
+  assert.deepEqual(await status(), active(job, true)); assert.equal(await permitCount(), 0);
+  await assert.rejects(apply({ plan_hash: hash('wrong repeat') }), /confirmation/);
+  await assert.rejects(configPlan(), /Clean owner maintenance/);
+}));
+
+test('source used dependencies remain pending, target valid/used and all employee/order/financial records stay exactly unchanged', () => transaction(async () => {
+  assert.equal(preparation.dependencies.orders, 1); assert.equal(preparation.dependencies.employees, 1);
+  await enter(); const plan = await configPlan(), before = await unaffected();
+  assert.equal((await apply(plan)).dependencies_pending, true);
+  assert.deepEqual(await unaffected(), before);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.users WHERE id=$1', [S.employee]), 0);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.orders WHERE id=$1', [S.order]), 0);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.valid_order_data WHERE id=$1', [S.valid]), 0);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.used_order_data'), 0);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_group_members'), 0);
+  assert.equal(lines(dispatchPackage.texts.dispatch_group_members).length, 1);
+}));
+
+test('source with no content clears all target content rather than preserving target Base defaults', () => transaction(async () => {
+  await cancel(job);
+  const input = await transaction(async () => {
+    await source.exec('DELETE FROM public.dispatch_group_orders');
+    return capture('dispatch', sharedPackage.packageId);
+  }, source);
+  const { task, dry } = await prepare('dispatch', input); await sealBackup('dispatch', task, dry);
+  await enter(task, dry); const plan = await configPlan(task); const keep = await unaffected();
+  assert.equal((await apply(plan, task)).configuration_applied, true);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_group_orders'), 0);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_group_members'), 0);
+  assert.deepEqual(await unaffected(), keep); assert.deepEqual(await status(), active(task, true)); assert.equal(await permitCount(), 0);
+}));
+
+for (const [label, extra] of [
+  ['secondary administrator', () => ({ p_admin_session_token: branch })],
+  ['emergency administrator', () => ({ p_admin_session_token: emergency })],
+  ['other super administrator', () => ({ p_admin_session_token: otherSession })],
+  ['unknown session', () => ({ p_admin_session_token: randomUUID() })],
+  ['null session', () => ({ p_admin_session_token: null })],
+  ['unknown task token', () => ({ p_job_token: randomUUID() })],
+  ['null task token', () => ({ p_job_token: null })],
+]) test(`plan/apply reject ${label} without writes or leaked permits`, () => transaction(async () => {
+  await enter(); const plan = await configPlan(), before = await businessState();
+  await assert.rejects(configPlan(job, extra()), /Super administrator|invalid or expired/i);
+  await assert.rejects(apply(plan, job, extra()), /Super administrator|invalid or expired/i);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active()); assert.equal(await permitCount(), 0);
+}));
+
+for (const field of ['revoked session', 'expired session', 'idle task', 'absolute task']) test(`configuration refuses ${field}`, () => transaction(async () => {
+  await enter(); const plan = await configPlan(), before = await businessState();
+  if (field === 'revoked session') await db.query('UPDATE public.admin_financial_sessions SET revoked_at=now() WHERE admin_id=$1', [NEW.root]);
+  if (field === 'expired session') await db.query("UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1", [NEW.root]);
+  if (field === 'idle task') await db.query("UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1", [job.job_id]);
+  if (field === 'absolute task') await db.query("UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", [job.job_id]);
+  await assert.rejects(configPlan(), /invalid or expired/i); await assert.rejects(apply(plan), /invalid or expired/i);
+  assert.deepEqual(await businessState(), before); assert.equal(await permitCount(), 0);
+  assert.equal(await scalar(db, 'SELECT dirty FROM private.employee_transfer_maintenance'), false);
+}));
+
+test('no maintenance, no confirmed plan, old preparation hash, null/wrong configuration hash never authorize apply', () => transaction(async () => {
+  const before = await businessState();
+  await assert.rejects(configPlan(), /Clean owner maintenance/); await assert.rejects(apply(preparation), /Owner maintenance/);
+  await enter(); await assert.rejects(apply(preparation), /configuration plan/);
+  const plan = await configPlan();
+  for (const value of [preparation.plan_hash, hash('wrong'), null]) await assert.rejects(apply(plan, job, { p_plan_hash: value }), /configuration plan/);
+  assert.deepEqual(await businessState(), before); assert.equal(await permitCount(), 0); assert.deepEqual(await status(), active());
+}));
+
+test('genuinely unsealed preparation cannot enter maintenance or obtain/apply a configuration plan', () => transaction(async () => {
+  await cancel(job); const { task, dry } = await prepare(); const before = await businessState();
+  await assert.rejects(enter(task, dry), /saved and sealed/);
+  await assert.rejects(configPlan(task), /Clean owner maintenance/);
+  await assert.rejects(apply({ plan_hash: dry.plan_hash }, task), /Owner maintenance/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), inactive()); assert.equal(await permitCount(), 0);
+}));
+
+// New real dispatch tasks exercise package/site binding, not edits to private job options.
+for (const variant of ['wrong package', 'wrong source site']) test(`${variant} cannot borrow a different shared receipt`, () => transaction(async () => {
+  await cancel(job);
+  let input = dispatchPackage;
+  if (variant === 'wrong package') input = { ...input, packageId: randomUUID() };
+  else input = await transaction(async () => {
+    await source.query('UPDATE private.employee_transfer_site SET site_id=$1', [randomUUID()]);
+    return capture('dispatch', sharedPackage.packageId);
+  }, source);
+  const { task, dry } = await prepare('dispatch', input); await sealBackup('dispatch', task, dry); await enter(task, dry);
+  const before = await businessState();
+  await assert.rejects(configPlan(task), /matching server-verified shared administrator import receipt/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active(task)); assert.equal(await permitCount(), 0);
+}));
+
+for (const [label, sql] of [
+  ['missing server shared receipt', "UPDATE private.employee_transfer_jobs SET summary=summary-'shared_receipt' WHERE id=$1"],
+  ['unapplied shared import', "UPDATE private.employee_transfer_jobs SET summary=summary-'shared_applied' WHERE id=$1"],
+  ['receipt map mismatch', "UPDATE private.employee_transfer_jobs SET admin_map='{}' WHERE id=$1"],
+]) test(`configuration rejects ${label}, with corruption only in this negative fixture`, () => transaction(async () => {
+  await db.query(sql, [sharedJob.job_id]);
+  await enter(); const before = await businessState();
+  await assert.rejects(configPlan(), /matching server-verified shared administrator import receipt/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active()); assert.equal(await permitCount(), 0);
+}));
+
+test('creator absent from genuine shared source administrator IDs blocks planning (not supplied by a client map)', () => transaction(async () => {
+  await cancel(job);
+  const input = await transaction(async () => {
+    await source.query(`INSERT INTO public.admins(id,username,password_hash,role,is_active)
+      VALUES($1,'configuration-not-in-shared','local-only','secondary_admin',false)`, [id(999)]);
+    await source.query('UPDATE public.dispatch_order_pools SET created_by=$1 WHERE id=$2', [id(999), S.base]);
+    return capture('dispatch', sharedPackage.packageId);
+  }, source);
+  const { task, dry } = await prepare('dispatch', input); await sealBackup('dispatch', task, dry); await enter(task, dry);
+  await assert.rejects(configPlan(task), /matching server-verified shared administrator import receipt/);
+  assert.deepEqual(await status(), active(task)); assert.equal(await permitCount(), 0);
+}));
+
+for (const [label, change] of [
+  ['cross-group source pool ID collision', async () => db.query(`INSERT INTO public.dispatch_order_pools(id,group_id,pool_name,created_by)
+    VALUES($1,$2,'佔用來源普通池ID',$3)`, [S.normalBase, T.only, NEW.root])],
+  ['base ID occupied by another group', async () => db.query(`INSERT INTO public.dispatch_order_pools(id,group_id,pool_name,created_by)
+    VALUES($1,$2,'佔用新組來源BaseID',$3)`, [S.freshBase, T.only, NEW.root])],
+]) test(`${label} is reported as a plan conflict and apply never retires any target state`, () => transaction(async () => {
+  await cancel(job); await change(); const { task, dry } = await prepare(); await sealBackup('dispatch', task, dry); await enter(task, dry);
+  const plan = await configPlan(task), before = await businessState();
+  assert.equal(plan.can_apply_configuration, false); assert.ok(plan.conflicts.includes('pool_mapping_collision'));
+  await assert.rejects(apply(plan, task), /contains conflicts/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active(task)); assert.equal(await permitCount(), 0);
+}));
+
+for (const table of ['dispatch_groups', 'dispatch_order_pools']) test(`reserved retirement names in source ${table} block configuration restoration`, () => transaction(async () => {
+  await cancel(job);
+  const input = await transaction(async () => {
+    await source.query(`UPDATE public.${table} SET ${table === 'dispatch_groups' ? 'group_name' : 'pool_name'}=$1 WHERE id=$2`,
+      [`transfer-retired-${id(888)}`, table === 'dispatch_groups' ? S.default : S.base]);
+    return capture('dispatch', sharedPackage.packageId);
+  }, source);
+  const { task, dry } = await prepare('dispatch', input); await sealBackup('dispatch', task, dry); await enter(task, dry);
+  const plan = await configPlan(task), before = await businessState();
+  assert.equal(plan.can_apply_configuration, false); assert.ok(plan.conflicts.includes('reserved_retirement_name'));
+  await assert.rejects(apply(plan, task), /contains conflicts/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active(task)); assert.equal(await permitCount(), 0);
+}));
+
+for (const [label, sql] of [
+  ['disabled business trigger', 'ALTER TABLE public.dispatch_order_pools DISABLE TRIGGER guard_dispatch_pool_base'],
+  ['missing business trigger', 'DROP TRIGGER create_dispatch_base_pool ON public.dispatch_groups'],
+  ['replica business trigger', 'ALTER TABLE public.dispatch_group_orders ENABLE REPLICA TRIGGER trigger_check_pool_health_on_deactivate'],
+  ['unknown business trigger', `CREATE TRIGGER configuration_unreviewed BEFORE INSERT ON public.dispatch_config FOR EACH STATEMENT EXECUTE FUNCTION private.employee_transfer_guard_write()`],
+  ['disabled maintenance guard', 'ALTER TABLE public.dispatch_groups DISABLE TRIGGER zz_employee_transfer_maintenance'],
+  ['changed business function', 'ALTER FUNCTION private.create_dispatch_base_pool() SECURITY INVOKER'],
+]) test(`plan/apply fail closed on ${label}`, () => transaction(async () => {
+  await enter(); const plan = await configPlan(), before = await businessState(); await db.exec(sql);
+  await assert.rejects(configPlan(), /Unreviewed.*(configuration triggers|maintenance)/);
+  await assert.rejects(apply(plan), /Unreviewed.*(configuration triggers|maintenance)/);
+  assert.deepEqual(await businessState(), before); assert.equal(await permitCount(), 0); assert.deepEqual(await status(), active());
+}));
+
+for (const [name, extra] of [
+  ['employee_import_finish', { p_summary: { full_site_complete: true } }],
+  ['employee_import_apply_core', { p_employee_id: S.employee, p_expected: {} }],
+  ['employee_import_rows_batch', { p_employee_id: S.employee, p_table_key: 'orders', p_rows: [] }],
+  ['employee_import_chat_batch', { p_employee_id: S.employee, p_table_key: 'chat_messages', p_rows: [] }],
+  ['employee_import_shared_apply', { p_plan_hash: hash('old') }],
+  ['employee_import_shared_replace_apply', { p_plan_hash: hash('old') }],
+  ['employee_import_products_apply', { p_plan_hash: hash('old') }],
+]) test(`dispatch task cannot bypass configuration/maintenance through ${name}`, () => transaction(async () => {
+  await enter(); const before = await businessState();
+  await assert.rejects(rpc(name, { ...auth(), ...extra }), /protocol/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active()); assert.equal(await permitCount(), 0);
+}));
+
+test('non-dispatch shared and legacy tasks cannot call configuration RPCs, nor accept client maps', () => transaction(async () => {
+  await cancel(job);
+  const prepared = await prepare('shared', sharedPackage);
+  await assert.rejects(configPlan(prepared.task), /protocol/);
+  await assert.rejects(apply({ plan_hash: prepared.dry.plan_hash }, prepared.task), /protocol/);
+  await cancel(prepared.task);
+  // An old task is initialized by its real RPC, not a fabricated private job.
+  await db.exec("INSERT INTO public.product_types(name,is_active) VALUES('舊站匯入（精簡訂單）',false) ON CONFLICT(name) DO NOTHING");
+  const legacy = await rpc('employee_import_begin', { p_admin_session_token: session, p_admin_password: PASSWORDS.root, p_decisions: {} });
+  await assert.rejects(configPlan(legacy), /protocol/);
+  await assert.rejects(apply({ plan_hash: hash('legacy') }, legacy), /protocol/);
+  await assert.rejects(configPlan(legacy, { p_admin_map: sharedReceipt.admin_map }), /has no argument p_admin_map/);
+  await assert.rejects(apply({ plan_hash: hash('legacy') }, legacy, { p_group_map: {} }), /has no argument p_group_map/);
+  assert.equal(await permitCount(), 0);
+}));
+
+for (const [label, sql] of [
+  ['removed seal', 'UPDATE private.employee_transfer_shared_backups SET sealed_at=NULL WHERE id=$1'],
+  ['changed maintenance target hash', "UPDATE private.employee_transfer_maintenance SET target_hash=repeat('0',64) WHERE job_id=$1"],
+]) test(`apply rechecks ${label} after planning and never grants a write permit`, () => transaction(async () => {
+  await enter(); const plan = await configPlan(), before = await businessState();
+  await db.query(sql, [job.job_id]);
+  await assert.rejects(apply(plan), /sealed configuration target changed/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active()); assert.equal(await permitCount(), 0);
+}));
+
+test('stale server plan after receipt removal cannot execute and rolls back to clean unchanged maintenance', () => transaction(async () => {
+  await enter(); const plan = await configPlan(), before = await businessState();
+  await db.query("UPDATE private.employee_transfer_jobs SET summary=summary-'shared_receipt' WHERE id=$1", [sharedJob.job_id]);
+  await assert.rejects(apply(plan), /matching server-verified shared administrator import receipt/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await status(), active()); assert.equal(await permitCount(), 0);
+}));
+
+test('failure AFTER real configuration writes rolls back target, receipt/event, dirty flag and private permit atomically', () => transaction(async () => {
+  await enter(); const plan = await configPlan(), before = await businessState(), state = await taskState(job), triggers = await triggerState();
+  // Failure injection on transfer bookkeeping ONLY, not an unreviewed business trigger or
+  // private-job success substitute. The genuine apply must reach its final event insert.
+  await db.exec(`CREATE FUNCTION public.configuration_fixture_event_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.action='dispatch_configuration_applied' THEN RAISE EXCEPTION 'configuration fixture final event failed'; END IF; RETURN NEW; END $$;
+    CREATE TRIGGER configuration_fixture_event_failure BEFORE INSERT ON private.employee_transfer_events
+      FOR EACH ROW EXECUTE FUNCTION public.configuration_fixture_event_failure()`);
+  await assert.rejects(apply(plan), /configuration fixture final event failed/);
+  assert.deepEqual(await businessState(), before); assert.deepEqual(await taskState(job), state);
+  assert.deepEqual(await status(), active()); assert.equal(await permitCount(), 0);
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM private.employee_transfer_events WHERE job_id=$1 AND action='dispatch_configuration_applied'", [job.job_id]), 0);
+  await db.exec('DROP TRIGGER configuration_fixture_event_failure ON private.employee_transfer_events; DROP FUNCTION public.configuration_fixture_event_failure()');
+  assert.deepEqual(await triggerState(), triggers);
+  // A caller can still explicitly leave because no partial configuration write committed.
+  assert.equal((await leave()).maintenance, false);
+}));
+
+test('committed real configuration receipt survives separate requests; cancellation never releases dirty maintenance', async () => {
+  let plan, receipt, before;
+  await transaction(async () => { await enter(); plan = await configPlan(); checkPlan(plan); before = await unaffected(); }, db, true);
+  await transaction(async () => { receipt = await apply(plan); await verifyConfiguration(plan); }, db, true);
+  await transaction(async () => {
+    assert.deepEqual(await status(), active(job, true)); assert.equal(await permitCount(), 0);
+    assert.deepEqual(await unaffected(), before); assert.deepEqual(await apply(plan), { ...receipt, repeated: true });
+    await blocked('DELETE FROM public.dispatch_config WHERE false'); await assert.rejects(leave(), /committed writes/);
+  });
+  await transaction(async () => { await cancel(job); }, db, true);
+  await transaction(async () => {
+    assert.deepEqual(await status(), active(job, true)); assert.equal(await permitCount(), 0);
+    await assert.rejects(leave(), /committed writes/); await assert.rejects(configPlan(), /invalid or expired/);
+    await blocked('DELETE FROM public.valid_order_data WHERE false'); await blocked('DELETE FROM public.announcements WHERE false');
+    assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_shared_backups WHERE id=$1 AND sealed_at IS NOT NULL', [job.job_id]), 1);
+    const chunk = await rpc('get_employee_dispatch_saved_backup_chunk', { p_admin_session_token: session, p_backup_id: job.job_id, p_chunk_no: 0 });
+    assert.equal(chunk.sha256, hash(backup.bytes));
+  });
+  // The in-memory site intentionally closes with dirty maintenance still active.
+});
