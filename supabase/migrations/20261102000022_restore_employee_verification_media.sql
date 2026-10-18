@@ -177,7 +177,7 @@ DECLARE v_ref record;v_file jsonb;v_receipt jsonb;
 BEGIN
   IF p_job.summary->'verification_media_files' IS NULL THEN RETURN false;END IF;
   FOR v_ref IN SELECT value,n-1 AS no FROM jsonb_array_elements(private.employee_transfer_verification_media_refs(p_job,false)) WITH ORDINALITY AS ref(value,n) LOOP
-    v_file:=p_job.summary->'verification_media_files'->v_ref.no;
+    v_file:=p_job.summary->'verification_media_files'->(v_ref.no::integer);
     SELECT payload INTO v_receipt FROM private.employee_transfer_staging WHERE job_id=p_job.id AND employee_id='00000000-0000-0000-0000-000000000000' AND table_key='verification-media-import' AND chunk_no=v_ref.no;
     IF v_receipt IS NULL OR v_receipt->'file' IS DISTINCT FROM v_file OR v_file->'source_url' IS DISTINCT FROM v_ref.value->'source_url' THEN RETURN false;END IF;
     IF p_final AND (v_receipt->>'checked' IS DISTINCT FROM 'true' OR (v_receipt->>'checked_at')::timestamptz<(p_job.summary#>>'{verification_restore,last_applied_at}')::timestamptz) THEN RETURN false;END IF;
