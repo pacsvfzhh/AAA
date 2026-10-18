@@ -114,8 +114,7 @@ async function response<T>(
   }
 }
 
-// Existing dispatch-import task only. The server verifies same-package identities/orders, configuration,
-// valid data, sealed backup and dirty maintenance; the client never supplies identity mappings or rows.
+// The server owns same-package mappings and backup/maintenance checks; the client sends no rows.
 export function createDispatchDependencySession(dispatchJobToken: string): DispatchDependencySession {
   const auth = getAdminFinancialSessionToken();
   uuid(auth); uuid(dispatchJobToken);
