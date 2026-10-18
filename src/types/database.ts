@@ -1,3 +1,8 @@
+type DispatchDependencyCounts = Record<'dispatch_group_members' | 'used_order_data', number>;
+type DispatchDependencyReceipt = EmployeeIdentityPending & {
+  success: true; scope: 'dispatch-dependencies'; counts: DispatchDependencyCounts; next_chunks: DispatchDependencyCounts;
+  chunks: DispatchDependencyCounts; totals: DispatchDependencyCounts; verified: boolean; repeated: boolean;
+};
 type EmployeeIdentityCounts = Record<'accounts' | 'credentials' | 'orders', number>;
 type EmployeeIdentityPending = {
   maintenance: true; financial_data_pending: true; dependencies_pending: true;
@@ -2361,6 +2366,23 @@ export interface Database {
       };
     };
     Functions: {
+      get_employee_import_dispatch_dependency_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: EmployeeIdentityPending & { scope: 'dispatch-dependencies'; can_restore: boolean; counts: DispatchDependencyCounts;
+          conflicts: ('target_members_not_empty' | 'target_used_not_empty' | 'unmapped_assigner')[]; plan_hash: string };
+      };
+      employee_import_dispatch_dependency_begin: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: DispatchDependencyReceipt;
+      };
+      employee_import_dispatch_dependency_chunk: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number };
+        Returns: DispatchDependencyReceipt;
+      };
+      employee_import_dispatch_dependency_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: DispatchDependencyReceipt;
+      };
       employee_export_identity_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeIdentityCatalog;

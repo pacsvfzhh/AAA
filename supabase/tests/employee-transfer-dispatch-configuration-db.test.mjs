@@ -12,7 +12,7 @@ import { buildNewSite, NEW, OLD, PASSWORDS } from './support/transfer-fixtures.m
 // Local PGlite + real migrations/public anon RPCs + real saved/authenticated ciphertext.
 // No network, fabricated jobs/receipts, public apply substitutes, or trigger bypasses in the
 // success path. Privileged corruption below is confined to explicitly negative transactions.
-const migration = '20261102000015_restore_employee_identities.sql';
+const migration = '20261102000016_restore_dispatch_dependencies.sql';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const SHARED = ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members',
   'admin_configs', 'system_configs', 'history_cleanup_config'];
@@ -349,7 +349,8 @@ before(async () => {
   bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020' });
   modules = { ...await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`) };
   const identityBuild = await build({stdin:{contents:`export * from './src/lib/employeeTransfer/identityApi.ts';
-    export * from './src/lib/employeeTransfer/identityTransfer.ts'; export { setHarness } from 'identity-db:state';`,resolveDir:root},
+    export * from './src/lib/employeeTransfer/identityTransfer.ts';
+    export * from './src/lib/employeeTransfer/dependencyApi.ts'; export { setHarness } from 'identity-db:state';`,resolveDir:root},
     bundle:true,write:false,format:'esm',platform:'browser',target:'es2020',plugins:[{name:'identity-local-sql',setup(builder){
       builder.onResolve({filter:/^\.\.\/(auth|supabase)$/},args=>({path:args.path.slice(3),namespace:'identity-db'}));
       builder.onResolve({filter:/^identity-db:state$/},()=>({path:'state',namespace:'identity-db'}));
@@ -380,8 +381,8 @@ before(async () => {
 }, { timeout: 180000 });
 after(async () => { mock.restoreAll(); await Promise.all([source?.close(), db?.close()]); });
 
-test('542 real migrations through 15 retain exactly 12 known old failures, never a fresh native PostgreSQL claim', () => {
-  assert.equal(replay.files.length, 542); assert.equal(replay.files.at(-1), migration);
+test('543 real migrations through 16 retain exactly 12 known old failures, never a fresh native PostgreSQL claim', () => {
+  assert.equal(replay.files.length, 543); assert.equal(replay.files.at(-1), migration);
   assert.equal(replay.failures.length, 12); assert.equal(replay.validation.matched.length, 12);
   assert.equal(replay.validation.freshDatabaseVerified, false);
   assert.ok(!replay.failures.some(f => f.file >= '20261102000011'));
@@ -1187,6 +1188,244 @@ test('identity source changes with identical row counts invalidate final export 
   const log=await transaction(()=>on(source,'get_employee_transfer_log',{p_admin_session_token:sourceSession}),source);assert.equal(log.last_export_at,null);
 }));
 
+const DEPENDENCIES = ['dispatch_group_members', 'used_order_data'];
+const dependencyPlan = (extra={}) => rpc('get_employee_import_dispatch_dependency_plan',{...auth(),...extra});
+const dependencyBegin = (plan,extra={}) => rpc('employee_import_dispatch_dependency_begin',{...auth(),p_plan_hash:plan.plan_hash,...extra});
+const dependencyChunk = (key,no,extra={}) => rpc('employee_import_dispatch_dependency_chunk',{...auth(),p_table_key:key,p_chunk_no:no,...extra});
+const dependencyVerify = (extra={}) => rpc('employee_import_dispatch_dependency_verify',{...auth(),...extra});
+async function dependencyReady() {
+  const configuration=await configured();await restoreValid(configuration);await identityRestore(await identityStage());return configuration;
+}
+async function dependencyRestore(plan) {
+  const start=await dependencyBegin(plan);
+  for(const key of DEPENDENCIES)for(let no=0;no<start.chunks[key];no++)await dependencyChunk(key,no);
+  return dependencyVerify();
+}
+const dependencyUnaffected = () => businessState(guarded.filter(name=>!DEPENDENCIES.map(key=>'public.'+key).includes(name)));
+
+for(const [name,args]of [
+  ['get_employee_import_dispatch_dependency_plan',['p_admin_session_token','p_job_token']],
+  ['employee_import_dispatch_dependency_begin',['p_admin_session_token','p_job_token','p_plan_hash']],
+  ['employee_import_dispatch_dependency_chunk',['p_admin_session_token','p_job_token','p_table_key','p_chunk_no']],
+  ['employee_import_dispatch_dependency_verify',['p_admin_session_token','p_job_token']],
+])test(`${name} has explicit grants and no client maps/rows`,()=>transaction(async()=>{
+  const fn=(await rows(db,`SELECT proargnames,prosecdef,proconfig,has_function_privilege('anon',oid,'EXECUTE') AS anon,
+    has_function_privilege('authenticated',oid,'EXECUTE') AS authenticated,
+    EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS everyone FROM pg_proc
+    WHERE pronamespace='public'::regnamespace AND proname=$1`,[name]))[0];
+  assert.deepEqual(fn.proargnames,args);assert.equal(fn.prosecdef,true);assert.equal(fn.anon,true);assert.equal(fn.authenticated,true);
+  assert.equal(fn.everyone,false);assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+}));
+
+test('source members replace target membership exactly and used writes preserve all valid fields without double counting',()=>transaction(async()=>{
+  await dependencyReady();const keep=await dependencyUnaffected(),triggers=await triggerState(),plan=await dependencyPlan();
+  assert.equal(plan.can_restore,true);assert.deepEqual(plan.counts,{dispatch_group_members:203,used_order_data:1});
+  assert.deepEqual(plan.conflicts,[]);assert.doesNotMatch(JSON.stringify(plan),/password|remarks|transaction_id|user_id/);
+  const start=await dependencyBegin(plan);assert.equal(start.verified,false);assert.deepEqual(start.chunks,{dispatch_group_members:2,used_order_data:1});
+  await assert.rejects(dependencyVerify(),/incomplete/);await assert.rejects(dependencyChunk('used_order_data',0),/before used submission/);
+  await assert.rejects(dependencyChunk('dispatch_group_members',1),/committed cursor/);
+  for(const key of DEPENDENCIES)for(let no=0;no<start.chunks[key];no++){
+    const ack=await dependencyChunk(key,no);assert.equal(ack.verified,false);assert.equal(ack.financial_data_pending,true);
+    assert.deepEqual(await dependencyChunk(key,no),{...ack,repeated:true});assert.deepEqual(await dependencyPlan(),plan);assert.equal(await permitCount(),0);
+  }
+  const result=await dependencyVerify();assert.equal(result.verified,true);assert.equal(result.full_site_complete,false);
+  assert.equal(result.maintenance,true);assert.equal(result.dependencies_pending,true);assert.equal(result.financial_data_pending,true);
+  assert.deepEqual(result.counts,plan.counts);assert.deepEqual(await dependencyVerify(),{...result,repeated:true});
+  assert.deepEqual(await dependencyBegin(plan),{...result,repeated:true});assert.deepEqual(await dependencyChunk('used_order_data',0),{...result,repeated:true});
+  for(const key of DEPENDENCIES){
+    assert.equal(await scalar(db,`SELECT count(*)::int FROM public.${key}`),plan.counts[key]);
+    for(const source of lines(dispatchPackage.texts[key])){
+      const row=JSON.parse(source),actual=await scalar(db,`SELECT to_jsonb(r) FROM public.${key} AS r WHERE id=$1`,[row.id]);
+      const expected=key==='dispatch_group_members'?{...row,group_id:row.group_id===S.default?T.default:row.group_id,assigned_by:sharedReceipt.admin_map[row.assigned_by]??null}:row;
+      assert.equal(await scalar(db,`SELECT to_jsonb(r)=$2::jsonb FROM public.${key} AS r WHERE id=$1`,
+        [row.id,JSON.stringify(expected)]),true,JSON.stringify(actual));
+    }
+  }
+  assert.equal(await scalar(db,'SELECT usage_count FROM public.valid_order_data WHERE id=$1',[S.valid]),7);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.dispatch_group_members WHERE user_id=ANY($1::uuid[])',[[T.employee,T.employee2]]),0);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.dispatch_group_members WHERE group_id=$1',[T.match]),0);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.users WHERE is_active AND id IN(SELECT user_id FROM public.dispatch_group_members)'),0);
+  assert.deepEqual(await dependencyUnaffected(),keep);assert.deepEqual(await triggerState(),triggers);assert.equal(await permitCount(),0);
+  assert.deepEqual(await status(),active(job,true));await assert.rejects(leave(),/committed writes/);
+  await blocked('UPDATE public.valid_order_data SET usage_count=usage_count+1 WHERE false');
+}));
+
+test('real lightweight dependency client performs explicit plan/begin/chunks/verify and fresh-factory resume against anon SQL',()=>transaction(async()=>{
+  await dependencyReady();identityTransport(db,session);const imp=modules.identity.createDispatchDependencySession(job.job_token);
+  const keep=await dependencyUnaffected(),plan=await imp.plan(),start=await imp.begin(plan.plan_hash);
+  await imp.chunk('dispatch_group_members',0);
+  const resumed=modules.identity.createDispatchDependencySession(job.job_token);assert.deepEqual(await resumed.plan(),plan);
+  const progress=await resumed.begin(plan.plan_hash);assert.equal(progress.repeated,true);assert.equal(progress.counts.dispatch_group_members,200);
+  await resumed.chunk('dispatch_group_members',1);await resumed.chunk('used_order_data',0);
+  assert.equal((await resumed.verify()).verified,true);assert.equal(start.verified,false);assert.deepEqual(await dependencyUnaffected(),keep);
+}));
+
+for(const [label,prepareStage]of [
+  ['no configuration',async()=>{}],['no identity receipt',async()=>{const plan=await configured();await restoreValid(plan);}],
+  ['identity not verified',async()=>{const plan=await configured();await restoreValid(plan);const identity=await identityStage();await identityBegin(identity);}],
+  ['valid not verified',async()=>{const plan=await configured();await identityRestore(await identityStage());await validBegin(plan);}],
+])test(`dependency planning refuses ${label} without trusting old identity drafts`,()=>transaction(async()=>{
+  await prepareStage();const keep=await businessState();await assert.rejects(dependencyPlan(),/running dispatch owner|server-verified|same-package/);
+  assert.deepEqual(await businessState(),keep);assert.equal(await permitCount(),0);
+}));
+
+for(const [label,sql]of [
+  ['unknown member trigger','CREATE TRIGGER aa_dependency_unknown BEFORE INSERT ON public.dispatch_group_members FOR EACH STATEMENT EXECUTE FUNCTION private.employee_transfer_guard_write()'],
+  ['unknown used trigger','CREATE TRIGGER aa_dependency_unknown BEFORE INSERT ON public.used_order_data FOR EACH STATEMENT EXECUTE FUNCTION private.employee_transfer_guard_write()'],
+  ['disabled usage trigger','ALTER TABLE public.used_order_data DISABLE TRIGGER trigger_update_valid_data_usage'],
+  ['replica usage trigger','ALTER TABLE public.used_order_data ENABLE REPLICA TRIGGER trigger_update_valid_data_usage'],
+  ['changed usage function','ALTER FUNCTION public.update_valid_data_usage_stats() SECURITY DEFINER'],
+  ['disabled maintenance','ALTER TABLE public.used_order_data DISABLE TRIGGER zz_employee_transfer_maintenance'],
+])test(`dependency stage rejects ${label} before issuing permits`,()=>transaction(async()=>{
+  await dependencyReady();const plan=await dependencyPlan();await dependencyBegin(plan);await db.exec(sql);const keep=await businessState(),state=await taskState(job);
+  for(const action of [()=>dependencyPlan(),()=>dependencyBegin(plan),()=>dependencyChunk('dispatch_group_members',0),()=>dependencyVerify()])
+    await assert.rejects(action(),/Unreviewed|maintenance guard/);
+  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);assert.equal(await permitCount(),0);
+}));
+
+for(const [label,table,sql,args]of [
+  ['member group','dispatch_group_members','UPDATE public.dispatch_group_members SET group_id=$2 WHERE user_id=$1',()=>[S.employee,T.match]],
+  ['member timestamp','dispatch_group_members',"UPDATE public.dispatch_group_members SET assigned_at=assigned_at+interval '1 microsecond' WHERE user_id=$1",()=>[S.employee]],
+  ['used employee/order','used_order_data','UPDATE public.used_order_data SET user_id=$2 WHERE id=$1',()=>[S.used,T.employee]],
+  ['valid usage','valid_order_data','UPDATE public.valid_order_data SET usage_count=usage_count+1 WHERE id=$1',()=>[S.valid]],
+  ['valid last-used','valid_order_data',"UPDATE public.valid_order_data SET last_used_at=last_used_at+interval '1 microsecond' WHERE id=$1",()=>[S.valid]],
+  ['valid content','valid_order_data',"UPDATE public.valid_order_data SET transaction_id='negative-drift' WHERE id=$1",()=>[S.valid]],
+  ['group configuration','dispatch_groups',"UPDATE public.dispatch_groups SET description='negative-drift' WHERE id=$1",()=>[T.default]],
+  ['employee identity','users',"UPDATE public.users SET remarks='negative-drift' WHERE id=$1",()=>[S.employee]],
+])test(`even completed/repeated dependency calls reject same-count ${label} drift`,()=>transaction(async()=>{
+  await dependencyReady();const plan=await dependencyPlan();await dependencyRestore(plan);
+  await db.exec(`ALTER TABLE public.${table} DISABLE TRIGGER zz_employee_transfer_maintenance`);await db.query(sql,args());
+  await db.exec(`ALTER TABLE public.${table} ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance`);
+  const keep=await businessState(),state=await taskState(job);
+  for(const action of [()=>dependencyPlan(),()=>dependencyBegin(plan),()=>dependencyChunk('used_order_data',0),()=>dependencyVerify()])
+    await assert.rejects(action(),/post-write|contents changed|verification failed/);
+  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);assert.equal(await permitCount(),0);
+}));
+
+for(const action of ['dispatch_dependencies_started','dispatch_dependencies_chunk','dispatch_dependencies_verified'])test(`late ${action} failure rolls back only this request and restores the usage trigger`,()=>transaction(async()=>{
+  await dependencyReady();const plan=await dependencyPlan();
+  if(action!=='dispatch_dependencies_started'){const start=await dependencyBegin(plan);for(let no=0;no<start.chunks.dispatch_group_members;no++)await dependencyChunk('dispatch_group_members',no);}
+  if(action==='dispatch_dependencies_verified')await dependencyChunk('used_order_data',0);
+  const keep=await businessState(),state=await taskState(job),triggers=await triggerState();
+  await db.exec(`CREATE FUNCTION public.dependency_event_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.action='${action}' THEN RAISE EXCEPTION 'dependency fixture final event failed'; END IF;RETURN NEW;END $$;
+    CREATE TRIGGER dependency_event_failure BEFORE INSERT ON private.employee_transfer_events FOR EACH ROW EXECUTE FUNCTION public.dependency_event_failure()`);
+  await assert.rejects(action==='dispatch_dependencies_started'?dependencyBegin(plan):action==='dispatch_dependencies_chunk'?dependencyChunk('used_order_data',0):dependencyVerify(),/dependency fixture final event failed/);
+  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);assert.equal(await permitCount(),0);
+  await db.exec('DROP TRIGGER dependency_event_failure ON private.employee_transfer_events;DROP FUNCTION public.dependency_event_failure()');
+  assert.deepEqual(await triggerState(),triggers);assert.deepEqual(await status(),active(job,true));
+}));
+
+for(const [label,extra]of [
+  ['secondary',()=>({p_admin_session_token:branch})],['emergency',()=>({p_admin_session_token:emergency})],
+  ['other super-admin',()=>({p_admin_session_token:otherSession})],['invalid task',()=>({p_job_token:randomUUID()})],
+])test(`dependency operations reject ${label} and cannot accept client ID maps`,()=>transaction(async()=>{
+  await dependencyReady();const plan=await dependencyPlan(),keep=await businessState();
+  for(const action of [()=>dependencyPlan(extra()),()=>dependencyBegin(plan,extra()),()=>dependencyChunk('used_order_data',0,extra()),()=>dependencyVerify(extra())])
+    await assert.rejects(action(),/Super administrator|invalid or expired/i);
+  await assert.rejects(dependencyPlan({p_employee_map:{[S.employee]:S.employee}}),/has no argument/);
+  assert.deepEqual(await businessState(),keep);assert.equal(await permitCount(),0);
+}));
+
+for(const [label,sql,args]of [
+  ['expired session',"UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1",()=>[NEW.root]],
+  ['expired task',"UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1",()=>[job.job_id]],
+  ['lost seal','UPDATE private.employee_transfer_shared_backups SET sealed_at=NULL WHERE id=$1',()=>[job.job_id]],
+  ['lost shared receipt',"UPDATE private.employee_transfer_jobs SET summary=summary-'shared_receipt' WHERE id=$1",()=>[sharedJob.job_id]],
+])test(`dependency continuation revalidates ${label} without releasing dirty maintenance`,()=>transaction(async()=>{
+  await dependencyReady();const plan=await dependencyPlan();await dependencyBegin(plan);await dependencyChunk('dispatch_group_members',0);
+  await db.query(sql,args());const keep=await businessState(),state=await taskState(job);
+  for(const action of [()=>dependencyBegin(plan),()=>dependencyChunk('dispatch_group_members',1),()=>dependencyVerify()])
+    await assert.rejects(action(),/invalid or expired|running dispatch owner|server-verified/);
+  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);assert.equal(await permitCount(),0);
+}));
+
+test('extra target membership is reported, never deleted or unioned into the source membership',()=>transaction(async()=>{
+  await dependencyReady();await db.exec('ALTER TABLE public.dispatch_group_members DISABLE TRIGGER zz_employee_transfer_maintenance');
+  await db.query('INSERT INTO public.dispatch_group_members(group_id,user_id,assigned_by) VALUES($1,$2,$3)',[T.match,T.employee,NEW.root]);
+  await db.exec('ALTER TABLE public.dispatch_group_members ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance');
+  const keep=await businessState(),plan=await dependencyPlan();assert.equal(plan.can_restore,false);assert.deepEqual(plan.conflicts,['target_members_not_empty']);
+  await assert.rejects(dependencyBegin(plan),/unresolved conflicts/);assert.deepEqual(await businessState(),keep);
+}));
+
+test('dependency keys/cursors/plan hashes and all private write helpers are guarded',()=>transaction(async()=>{
+  await dependencyReady();const plan=await dependencyPlan();await assert.rejects(dependencyBegin({plan_hash:hash('wrong')}),/matching dispatch dependency plan/);
+  await dependencyBegin(plan);const keep=await businessState();
+  for(const key of [null,'orders','valid_order_data','dispatch_group_members;DROP TABLE users'])await assert.rejects(dependencyChunk(key,0),/Unsupported/);
+  for(const no of [null,-1,2,500001])await assert.rejects(dependencyChunk('dispatch_group_members',no),/committed cursor/);
+  const helpers=await rows(db,`SELECT oid,proname FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_%dependency%'`);
+  assert.ok(helpers.length>=7);for(const fn of helpers)for(const role of ['anon','authenticated','service_role'])
+    assert.equal(await scalar(db,"SELECT has_function_privilege($1,$2::oid,'EXECUTE')",[role,fn.oid]),false,fn.proname);
+  assert.deepEqual(await businessState(),keep);assert.equal(await permitCount(),0);
+}));
+
+async function withDependencyVariant(change,run) {
+  const input=await transaction(async()=>{await change();return capture('dispatch',sharedPackage.packageId);},source);
+  const savedJob=job,savedPreparation=preparation;
+  await cancel(job);
+  try {
+    const prepared=await prepare('dispatch',input);job=prepared.task;preparation=prepared.dry;
+    await sealBackup('dispatch',job,preparation);await dependencyReady();await run(input);
+  } finally {job=savedJob;preparation=savedPreparation;}
+}
+
+test('203 used records restore in multiple committed chunks without recalculating NULL, maximum counts or last-used time',()=>transaction(()=>withDependencyVariant(async()=>{
+  await source.exec('UPDATE public.valid_order_data SET usage_count=CASE WHEN usage_count IS NULL THEN NULL ELSE 6 END');
+  await source.query(`INSERT INTO public.used_order_data(id,user_id,valid_order_data_id,order_id,created_at)
+    SELECT ('12000000-0000-4000-8000-'||lpad(to_hex(8000+n),12,'0'))::uuid,
+      ('12000000-0000-4000-8000-'||lpad(to_hex(2000+n),12,'0'))::uuid,
+      ('12000000-0000-4000-8000-'||lpad(to_hex(1000+n),12,'0'))::uuid,
+      ('12000000-0000-4000-8000-'||lpad(to_hex(3000+2*n),12,'0'))::uuid,
+      '2021-03-04T05:06:07.123456Z' FROM generate_series(1,202) AS x(n)`);
+  await source.query(`UPDATE public.valid_order_data SET usage_count=CASE WHEN usage_count IS NULL THEN NULL ELSE 2147483647 END,
+    last_used_at=CASE WHEN usage_count IS NULL THEN NULL ELSE '2030-03-04T05:06:07.654321Z'::timestamptz END`);
+},async()=>{
+  const keep=await dependencyUnaffected(),plan=await dependencyPlan(),start=await dependencyBegin(plan);
+  assert.equal(plan.counts.used_order_data,203);assert.equal(start.chunks.used_order_data,2);
+  for(let no=0;no<start.chunks.dispatch_group_members;no++)await dependencyChunk('dispatch_group_members',no);
+  assert.equal((await dependencyChunk('used_order_data',0)).counts.used_order_data,200);
+  assert.equal((await dependencyChunk('used_order_data',0)).counts.used_order_data,200);
+  assert.equal((await dependencyChunk('used_order_data',1)).counts.used_order_data,203);
+  assert.equal((await dependencyVerify()).verified,true);assert.deepEqual(await dependencyUnaffected(),keep);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.used_order_data'),203);assert.equal(await permitCount(),0);
+})));
+
+test('empty source member and used sets complete only after explicit zero-row chunks and retain no target memberships',()=>transaction(()=>withDependencyVariant(async()=>{
+  await source.exec('DELETE FROM public.used_order_data;DELETE FROM public.dispatch_group_members');
+},async()=>{
+  const plan=await dependencyPlan(),start=await dependencyBegin(plan);assert.deepEqual(plan.counts,{dispatch_group_members:0,used_order_data:0});
+  assert.deepEqual(start.chunks,{dispatch_group_members:1,used_order_data:1});await assert.rejects(dependencyVerify(),/incomplete/);
+  await dependencyChunk('dispatch_group_members',0);await dependencyChunk('used_order_data',0);assert.equal((await dependencyVerify()).verified,true);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.dispatch_group_members'),0);assert.equal(await scalar(db,'SELECT count(*)::int FROM public.used_order_data'),0);
+})));
+
+test('NULL source assigner/member timestamp and used timestamp are not replaced with defaults',()=>transaction(()=>withDependencyVariant(async()=>{
+  await source.query('UPDATE public.dispatch_group_members SET assigned_by=NULL,assigned_at=NULL WHERE user_id=$1',[S.employee]);
+  await source.query('UPDATE public.used_order_data SET created_at=NULL WHERE id=$1',[S.used]);
+},async()=>{
+  await dependencyRestore(await dependencyPlan());assert.deepEqual((await rows(db,'SELECT assigned_by,assigned_at FROM public.dispatch_group_members WHERE user_id=$1',[S.employee]))[0],{assigned_by:null,assigned_at:null});
+  assert.equal(await scalar(db,'SELECT created_at FROM public.used_order_data WHERE id=$1',[S.used]),null);
+})));
+
+test('unmapped source membership assigner blocks plan instead of substituting the root administrator',()=>transaction(()=>withDependencyVariant(async()=>{
+  await source.query("INSERT INTO public.admins(id,username,password_hash,role,is_active) VALUES($1,'dependency-unmapped-admin','local-only','secondary_admin',false)",[id(999)]);
+  await source.query('UPDATE public.dispatch_group_members SET assigned_by=$1 WHERE user_id=$2',[id(999),S.employee]);
+},async()=>{
+  const keep=await businessState(),plan=await dependencyPlan();assert.equal(plan.can_restore,false);assert.deepEqual(plan.conflicts,['unmapped_assigner']);
+  await assert.rejects(dependencyBegin(plan),/unresolved conflicts/);assert.deepEqual(await businessState(),keep);
+})));
+
+test('target used records are reported and never removed or silently accepted by matching UUID',()=>transaction(async()=>{
+  await dependencyReady();
+  const disabled=await scalar(db,"SELECT private.employee_transfer_bypass_triggers(ARRAY['used_order_data'])");
+  await db.exec('ALTER TABLE public.used_order_data DISABLE TRIGGER zz_employee_transfer_maintenance');
+  await db.query('INSERT INTO public.used_order_data(id,user_id,valid_order_data_id,order_id) VALUES($1,$2,$3,$4)',[S.used,S.employee,S.valid,S.order]);
+  await db.exec('ALTER TABLE public.used_order_data ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance');
+  await db.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)',[JSON.stringify(disabled)]);
+  const keep=await businessState(),plan=await dependencyPlan();assert.equal(plan.can_restore,false);assert.deepEqual(plan.conflicts,['target_used_not_empty']);
+  await assert.rejects(dependencyBegin(plan),/unresolved conflicts/);assert.deepEqual(await businessState(),keep);assert.equal(await permitCount(),0);
+}));
+
 test('committed real configuration receipt survives separate requests; cancellation never releases dirty maintenance', async () => {
   let plan, receipt, before;
   await transaction(async () => { await enter(); plan = await configPlan(); checkPlan(plan); before = await unaffected(); }, db, true);
@@ -1203,10 +1442,16 @@ test('committed real configuration receipt survives separate requests; cancellat
     assert.equal((await validChunk(1)).rows,400);
   },db,true);
   await transaction(async () => { await validChunk(2); assert.equal((await validVerify()).verified,true); },db,true);
+  await transaction(async () => { await identityRestore(await identityStage());plan=await dependencyPlan();await dependencyBegin(plan); },db,true);
+  await transaction(async () => { await dependencyChunk('dispatch_group_members',0); },db,true);
+  await transaction(async () => { assert.equal((await dependencyBegin(plan)).counts.dispatch_group_members,200);await dependencyChunk('dispatch_group_members',1); },db,true);
+  await transaction(async () => { await dependencyChunk('used_order_data',0);assert.equal((await dependencyVerify()).verified,true); },db,true);
   await transaction(async () => { await cancel(job); }, db, true);
   await transaction(async () => {
     assert.deepEqual(await status(), active(job, true));
     await assert.rejects(validChunk(0),/invalid or expired/);
+    await assert.rejects(dependencyPlan(),/invalid or expired/);await assert.rejects(dependencyVerify(),/invalid or expired/);
+    await assert.rejects(dependencyChunk('used_order_data',0),/invalid or expired/);
     await assert.rejects(validVerify(),/invalid or expired/);
     await assert.rejects(validBegin(plan),/invalid or expired/);
     assert.equal(await scalar(db,'SELECT count(*)::int FROM public.valid_order_data'),403); assert.equal(await permitCount(), 0);

@@ -30,6 +30,7 @@ const criticalMigrations = [
   '20261102000013_restore_valid_submission_data.sql',
   '20261102000014_export_stage_employee_identities.sql',
   '20261102000015_restore_employee_identities.sql',
+  '20261102000016_restore_dispatch_dependencies.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -109,6 +110,8 @@ const publicFunctions = [
   'employee_import_identity_bind(uuid,uuid,jsonb)', 'employee_import_identity_stage(uuid,uuid,text,integer,text)',
   'get_employee_import_identity_plan(uuid,uuid)', 'employee_import_identity_begin(uuid,uuid,text)',
   'employee_import_identity_chunk(uuid,uuid,text,integer)', 'employee_import_identity_verify(uuid,uuid)',
+  'get_employee_import_dispatch_dependency_plan(uuid,uuid)', 'employee_import_dispatch_dependency_begin(uuid,uuid,text)',
+  'employee_import_dispatch_dependency_chunk(uuid,uuid,text,integer)', 'employee_import_dispatch_dependency_verify(uuid,uuid)',
 ];
 
 async function checkCatalog(db) {
