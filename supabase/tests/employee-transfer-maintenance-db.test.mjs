@@ -383,7 +383,7 @@ test('leave refuses changed target hash even when dirty=false; privileged corrup
   await assert.rejects(leave(), /target changed/); assert.deepEqual(await status(), active());
 }));
 
-test('private permit fixture allows exactly five dispatch tables, denies all other writes and TRUNCATE; clear removes current xid only', () => transaction(async () => {
+test('private permit fixture allows exactly five dispatch tables plus empty-assignment UPDATE only; clear removes current xid only', () => transaction(async () => {
   await assert.rejects(isolated(db, () => db.query('SELECT private.employee_transfer_allow_config_write($1)', [job.job_id])), /running maintenance owner/);
   await enter();
   await assert.rejects(isolated(db, () => db.query('SELECT private.employee_transfer_allow_config_write($1)', [randomUUID()])), /running maintenance owner/);
@@ -394,8 +394,17 @@ test('private permit fixture allows exactly five dispatch tables, denies all oth
     assert.deepEqual(await status(), active(true));
     const permit = (await rows(db, 'SELECT transaction_id=pg_current_xact_id() AS current,job_id,table_names FROM private.employee_transfer_write_permits'))[0];
     assert.equal(permit.current, true); assert.equal(permit.job_id, job.job_id);
-    assert.deepEqual(permit.table_names, ['public.dispatch_config','public.dispatch_groups','public.dispatch_order_pools','public.dispatch_group_orders','public.dispatch_group_members']);
-    for (const table of permit.table_names) await db.exec(`DELETE FROM ${table} WHERE false`);
+    assert.deepEqual(permit.table_names, ['public.dispatch_config','public.dispatch_groups','public.dispatch_order_pools','public.dispatch_group_orders','public.dispatch_group_members','public.dispatch_assignments']);
+    for (const table of permit.table_names.slice(0, 5)) await db.exec(`DELETE FROM ${table} WHERE false`);
+    assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_assignments'), 0);
+    assert.deepEqual(await rows(db, 'UPDATE public.dispatch_assignments SET dispatch_order_id=NULL RETURNING id'), []);
+    await blocked(() => db.query('INSERT INTO public.dispatch_assignments(user_id) SELECT $1::uuid WHERE false', [EMPLOYEE]));
+    await blocked(() => db.query('INSERT INTO public.dispatch_assignments(user_id) VALUES($1)', [EMPLOYEE]));
+    await blocked(() => db.exec('DELETE FROM public.dispatch_assignments'));
+    // Include the FK-referencing log table explicitly so TRUNCATE reaches the guard;
+    // no CASCADE, disabled protections or generic FK-error acceptance.
+    await blocked(() => db.exec('TRUNCATE public.dispatch_assignments,public.dispatch_system_logs'));
+    assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_assignments'), 0);
     await db.exec("UPDATE public.dispatch_config SET config_value='19' WHERE config_key='dispatch_interval_min'");
     for (const table of ['public.valid_order_data','public.used_order_data','public.admins','public.users','public.financial_admin_credentials','public.messages'])
       await blocked(() => db.exec(`DELETE FROM ${table} WHERE false`));
@@ -403,9 +412,45 @@ test('private permit fixture allows exactly five dispatch tables, denies all oth
   } finally { await db.exec('SELECT private.employee_transfer_clear_write_permit()'); }
   assert.equal(await permitCount(), 0); assert.deepEqual(await status(), active(true));
   await blocked(() => db.exec('DELETE FROM public.dispatch_config WHERE false'));
+  await blocked(() => db.exec('UPDATE public.dispatch_assignments SET dispatch_order_id=NULL WHERE false'));
   await assert.rejects(leave(), /committed writes/);
   await assert.rejects(enter(), /task or state/);
   await cancel(); assert.deepEqual(await status(), active(true)); await assert.rejects(leave(), /committed writes/);
+}));
+
+test('private guard-only maintenance fixture rejects assignment UPDATE whenever any legitimate assignment exists, even for zero matching rows', () => transaction(async () => {
+  const orderId = randomUUID(), assignmentId = randomUUID();
+  assert.deepEqual(await status(), clean());
+  await db.query(`INSERT INTO public.dispatch_group_orders(id,group_id,pool_id,order_content,created_by)
+    SELECT $1,pool.group_id,pool.id,'local assignment guard fixture',$2
+    FROM public.dispatch_order_pools AS pool JOIN public.dispatch_groups AS dispatch_group ON dispatch_group.id=pool.group_id
+    WHERE pool.is_base AND dispatch_group.is_default`, [orderId, NEW.root]);
+  await db.query(`INSERT INTO public.dispatch_assignments(id,dispatch_order_id,user_id,status,group_id,pool_id,
+    order_content_snapshot,dispatch_success_rate_snapshot,session_timeout_minutes_snapshot)
+    SELECT $1,dispatch_order.id,$2,'pending',dispatch_order.group_id,dispatch_order.pool_id,
+      dispatch_order.order_content,pool.dispatch_success_rate,pool.session_timeout_minutes
+    FROM public.dispatch_group_orders AS dispatch_order JOIN public.dispatch_order_pools AS pool ON pool.id=dispatch_order.pool_id
+    WHERE dispatch_order.id=$3`, [assignmentId, EMPLOYEE, orderId]);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.dispatch_assignments WHERE id=$1 AND dispatch_order_id=$2', [assignmentId, orderId]), 1);
+  await assert.rejects(enter(), /business history/);
+  assert.deepEqual(await status(), clean());
+  // Privileged local fixture ONLY: the real enter correctly rejects this nonempty target.
+  // This private row isolates the guard's existing-assignment check; it is NOT enter,
+  // empty-site eligibility, public import/apply or backup acceptance evidence.
+  await db.query(`INSERT INTO private.employee_transfer_maintenance(job_id,admin_id,plan_hash,target_hash,entered_at)
+    SELECT task.id,task.admin_id,backup.plan_hash,backup.target_hash,clock_timestamp()
+    FROM private.employee_transfer_jobs AS task JOIN private.employee_transfer_shared_backups AS backup ON backup.id=task.id
+    WHERE task.id=$1`, [job.job_id]);
+  await db.query('SELECT private.employee_transfer_allow_config_write($1)', [job.job_id]);
+  try {
+    const before = await businessState();
+    await blocked(() => db.exec('UPDATE public.dispatch_assignments SET dispatch_order_id=NULL'));
+    await blocked(() => db.exec('UPDATE public.dispatch_assignments SET dispatch_order_id=NULL WHERE false'));
+    await blocked(() => db.query('DELETE FROM public.dispatch_group_orders WHERE id=$1', [orderId]));
+    assert.deepEqual(await businessState(), before);
+    assert.deepEqual(await status(), active(true));
+  } finally { await db.exec('SELECT private.employee_transfer_clear_write_permit()'); }
+  assert.equal(await permitCount(), 0);
 }));
 
 test('failed controlled-write fixture rolls back dirty flag, business changes and permit, including exception cleanup', () => transaction(async () => {
