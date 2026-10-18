@@ -4,7 +4,7 @@ import type { Database } from '../types/database';
 const REQUEST_TIMEOUT_MS = 8000;
 const AUDIT_REQUEST_TIMEOUT_MS = 120000;
 const getRequestTimeout = (input: RequestInfo | URL) =>
-  /\/(?:functions\/v1\/content-audit|rest\/v1\/rpc\/archive_employee_without_media)(?:\?|\/|$)/.test(input instanceof Request ? input.url : input.toString())
+  /\/(?:functions\/v1\/content-audit|rest\/v1\/rpc\/(?:archive_employee_without_media|employee_export_shared_begin|employee_export_shared_verify|get_employee_export_shared_catalog|get_employee_export_shared_page|employee_import_shared_begin|employee_import_shared_stage|get_employee_import_shared_dry_run|employee_import_shared_apply|employee_import_shared_replace_begin|get_employee_import_shared_replace_dry_run|get_employee_import_shared_backup|get_employee_import_shared_backup_page|employee_import_shared_backup_append|employee_import_shared_backup_seal|get_employee_shared_saved_backup_chunk|employee_import_shared_replace_apply|employee_export_products_begin|get_employee_export_products_page|employee_export_products_verify|employee_import_products_begin|employee_import_products_stage|get_employee_import_products_dry_run|get_employee_import_products_backup|get_employee_import_products_backup_page|employee_import_products_backup_append|employee_import_products_backup_seal|get_employee_products_saved_backup_chunk|employee_import_products_apply|employee_products_close|employee_export_dispatch_begin|get_employee_export_dispatch_page|employee_export_dispatch_verify|employee_export_dispatch_close|get_employee_import_dispatch_preflight|employee_import_dispatch_begin|employee_import_dispatch_stage|get_employee_import_dispatch_dry_run|get_employee_import_dispatch_backup|get_employee_import_dispatch_backup_page|employee_import_dispatch_backup_append|employee_import_dispatch_backup_seal|get_employee_dispatch_saved_backup_chunk))(?:\?|\/|$)/.test(input instanceof Request ? input.url : input.toString())
     ? AUDIT_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 const MAX_NETWORK_RETRIES = 2;
 const NETWORK_RETRY_DELAY_MS = 250;
@@ -76,7 +76,8 @@ export function isEmployeeSessionEndedError(error: unknown): boolean {
   const message = formatSupabaseError(error).toLowerCase();
   return message.includes('employee session is invalid or expired')
     || message.includes('employee session has expired')
-    || message.includes('invalid employee logout session');
+    || message.includes('invalid employee logout session')
+    || message.includes('invalid employee login session');
 }
 
 export function isSupabaseTransientError(error: unknown): boolean {

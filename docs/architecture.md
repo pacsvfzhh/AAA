@@ -23,13 +23,13 @@
   - 同一登录标记（「记住我」或复制分页带来的同一会话）：最后启动的分页写入 `localStorage['work_platform_session_owner'] = { marker, tabId }` 成为拥有者；其他分页收到广播、`storage` 事件或回到前台时发现拥有者不是自己，就调用 `leaveSessionForAnotherTab()` 安静让出：只清本分页 sessionStorage，不撤销服务器会话、不停派单会话、不写登出纪录，登录页显示「账号已在另一个页面中打开」。回到前台的检查专门处理手机后台冻结、错过广播的页面。
 - 员工登录失效（2026-10-10 真实浏览器实测）：服务器端员工会话 24 小时到期；`create_employee_financial_session` 每次登录都撤销该员工所有旧会话，并把 `users.current_session_token` 换成新标记。旧页面靠 `EmployeeDashboard` 订阅自己 `users` 行的 Realtime UPDATE 发现标记改变（`anon` 可读该列），约 0.4 秒弹出「Session Expired」，5 秒倒数后登出回登录页；断网/后台时错过推送，重新连线后约 0.1 秒补到同一事件。其他发现途径：带员工会话的通知 RPC 返回 `Employee session is invalid or expired.`（每 30 秒或回到前台时检查）、`TabSessionManager` 前端 24 小时计时。旧页面登出时 `revoke_financial_session` 只清除仍等于自己标记的 `current_session_token`，不会把新设备踢下线；此时 `stop_employee_dispatch_session_secure` 因会话已失效返回 400，属预期。客服聊天的读取与发送不使用员工会话，所以登录失效不会让聊天变空白；重新登录后列表与会话 1 秒内正常显示。
 - 登录限流：`src/lib/rateLimitService.ts`（检查 RPC 出错时放行）；管理员解锁用会话 token。
-- 登录纪录：`src/lib/loginHistoryService.ts` 记录 IP、UA、设备（IP 查询走 ipify，会被 CSP 拦截而记为 Unknown）；`src/lib/deviceInfo.ts` 解析设备信息。
+- 登录纪录：`src/lib/loginHistoryService.ts` 记录 IP、UA、设备（IP 查询走 ipify，会被 CSP 拦截而记为 Unknown）；`src/lib/deviceInfo.ts` 解析设备信息。员工页每次打开都会补记一次登录纪录；会话已被服务器结束（被别处登录顶替、已退出、过期、停用）时，登录/退出纪录的拒绝由 `isEmployeeSessionEndedError`（`src/lib/supabase.ts`）判为预期结果，静默跳过，不打印错误。
 
 ## 数据访问模式
 - 组件直接调用 `supabase.from(...)` / `supabase.rpc(...)`。没有全局状态库（无 Redux/Zustand），状态多在组件内 `useState`。
 - `src/lib/supabase.ts`：
   - typed client（类型来自 `src/types/database.ts`），读取 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`。
-  - 普通请求超时 8 秒，稽核/归档请求 120 秒；网络错误有 XHR 回退。
+  - 普通请求超时 8 秒，稽核/归档及共享设置导入/导出 RPC 请求 120 秒（不改变数据库角色执行上限）；网络错误有 XHR 回退。
   - 只对 GET 与白名单只读 RPC/稽核读取自动重试（最多 2 次），写操作不重试，避免重复执行。新增只读 RPC 如需重试，要加入白名单。
   - `formatSupabaseError()`：统一把错误转成可显示的文字。
 - Realtime 一般只当作「有变化」的信号：收到后防抖、再重新查询。异步请求用请求序号或 AbortSignal，防止旧响应覆盖新结果。
@@ -41,6 +41,14 @@
 | 文件 | 用途 |
 |---|---|
 | `contentAudit.ts` | 调用 Edge Function `content-audit` 的全部封装（留证改删、永久删除、私有附件读取） |
+| `employeeTransfer/crypto.ts` | WebCrypto 流式分块认证，解密可绑定预期包/卷和取消信号；须等整卷 EOF/结束认证后才可提交业务资料；独立解密工具为 `scripts/decrypt-employee-export.mjs` |
+| `employeeTransfer/container.ts`、`manifest.ts`、`sha256.ts` | 双遍读取不可变临时文件，生成标准 STORED ZIP32；流式校验文件哈希/清单/卷集合/中央目录及外层结束认证，受大小与路径白名单限制。sink 仅写临时隔离区，abort 须阻断包括迟到完成在内的全部写入；真实临时文件适配器、媒体传输、业务导入导出及页面尚未接入 |
+| `employeeTransfer/sharedExport.ts`、`api.ts` | 管理员/共享设置七表的固定协议分页导出，原始 NDJSON 哈希、写入后真实计数及源快照核对；清理失败显式标记不可复用。仅子阶段、不标全站完成，尚无浏览器磁盘适配或后台页面，未部署 |
+| `employeeTransfer/sharedImport.ts`、`api.ts` | 七表两遍校验/暂存并取得干跑；create-only 与同名来源 replacement 分入口，业务 apply 独立确认、不自动执行。replacement 冻结备份 descriptor/计划与接收器，公开对象副本不能改变内部绑定；账号启用、全站协调/续接与页面仍待实现 |
+| `employeeTransfer/replacementBackup.ts` | 七表冻结快照写临时文件→加密保存独立文件→重读完整认证及清单对照→重读密文按128KiB上传/回执→封存；最大9MiB，不自动apply/重试。失败清临时明文、不删除独立密文；封存结果不明须核对，真实浏览器磁盘适配/恢复向导仍待接入 |
+| `employeeTransfer/productTransfer.ts`、`productBackup.ts`、`api.ts` | 产品专用固定单表协议，分页背压导出、两遍验证后暂存、真实回执计数；密文整卷认证后才开始导入，覆盖前独立密文保存/回读认证/上传封存。任务、备份、计划绑定且公开副本不改变内部值；不自动apply/close/重试，最大1万行/8MiB、密文9MiB。仅产品子阶段，未接全站协调、续传或后台页面，未部署 |
+| `employeeTransfer/dispatchTransfer.ts`、`api.ts` | 派单/交单七表固定投影、主键游标分页导出；页SHA-256、逐行原始字节SHA-256串摘要与源前后核对，保留高精度原文，不经浮点重序列化；写临时区确认后才计数，清理失败显式报错。专用任务提供显式close/cancel，不自动结束/重试；目标只读预检始终replacement_ready=false，整批导入、浏览器磁盘/多卷/页面未接入，未部署 |
+| `employeeTransfer/dispatchImport.ts`、`dispatchBackup.ts`、`api.ts` | 七表先全验证再begin、二遍原文校验/分块暂存与真实确认进度；干跑只准备、不提供apply。冻结目标备份实际独立加密保存→回读认证/行摘要/清单及文件哈希→再读密文上传封存，明文8MiB/密文9MiB超限阻断，来源暂存仍总1GiB；公开descriptor不改变闭包绑定。本地Abort不自动发取消RPC，失败明确暂存/封存结果不明并清临时明文；轻量API不加载ZIP/加密依赖。无维护屏障/默认池替换/同站恢复/页面，未部署 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |

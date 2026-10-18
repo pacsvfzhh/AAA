@@ -11,7 +11,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "test:audit-cleanup": "node --test supabase/tests/audit-cleanup.test.mjs",
     "test:service-chat": "node --test supabase/tests/service-chat-scale.test.mjs",
-    "test:work-session": "node --test supabase/tests/work-session-stop.test.mjs"
+    "test:work-session": "node --test supabase/tests/work-session-stop.test.mjs",
+    "test:employee-transfer": "node --test --test-concurrency=1 supabase/tests/employee-transfer-*.test.mjs",
+    "test:employee-transfer:crypto": "node --test supabase/tests/employee-transfer-crypto.test.mjs",
+    "test:employee-transfer:foundation": "node --test supabase/tests/employee-transfer-foundation.test.mjs",
+    "test:employee-transfer:scope": "node --test supabase/tests/employee-transfer-scope.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
@@ -26,6 +30,7 @@
     "@tiptap/starter-kit": "^3.10.2",
     "bcryptjs": "^3.0.2",
     "dompurify": "^3.3.0",
+    "fflate": "^0.8.3",
     "lucide-react": "^0.344.0",
     "mammoth": "^1.11.0",
     "marked": "^16.4.1",

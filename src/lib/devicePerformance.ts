@@ -1,8 +1,10 @@
 /**
- * Device Performance Detection and Optimization
+ * Device performance detection and adaptation.
  *
- * Automatically detects device capabilities and applies appropriate optimizations
- * for low-end, mid-range, and high-end mobile devices.
+ * The tier comes from hardware signals (cores, memory, GPU texture limit). Safari exposes neither
+ * deviceMemory nor the Network Information API, so missing signals never count against a device.
+ * A measured frame-rate probe flags devices that are slow in practice (older phones, battery saver,
+ * iOS Low Power Mode); every user of useDeviceOptimization() then switches to the lite visuals.
  */
 
 export interface DeviceCapabilities {
@@ -13,12 +15,15 @@ export interface DeviceCapabilities {
   maxTextureSize: number | undefined;
   isMobile: boolean;
   isTablet: boolean;
+  isIOS: boolean;
+  saveData: boolean;
   deviceType: 'phone' | 'tablet' | 'desktop';
   isLowEndDevice: boolean;
 }
 
 interface NetworkInformationLike {
   effectiveType?: string;
+  saveData?: boolean;
 }
 
 interface ExtendedNavigator extends Navigator {
@@ -40,17 +45,136 @@ export interface PerformanceConfig {
   lazyLoadThreshold: number;
 }
 
+const SLOW_FRAMES_KEY = 'device_slow_frames';
+const LITE_CLASS = 'perf-lite';
+// The probe starts once the app has settled, then needs two consecutive slow windows before it flips the device to lite.
+const PROBE_START_DELAY_MS = 4000;
+const PROBE_WINDOW_MS = 2000;
+const PROBE_MAX_FRAME_GAP_MS = 250;
+const PROBE_MIN_FPS = 38;
+const PROBE_SLOW_WINDOWS = 2;
+
 class DevicePerformanceDetector {
   private capabilities: DeviceCapabilities | null = null;
   private performanceConfig: PerformanceConfig | null = null;
   private maxTextureSize: number | undefined | null = null;
+  private slowFrames = false;
+  private started = false;
+  private lastWidth = 0;
+  private listeners = new Set<() => void>();
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notify(): void {
+    this.listeners.forEach(listener => listener());
+  }
 
   /**
-   * Reset cached capabilities (useful for debugging or screen resize)
+   * Reset cached capabilities (screen resize or a new slow-frame verdict)
    */
   resetCapabilities(): void {
     this.capabilities = null;
     this.performanceConfig = null;
+  }
+
+  /**
+   * Applies the CSS for the current tier, tracks width changes and starts the frame-rate probe. Safe to call repeatedly.
+   */
+  start(): void {
+    if (this.started || typeof window === 'undefined') return;
+    this.started = true;
+    this.lastWidth = window.innerWidth;
+
+    this.applyCSSOptimizations();
+
+    // Mobile toolbars collapsing while scrolling fire height-only resizes; the device class can only change with width.
+    const handleResize = () => {
+      if (window.innerWidth === this.lastWidth) return;
+      this.lastWidth = window.innerWidth;
+      this.resetCapabilities();
+      this.applyCSSOptimizations();
+      this.notify();
+    };
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+
+    this.startFrameRateProbe();
+  }
+
+  private startFrameRateProbe(): void {
+    try {
+      if (sessionStorage.getItem(SLOW_FRAMES_KEY) === '1') {
+        this.setSlowFrames(false);
+        return;
+      }
+    } catch {
+      // Storage can be blocked; the probe still works without the remembered verdict.
+    }
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    let frameId = 0;
+    let windowStart = 0;
+    let lastFrame = 0;
+    let frames = 0;
+    let slowWindows = 0;
+    let stopped = false;
+
+    const stop = () => {
+      stopped = true;
+      cancelAnimationFrame(frameId);
+    };
+    const tick = (now: number) => {
+      if (stopped) return;
+      // A long gap means the tab was hidden or the main thread was blocked; that says nothing about rendering speed.
+      if (!windowStart || now - lastFrame > PROBE_MAX_FRAME_GAP_MS) {
+        windowStart = now;
+        frames = 0;
+        slowWindows = 0;
+      } else {
+        frames++;
+        if (now - windowStart >= PROBE_WINDOW_MS) {
+          const fps = (frames * 1000) / (now - windowStart);
+          if (fps >= PROBE_MIN_FPS) {
+            stop();
+            return;
+          }
+          slowWindows++;
+          if (slowWindows >= PROBE_SLOW_WINDOWS) {
+            stop();
+            this.setSlowFrames(true);
+            return;
+          }
+          windowStart = now;
+          frames = 0;
+        }
+      }
+      lastFrame = now;
+      frameId = requestAnimationFrame(tick);
+    };
+
+    window.setTimeout(() => {
+      if (!stopped) frameId = requestAnimationFrame(tick);
+    }, PROBE_START_DELAY_MS);
+  }
+
+  private setSlowFrames(remember: boolean): void {
+    if (this.slowFrames) return;
+    this.slowFrames = true;
+    if (remember) {
+      try {
+        sessionStorage.setItem(SLOW_FRAMES_KEY, '1');
+      } catch {
+        // Not remembering only means the probe runs again after a reload.
+      }
+    }
+    this.resetCapabilities();
+    this.applyCSSOptimizations();
+    this.notify();
   }
 
   /**
@@ -61,91 +185,59 @@ class DevicePerformanceDetector {
       return this.capabilities;
     }
 
-    const screenWidth = window.innerWidth;
-    const screenHeight = window.innerHeight;
-    const maxDimension = Math.max(screenWidth, screenHeight);
-    const minDimension = Math.min(screenWidth, screenHeight);
-
-    console.log('[Performance] Screen dimensions:', {
-      width: screenWidth,
-      height: screenHeight,
-      minDimension,
-      maxDimension,
-      userAgent: navigator.userAgent,
-      maxTouchPoints: navigator.maxTouchPoints
-    });
-
     const isTablet = this.detectTablet();
     const isMobile = this.detectMobile();
     const deviceType = this.detectDeviceType();
+    const isIOS = this.detectIOS();
     const hardwareConcurrency = navigator.hardwareConcurrency || 2;
-
     const deviceMemory = (navigator as ExtendedNavigator).deviceMemory;
-
     const connectionSpeed = this.detectConnectionSpeed();
+    const saveData = this.detectSaveData();
     const maxTextureSize = this.detectMaxTextureSize();
 
-    // Calculate device tier based on multiple factors
     let score = 0;
 
-    // CPU cores score (max 30 points)
-    if (hardwareConcurrency >= 8) score += 30;
-    else if (hardwareConcurrency >= 6) score += 25;
-    else if (hardwareConcurrency >= 4) score += 20;
+    // CPU cores (max 35)
+    if (hardwareConcurrency >= 8) score += 35;
+    else if (hardwareConcurrency >= 6) score += 30;
+    else if (hardwareConcurrency >= 4) score += 22;
     else if (hardwareConcurrency >= 2) score += 10;
     else score += 5;
 
-    // Memory score (max 30 points)
+    // Memory (max 30). Safari never reports it; Apple devices that run current iOS are uniformly capable.
     if (deviceMemory !== undefined) {
       if (deviceMemory >= 8) score += 30;
-      else if (deviceMemory >= 4) score += 20;
+      else if (deviceMemory >= 4) score += 22;
       else if (deviceMemory >= 2) score += 10;
-      else score += 5;
+      else score += 4;
     } else {
-      // Assume mid-tier if unknown
-      score += 15;
+      score += isIOS ? 24 : 16;
     }
 
-    // Connection speed score (max 20 points)
-    if (connectionSpeed === 'fast') score += 20;
-    else if (connectionSpeed === 'medium') score += 10;
-    else score += 5;
-
-    // Texture size score (max 20 points)
+    // GPU texture limit (max 25)
     if (maxTextureSize !== undefined) {
-      if (maxTextureSize >= 8192) score += 20;
-      else if (maxTextureSize >= 4096) score += 15;
-      else if (maxTextureSize >= 2048) score += 10;
+      if (maxTextureSize >= 16384) score += 25;
+      else if (maxTextureSize >= 8192) score += 18;
+      else if (maxTextureSize >= 4096) score += 10;
       else score += 5;
     } else {
-      score += 10;
+      score += 12;
     }
 
-    // Determine tier based on total score (max 100)
-    // Use different thresholds for desktop vs mobile to better detect low-end desktops
     let tier: 'low' | 'mid' | 'high';
+    if (score >= 60) tier = 'high';
+    else if (score >= 35) tier = 'mid';
+    else tier = 'low';
 
-    // Desktop: use relaxed thresholds to catch more low-end devices
-    if (deviceType === 'desktop') {
-      if (score >= 65) tier = 'high';
-      else if (score >= 45) tier = 'mid';
-      else tier = 'low';
-    }
-    // Mobile/Tablet: use standard thresholds
-    else {
-      if (score >= 70) tier = 'high';
-      else if (score >= 40) tier = 'mid';
-      else tier = 'low';
-    }
+    let isLowEndDevice = tier === 'low'
+      || saveData
+      || (deviceMemory !== undefined && deviceMemory <= 2)
+      || (!isIOS && hardwareConcurrency <= 2);
 
-    // Tablets: treat as desktop-like (no downgrade)
-    // Phones: downgrade by one tier for battery/thermal management
-    if (deviceType === 'phone') {
-      if (tier === 'high') tier = 'mid';
-      else if (tier === 'mid') tier = 'low';
+    if (this.slowFrames) {
+      tier = 'low';
+      isLowEndDevice = true;
     }
-
-    const isLowEndDevice = tier === 'low' || (deviceType === 'phone' && hardwareConcurrency <= 4 && (deviceMemory || 2) <= 2);
 
     this.capabilities = {
       tier,
@@ -155,11 +247,12 @@ class DevicePerformanceDetector {
       maxTextureSize,
       isMobile,
       isTablet,
+      isIOS,
+      saveData,
       deviceType,
       isLowEndDevice
     };
 
-    console.log('[Performance] Device capabilities:', this.capabilities);
     return this.capabilities;
   }
 
@@ -221,8 +314,15 @@ class DevicePerformanceDetector {
     }
 
     this.performanceConfig = config;
-    console.log('[Performance] Configuration:', config);
     return config;
+  }
+
+  /**
+   * iPhone, iPad and iPod, including iPadOS / "Request Desktop Website" which report a Macintosh user agent.
+   */
+  private detectIOS(): boolean {
+    return /iPhone|iPad|iPod/.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   }
 
   /**
@@ -258,19 +358,7 @@ class DevicePerformanceDetector {
     const isDesktopUA = (userAgent.includes('macintosh') || userAgent.includes('windows nt') || userAgent.includes('linux x86')) &&
                         !userAgent.includes('android');
 
-    const isTablet = isTabletUA || (isTabletSize && hasTouch && !isDesktopUA);
-
-    console.log('[Performance] Tablet detection:', {
-      isTablet,
-      isTabletUA,
-      isIPad,
-      isTabletSize,
-      hasTouch,
-      isDesktopUA,
-      dimensions: `${screenWidth}x${screenHeight}`
-    });
-
-    return isTablet;
+    return isTabletUA || (isTabletSize && hasTouch && !isDesktopUA);
   }
 
   /**
@@ -312,12 +400,16 @@ class DevicePerformanceDetector {
     return deviceType === 'phone' || deviceType === 'tablet';
   }
 
+  private getConnection(): NetworkInformationLike | undefined {
+    const extendedNavigator = navigator as ExtendedNavigator;
+    return extendedNavigator.connection || extendedNavigator.mozConnection || extendedNavigator.webkitConnection;
+  }
+
   /**
    * Detect connection speed
    */
   private detectConnectionSpeed(): 'slow' | 'medium' | 'fast' {
-    const extendedNavigator = navigator as ExtendedNavigator;
-    const connection = extendedNavigator.connection || extendedNavigator.mozConnection || extendedNavigator.webkitConnection;
+    const connection = this.getConnection();
 
     if (!connection) {
       return 'medium';
@@ -332,6 +424,10 @@ class DevicePerformanceDetector {
     } else {
       return 'slow';
     }
+  }
+
+  private detectSaveData(): boolean {
+    return this.getConnection()?.saveData === true;
   }
 
   /**
@@ -361,7 +457,7 @@ class DevicePerformanceDetector {
   applyCSSOptimizations(): void {
     const capabilities = this.detectCapabilities();
     const styleId = 'device-performance-optimizations';
-    let styleElement = document.getElementById(styleId) as HTMLStyleElement;
+    let styleElement = document.getElementById(styleId) as HTMLStyleElement | null;
 
     if (!styleElement) {
       styleElement = document.createElement('style');
@@ -369,22 +465,14 @@ class DevicePerformanceDetector {
       document.head.appendChild(styleElement);
     }
 
+    // The perf-lite rules in index.css (no backdrop blur, no decorative glows) hang off this class.
+    document.documentElement.classList.toggle(LITE_CLASS, capabilities.isLowEndDevice);
+
     let css = '';
 
-    // Tablets: minimal optimizations (treat like desktop)
-    if (capabilities.isTablet) {
+    if (capabilities.isLowEndDevice) {
       css = `
-        /* Tablet-specific optimizations - minimal impact */
-        html {
-          -webkit-font-smoothing: antialiased;
-          -moz-osx-font-smoothing: grayscale;
-        }
-      `;
-    }
-    // Low-end phones only
-    else if (capabilities.tier === 'low' && capabilities.deviceType === 'phone') {
-      css = `
-        /* Low-end phone optimizations */
+        /* Low-performance device optimizations */
         .animate-float, .animate-float-slow, .animate-orbit,
         .animate-spin-slow, .animate-scan-line, .animate-matrix-fall,
         .animate-float-block, .animate-data-flow, .animate-glow-pulse {
@@ -395,11 +483,17 @@ class DevicePerformanceDetector {
           backdrop-filter: none !important;
         }
       `;
-    }
-    // Mid-tier phones
-    else if (capabilities.tier === 'mid' && capabilities.deviceType === 'phone') {
+    } else if (capabilities.isTablet) {
       css = `
-        /* Mid-range phone optimizations */
+        /* Tablet-specific optimizations - minimal impact */
+        html {
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+        }
+      `;
+    } else if (capabilities.tier === 'mid') {
+      css = `
+        /* Mid-range device optimizations */
         .animate-float, .animate-orbit, .animate-spin-slow {
           animation: none !important;
         }
@@ -408,23 +502,7 @@ class DevicePerformanceDetector {
           backdrop-filter: none !important;
         }
       `;
-    }
-    // Low-end desktop optimizations
-    else if (capabilities.tier === 'low' && capabilities.deviceType === 'desktop') {
-      css = `
-        /* Low-end desktop optimizations */
-        .animate-float, .animate-orbit, .animate-pulse-slow, .animate-spin-slow,
-        .animate-float-slow, .animate-scan-line {
-          animation: none !important;
-        }
-        .fixed.inset-0.-z-10 * {
-          -webkit-backdrop-filter: none !important;
-          backdrop-filter: none !important;
-        }
-      `;
-    }
-    // Mid and High tier desktops
-    else if (capabilities.deviceType === 'desktop') {
+    } else if (capabilities.deviceType === 'desktop') {
       css = `
         /* Desktop optimizations */
         .animate-orbit, .animate-spin-slow, .animate-scan-line {

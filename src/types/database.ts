@@ -2346,6 +2346,178 @@ export interface Database {
       };
     };
     Functions: {
+      employee_transfer_cancel: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { success: boolean; cancelled: boolean };
+      };
+      employee_export_dispatch_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_export_dispatch_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_dispatch_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_dispatch_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_dispatch_preflight: {
+        Args: { p_admin_session_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_products_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_export_products_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_products_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_products_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string; p_catalog: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_products_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_chunk_no: number; p_ndjson: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_products_dry_run: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_products_backup: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_products_backup_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_products_backup_append: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_chunk_no: number; p_hex: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_products_backup_seal: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_sha256: string; p_bytes: number };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_products_saved_backup_chunk: {
+        Args: { p_admin_session_token: string; p_backup_id: string; p_chunk_no: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_products_apply: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_products_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_replace_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string; p_catalog: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_shared_replace_dry_run: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_dispatch_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string; p_catalog: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_dispatch_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_dispatch_dry_run: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_dispatch_backup: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_dispatch_backup_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_dispatch_backup_append: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_chunk_no: number; p_hex: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_dispatch_backup_seal: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_sha256: string; p_bytes: number };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_dispatch_saved_backup_chunk: {
+        Args: { p_admin_session_token: string; p_backup_id: string; p_chunk_no: number };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_shared_backup: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_shared_backup_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_backup_append: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_chunk_no: number; p_hex: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_backup_seal: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_sha256: string; p_bytes: number };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_shared_saved_backup_chunk: {
+        Args: { p_admin_session_token: string; p_backup_id: string; p_chunk_no: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_replace_apply: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string; p_catalog: Record<string, unknown> };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_import_shared_dry_run: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_shared_apply: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_shared_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_export_shared_catalog: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_export_shared_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_export_shared_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
       cancel_audit_deletion_confirmation: {
         Args: { p_admin_session_token: string; p_job_kind: 'content' | 'employee'; p_job_id: string };
         Returns: { success: boolean; cancelled: boolean };
