@@ -25,7 +25,7 @@ BEGIN
         OR v_path ~ '[.][.]' THEN RAISE EXCEPTION 'Verification document path does not belong to its employee.';END IF;
       v_key:=encode(extensions.digest(convert_to(v_url,'UTF8'),'sha256'),'hex');
       v_refs:=v_refs||jsonb_build_object(v_key,jsonb_build_object('key',v_key,'source_url',v_url,'bucket','verification-documents','path',v_path));
-      IF jsonb_object_length(v_refs)>3000 THEN RAISE EXCEPTION 'Verification media exceeds this substage limit; no files were truncated.';END IF;
+      IF (SELECT count(*) FROM jsonb_object_keys(v_refs))>3000 THEN RAISE EXCEPTION 'Verification media exceeds this substage limit; no files were truncated.';END IF;
     END LOOP;
   END LOOP;
   RETURN COALESCE((SELECT jsonb_agg(value ORDER BY key COLLATE "C") FROM jsonb_each(v_refs)),'[]'::jsonb);
