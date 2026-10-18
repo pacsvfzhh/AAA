@@ -187,7 +187,7 @@ CREATE FUNCTION public.employee_import_activity_apply(p_admin_session_token uuid
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' SET lock_timeout='2s' AS $$
 DECLARE v_job private.employee_transfer_jobs%ROWTYPE;v_map jsonb;v_plan jsonb;v_completed bigint;v_total bigint;v_counts jsonb;v_done jsonb;v_disabled jsonb;
-  v_key text;v_row jsonb;v_columns text;v_relation regclass;
+  v_key text;v_row jsonb;v_columns text;v_projection text;v_relation regclass;
 BEGIN
   PERFORM private.employee_transfer_lock_maintenance_tables();v_job:=private.employee_transfer_job(p_admin_session_token,p_job_token,'dispatch-import');
   v_map:=private.employee_transfer_activity_context(v_job);PERFORM private.employee_transfer_check_activity_input(v_job);
@@ -208,10 +208,12 @@ BEGIN
   v_disabled:=private.employee_transfer_bypass_triggers(ARRAY['employee_login_history','work_sessions']);
   FOREACH v_key IN ARRAY ARRAY['employee_login_history','work_sessions','work_stop_markers'] LOOP
     v_relation:=private.employee_transfer_activity_relation(v_key);
-    SELECT string_agg(format('%I',key),',' ORDER BY key COLLATE "C") INTO v_columns FROM jsonb_each(private.employee_transfer_activity_spec()->v_key) WHERE NOT(v_key='work_stop_markers' AND key='id');
+    SELECT string_agg(format('%I',key),',' ORDER BY key COLLATE "C"),string_agg(CASE WHEN v_key='employee_login_history' AND key='device_info' THEN
+      'CASE WHEN ($1->>''device_info_is_sql_null'')::boolean THEN NULL::jsonb ELSE $1->''device_info'' END' ELSE format('r.%I',key) END,',' ORDER BY key COLLATE "C")
+      INTO v_columns,v_projection FROM jsonb_each(private.employee_transfer_activity_spec()->v_key) WHERE key<>'device_info_is_sql_null' AND NOT(v_key='work_stop_markers' AND key='id');
     FOR v_row IN SELECT body FROM private.employee_transfer_activity_expected(v_job,p_employee_id,v_key) ORDER BY id::uuid LOOP
       PERFORM private.employee_transfer_check_activity_row(v_key,v_row);
-      EXECUTE format('INSERT INTO %s(%s) SELECT %s FROM jsonb_populate_record(NULL::%s,$1) AS r',v_relation,v_columns,v_columns,v_relation) USING v_row;
+      EXECUTE format('INSERT INTO %s(%s) SELECT %s FROM jsonb_populate_record(NULL::%s,$1) AS r',v_relation,v_columns,v_projection,v_relation) USING v_row;
     END LOOP;
   END LOOP;
   PERFORM private.employee_transfer_restore_triggers(v_disabled);PERFORM private.employee_transfer_clear_write_permit();PERFORM private.employee_transfer_assert_activity_triggers();

@@ -245,7 +245,7 @@ function timestamp(value: unknown): void {
 }
 const SPEC: Record<ActivityTableKey, Record<string, string>> = {
   employee_login_history: { id: 'uuid!', user_id: 'uuid!', username: 'text!', employee_id: 'text!', action_type: 'text!',
-    ip_address: 'text', user_agent: 'text', session_id: 'text', created_at: 'time', device_info: 'jsonb' },
+    ip_address: 'text', user_agent: 'text', session_id: 'text', created_at: 'time', device_info: 'jsonb', device_info_is_sql_null: 'boolean!' },
   work_sessions: { id: 'uuid!', user_id: 'uuid!', start_time: 'time!', end_time: 'time', duration_minutes: 'integer',
     created_at: 'time', last_heartbeat_at: 'time' },
   work_stop_markers: { id: 'uuid!', user_id: 'uuid!', stopped_at: 'time!' },
@@ -297,6 +297,7 @@ export function validateActivityRow(line: string, key: ActivityTableKey): string
     switch (type.replace('!', '')) {
       case 'uuid': uuid(value); break;
       case 'text': if (typeof value !== 'string') invalid(); break;
+      case 'boolean': if (typeof value !== 'boolean') invalid(); break;
       case 'integer': if (typeof value !== 'number' || !Number.isInteger(value) || value < -2147483648 || value > 2147483647) invalid(); break;
       // Any JSON value is valid here. Its original number lexemes, not parsed JS numbers, are transferred.
       case 'jsonb': break;
@@ -308,7 +309,8 @@ export function validateActivityRow(line: string, key: ActivityTableKey): string
   if (key === 'employee_login_history') {
     const session = row.session_id;
     if (!['login', 'logout'].includes(row.action_type as string)
-      || (session !== null && (typeof session !== 'string' || session.length !== 72 || !/^history-[0-9a-f]{64}$/.test(session)))) invalid();
+      || (session !== null && (typeof session !== 'string' || session.length !== 72 || !/^history-[0-9a-f]{64}$/.test(session)))
+      || (row.device_info_is_sql_null === true && row.device_info !== null)) invalid();
   }
   return activityCursor(key, row.id);
 }
@@ -495,6 +497,8 @@ export async function stageActivityImport(
   } catch { outcome = { error: true }; }
   try { await files.abort(new Error('Employee activity import plaintext discarded.')); }
   catch { throw new ActivityTransferCleanupError(stagingMayExist); }
+  // Cancellation while awaiting plaintext cleanup cannot rule out server staging.
+  if (signal?.aborted && stagingMayExist) throw new ActivityImportStagingMayExistError(true);
   if ('error' in outcome) {
     if (stagingMayExist) throw new ActivityImportStagingMayExistError(signal?.aborted === true);
     checkAbort(signal);

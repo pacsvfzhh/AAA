@@ -35,7 +35,7 @@ const bound = () => ({ ...closed(), repeated: false });
 const row = (key, n = 1) => ({
   employee_login_history: { id: id(n), user_id: id(1), username: '员工é é 𠮷', employee_id: 'E-1', action_type: n % 2 ? 'login' : 'logout',
     ip_address: null, user_agent: '原文𠮷', session_id: 'history-' + 'b'.repeat(64), created_at: TIME,
-    device_info: { id: 'device', nested: [{ id: 'child', precise: 0 }, { id: 'sibling' }], escaped: 'braces {} [], colon : quote " slash \\' } },
+    device_info: { id: 'device', nested: [{ id: 'child', precise: 0 }, { id: 'sibling' }], escaped: 'braces {} [], colon : quote " slash \\' }, device_info_is_sql_null: false },
   work_sessions: { id: id(n), user_id: id(1), start_time: TIME, end_time: null, duration_minutes: 0, created_at: TIME, last_heartbeat_at: TIME },
   work_stop_markers: { id: id(n), user_id: id(n), stopped_at: TIME },
 })[key];
@@ -135,7 +135,8 @@ function fixture(sizes = [405, 405, 2], employees = 3) {
 const exportRun = (f, options = {}) => api.exportActivityData(f.source, f.sink, { onProgress: p => f.progress.push(p), ...options });
 const stageRun = (f, options = {}) => api.stageActivityImport(f.cat, f.files, f.target, { onProgress: p => f.progress.push(p), ...options });
 const redacted = error => { assert.ok(error instanceof Error); assert.equal(String(error).includes(PASSWORD), false); assert.equal('cause' in error, false); return true; };
-const deviceLine = raw => JSON.stringify({ ...row(TABLES[0]), device_info: null }).replace('"device_info":null', `"device_info":${raw}`) + '\n';
+const deviceLine = (raw, sqlNull = false, n = 1) => JSON.stringify({ ...row(TABLES[0], n), device_info: null, device_info_is_sql_null: sqlNull })
+  .replace('"device_info":null', `"device_info":${raw}`) + '\n';
 
 test('real lightweight bundle uses activity/identity/checks/SHA only; no finance, ZIP, crypto or node_modules', () => {
   const inputs = Object.keys(compiled.metafile.inputs);
@@ -219,6 +220,10 @@ test('apply/verify exact shapes, completeness and independent employee totals, i
   assert.throws(() => api.validateActivityVerifyReceipt({ ...verifyReceipt(), completed_employees: 0 }));
   for (const [n, employees] of [[0, 0], [0, 3], [500000, 1]]) assert.deepEqual(api.validateActivityVerifyReceipt(verifyReceipt(counts(n), employees)), verifyReceipt(counts(n), employees));
 });
+test('login history fixes all 11 protocol fields including the required SQL NULL discriminator', () => {
+  assert.deepEqual(Object.keys(row(TABLES[0])), ['id', 'user_id', 'username', 'employee_id', 'action_type',
+    'ip_address', 'user_agent', 'session_id', 'created_at', 'device_info', 'device_info_is_sql_null']);
+});
 const nullable = { employee_login_history: ['ip_address', 'user_agent', 'session_id', 'created_at', 'device_info'],
   work_sessions: ['end_time', 'duration_minutes', 'created_at', 'last_heartbeat_at'], work_stop_markers: [] };
 for (const key of TABLES) {
@@ -273,10 +278,39 @@ for (const value of [-2147483648, 2147483647, 0, null]) test(`duration accepts P
 for (const raw of ['2147483648', '-2147483649', '1.5', '1e400', '"1"', 'true']) test(`duration rejects ${raw}`, () => {
   assert.throws(() => api.validateActivityRow(line(TABLES[1], 1).replace('"duration_minutes":0', `"duration_minutes":${raw}`), TABLES[1]));
 });
+test('SQL NULL and JSON null are both valid but stay distinct through export, staging and row hashes', async () => {
+  const key = TABLES[0], sqlNull = deviceLine('null', true), jsonNull = deviceLine('null', false);
+  for (const raw of [sqlNull, jsonNull]) assert.equal(api.validateActivityRow(raw, key), id(1));
+  assert.notEqual(sqlNull, jsonNull); assert.notEqual(rowHash(sqlNull), rowHash(jsonNull));
+  const f = fixture([2, 0, 0]); f.texts[key] = sqlNull + deviceLine('null', false, 2); f.cat = catalog(f.texts, 3);
+  const exported = await exportRun(f), imported = await stageRun(f);
+  assert.equal(f.stored.get(`data/activity-${key}.ndjson`).toString(), f.texts[key]);
+  assert.equal(f.calls.stage.find(page => page.key === key).ndjson, f.texts[key]);
+  assert.deepEqual(f.calls.stage.find(page => page.key === key).ndjson.trimEnd().split('\n').map(raw => {
+    const value = JSON.parse(raw); return [value.device_info, value.device_info_is_sql_null];
+  }), [[null, true], [null, false]]);
+  assert.equal(exported.entries[0].sha256, sha(f.texts[key])); assert.equal(imported.rows, 2);
+  const g = fixture([1, 0, 0]); g.texts[key] = sqlNull; g.cat = catalog(g.texts, 3); const bind = g.target.bind;
+  g.target.bind = async c => { const result = await bind(c); g.texts[key] = jsonNull; return result; };
+  await assert.rejects(stageRun(g), e => e.stagingMayExist === true && redacted(e));
+  assert.equal(g.calls.plan, 0); assert.equal(g.calls.cleanup, 1);
+});
+for (const [label, edit] of [
+  ['missing', r => { delete r.device_info_is_sql_null; }],
+  ...[null, 0, 1, 'true', 'false', {}, []].map(value => [`invalid ${JSON.stringify(value)}`, r => { r.device_info_is_sql_null = value; }]),
+]) test(`login history rejects SQL NULL discriminator ${label}`, () => {
+  const r = { ...row(TABLES[0]), device_info: null }; edit(r);
+  assert.throws(() => api.validateActivityRow(JSON.stringify(r), TABLES[0]));
+});
+for (const raw of ['true', 'false', '0', PRECISE, '1e400', '-1e-400', '"null"', '""', '[]', '{}', '{"nested":null}']) {
+  test(`SQL NULL discriminator true rejects non-null JSON ${raw}`, () => {
+    assert.throws(() => api.validateActivityRow(deviceLine(raw, true), TABLES[0]));
+  });
+}
 for (const raw of ['null', 'true', 'false', '0', PRECISE, '1e400', '-1e-400', '"𠮷é é"', '[]', '{}',
   '{"id":1,"left":{"id":2},"right":{"id":3},"array":[{"id":4},{"id":5}]}',
   '{"\\u0061":1,"child":{"a":2},"escaped":"\\\" { [ ] } \\\\ :"}', '{"__proto__":{"id":1},"constructor":{"id":2}}']) {
-  test(`arbitrary nullable JSON accepted without flattening or reserialization ${raw}`, () => { assert.equal(api.validateActivityRow(deviceLine(raw), TABLES[0]), id(1)); });
+  test(`SQL NULL discriminator false accepts arbitrary JSON without flattening or reserialization ${raw}`, () => { assert.equal(api.validateActivityRow(deviceLine(raw), TABLES[0]), id(1)); });
 }
 for (const raw of ['{"a":1,"a":2}', '{"a":1,"\\u0061":2}', '{"child":{"id":1,"id":2}}', '[{"a":1,"\\u0061":2}]',
   '{"x":1,"\\u0078":2}', '{"𠮷":1,"\\ud842\\udfb7":2}', '{"__proto__":1,"__proto__":2}',
@@ -297,7 +331,10 @@ test('nested numeric lexemes, exponent extremes and whitespace survive export an
   const exported = await exportRun(f); await stageRun(f);
   const path = `data/activity-${TABLES[0]}.ndjson`;
   assert.equal(f.stored.get(path).toString(), f.texts[TABLES[0]]);
-  assert.equal(f.calls.stage.find(page => page.key === TABLES[0]).ndjson, f.texts[TABLES[0]]);
+  const staged = f.calls.stage.find(page => page.key === TABLES[0]).ndjson;
+  assert.equal(staged, f.texts[TABLES[0]]);
+  assert.ok(staged.includes(PRECISE)); assert.ok(staged.includes('9007199254740993'));
+  assert.ok(staged.includes('"device_info_is_sql_null":false'));
   assert.equal(exported.entries[0].sha256, sha(f.texts[TABLES[0]]));
 });
 test('streamed export preserves all original nested high precision bytes, UUID cursors and bounded pages', async () => {
@@ -332,7 +369,8 @@ test('two-pass import reads ALL files before bind, stages original bounded pages
   assert.deepEqual(f.calls.open, [...TABLES, ...TABLES].map(key => `data/activity-${key}.ndjson`));
   for (const key of TABLES) assert.equal(f.calls.stage.filter(p => p.key === key).map(p => p.ndjson).join(''), f.texts[key]);
   assert.deepEqual(f.calls.stage.filter(p => p.key === TABLES[0]).map(p => p.chunkNo), [0, 1, 2]);
-  assert.equal(r.plan.employees, 3); assert.equal(r.fullSiteComplete, false); assert.equal(r.plan.maintenance, true);
+  assert.deepEqual(r, { plan: plan(Object.fromEntries(f.cat.tables.map(t => [t.key, t.rows])), 3),
+    rows: 812, bytes: Buffer.byteLength(Object.values(f.texts).join('')), fullSiteComplete: false });
 });
 test('zero activity with nonzero employees stages one acknowledged empty chunk per table', async () => {
   const f = fixture([0, 0, 0], 7), r = await stageRun(f); assert.equal(r.rows, 0); assert.equal(r.plan.employees, 7);
@@ -389,6 +427,57 @@ for (const phase of ['catalog', 'page', 'write', 'verify', 'read', 'bind', 'stag
   await assert.rejects(soon(pending), e => redacted(e) && (isImport && phase !== 'read' ? e.stagingMayExist === true && e.cancelled === true : e.name === 'AbortError'));
   const before = structuredClone(f.calls), progress = f.progress.length; gate.reject(Error(PASSWORD)); await nextTurn();
   assert.deepEqual(f.calls, before); assert.equal(f.progress.length, progress); assert.equal(f.calls.cleanup, 1); if (phase === 'read') assert.equal(returned, 1);
+});
+for (const path of ['success', 'plan failure', 'before staging']) for (const cleanup of ['success', 'failure']) {
+  test(`cancel during deferred cleanup after ${path}; cleanup ${cleanup} preserves error fields and never issues automatic RPCs`, async () => {
+    const h = harness(), f = fixture([1, 1, 1]), entered = deferred(), gate = deferred(), c = new AbortController();
+    const staged = path !== 'before staging'; f.target = api.createActivityImportSession(TOKEN).target;
+    if (!staged) f.cat.tables[2].row_hashes_sha256 = '0'.repeat(64);
+    else {
+      h.respond(bound()); for (const key of TABLES) h.respond(ack(f.texts[key]));
+      if (path === 'plan failure') h.replies.push({ reject: Error(PASSWORD) }); else h.respond(plan(counts(), 3));
+    }
+    f.files.abort = async reason => { f.calls.cleanup++; assert.ok(reason instanceof Error); redacted(reason); entered.resolve(); await gate.promise; };
+    const pending = stageRun(f, { signal: c.signal }); let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await soon(entered.promise);
+    assert.deepEqual(h.calls.map(call => call.name), staged ? ['employee_import_activity_bind', ...TABLES.map(() => 'employee_import_activity_stage'), 'get_employee_import_activity_plan'] : []);
+    assert.equal(h.replies.length, 0); assert.equal(f.calls.cleanup, 1);
+    const before = h.calls.map(call => ({ ...call, args: structuredClone(call.args), signals: [...call.signals] }));
+    const progress = structuredClone(f.progress), calls = structuredClone(f.calls);
+    c.abort(PASSWORD); await nextTurn(); assert.equal(settled, false);
+    if (cleanup === 'failure') gate.reject(Error(PASSWORD)); else gate.resolve();
+    await assert.rejects(soon(pending), error => {
+      redacted(error); assert.equal('plan' in error, false); assert.equal('result' in error, false);
+      if (cleanup === 'failure') {
+        assert.ok(error instanceof api.ActivityTransferCleanupError);
+        assert.equal(error.name, 'ActivityTransferCleanupError'); assert.equal(error.cleanupRequired, true);
+        assert.equal(error.stagingMayExist, staged); assert.equal('cancelled' in error, false);
+      } else if (staged) {
+        assert.ok(error instanceof api.ActivityImportStagingMayExistError);
+        assert.equal(error.name, 'ActivityImportStagingMayExistError'); assert.equal(error.stagingMayExist, true); assert.equal(error.cancelled, true);
+        assert.equal('cleanupRequired' in error, false);
+        assert.match(error.message, /Server staging may exist; reconcile before rerunning/);
+        assert.match(error.message, /No automatic retry, cancel, rollback, restore or close was performed/);
+      } else {
+        assert.equal(error.name, 'AbortError'); assert.equal('stagingMayExist' in error, false); assert.equal('cleanupRequired' in error, false);
+      }
+      return true;
+    });
+    await nextTurn(); assert.deepEqual(h.calls, before); assert.deepEqual(f.calls, calls); assert.deepEqual(f.progress, progress);
+    assert.equal(h.replies.length, 0);
+  });
+}
+test('deferred cleanup without cancellation returns every result field and does not auto-apply, verify or close', async () => {
+  const h = harness(), f = fixture([1, 1, 1]), entered = deferred(), gate = deferred(); f.target = api.createActivityImportSession(TOKEN).target;
+  h.respond(bound()); for (const key of TABLES) h.respond(ack(f.texts[key])); h.respond(plan(counts(), 3));
+  f.files.abort = async () => { f.calls.cleanup++; entered.resolve(); await gate.promise; };
+  const pending = stageRun(f); let settled = false; void pending.then(() => { settled = true; }, () => { settled = true; });
+  await soon(entered.promise); await nextTurn(); assert.equal(settled, false);
+  gate.resolve(); assert.deepEqual(await soon(pending), { plan: plan(counts(), 3), rows: 3,
+    bytes: Buffer.byteLength(Object.values(f.texts).join('')), fullSiteComplete: false });
+  await nextTurn(); assert.deepEqual(h.calls.map(call => call.name), ['employee_import_activity_bind', ...TABLES.map(() => 'employee_import_activity_stage'), 'get_employee_import_activity_plan']);
+  assert.equal(h.replies.length, 0); assert.equal(f.calls.cleanup, 1);
 });
 test('pre-abort reads/writes no data but still discards isolated workspace', async () => {
   for (const run of [exportRun, stageRun]) { const f = fixture(), c = new AbortController(); c.abort(PASSWORD);
@@ -544,7 +633,8 @@ test('per-session exclusion covers export/import operations including catalog wh
 test('API validates raw stage chunks and empty-table chunk zero before RPC', async () => {
   const h = harness(), s = await imported(h), before = h.calls.length;
   for (const [key, no, value] of [[TABLES[0], 0, ''], [TABLES[0], -1, line(TABLES[0], 1)], [TABLES[0], 500001, line(TABLES[0], 1)], [TABLES[0], 0, line(TABLES[0], 1).trimEnd()], ['bad', 0, ''],
-    [TABLES[0], 0, deviceLine('{"a":1,"a":2}')], [TABLES[0], 0, text(TABLES[0], 201)]]) await assert.rejects(s.target.stage(key, no, value));
+    [TABLES[0], 0, deviceLine('{"a":1,"a":2}')], [TABLES[0], 0, deviceLine('null', 'false')], [TABLES[0], 0, deviceLine('{}', true)],
+    [TABLES[0], 0, line(TABLES[0], 1).replace(',"device_info_is_sql_null":false', '')], [TABLES[0], 0, text(TABLES[0], 201)]]) await assert.rejects(s.target.stage(key, no, value));
   assert.equal(h.calls.length, before); const raw = line(TABLES[0], 1); h.respond(ack(raw)); await s.target.stage(TABLES[0], 0, raw);
   assert.equal(h.calls.at(-1).args.p_ndjson, raw);
   const e = api.createActivityImportSession(TOKEN); h.respond(bound()); await e.target.bind(catalog(Object.fromEntries(TABLES.map(key => [key, '']))));

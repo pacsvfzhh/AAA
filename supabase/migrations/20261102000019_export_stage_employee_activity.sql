@@ -5,7 +5,7 @@ CREATE FUNCTION private.employee_transfer_activity_spec()
 RETURNS jsonb LANGUAGE sql IMMUTABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
   SELECT '{
-    "employee_login_history":{"id":"uuid!","user_id":"uuid!","username":"text!","employee_id":"text!","action_type":"text!","ip_address":"text","user_agent":"text","session_id":"text","created_at":"timestamp with time zone","device_info":"jsonb"},
+    "employee_login_history":{"id":"uuid!","user_id":"uuid!","username":"text!","employee_id":"text!","action_type":"text!","ip_address":"text","user_agent":"text","session_id":"text","created_at":"timestamp with time zone","device_info":"jsonb","device_info_is_sql_null":"boolean!"},
     "work_sessions":{"id":"uuid!","user_id":"uuid!","start_time":"timestamp with time zone!","end_time":"timestamp with time zone","duration_minutes":"integer","created_at":"timestamp with time zone","last_heartbeat_at":"timestamp with time zone"},
     "work_stop_markers":{"id":"uuid!","user_id":"uuid!","stopped_at":"timestamp with time zone!"}
   }'::jsonb;
@@ -31,6 +31,7 @@ DECLARE v_key text; v_spec jsonb; v_actual jsonb;
 BEGIN
   FOR v_key,v_spec IN SELECT key,value FROM jsonb_each(private.employee_transfer_activity_spec()) LOOP
     IF v_key='work_stop_markers' THEN v_spec:=v_spec-'id'; END IF;
+    IF v_key='employee_login_history' THEN v_spec:=v_spec-'device_info_is_sql_null'; END IF;
     SELECT jsonb_object_agg(attname,format_type(atttypid,atttypmod)||CASE WHEN attnotnull THEN '!' ELSE '' END) INTO v_actual
       FROM pg_attribute WHERE attrelid=private.employee_transfer_activity_relation(v_key) AND attnum>0 AND NOT attisdropped;
     IF v_actual IS DISTINCT FROM v_spec THEN RAISE EXCEPTION 'Unreviewed employee activity schema.'; END IF;
@@ -59,6 +60,7 @@ BEGIN
   v_spec:=private.employee_transfer_activity_spec()->p_key;
   v_id:=CASE WHEN p_key='work_stop_markers' THEN 'user_id' ELSE 'id' END;
   SELECT string_agg(format('%L,%s',key,CASE
+    WHEN p_key='employee_login_history' AND key='device_info_is_sql_null' THEN 'src.device_info IS NULL'
     WHEN p_key='employee_login_history' AND key='session_id' AND p_export THEN
       'CASE WHEN src.session_id IS NULL THEN NULL ELSE ''history-''||encode(extensions.digest(convert_to((SELECT site_id::text FROM private.employee_transfer_site)||'':''||src.user_id::text||'':''||src.session_id,''UTF8''),''sha256''),''hex'') END'
     ELSE format('src.%I',CASE WHEN key='id' THEN v_id ELSE key END) END),',' ORDER BY key COLLATE "C") INTO v_projection FROM jsonb_each(v_spec);
@@ -261,6 +263,7 @@ BEGIN
     ELSIF v_type='integer' THEN
       IF jsonb_typeof(v_value)<>'number' OR (v_value#>>'{}') !~ '^-?(0|[1-9][0-9]*)$'
         OR (v_value#>>'{}')::numeric NOT BETWEEN -2147483648 AND 2147483647 THEN RAISE EXCEPTION 'Invalid activity integer.'; END IF;
+    ELSIF v_type='boolean' THEN IF jsonb_typeof(v_value)<>'boolean' THEN RAISE EXCEPTION 'Invalid activity boolean.'; END IF;
     ELSIF v_type='text' THEN IF jsonb_typeof(v_value)<>'string' THEN RAISE EXCEPTION 'Invalid activity text.'; END IF;
     ELSIF v_type='jsonb' THEN
       CONTINUE;
@@ -273,7 +276,8 @@ BEGIN
   IF p_key='employee_login_history' AND (p_row->>'action_type' NOT IN ('login','logout')
     OR (p_row->'session_id'<>'null'::jsonb AND (p_row->>'session_id') !~ '^history-[0-9a-f]{64}$')) THEN RAISE EXCEPTION 'Invalid activity login action or redacted session.'; END IF;
   IF p_key='work_stop_markers' AND p_row->'id' IS DISTINCT FROM p_row->'user_id' THEN RAISE EXCEPTION 'Activity stop marker identity differs from its owner.'; END IF;
-  v_record:=CASE WHEN p_key='work_stop_markers' THEN p_row-'id' ELSE p_row END;
+  IF p_key='employee_login_history' AND p_row->'device_info_is_sql_null'='true'::jsonb AND p_row->'device_info' IS DISTINCT FROM 'null'::jsonb THEN RAISE EXCEPTION 'Activity device SQL null marker differs from its value.';END IF;
+  v_record:=CASE WHEN p_key='work_stop_markers' THEN p_row-'id' ELSE p_row-'device_info_is_sql_null' END;
   SELECT format('%I.%I',n.nspname,c.relname) INTO v_table FROM pg_class AS c JOIN pg_namespace AS n ON n.oid=c.relnamespace WHERE c.oid=v_relation;
   EXECUTE format('SELECT to_jsonb(r) FROM jsonb_populate_record(NULL::%s,$1) AS r',v_table) INTO v_cast USING v_record;
   IF p_key='employee_login_history' AND v_cast->'device_info' IS DISTINCT FROM p_row->'device_info' THEN RAISE EXCEPTION 'Activity JSON precision would be lost.'; END IF;

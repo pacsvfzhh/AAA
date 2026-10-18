@@ -191,6 +191,8 @@ async function assertRestored() {
     'history-'||encode(extensions.digest(convert_to($1||':'||user_id::text||':'||session_id,'UTF8'),'sha256'),'hex') END))::text AS body
     FROM public.employee_login_history AS r ORDER BY id`, [siteId]);
   assert.deepEqual(await activityRows(db, 'employee_login_history'), expectedLogin);
+  assert.equal(await scalar(db, 'SELECT device_info IS NULL FROM public.employee_login_history WHERE id=$1', [id(1002)]), true);
+  assert.equal(await scalar(db, "SELECT device_info IS NOT NULL AND device_info='null'::jsonb FROM public.employee_login_history WHERE id=$1", [id(1007)]), true);
   const expectedWork = await rows(source, `SELECT (to_jsonb(r)||CASE WHEN end_time IS NULL THEN jsonb_build_object(
     'end_time',GREATEST(start_time,COALESCE(last_heartbeat_at,start_time)),
     'duration_minutes',GREATEST(round(extract(epoch FROM (GREATEST(start_time,COALESCE(last_heartbeat_at,start_time))-start_time))/60)::int,0)) ELSE '{}'::jsonb END)::text AS body
@@ -227,7 +229,7 @@ before(async () => {
         CASE WHEN n%2=0 THEN NULL ELSE E'UA \\n{} " \\t' END,CASE WHEN n%2=0 THEN NULL ELSE $2 END,
         CASE WHEN n=2 THEN NULL ELSE '2023-02-03T04:05:06.654321Z'::timestamptz END,
         CASE n WHEN 1 THEN ('{"id":"device","children":[{"id":"left","precise":'||$3||'},{"id":"right"}],"other":{"id":"nested"},"escaped":"{} [] : \\\""}')::jsonb
-          WHEN 2 THEN NULL WHEN 3 THEN '[]'::jsonb WHEN 4 THEN '"文字𠮷"'::jsonb WHEN 5 THEN $3::jsonb WHEN 6 THEN 'true'::jsonb ELSE '{}'::jsonb END
+          WHEN 2 THEN NULL WHEN 7 THEN 'null'::jsonb WHEN 3 THEN '[]'::jsonb WHEN 4 THEN '"文字𠮷"'::jsonb WHEN 5 THEN $3::jsonb WHEN 6 THEN 'true'::jsonb ELSE '{}'::jsonb END
       FROM generate_series(1,205) AS x(n)`, [F.history, SOURCE_SESSION, PRECISE]);
     await source.query(`INSERT INTO public.work_sessions(id,user_id,start_time,end_time,duration_minutes,created_at,last_heartbeat_at)
       SELECT ('72000000-0000-4000-8000-'||lpad(to_hex(2000+n),12,'0'))::uuid,$1,
@@ -299,16 +301,18 @@ test('real prerequisites are verified by their RPCs and retain the source-to-tar
   assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.orders'), 0); await stillClosed();
 }));
 
-test('raw activity pages preserve 10/7/3 fields, NULL/microseconds/nested numeric and hash historical session IDs', () => transaction(async () => {
+test('raw activity pages preserve 11/7/3 fields, NULL/microseconds/nested numeric and hash historical session IDs', () => transaction(async () => {
   assert.deepEqual(activity.pages.employee_login_history, [200, 5]); assert.deepEqual(activity.pages.work_sessions, [200, 6]);
   assert.equal(activity.catalog.scope, 'employee-activity'); assert.deepEqual(activity.catalog.identity_catalog, finance.catalog.identity_catalog);
   assert.match(activity.texts.employee_login_history, new RegExp(PRECISE.replace('.', '\\.'))); assert.doesNotMatch(activity.texts.employee_login_history, new RegExp(SOURCE_SESSION));
-  for (const [key, count] of [['employee_login_history', 10], ['work_sessions', 7], ['work_stop_markers', 3]]) {
+  for (const [key, count] of [['employee_login_history', 11], ['work_sessions', 7], ['work_stop_markers', 3]]) {
     const text = activity.texts[key]; assert.equal(activity.catalog.tables.find(t => t.key === key).row_hashes_sha256, hash(lines(text).map(hash).join('')));
     for (const line of lines(text)) assert.equal(Object.keys(JSON.parse(line)).length, count);
   }
   const log = lines(activity.texts.employee_login_history).map(line => JSON.parse(line));
   assert.equal(log[0].session_id, `history-${hash(`${activity.catalog.site_id}:${F.history}:${SOURCE_SESSION}`)}`); assert.equal(log[1].session_id, null); assert.equal(log[1].created_at, null);
+  assert.equal(log[1].device_info, null); assert.equal(log[1].device_info_is_sql_null, true);
+  assert.equal(log[6].device_info, null); assert.equal(log[6].device_info_is_sql_null, false);
   assert.equal(log[0].device_info.children[0].id, 'left'); assert.equal(log[0].device_info.children[1].id, 'right');
   assert.equal(lines(activity.texts.work_sessions).filter(line => JSON.parse(line).end_time === null).length, 2);
   for (const line of lines(activity.texts.work_stop_markers)) { const r = JSON.parse(line); assert.equal(r.id, r.user_id); }
@@ -354,6 +358,7 @@ test('real activityApi/Transfer bundle streams raw bytes to anon SQL and resumes
 
 for (const [label, relation, sql, args] of [
   ['login nested precision', ACTIVITY[0], `UPDATE public.employee_login_history SET device_info=jsonb_set(device_info,'{children,0,precise}','12345678901234567890.12345678901234567891'::jsonb) WHERE id=$1`, () => [F.login]],
+  ['device JSON null versus SQL null', ACTIVITY[0], 'UPDATE public.employee_login_history SET device_info=NULL WHERE id=$1', () => [id(1007)]],
   ['login nullable timestamp', ACTIVITY[0], 'UPDATE public.employee_login_history SET created_at=NULL WHERE id=$1', () => [F.login]],
   ['work NULL duration', ACTIVITY[1], 'UPDATE public.work_sessions SET duration_minutes=0 WHERE id=$1', () => [id(2002)]],
   ['work heartbeat', ACTIVITY[1], "UPDATE public.work_sessions SET last_heartbeat_at=last_heartbeat_at+interval '1 microsecond' WHERE id=$1", () => [F.running]],
