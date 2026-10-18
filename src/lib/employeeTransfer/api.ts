@@ -14,7 +14,7 @@ import {
 } from './dispatchTransfer';
 
 import { validateDispatchImportDryRun, type DispatchImportTarget } from './dispatchImport';
-import { validateDispatchBackupDescriptor, type DispatchBackupDescriptor } from './dispatchBackup';
+import type { DispatchBackupDescriptor } from './dispatchBackup';
 
 export interface DispatchImportSession {
   identity(): { jobId: string; jobToken: string } | null;
@@ -83,9 +83,13 @@ export function createDispatchImportSession(packageId: string, adminPassword: st
         const query = supabase.rpc('get_employee_import_dispatch_backup', args());
         const { data, error } = await (readSignal ? query.abortSignal(readSignal) : query);
         if (error) throw new Error('Dispatch backup descriptor read failed.');
-        const descriptor = validateDispatchBackupDescriptor(data);
-        if (descriptor.backup_id !== job?.jobId) throw new Error('Dispatch backup task mismatch.');
-        return descriptor;
+        const record = object(data, ['backup_id', 'plan_hash', 'target_hash', 'catalog']);
+        const catalog = validateDispatchCatalog(record.catalog);
+        if (uuid(record.backup_id) !== job?.jobId || catalog.tables.reduce((sum, table) => sum + table.bytes, 0) > 8 * 1024 * 1024) {
+          throw new Error('Dispatch backup task mismatch or size limit exceeded.');
+        }
+        return { backup_id: record.backup_id as string, plan_hash: dispatchTransferChecks.hash(record.plan_hash),
+          target_hash: dispatchTransferChecks.hash(record.target_hash), catalog };
       }, readSignal);
       const descriptor = await read(signal);
       return {

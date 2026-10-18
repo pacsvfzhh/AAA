@@ -167,13 +167,21 @@ NOTIFY pgrst, 'reload schema';
 - 目标预检检查订单/历史订单、派单/使用/工时记录、资金/收入/基准/流水/账本/提款与对账审计等16类计数，有任何业务痕迹阻断空站模式；普通未用配置可通过。该预检不锁定目标、不证明维护隔离或允许替换，恒为`replacement_ready=false`；后续导入须绑定备份、维护和目标变化核验。显式cancel释放服务端任务；本地AbortSignal只取消传输并清临时区，不自动做服务端写操作。
 - 本地新增客户端57项、真实双站SQL/API39项，共96项通过；含12001条交单资料分页、源默认池非默认值/原文/使用状态及高精度数值、源变化、权限/协议隔离、字节界限与取消，完整迁移1358项通过。严格尝试536份SQL仍有原12项已知历史失败，非干净建库证明。未部署/访问正式库，无UI；整批导入、默认池替换、员工/订单映射、浏览器/真实PostgreSQL/Storage及全站验收仍待做。
 
+## 派单/交单导入准备与目标备份（2026-10-18，本地未部署）
+
+- `20261102000010_prepare_dispatch_submission_import.sql` 新增八个超管RPC：`employee_import_dispatch_begin/stage`、`get_employee_import_dispatch_dry_run/backup/backup_page`、`employee_import_dispatch_backup_append/seal`、`get_employee_dispatch_saved_backup_chunk`。沿用私有任务、暂存和密文备份表，没有业务表写入、业务触发器/权限/cron变动；新导入协议与旧员工/共享/产品接口隔离，不能借旧finish标成功。
+- 来源七表按包ID、目录、逐行原始字节摘要绑定；不可变有序分块（200行/256KiB，行含LF64KiB），明确空表块，重复仅允许同身份同内容。服务端固定全部列与精度/类型/约束核对，再验证默认组、每组唯一Base、概率、池与组/原文/成员/有效已用关系和业务唯一键；管理员、员工、精简订单仅清点依赖，尚未对应或验证外部来源身份，不能据此认为引用可写入。
+- 干跑在事务表锁中重新核验空站、七表内容、身份和保留配置并冻结目标备份；计划绑定来源包/目录与目标指纹，封存时再次加锁核对。锁只覆盖单次RPC，不是跨请求维护屏障，不暂停历史清理或业务；干跑始终 `preparation_ready=true`、`replacement_ready=false`、`can_apply=false`、`full_site_complete=false`，无apply/成功close接口。显式取消清暂存与未封存密文，已封存独立保留且仅原操作者超管可取回。
+- 来源暂存沿用每表50万行/256MiB、总1GiB；空站目标安全备份暂限明文8MiB/密文9MiB，超限阻断不截断，待多卷支持。客户端必须真正保存独立加密文件、回读整卷认证与逐行摘要/清单/文件哈希、再重读密文按128KiB上传核回执后封存；服务器只核密文及目标绑定，不持口令独立证明明文。备份可解密不代表已支持同站自动恢复。
+- 新增客户端205项、双站SQL/真实打包API及密文落盘75项，共280项通过，含12001条交单资料及目标变化/权限/取消；独立复审未发现本范围可复现缺陷。未访问正式库、部署SQL/Edge Function或前端，未改Storage/权限/cron；无UI，未做浏览器/原生PostgreSQL并发与anon3秒验收。默认池实际替换、维护隔离、员工/订单映射、使用计数恢复和全站协调仍待实现。
+
 ## 类型与测试
 - `src/types/database.ts` 手工维护（没有生成脚本）：新增 RPC 时补充 `Functions` 的 `Args` / `Returns`；改表时同步 `Row` / `Insert` / `Update`。
 - `supabase/tests/audit-cleanup.test.mjs`：用 PGlite 加载缩减版 schema，再执行指定的真实迁移；每个测试在事务中执行后回滚。运行 `npm run test:audit-cleanup`。
 - `supabase/tests/service-chat-scale.test.mjs`：先装入正式库现行的会话摘要与分组 RPC（取自旧迁移），在混合数据（跨组旧会话、已归档员工、停用/紧急组、富卡、空时间消息、空聊天表）上记录结果，再执行 `20261101000002` 并逐行对比；另验证 `get_admin_chat_unread_counts` 的范围、无效/停用会话拒绝与执行权限。运行 `npm run test:service-chat`。
 - `supabase/tests/work-session-stop.test.mjs`：装入现行的开工/停工/恢复 RPC，先复现「主动停工后刷新被自动恢复」，再执行 `20261101000003` 验证主动停工不再恢复、刷新（beacon 停工）仍会恢复、停工后重新开工再刷新仍会恢复，以及权限。运行 `npm run test:work-session`。
-- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对当前 536 份 SQL 回放中的 12 项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名 RPC 和私有表权限；新增/变化/缺失失败阻断。测试使用 platform/baseline 替身，**不是全部迁移成功或真实空库建库证明**。
+- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对当前 537 份 SQL 回放中的 12 项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名 RPC 和私有表权限；新增/变化/缺失失败阻断。测试使用 platform/baseline 替身，**不是全部迁移成功或真实空库建库证明**。
 - `supabase/tests/support/transfer-scope.mjs` 与 `employee-transfer-scope.test.mjs`：固化本地 104 张根表、927 列及业务迁移意图，拒绝未知/缺失表列、类型/空值性漂移；不是导出授权清单，也不表示转换已实现。根表覆盖不含独立分区，实际目标库仍须重新核对。
 - `employee-transfer-production-scope.test.mjs` 单独核对正式 96 根表/871 列及独立目录 SHA-256，与本地 104 表配置不可混用；`employee-transfer-triggers.test.mjs` 验证真实迁移 SQL 的精确状态恢复、回执和提交门禁（使用 PGlite，不是原生多连接测试）。
-- `npm run test:employee-transfer` 运行加密、ZIP 清单/容器、增量 SHA-256、基础回放、双结构库存、触发器、共享设置导出/导入、来源覆盖与备份/API、产品专用数据库/客户端、派单交单导出/目标预检测试；全站往返、管理员/配置/自动化/实际媒体及界面验收尚未完成。专项命令为 `test:employee-transfer:crypto`、`:foundation`、`:scope`。
+- `npm run test:employee-transfer` 运行加密、ZIP 清单/容器、增量 SHA-256、基础回放、双结构库存、触发器、共享设置导出/导入、来源覆盖与备份/API、产品专用数据库/客户端、派单交单导出/目标预检及导入准备/独立备份测试；全站往返、管理员/配置/自动化/实际媒体及界面验收尚未完成。专项命令为 `test:employee-transfer:crypto`、`:foundation`、`:scope`。
 - `supabase/config.toml` 只配置了 `process-orders`、`cleanup-dispatch`；`supabase/health_check.sql` 是为新部署准备的只读检查，期望的定时任务与存储桶清单已过时。

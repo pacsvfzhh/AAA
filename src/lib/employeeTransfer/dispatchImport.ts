@@ -1,4 +1,3 @@
-import { MAX_CONTAINER_INPUT_BYTES } from './container';
 import type { TransferByteSource } from './crypto';
 import type { VolumeManifest } from './manifest';
 import { Sha256 } from './sha256';
@@ -9,6 +8,7 @@ import {
 
 const { object, count, uuid, hash, rowIdentity } = dispatchTransferChecks;
 const limits = DISPATCH_TRANSFER_LIMITS;
+const MAX_INPUT_BYTES = 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
@@ -112,7 +112,7 @@ export class DispatchTableVerifier {
 
   async push(input: Uint8Array, signal?: AbortSignal, onLine?: OnLine): Promise<void> {
     checkAbort(signal);
-    if (this.finished || !(input instanceof Uint8Array) || input.length > MAX_CONTAINER_INPUT_BYTES) invalid();
+    if (this.finished || !(input instanceof Uint8Array) || input.length > MAX_INPUT_BYTES) invalid();
     this.bytes += input.length;
     if (this.bytes > this.expected.bytes || this.bytes > limits.maxTableBytes) invalid();
     // Own the bounded producer buffer across awaits (including reused Node Buffers).
