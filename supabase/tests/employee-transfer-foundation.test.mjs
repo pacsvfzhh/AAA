@@ -33,6 +33,8 @@ const criticalMigrations = [
   '20261102000016_restore_dispatch_dependencies.sql',
   '20261102000017_export_stage_employee_finance.sql',
   '20261102000018_restore_employee_finance.sql',
+  '20261102000019_export_stage_employee_activity.sql',
+  '20261102000020_restore_employee_activity.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -118,6 +120,10 @@ const publicFunctions = [
   'employee_export_finance_verify(uuid,uuid)', 'employee_export_finance_close(uuid,uuid)',
   'employee_import_finance_bind(uuid,uuid,jsonb)', 'employee_import_finance_stage(uuid,uuid,text,integer,text)',
   'get_employee_import_finance_plan(uuid,uuid)', 'employee_import_finance_apply(uuid,uuid,uuid,text)', 'employee_import_finance_verify(uuid,uuid)',
+  'employee_export_activity_begin(uuid,text,uuid)', 'get_employee_export_activity_page(uuid,uuid,text,text,integer)',
+  'employee_export_activity_verify(uuid,uuid)', 'employee_export_activity_close(uuid,uuid)',
+  'employee_import_activity_bind(uuid,uuid,jsonb)', 'employee_import_activity_stage(uuid,uuid,text,integer,text)',
+  'get_employee_import_activity_plan(uuid,uuid)', 'employee_import_activity_apply(uuid,uuid,uuid,text)', 'employee_import_activity_verify(uuid,uuid)',
 ];
 
 async function checkCatalog(db) {

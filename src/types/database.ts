@@ -1,4 +1,13 @@
 type EmployeeFinanceCounts = Record<'wallets' | 'wallet_balance_baselines' | 'wallet_ledger_entries' | 'wallet_transactions' | 'withdrawals' | 'wallet_reconciliation_audit', number>;
+type EmployeeActivityCounts = Record<'employee_login_history' | 'work_sessions' | 'work_stop_markers', number>;
+type EmployeeActivityCatalog = {
+  version: 1; scope: 'employee-activity'; site_id: string; package_id: string; identity_catalog: EmployeeIdentityCatalog;
+  tables: { key: keyof EmployeeActivityCounts; rows: number; bytes: number; row_hashes_sha256: string }[]; full_site_complete: false;
+};
+type EmployeeActivityReceipt = EmployeeIdentityPending & {
+  success: true; scope: 'employee-activity'; counts: EmployeeActivityCounts; completed_employees: number; total_employees: number;
+  verified: true; repeated: boolean;
+};
 type EmployeeFinanceCatalog = {
   version: 1; scope: 'employee-finance'; site_id: string; package_id: string; identity_catalog: EmployeeIdentityCatalog;
   tables: { key: keyof EmployeeFinanceCounts; rows: number; bytes: number; row_hashes_sha256: string }[]; full_site_complete: false;
@@ -2375,6 +2384,43 @@ export interface Database {
       };
     };
     Functions: {
+      employee_export_activity_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
+        Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeActivityCatalog; scope: 'employee-activity'; full_site_complete: false };
+      };
+      get_employee_export_activity_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: { table_key: string; count: number; ndjson: string; next_after: string | null; sha256: string };
+      };
+      employee_export_activity_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { verified: true; scope: 'employee-activity'; full_site_complete: false };
+      };
+      employee_export_activity_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { success: true; scope: 'employee-activity'; full_site_complete: false };
+      };
+      employee_import_activity_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog: Record<string, unknown> };
+        Returns: { success: true; scope: 'employee-activity'; full_site_complete: false; repeated: boolean };
+      };
+      employee_import_activity_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: { success: true; rows: number; bytes: number; sha256: string; repeated: boolean };
+      };
+      get_employee_import_activity_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: EmployeeIdentityPending & { scope: 'employee-activity'; can_restore: boolean; counts: EmployeeActivityCounts; employees: number;
+          running_work_sessions: number; conflicts: ('activity_target_not_empty' | 'activity_uuid_collision' | 'source_employee_missing' | 'work_duration_out_of_range')[]; plan_hash: string };
+      };
+      employee_import_activity_apply: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_employee_id: string; p_plan_hash: string };
+        Returns: EmployeeActivityReceipt & { employee_id: string };
+      };
+      employee_import_activity_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: EmployeeActivityReceipt;
+      };
       employee_export_finance_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeFinanceCatalog; scope: 'employee-finance'; full_site_complete: false };

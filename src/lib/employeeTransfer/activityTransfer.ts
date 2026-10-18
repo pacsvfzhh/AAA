@@ -254,8 +254,7 @@ export function activityCursor(key: ActivityTableKey, value: unknown): string {
   activityTableKey(key);
   return uuid(value);
 }
-// Scan strings rather than parsed objects: JSON.parse loses duplicate keys and numeric precision.
-// Keep a separate key set for each object; the row object counts as depth one.
+// Track raw keys per object because JSON.parse discards duplicate and escaped-equivalent keys.
 function checkJson(line: string): void {
   const stack: (Set<string> | null)[] = [];
   for (let index = 0; index < line.length; index++) {
@@ -311,7 +310,6 @@ export function validateActivityRow(line: string, key: ActivityTableKey): string
     if (!['login', 'logout'].includes(row.action_type as string)
       || (session !== null && (typeof session !== 'string' || session.length !== 72 || !/^history-[0-9a-f]{64}$/.test(session)))) invalid();
   }
-  // An unfinished source session stays NULL here; only target SQL ends it at the last heartbeat.
   return activityCursor(key, row.id);
 }
 export interface ActivityPage {
