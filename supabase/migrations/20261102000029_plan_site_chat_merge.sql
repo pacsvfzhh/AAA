@@ -123,10 +123,9 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
       WHERE p.target_id IS NOT NULL
         AND (p_map->>(a.body->>'created_by')=p.admin_id OR owner.role='super_admin' OR role_owner.role='super_admin')
         AND CASE WHEN jsonb_array_length(COALESCE(NULLIF(p.body->'target_employee_ids','null'::jsonb),'[]'::jsonb))>0
-          THEN p.body->'target_employee_ids' ? a.id::text
-          WHEN p.body->>'target_employee_id' IS NOT NULL THEN p.body->>'target_employee_id'=a.id::text ELSE true END
-        AND CASE WHEN COALESCE(cardinality(target.target_employee_ids),0)>0 THEN NOT a.id=ANY(target.target_employee_ids)
-          WHEN target.target_employee_id IS NOT NULL THEN a.id<>target.target_employee_id ELSE false END
+          THEN p.body->'target_employee_ids' ? a.id::text ELSE true END
+        AND COALESCE(cardinality(target.target_employee_ids),0)>0
+        AND NOT EXISTS(SELECT 1 FROM unnest(target.target_employee_ids) AS visible(employee_id) WHERE visible.employee_id=a.id)
     ) AS v ON true
   ) SELECT COALESCE(jsonb_agg(jsonb_build_object('source_id',id,'source_name',body->>'customer_name','source_number',body->>'customer_id',
     'target_admin_id',admin_id,'source_type',body->>'source_type','match',match,'target_id',target_id,'candidates',choices,

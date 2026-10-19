@@ -42,6 +42,8 @@ const criticalMigrations = [
   '20261102000025_prepare_notification_configuration.sql',
   '20261102000026_transfer_notification_media.sql',
   '20261102000027_restore_site_notifications.sql',
+  '20261102000028_export_stage_site_chat.sql',
+  '20261102000029_plan_site_chat_merge.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -147,6 +149,10 @@ const publicFunctions = [
   'get_employee_transfer_notification_media(uuid,uuid,text)', 'employee_import_notification_media_bind(uuid,uuid,jsonb)',
   'employee_import_notifications_begin(uuid,uuid,text)', 'employee_import_notifications_chunk(uuid,uuid,integer)',
   'employee_import_notifications_verify(uuid,uuid)', 'get_employee_import_notifications_restore_status(uuid,uuid)',
+  'employee_export_chat_begin(uuid,text,uuid)', 'get_employee_export_chat_page(uuid,uuid,text,text,integer)',
+  'employee_export_chat_verify(uuid,uuid)', 'employee_export_chat_close(uuid,uuid)',
+  'employee_import_chat_bind(uuid,uuid,jsonb)', 'employee_import_chat_stage(uuid,uuid,text,integer,text)',
+  'get_employee_import_chat_plan(uuid,uuid)',
 ];
 const serviceOnlyFunctions = [
   'employee_transfer_verification_media_authorize(uuid,uuid,text,text)',
