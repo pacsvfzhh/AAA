@@ -334,7 +334,7 @@ test('SQL21/22 all 13 RPC arguments and exact returned types match, including nu
       employee_import_verification_stage: {success:true;rows:number;bytes:number;sha256:string;repeated:boolean};
       get_employee_transfer_verification_media: {scope:'employee-verification-media';direction:'export'|'import';files:Ref[];full_site_complete:false};
       employee_import_verification_media_bind: {success:true;scope:'employee-verification-media';files:number;bytes:number;repeated:boolean;full_site_complete:false};
-      employee_transfer_verification_media_authorize: Ref & {direction:'export'|'import'};
+      employee_transfer_verification_media_authorize: Ref & {direction:'export'|'import';generation:string};
       employee_transfer_verification_media_commit: {success:true;key:string;bytes:number;sha256:string;content_type:File['content_type'];full_site_complete:false};
       get_employee_import_verification_plan: VerificationPlan;
       employee_import_verification_apply: VerificationApplyReceipt;

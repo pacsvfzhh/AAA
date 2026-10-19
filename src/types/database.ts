@@ -2438,11 +2438,11 @@ export interface Database {
       employee_transfer_verification_media_authorize: {
         Args: { p_admin_session_token: string; p_job_token: string; p_action: EmployeeVerificationMediaAction; p_object_key: string };
         Returns: { direction: 'export' | 'import'; key: string; bucket: 'verification-documents'; path: string; source_url: string;
-          file: EmployeeVerificationMediaFile | null };
+          file: EmployeeVerificationMediaFile | null; generation: string };
       };
       employee_transfer_verification_media_commit: {
         Args: { p_admin_session_token: string; p_job_token: string; p_action: EmployeeVerificationMediaAction; p_object_key: string;
-          p_bytes: number; p_sha256: string; p_content_type: EmployeeVerificationMediaFile['content_type']; p_storage_origin: string };
+          p_bytes: number; p_sha256: string; p_content_type: EmployeeVerificationMediaFile['content_type']; p_storage_origin: string; p_generation: string };
         Returns: { success: true; key: string; bytes: number; sha256: string; content_type: EmployeeVerificationMediaFile['content_type']; full_site_complete: false };
       };
       get_employee_import_verification_plan: {

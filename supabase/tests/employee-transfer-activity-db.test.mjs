@@ -47,6 +47,7 @@ function chunks(text) {
 }
 let replay, source, db, session, sourceSession, branch, emergency, other, modules;
 let packageId, dispatch, identity, finance, activity, verification, task, guarded;
+let verificationDb;
 let sequence = 0;
 async function transaction(fn, site = db, commit = false) {
   await site.exec('BEGIN');
@@ -103,7 +104,7 @@ function transport(site = db, token = session) {
     return query;
   } });
 }
-async function capture(kind, { completeMedia = true } = {}) {
+async function capture(kind) {
   const sourceBefore = ['activity', 'verification'].includes(kind) ? await business(source) : null;
   const job = await on(source, `employee_export_${kind}_begin`, { p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root,
     ...(['identity', 'finance', 'activity', 'verification'].includes(kind) ? { p_package_id: packageId } : {}) });
@@ -121,17 +122,12 @@ async function capture(kind, { completeMedia = true } = {}) {
     texts[key] = text;
   }
   const files = kind === 'verification' ? syntheticMedia(texts.verification_requests) : undefined;
-  // Keep raw fixtures available even when media SQL is broken. This branch explicitly cancels an
-  // UNVERIFIED source task; it neither edits summary nor pretends files were downloaded/read back.
-  if (kind === 'verification' && !completeMedia) await on(source, 'employee_transfer_cancel', auth(job, sourceSession));
-  else {
-    if (files) {
-      await commitMedia(source, job, sourceSession, files, 'download');
-      await commitMedia(source, job, sourceSession, files, 'recheck-export');
-    }
-    assert.equal((await on(source, `employee_export_${kind}_verify`, auth(job, sourceSession))).verified, true);
-    await on(source, kind === 'shared' ? 'employee_transfer_cancel' : `employee_export_${kind}_close`, auth(job, sourceSession));
+  if (files) {
+    await commitMedia(source, job, sourceSession, files, 'download');
+    await commitMedia(source, job, sourceSession, files, 'recheck-export');
   }
+  assert.equal((await on(source, `employee_export_${kind}_verify`, auth(job, sourceSession))).verified, true);
+  await on(source, kind === 'shared' ? 'employee_transfer_cancel' : `employee_export_${kind}_close`, auth(job, sourceSession));
   if (sourceBefore) assert.deepEqual(await business(source), sourceBefore);
   return { catalog: job.catalog, texts, pages, ...(files ? { files } : {}) };
 }
@@ -245,21 +241,29 @@ function syntheticMedia(text) {
 const mediaInventory = (site, job, token, direction) => on(site, 'get_employee_transfer_verification_media', { ...auth(job, token), p_direction: direction });
 const mediaAuthorize = (site, job, token, action, key, role = 'service_role') => on(site, MEDIA_AUTH,
   { ...auth(job, token), p_action: action, p_object_key: key }, role);
-const mediaCommit = (site, job, token, action, file, extra = {}, role = 'service_role') => on(site, MEDIA_COMMIT,
-  { ...auth(job, token), p_action: action, p_object_key: file.key, p_bytes: file.bytes, p_sha256: file.sha256,
-    p_content_type: file.content_type, p_storage_origin: ['download', 'recheck-export'].includes(action) ? SOURCE_ORIGIN : TARGET_ORIGIN, ...extra }, role);
+async function mediaCommit(site, job, token, action, file, extra = {}, role = 'service_role') {
+  // Capture the real authorized generation, never infer it from a fabricated receipt or summary.
+  // An explicit override preserves an earlier authorization for the delayed-commit race test.
+  const generation = Object.hasOwn(extra, 'p_generation') ? extra.p_generation :
+    (await mediaAuthorize(site, job, token, action, file.key)).generation;
+  return on(site, MEDIA_COMMIT, { ...auth(job, token), p_action: action, p_object_key: file.key, p_bytes: file.bytes, p_sha256: file.sha256,
+    p_content_type: file.content_type, p_storage_origin: ['download', 'recheck-export'].includes(action) ? SOURCE_ORIGIN : TARGET_ORIGIN,
+    p_generation: generation, ...extra }, role);
+}
 async function commitMedia(site, job, token, files, action) {
   for (const file of files) {
     const context = await mediaAuthorize(site, job, token, action, file.key);
     assert.equal(context.key, file.key); assert.equal(context.source_url, file.source_url); assert.equal(context.bucket, 'verification-documents');
     const originalPath = file.source_url.split(MEDIA_PREFIX + '/')[1];
-    if (context.direction === 'export') assert.equal(context.path, originalPath);
+    if (context.direction === 'export') { assert.equal(context.path, originalPath); assert.equal(context.generation, 'export'); }
     else {
+      assert.match(context.generation, /^(0|[1-9][0-9]*)$/);
+      assert.equal(context.generation, String((await state()).verification_restore?.completed_employees ?? 0));
       const [folder, name] = originalPath.split('/');
       assert.equal(context.path, `${folder}/${name.slice(0, 36)}-transfer-${hash(`${job.job_id}:${file.key}`).slice(0, 32)}.${name.split('.').at(-1).toLowerCase()}`);
       assert.deepEqual(context.file, file);
     }
-    const receipt = await mediaCommit(site, job, token, action, file);
+    const receipt = await mediaCommit(site, job, token, action, file, { p_generation: context.generation });
     assert.deepEqual(receipt, { success: true, key: file.key, bytes: file.bytes, sha256: file.sha256, content_type: file.content_type, full_site_complete: false });
   }
 }
@@ -276,9 +280,13 @@ async function vraw(input = verification) {
     assert.equal(receipt.rows, lines(text).length); assert.equal(receipt.bytes, Buffer.byteLength(text)); assert.equal(receipt.sha256, hash(text));
   }
 }
+async function verifiedActivity() {
+  if ((await state()).activity_restore?.verified) assert.equal((await verify()).verified, true);
+  else assert.equal((await restore(await stage())).verified, true);
+}
 async function vstage(input = verification, { media = true } = {}) {
-  // Every new import test first performs the genuine stage/apply/verify activity prerequisite.
-  await restore(await stage()); await vraw(input);
+  // Cached activity was genuinely staged/restored/verified; recheck it through the actual RPC.
+  await verifiedActivity(); await vraw(input);
   if (media) { await vmediaBind(input.files); await commitMedia(db, task, session, input.files, 'upload'); }
   return vplan();
 }
@@ -396,14 +404,14 @@ before(async () => {
   await transaction(async () => { const r = await prepare('shared', shared); assert.equal((await r.client.apply(r.plan.plan_hash)).success, true); await rpc('employee_transfer_cancel', auth(r.job)); }, db, true);
   dispatch = await transaction(() => capture('dispatch'), source, true); identity = await transaction(() => capture('identity'), source, true);
   finance = await transaction(() => capture('finance'), source, true); activity = await transaction(() => capture('activity'), source, true);
-  verification = await transaction(() => capture('verification', { completeMedia: false }), source, true);
+  verification = await transaction(() => capture('verification'), source, true);
   assert.deepEqual(activity.catalog.identity_catalog, identity.catalog); assert.deepEqual(finance.catalog.identity_catalog, identity.catalog);
   // Commit this expensive authentic prerequisite chain once; individual activity tests roll back to it.
   await transaction(async () => { const r = await prepare('dispatch', dispatch); task = r.job; await ready(r.plan); await stillClosed(); }, db, true);
 }, { timeout: 240000 });
 after(async () => { try {
   assert.equal(globalThis.fetch.mock.callCount(), 0, 'no fetch, including fake Storage URLs');
-  await Promise.all([source?.close(), db?.close()]);
+  await Promise.all([source?.close(), db?.close(), verificationDb?.close()]);
 } finally { mock.restoreAll(); } });
 
 test('549 real migrations preserve exactly the 12 historical failures and install activity 19/20 and verification 21/22', () => {
@@ -685,8 +693,30 @@ test('same-length raw-byte corruption cannot satisfy the catalog digest even wit
   const before = await business(); await assert.rejects(plan(), /catalog|verification|digest/i); assert.deepEqual(await business(), before); assert.equal(await permits(), 0);
 }));
 
-// Verification tests are isolated from the original activity suite; no verification prerequisite is
-// forged in the shared before hook, so a broken media RPC cannot suppress existing activity coverage.
+// The original activity suite continues against its unchanged finance-ready database. Verification
+// tests share a separate real stage/apply/verify snapshot, with each existing transaction rolled back.
+// No receipt, private mapping or verified flag is manufactured; the missing-prerequisite case stays
+// on the original database. The committed continuation test still clones/reopens its own database.
+function verificationTest(name, run) {
+  return test(name, async () => {
+    if (name === 'verification bind cannot bypass real restored activity prerequisites') return run();
+    const activityDb = db;
+    try {
+      if (!verificationDb) {
+        const staged = new PGlite({ loadDataDir: await activityDb.dumpDataDir('none'), extensions: { pgcrypto, pg_trgm, uuid_ossp } });
+        try {
+          await staged.waitReady; db = staged;
+          await transaction(async () => { await verifiedActivity(); await assertRestored(); await stillClosed(); }, staged, true);
+          const dump = await staged.dumpDataDir('none');
+          verificationDb = new PGlite({ loadDataDir: dump, extensions: { pgcrypto, pg_trgm, uuid_ossp } });
+          await verificationDb.waitReady;
+        } finally { await staged.close(); }
+      }
+      db = verificationDb;
+      return await run();
+    } finally { db = activityDb; transport(); }
+  });
+}
 for (const [name, args, service] of [
   ['employee_export_verification_begin', ['p_admin_session_token', 'p_admin_password', 'p_package_id']],
   ['get_employee_export_verification_page', ['p_admin_session_token', 'p_job_token', 'p_table_key', 'p_after', 'p_limit']],
@@ -700,8 +730,8 @@ for (const [name, args, service] of [
   ['employee_import_verification_apply', ['p_admin_session_token', 'p_job_token', 'p_employee_id', 'p_plan_hash']],
   ['employee_import_verification_verify', ['p_admin_session_token', 'p_job_token']],
   [MEDIA_AUTH, ['p_admin_session_token', 'p_job_token', 'p_action', 'p_object_key'], true],
-  [MEDIA_COMMIT, ['p_admin_session_token', 'p_job_token', 'p_action', 'p_object_key', 'p_bytes', 'p_sha256', 'p_content_type', 'p_storage_origin'], true],
-]) test(`verification ${name} keeps exact signature, definer search path and ${service ? 'service-only' : 'browser'} grants`, () => transaction(async () => {
+  [MEDIA_COMMIT, ['p_admin_session_token', 'p_job_token', 'p_action', 'p_object_key', 'p_bytes', 'p_sha256', 'p_content_type', 'p_storage_origin', 'p_generation'], true],
+]) verificationTest(`verification ${name} keeps exact signature, definer search path and ${service ? 'service-only' : 'browser'} grants`, () => transaction(async () => {
   const found = await rows(db, `SELECT oid,proargnames,prosecdef,proconfig,
     EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS everyone
     FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=$1`, [name]);
@@ -710,7 +740,7 @@ for (const [name, args, service] of [
   for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, 'SELECT has_function_privilege($1,$2::oid,\'EXECUTE\')', [role, fn.oid]), service ? role === 'service_role' : role !== 'service_role');
 }));
 
-test('verification raw source export has 205 rows over two pages, all 15 fields, three statuses, NULL, UTF8 and microseconds', () => transaction(async () => {
+verificationTest('verification raw source export has 205 rows over two pages, all 15 fields, three statuses, NULL, UTF8 and microseconds', () => transaction(async () => {
   assert.deepEqual(verification.pages.verification_requests, [200, 5]); assert.equal(verification.catalog.scope, 'employee-verification');
   assert.deepEqual(verification.catalog.identity_catalog, identity.catalog);
   const text = verification.texts.verification_requests, raw = lines(text).map(line => JSON.parse(line));
@@ -731,7 +761,7 @@ test('verification raw source export has 205 rows over two pages, all 15 fields,
 }, source));
 
 const vexportBegin = () => on(source, 'employee_export_verification_begin', { p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root, p_package_id: packageId });
-test('verification media inventory has exact deduplicated refs; verify blocks before download and before second readback, then verifies/closes without full export time', () => transaction(async () => {
+verificationTest('verification media inventory has exact deduplicated refs; verify blocks before download and before second readback, then verifies/closes without full export time', () => transaction(async () => {
   const original = await business(source), exp = await vexportBegin();
   const inventory = await mediaInventory(source, exp, sourceSession, 'export');
   assert.equal(inventory.scope, 'employee-verification-media'); assert.equal(inventory.full_site_complete, false);
@@ -751,14 +781,14 @@ test('verification media inventory has exact deduplicated refs; verify blocks be
   assert.deepEqual(await business(source), original);
 }, source));
 
-test('verification capture can complete only through actual service-role download/recheck RPCs, not summary injection', () => transaction(async () => {
+verificationTest('verification capture can complete only through actual service-role download/recheck RPCs, not summary injection', () => transaction(async () => {
   const exported = await capture('verification'); assert.deepEqual(exported, verification);
 }, source));
 
 for (const [label, extra] of [
   ['wrong source origin', { p_storage_origin: TARGET_ORIGIN }],
   ['changed bytes', { p_bytes: 1 }], ['changed digest', { p_sha256: hash('changed synthetic') }], ['changed MIME', { p_content_type: 'image/gif' }],
-]) test(`verification source commit rejects ${label} without changing the real receipt`, () => transaction(async () => {
+]) verificationTest(`verification source commit rejects ${label} without changing the real receipt`, () => transaction(async () => {
   const exp = await vexportBegin(), file = verification.files[0]; await commitMedia(source, exp, sourceSession, [file], 'download');
   const saved = await rows(source, "SELECT * FROM private.employee_transfer_staging WHERE job_id=$1 ORDER BY table_key,chunk_no", [exp.job_id]);
   await assert.rejects(mediaCommit(source, exp, sourceSession, 'recheck-export', file, extra), /not stored on this site|content changed/i);
@@ -766,7 +796,7 @@ for (const [label, extra] of [
   await assert.rejects(on(source, 'employee_export_verification_verify', auth(exp, sourceSession)), /incomplete/i);
 }, source));
 
-for (const role of ['anon', 'authenticated']) test(`verification ${role} cannot call media authorize/commit even with valid administrator/job tokens`, () => transaction(async () => {
+for (const role of ['anon', 'authenticated']) verificationTest(`verification ${role} cannot call media authorize/commit even with valid administrator/job tokens`, () => transaction(async () => {
   const exp = await vexportBegin(), file = verification.files[0];
   await assert.rejects(mediaAuthorize(source, exp, sourceSession, 'download', file.key, role), /permission denied/i);
   await assert.rejects(mediaCommit(source, exp, sourceSession, 'download', file, {}, role), /permission denied/i);
@@ -775,7 +805,7 @@ for (const role of ['anon', 'authenticated']) test(`verification ${role} cannot 
 for (const [label, url] of [
   ['foreign employee path', `${SOURCE_ORIGIN}${MEDIA_PREFIX}/id-front/${F.outsider}-synthetic.jpg`],
   ['unmanaged URL', `${SOURCE_ORIGIN}${MEDIA_PREFIX}/id-front/${F.history}-synthetic.jpg?unmanaged=1`],
-]) test(`verification source media refuses ${label} rather than silently dropping a file`, () => transaction(async () => {
+]) verificationTest(`verification source media refuses ${label} rather than silently dropping a file`, () => transaction(async () => {
   await localChange(source, 'public.verification_requests', 'UPDATE public.verification_requests SET id_front_url=$2 WHERE id=$1', [V.first, url]);
   const exp = await vexportBegin(); await assert.rejects(mediaInventory(source, exp, sourceSession, 'export'), /does not belong|Unmanaged/i);
   await assert.rejects(on(source, 'employee_export_verification_verify', auth(exp, sourceSession)), /does not belong|Unmanaged/i);
@@ -784,7 +814,7 @@ for (const [label, url] of [
 for (const [label, relation, sql] of [
   ['request same-count drift', 'public.verification_requests', "UPDATE public.verification_requests SET audit_remark='source drift' WHERE id=$1"],
   ['identity drift', 'public.users', "UPDATE public.users SET remarks='source identity drift' WHERE id=$1"],
-]) test(`verification source rechecks ${label} after real media receipts, including after successful verify`, () => transaction(async () => {
+]) verificationTest(`verification source rechecks ${label} after real media receipts, including after successful verify`, () => transaction(async () => {
   const exp = await vexportBegin(); await commitMedia(source, exp, sourceSession, verification.files, 'download'); await commitMedia(source, exp, sourceSession, verification.files, 'recheck-export');
   await on(source, 'employee_export_verification_verify', auth(exp, sourceSession));
   await localChange(source, relation, sql, [relation === 'public.users' ? F.history : V.first]);
@@ -795,7 +825,7 @@ test('verification bind cannot bypass real restored activity prerequisites', () 
   const before = await business(); await assert.rejects(vbind(), /Invalid employee activity catalog\.|Verified same-package.*activity.*required/i); assert.deepEqual(await business(), before); await stillClosed();
 }));
 
-test('verification media_incomplete blocks import before media bind, with missing receipts, and with a missing last upload', () => transaction(async () => {
+verificationTest('verification media_incomplete blocks import before media bind, with missing receipts, and with a missing last upload', () => transaction(async () => {
   const p = await vstage(verification, { media: false }); assert.equal(p.can_restore, false); assert.ok(p.conflicts.includes('media_incomplete')); flags(p);
   await assert.rejects(vapply(p), /conflict-free/i);
   await vmediaBind(); let next = await vplan(); assert.ok(next.conflicts.includes('media_incomplete'));
@@ -804,7 +834,7 @@ test('verification media_incomplete blocks import before media bind, with missin
   await commitMedia(db, task, session, verification.files.slice(-1), 'upload'); next = await vplan(); assert.equal(next.can_restore, true); flags(next); await stillClosed();
 }));
 
-test('verification restores every original column except mapped reviewers/namespaced URLs; is_verified, money, activity, triggers and dirty maintenance stay independent', () => transaction(async () => {
+verificationTest('verification restores every original column except mapped reviewers/namespaced URLs; is_verified, money, activity, triggers and dirty maintenance stay independent', () => transaction(async () => {
   const originalFlags = await verifiedFlags(); const p = await vstage(), before = await voutside(), original = await triggers(), sourceBefore = await business(source);
   assert.equal(p.can_restore, true, JSON.stringify(p.conflicts)); assert.deepEqual(p.counts, { verification_requests: 205 }); assert.equal(p.employees, 3); flags(p);
   await assert.rejects(vverify(), /incomplete/i);
@@ -820,7 +850,7 @@ test('verification restores every original column except mapped reviewers/namesp
   assert.deepEqual(await triggers(), original); assert.deepEqual(await business(source), sourceBefore); await stillClosed();
 }));
 
-test('verification final readback must occur after the last actual employee apply, not an earlier successful recheck-import', () => transaction(async () => {
+verificationTest('verification final readback must occur after the last actual employee apply, not an earlier successful recheck-import', () => transaction(async () => {
   const p = await vstage(); await commitMedia(db, task, session, verification.files, 'recheck-import');
   for (const employee of EMPLOYEES) await vapply(p, employee);
   await assert.rejects(vverify(), /final document readback is incomplete/i);
@@ -828,12 +858,35 @@ test('verification final readback must occur after the last actual employee appl
   await commitMedia(db, task, session, verification.files.slice(-1), 'recheck-import'); assert.equal((await vverify()).verified, true); await stillClosed();
 }));
 
+verificationTest('verification delayed recheck-import commit rejects the pre-final-apply generation and requires newly authorized final readback', () => transaction(async () => {
+  const p = await vstage(), file = verification.files[0];
+  assert.equal((await mediaAuthorize(db, task, session, 'recheck-import', file.key)).generation, '0');
+  await vapply(p, F.history); await vapply(p, F.noHeartbeat);
+  const oldContext = await mediaAuthorize(db, task, session, 'recheck-import', file.key);
+  assert.equal(oldContext.generation, '2');
+  // The file read started before the final employee apply; only the database generation changes.
+  await vapply(p, F.empty);
+  const saved = await rows(db, "SELECT * FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key='verification-media-import' ORDER BY chunk_no", [task.job_id]);
+  const summary = await state(), before = await business();
+  await assert.rejects(mediaCommit(db, task, session, 'recheck-import', file, { p_generation: oldContext.generation }),
+    /Verification media read generation changed; read the file again\./);
+  assert.deepEqual(await rows(db, "SELECT * FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key='verification-media-import' ORDER BY chunk_no", [task.job_id]), saved);
+  assert.deepEqual(await state(), summary); assert.deepEqual(await business(), before);
+  await assert.rejects(vverify(), /final document readback is incomplete/i);
+  const freshContext = await mediaAuthorize(db, task, session, 'recheck-import', file.key);
+  assert.equal(freshContext.generation, '3'); assert.notEqual(freshContext.generation, oldContext.generation);
+  await mediaCommit(db, task, session, 'recheck-import', file, { p_generation: freshContext.generation });
+  await assert.rejects(vverify(), /final document readback is incomplete/i);
+  await commitMedia(db, task, session, verification.files.slice(1), 'recheck-import');
+  assert.equal((await vverify()).verified, true); await assertVerificationRestored(); await stillClosed();
+}));
+
 for (const [label, change] of [
   ['package', c => { c.package_id = randomUUID(); c.identity_catalog.package_id = c.package_id; }],
   ['source site', c => { c.site_id = randomUUID(); c.identity_catalog.site_id = c.site_id; }],
   ['identity raw digest', c => { c.identity_catalog.tables[0].row_hashes_sha256 = hash('other raw identity'); }],
-]) test(`verification bind requires exact same ${label} and refuses replacement catalogs`, () => transaction(async () => {
-  await restore(await stage()); const catalog = structuredClone(verification.catalog); change(catalog); const before = await business();
+]) verificationTest(`verification bind requires exact same ${label} and refuses replacement catalogs`, () => transaction(async () => {
+  await verifiedActivity(); const catalog = structuredClone(verification.catalog); change(catalog); const before = await business();
   await assert.rejects(vbind({ catalog }), /binding|source|catalog|identity|package/i); assert.deepEqual(await business(), before);
   await vbind(); assert.equal((await vbind()).repeated, true); const modified = changedVerification(r => ({ ...r, real_name: r.real_name + 'x' }));
   await assert.rejects(vbind(modified), /immutable/i); await stillClosed();
@@ -842,7 +895,7 @@ for (const [label, change] of [
 for (const [label, change, conflict] of [
   ['missing reviewer mapping', r => r.id === V.first ? { ...r, audited_by: F.outsider } : r, 'verification_admin_unmapped'],
   ['missing source employee', r => r.id === V.first ? { ...r, user_id: F.outsider, id_front_url: null, id_back_url: null, selfie_url: null } : r, 'source_employee_missing'],
-]) test(`verification plan blocks ${label} from untrusted source files without modifying private maps`, () => transaction(async () => {
+]) verificationTest(`verification plan blocks ${label} from untrusted source files without modifying private maps`, () => transaction(async () => {
   const p = await vstage(changedVerification(change)); assert.equal(p.can_restore, false); assert.ok(p.conflicts.includes(conflict)); flags(p);
   const before = await business(), saved = await state(); await assert.rejects(vapply(p), /conflict-free/i); assert.deepEqual(await business(), before); assert.deepEqual(await state(), saved); await stillClosed();
 }));
@@ -852,13 +905,13 @@ const insertVerification = (request, employee) => localChange(db, 'public.verifi
 for (const [label, request, employee, reason] of [
   ['target residual', V.residual, F.history, 'verification_target_not_empty'],
   ['UUID collision owned by another package employee', V.first, F.noHeartbeat, 'verification_uuid_collision'],
-]) test(`verification plan refuses ${label} without deleting or skipping target rows`, () => transaction(async () => {
+]) verificationTest(`verification plan refuses ${label} without deleting or skipping target rows`, () => transaction(async () => {
   const p = await vstage(); assert.equal(p.can_restore, true); await insertVerification(request, employee); const before = await business(), blocked = await vplan();
   assert.equal(blocked.can_restore, false); assert.ok(blocked.conflicts.includes(reason)); await assert.rejects(vapply(blocked), /conflict-free|changed/i);
   assert.deepEqual(await business(), before); await stillClosed();
 }));
 
-test('verification UUID introduced after planning blocks a later employee without claiming an earlier employee commit was reversed', () => transaction(async () => {
+verificationTest('verification UUID introduced after planning blocks a later employee without claiming an earlier employee commit was reversed', () => transaction(async () => {
   const p = await vstage(); await vapply(p, F.noHeartbeat); await insertVerification(V.first, F.empty); const before = await business(), saved = await state();
   await assert.rejects(vapply(p), /UUID collision changed/i); assert.deepEqual(await business(), before); assert.deepEqual(await state(), saved);
   assert.equal((await vapply(p, F.noHeartbeat)).repeated, true); assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.verification_requests WHERE user_id=$1', [F.noHeartbeat]), 2); await stillClosed();
@@ -867,7 +920,7 @@ test('verification UUID introduced after planning blocks a later employee withou
 for (const [field, value] of [['id', V.residual], ['user_id', F.empty], ['real_name', 'drift'], ['wallet_address', 'drift'], ['phone', 'drift'], ['email', 'drift'],
   ['status', 'rejected'], ['audit_remark', null], ['audited_by', NEW.branch], ['audited_at', null], ['created_at', null],
   ['updated_at', '2001-01-01T00:00:00.000001Z'], ['id_front_url', null], ['id_back_url', `${TARGET_ORIGIN}${MEDIA_PREFIX}/id-back/${F.history}-drift.png`], ['selfie_url', null]])
-  test(`verification same-count ${field} drift blocks repeated apply, plan and final verify`, () => transaction(async () => {
+  verificationTest(`verification same-count ${field} drift blocks repeated apply, plan and final verify`, () => transaction(async () => {
     const p = await vstage(); await vrestore(p);
     await localChange(db, 'public.verification_requests', `UPDATE public.verification_requests SET ${field}=$2 WHERE id=$1`, [V.first, value]);
     const before = await business(), saved = await state();
@@ -880,13 +933,13 @@ for (const [label, change] of [
   ['wrong source URL', files => { files[0].source_url = files[1].source_url; return files; }],
   ['reordered refs', files => files.reverse()], ['zero bytes', files => { files[0].bytes = 0; return files; }],
   ['unknown MIME', files => { files[0].content_type = 'text/html'; return files; }],
-]) test(`verification media bind rejects ${label} without accepting an incomplete or misbound file inventory`, () => transaction(async () => {
-  await restore(await stage()); await vraw(); const before = await business(), saved = await state();
+]) verificationTest(`verification media bind rejects ${label} without accepting an incomplete or misbound file inventory`, () => transaction(async () => {
+  await verifiedActivity(); await vraw(); const before = await business(), saved = await state();
   await assert.rejects(vmediaBind(change(structuredClone(verification.files))), /Invalid|mismatched/i); assert.deepEqual(await business(), before); assert.deepEqual(await state(), saved);
 }));
 
-test('verification media binding is immutable and import commits require exact tuple plus one target origin', () => transaction(async () => {
-  await restore(await stage()); await vraw(); await vmediaBind(); assert.equal((await vmediaBind()).repeated, true);
+verificationTest('verification media binding is immutable and import commits require exact tuple plus one target origin', () => transaction(async () => {
+  await verifiedActivity(); await vraw(); await vmediaBind(); assert.equal((await vmediaBind()).repeated, true);
   const changed = structuredClone(verification.files); changed[0].sha256 = hash('different content'); await assert.rejects(vmediaBind(changed), /immutable/i);
   const file = verification.files[0]; const context = await mediaAuthorize(db, task, session, 'upload', file.key); assert.deepEqual(context.file, file);
   for (const extra of [{ p_bytes: 1 }, { p_sha256: hash('changed') }, { p_content_type: 'image/gif' }]) await assert.rejects(mediaCommit(db, task, session, 'upload', file, extra), /content changed/i);
@@ -903,12 +956,12 @@ for (const [label, text] of [
   ['duplicate JSON field', () => lines(verification.texts.verification_requests)[0].replace('{', '{"id":"' + V.first + '",')],
   ['missing LF', () => lines(verification.texts.verification_requests)[0].slice(0, -1)],
   ['over 200 rows', () => verification.texts.verification_requests],
-]) test(`verification immutable raw staging rejects ${label}`, () => transaction(async () => {
-  await restore(await stage()); await vbind(); await assert.rejects(vchunk(0, text()), /Invalid|row limit/i); assert.equal(await permits(), 0);
+]) verificationTest(`verification immutable raw staging rejects ${label}`, () => transaction(async () => {
+  await verifiedActivity(); await vbind(); await assert.rejects(vchunk(0, text()), /Invalid|row limit/i); assert.equal(await permits(), 0);
 }));
 
-test('verification staging preserves raw chunks, rejects changed retries and detects same-length raw corruption', () => transaction(async () => {
-  await restore(await stage()); await vbind(); const first = chunks(verification.texts.verification_requests)[0];
+verificationTest('verification staging preserves raw chunks, rejects changed retries and detects same-length raw corruption', () => transaction(async () => {
+  await verifiedActivity(); await vbind(); const first = chunks(verification.texts.verification_requests)[0];
   assert.equal((await vchunk(0, first)).rows, 200); assert.equal((await vchunk(0, first)).repeated, true);
   await assert.rejects(vchunk(0, first.replace('合成姓名', '不同姓名')), /content changed/i);
   await vchunk(1, chunks(verification.texts.verification_requests)[1].replace('123456', '123457'));
@@ -919,7 +972,7 @@ for (const [label, sql] of [
   ['unknown verification trigger', 'CREATE TRIGGER aa_verification_unknown BEFORE INSERT ON public.verification_requests FOR EACH STATEMENT EXECUTE FUNCTION private.employee_transfer_guard_write()'],
   ['disabled maintenance guard', 'ALTER TABLE public.verification_requests DISABLE TRIGGER zz_employee_transfer_maintenance'],
   ['replica maintenance guard', 'ALTER TABLE public.verification_requests ENABLE REPLICA TRIGGER zz_employee_transfer_maintenance'],
-]) test(`verification refuses ${label} before writing and never normalizes its trigger state`, () => transaction(async () => {
+]) verificationTest(`verification refuses ${label} before writing and never normalizes its trigger state`, () => transaction(async () => {
   const p = await vstage(); await db.exec(sql); const before = await business(), original = await triggers();
   await assert.rejects(vapply(p), /Unreviewed|guard|trigger/i); assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); assert.equal(await permits(), 0);
 }));
@@ -928,13 +981,13 @@ for (const [label, relation, sql] of [
   ['identity', 'public.users', "UPDATE public.users SET remarks='actual identity drift' WHERE id=$1"],
   ['finance', 'public.wallets', "UPDATE public.wallets SET updated_at='2001-01-01' WHERE user_id=$1"],
   ['activity', 'public.employee_login_history', "UPDATE public.employee_login_history SET user_agent='actual activity drift' WHERE id=$1"],
-]) test(`verification continuation rechecks actual ${label} rather than its previous verified flag`, () => transaction(async () => {
+]) verificationTest(`verification continuation rechecks actual ${label} rather than its previous verified flag`, () => transaction(async () => {
   const p = await vstage(); await localChange(db, relation, sql, [label === 'activity' ? F.login : F.history]); const before = await business();
   for (const action of [() => vplan(), () => vapply(p), () => vverify()]) await assert.rejects(action(), /changed|verification|content/i);
   assert.deepEqual(await business(), before); assert.equal(await permits(), 0);
 }));
 
-test('verification late per-employee event failure rolls back 203 inserted requests, receipt and progress, retaining earlier employee result', () => transaction(async () => {
+verificationTest('verification late per-employee event failure rolls back 203 inserted requests, receipt and progress, retaining earlier employee result', () => transaction(async () => {
   const p = await vstage(); await vapply(p, F.noHeartbeat); const before = await business(), saved = await state(), original = await triggers();
   await db.exec(`CREATE FUNCTION public.verification_event_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
     IF NEW.action='verification_employee_restored' AND NEW.details->>'employee_id'='${F.history}' THEN RAISE EXCEPTION 'late verification failure'; END IF; RETURN NEW; END $$;
@@ -947,7 +1000,7 @@ test('verification late per-employee event failure rolls back 203 inserted reque
 }));
 
 for (const [label, token] of [['secondary', () => branch], ['emergency', () => emergency], ['another root', () => other], ['unknown session', randomUUID]])
-  test(`verification browser and service-role protocols reject ${label} identity even with the right job`, () => transaction(async () => {
+  verificationTest(`verification browser and service-role protocols reject ${label} identity even with the right job`, () => transaction(async () => {
     const p = await vstage(), extra = { p_admin_session_token: token() }, before = await business();
     for (const action of [() => vbind(verification, extra), () => vchunk(0, chunks(verification.texts.verification_requests)[0], extra), () => vmediaBind(verification.files, extra),
       () => vplan(extra), () => vapply(p, F.history, extra), () => vverify(extra),
@@ -959,14 +1012,14 @@ for (const [label, token] of [['secondary', () => branch], ['emergency', () => e
 for (const [label, sql, args] of [
   ['expired admin session', "UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1", () => [NEW.root]],
   ['expired task', "UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", () => [task.job_id]],
-]) test(`verification ${label} blocks all continuation including service commits and keeps dirty maintenance`, () => transaction(async () => {
+]) verificationTest(`verification ${label} blocks all continuation including service commits and keeps dirty maintenance`, () => transaction(async () => {
   const p = await vstage(); await vapply(p, F.noHeartbeat); await db.query(sql, args()); const before = await business();
   for (const action of [() => vbind(), () => vplan(), () => vapply(p), () => vverify(), () => mediaAuthorize(db, task, session, 'upload', verification.files[0].key),
     () => mediaCommit(db, task, session, 'recheck-import', verification.files[0])]) await assert.rejects(action(), /invalid or expired|running dispatch owner/i);
   assert.deepEqual(await business(), before); assert.equal(await permits(), 0); assert.equal(await scalar(db, 'SELECT dirty FROM private.employee_transfer_maintenance'), true);
 }));
 
-test('verification plan hash and package membership cannot be forged or bypassed through legacy finish', () => transaction(async () => {
+verificationTest('verification plan hash and package membership cannot be forged or bypassed through legacy finish', () => transaction(async () => {
   const p = await vstage(), before = await business(), saved = await state();
   await assert.rejects(vapply({ plan_hash: hash('forged verification plan') }), /matching conflict-free verification plan/i);
   await assert.rejects(vapply(p, F.outsider), /outside this package/i);
@@ -975,7 +1028,7 @@ test('verification plan hash and package membership cannot be forged or bypassed
   assert.deepEqual(await business(), before); assert.deepEqual(await state(), saved); await stillClosed();
 }));
 
-test('verification cancellation after a partial employee result blocks browser/service continuation but retains committed history and disabled accounts', () => transaction(async () => {
+verificationTest('verification cancellation after a partial employee result blocks browser/service continuation but retains committed history and disabled accounts', () => transaction(async () => {
   const p = await vstage(); await vapply(p, F.noHeartbeat); const before = await business();
   await rpc('employee_transfer_cancel', auth());
   for (const action of [() => vbind(), () => vplan(), () => vapply(p), () => vverify(),
@@ -985,7 +1038,7 @@ test('verification cancellation after a partial employee result blocks browser/s
   await stillClosed();
 }));
 
-test('verification source expiration/cancellation and unsupported objects/actions cannot manufacture a verified export', () => transaction(async () => {
+verificationTest('verification source expiration/cancellation and unsupported objects/actions cannot manufacture a verified export', () => transaction(async () => {
   const exp = await vexportBegin(), file = verification.files[0];
   await assert.rejects(mediaAuthorize(source, exp, sourceSession, 'download', hash('outside task')), /outside this task/i);
   await assert.rejects(mediaAuthorize(source, exp, sourceSession, 'delete', file.key), /Unsupported/i);
@@ -996,7 +1049,7 @@ test('verification source expiration/cancellation and unsupported objects/action
   await assert.rejects(on(source, 'employee_export_verification_verify', auth(cancelled, sourceSession)), /invalid or expired/i);
 }, source));
 
-test('verification helpers and private media receipts/maps remain inaccessible to browser and service roles', () => transaction(async () => {
+verificationTest('verification helpers and private media receipts/maps remain inaccessible to browser and service roles', () => transaction(async () => {
   const functions = await rows(db, "SELECT oid,proname FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_%verification%'"); assert.ok(functions.length > 0);
   for (const fn of functions) for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), false, fn.proname);
   for (const role of ['anon', 'authenticated', 'service_role']) for (const relation of ['private.employee_transfer_staging', 'private.employee_transfer_jobs']) {
@@ -1005,7 +1058,7 @@ test('verification helpers and private media receipts/maps remain inaccessible t
   }
 }));
 
-test('verification real committed transactions survive a new PGlite connection, late failure and cancellation without falsely undoing earlier employees', async () => {
+verificationTest('verification real committed transactions survive a new PGlite connection, late failure and cancellation without falsely undoing earlier employees', async () => {
   // An isolated durable in-memory clone leaves the original activity continuation test unchanged.
   const activityDb = db; const extensions = { pgcrypto, pg_trgm, uuid_ossp };
   db = new PGlite({ loadDataDir: await activityDb.dumpDataDir('none'), extensions }); await db.waitReady;
