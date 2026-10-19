@@ -13,9 +13,14 @@ const NOTIFICATION_TYPES = new Set([...TYPES, 'video/mp4', 'video/webm']);
 const NOTIFICATION_BUCKETS = new Set(['announcement-images', 'chat-images', 'template-images']);
 const NOTIFICATION_PATH = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.[A-Za-z0-9]{1,8}$/;
 const NOTIFICATION_IMPORT_PATH = new RegExp(`^${UUID}/transfer-[0-9a-f]{32}\\.[a-z0-9]{1,8}$`);
+const CHAT_BUCKETS = new Set(['announcement-images', 'chat-images', 'template-images', 'super-customer-avatars']);
+const AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const CHAT_AVATAR_IMPORT_PATH = /^avatars\/transfer-[0-9a-f]{32}\.[a-z0-9]{1,8}$/;
+export const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 const RPCS = {
   verification: { authorize: 'employee_transfer_verification_media_authorize', commit: 'employee_transfer_verification_media_commit' },
   notifications: { authorize: 'employee_transfer_notification_media_authorize', commit: 'employee_transfer_notification_media_commit' },
+  chat: { authorize: 'employee_transfer_chat_media_authorize', commit: 'employee_transfer_chat_media_commit' },
 };
 type Scope = keyof typeof RPCS;
 const ACTIONS = new Set(['download', 'recheck-export', 'upload', 'recheck-import']);
@@ -44,7 +49,7 @@ export interface MediaHandlerDependencies {
 
 type RecordValue = Record<string, unknown>;
 type FileTuple = { key: string; source_url: string; bytes: number; sha256: string; content_type: string };
-type Context = { direction: string; key: string; bucket: string; path: string; source_url: string; file: FileTuple | null; generation: string };
+type Context = { direction: string; key: string; bucket: string; path: string; source_url: string; file: FileTuple | null; generation: string; avatar: boolean };
 
 // All failures have fixed, non-sensitive responses, including uncertain writes.
 class Failure extends Error {
@@ -91,12 +96,14 @@ function notificationSourcePath(value: unknown, bucket: string): string {
   if (!safeNotificationPath(path)) fail();
   return path;
 }
-function fileTuple(value: unknown, key: string, source: string, scope: Scope): FileTuple {
+function fileTuple(value: unknown, key: string, source: string, scope: Scope, avatar: boolean): FileTuple {
   if (!record(value) || !exact(value, ['key', 'source_url', 'bytes', 'sha256', 'content_type']) ||
     value.key !== key || value.source_url !== source || !Number.isSafeInteger(value.bytes) ||
     (value.bytes as number) < 1 || (value.bytes as number) > MAX_MEDIA_BYTES ||
     typeof value.sha256 !== 'string' || value.sha256.length !== 64 || !KEY_PATTERN.test(value.sha256) ||
-    typeof value.content_type !== 'string' || !(scope === 'notifications' ? NOTIFICATION_TYPES : TYPES).has(value.content_type)) fail();
+    typeof value.content_type !== 'string' || !(scope === 'verification' ? TYPES : NOTIFICATION_TYPES).has(value.content_type)) fail();
+  if (scope === 'chat' && avatar &&
+    ((value.bytes as number) > MAX_AVATAR_BYTES || !AVATAR_TYPES.has(value.content_type))) fail();
   return value as FileTuple;
 }
 async function digest(bytes: Uint8Array, crypto: Pick<Crypto, 'subtle'>): Promise<string> {
@@ -105,21 +112,31 @@ async function digest(bytes: Uint8Array, crypto: Pick<Crypto, 'subtle'>): Promis
 }
 async function context(value: unknown, action: string, key: string, origin: string, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<Context> {
   const direction = action === 'download' || action === 'recheck-export' ? 'export' : 'import';
-  if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation']) ||
+  if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation', ...(scope === 'chat' ? ['avatar'] : [])]) ||
     value.direction !== direction || value.key !== key || typeof value.bucket !== 'string') fail();
   if (scope === 'verification' ? value.bucket !== BUCKET || !safePath(value.path) :
-    !NOTIFICATION_BUCKETS.has(value.bucket) || !safeNotificationPath(value.path)) fail();
+    !(scope === 'chat' ? CHAT_BUCKETS : NOTIFICATION_BUCKETS).has(value.bucket) || !safeNotificationPath(value.path)) fail();
+  if (scope === 'chat' && value.bucket === 'super-customer-avatars' && !(value.path as string).startsWith('avatars/')) fail();
   if (typeof value.path !== 'string') fail();
+  const avatar = scope === 'chat' && value.avatar === true;
+  if (scope === 'chat' && (typeof value.avatar !== 'boolean' || (value.bucket === 'super-customer-avatars' && !avatar))) fail();
   const generation = value.generation;
-  if (typeof generation !== 'string' || (direction === 'export' ? generation !== 'export' :
+  if (scope === 'chat') {
+    // Decimal string preserves the SQL bigint exactly, beyond JavaScript's safe integers.
+    if (typeof generation !== 'string' || generation !== generation.trim() ||
+      !/^(0|[1-9][0-9]{0,18})$/.test(generation) || BigInt(generation) > 9223372036854775807n ||
+      (direction === 'export' && generation !== '0')) fail();
+  } else if (typeof generation !== 'string' || (direction === 'export' ? generation !== 'export' :
     generation !== generation.trim() || !/^(0|[1-9][0-9]{0,5})$/.test(generation) || Number(generation) > 500000)) fail();
   const path = scope === 'verification' ? sourcePath(value.source_url) : notificationSourcePath(value.source_url, value.bucket);
+  if (scope === 'chat' && value.bucket === 'super-customer-avatars' && !path.startsWith('avatars/')) fail();
   if (await digest(new TextEncoder().encode(value.source_url as string), crypto) !== key) fail();
   if (direction === 'export') {
     const prefix = scope === 'verification' ? PUBLIC_PREFIX : `/storage/v1/object/public/${value.bucket}/`;
     if (value.source_url !== origin + prefix + path || value.path !== path) fail();
-  } else if (scope === 'notifications') {
-    if (!NOTIFICATION_IMPORT_PATH.test(value.path) ||
+  } else if (scope !== 'verification') {
+    const targetPattern = scope === 'chat' && value.bucket === 'super-customer-avatars' ? CHAT_AVATAR_IMPORT_PATH : NOTIFICATION_IMPORT_PATH;
+    if (!targetPattern.test(value.path) ||
       value.path.slice(value.path.lastIndexOf('.') + 1) !== path.slice(path.lastIndexOf('.') + 1).toLowerCase()) fail();
   } else {
     const [folder, name] = value.path.split('/');
@@ -127,8 +144,8 @@ async function context(value: unknown, action: string, key: string, origin: stri
     if (folder !== sourceFolder || name.slice(0, 36) !== sourceName.slice(0, 36) || !IMPORT_NAME.test(name) ||
       name.slice(name.lastIndexOf('.') + 1) !== sourceName.slice(sourceName.lastIndexOf('.') + 1).toLowerCase()) fail();
   }
-  const file = value.file === null && action === 'download' ? null : fileTuple(value.file, key, value.source_url as string, scope);
-  return { direction, key, bucket: value.bucket, path: value.path, source_url: value.source_url as string, file, generation };
+  const file = value.file === null && action === 'download' ? null : fileTuple(value.file, key, value.source_url as string, scope, avatar);
+  return { direction, key, bucket: value.bucket, path: value.path, source_url: value.source_url as string, file, generation, avatar };
 }
 
 // Finite EBML header elements only: finding the word "webm" somewhere is not evidence.
@@ -189,7 +206,7 @@ function detectType(bytes: Uint8Array, scope: Scope): string {
   if (bytes.length >= 6 && (starts([0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) || starts([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))) return 'image/gif';
   if (bytes.length >= 12 && starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return 'image/webp';
   if (bytes.length >= 5 && starts([0x25, 0x50, 0x44, 0x46, 0x2d])) return 'application/pdf';
-  if (scope === 'notifications') {
+  if (scope === 'notifications' || scope === 'chat') {
     if (starts([0x66, 0x74, 0x79, 0x70], 4) && isMp4(bytes)) return 'video/mp4';
     if (starts([0x1a, 0x45, 0xdf, 0xa3]) && isWebm(bytes)) return 'video/webm';
   }
@@ -198,6 +215,8 @@ function detectType(bytes: Uint8Array, scope: Scope): string {
 async function inspect(bytes: Uint8Array, ctx: Context, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<FileTuple> {
   if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) fail(422, 'INVALID_MEDIA');
   const actual = { key: ctx.key, source_url: ctx.source_url, bytes: bytes.length, sha256: await digest(bytes, crypto), content_type: detectType(bytes, scope) };
+  if (scope === 'chat' && ctx.avatar &&
+    (bytes.length > MAX_AVATAR_BYTES || !AVATAR_TYPES.has(actual.content_type))) fail(422, 'INVALID_MEDIA');
   if (ctx.file && !sameFile(ctx.file, actual)) fail(422, 'INVALID_MEDIA');
   return actual;
 }
@@ -265,15 +284,16 @@ async function download(store: MediaStore, ctx: Context, requestSignal: AbortSig
     const encoding = response.headers.get('content-encoding');
     if (result.error || response.status !== 200 || response.redirected || response.headers.has('content-range') ||
       (encoding !== null && encoding.toLowerCase() !== 'identity') || signal.aborted) fail();
+    const maxBytes = ctx.avatar ? MAX_AVATAR_BYTES : MAX_MEDIA_BYTES;
     const header = response.headers.get('content-length');
     let declared: number | null = null;
     if (header !== null) {
       if (!/^(0|[1-9][0-9]{0,8})$/.test(header)) fail();
       declared = Number(header);
-      if (!declared || declared > MAX_MEDIA_BYTES || (ctx.file && declared !== ctx.file.bytes)) fail(422, 'INVALID_MEDIA');
+      if (!declared || declared > maxBytes || (ctx.file && declared !== ctx.file.bytes)) fail(422, 'INVALID_MEDIA');
     }
     const expected = ctx.file?.bytes ?? declared;
-    const limit = expected ?? MAX_MEDIA_BYTES;
+    const limit = expected ?? maxBytes;
     if (!response.body) fail(422, 'INVALID_MEDIA');
     const reader = response.body.getReader();
     const onAbort = () => { void reader.cancel().catch(() => {}); };
@@ -335,7 +355,7 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
       if (request.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       if (!origin || !crypto?.subtle) fail(500, 'TRANSFER_FAILED');
       const rawScope = request.headers.get('x-transfer-scope') ?? 'verification';
-      if (rawScope !== 'verification' && rawScope !== 'notifications') fail(400, 'INVALID_REQUEST');
+      if (rawScope !== 'verification' && rawScope !== 'notifications' && rawScope !== 'chat') fail(400, 'INVALID_REQUEST');
       const scope: Scope = rawScope;
       const rpcs = RPCS[scope];
       const action = request.headers.get('x-transfer-action') ?? '';
