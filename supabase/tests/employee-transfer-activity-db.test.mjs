@@ -2658,6 +2658,84 @@ test('chat transfer: real chatApi streams raw files and resumes committed stagin
   assert.deepEqual(await business(), originalBusiness); assert.deepEqual(await transferSnapshot(), originalTransfer);
 });
 
+test('chat transfer: arbitrary rating JSON preserves SQL NULL and JSON null accepts 32 containers and rejects deeper or escaped duplicate keys', () => transaction(async () => {
+  const key = 'customer_employee_conversations', before = await business(), original = await triggers();
+  const nest = depth => Array.from({ length: depth }, (_, n) => n % 2 ? 'array' : 'object').reduceRight((raw, kind) =>
+    kind === 'array' ? `[${raw}]` : `{"child":${raw}}`, PRECISE);
+  const values = [
+    ['SQL NULL', 'null', true], ['JSON null', 'null', false],
+    ['array', `[null,${PRECISE},{"arbitrary":true,"children":[{"id":"left"},{"id":"right"}]}]`, false],
+    ['string', JSON.stringify('原始評分字串𠮷 é é'), false], ['boolean', 'true', false],
+    ['number', PRECISE, false], ['32 rating containers plus row container', nest(32), false],
+  ];
+  // Raw lexical replacement retains numbers beyond JS precision; JSON.parse is used only for
+  // the surrounding source row. No source business row, verified receipt or map is rewritten.
+  const rawRating = (row, raw, sqlNull) => JSON.stringify({ ...row, rating_data: '__chat_raw_rating__', rating_data_sql_null: sqlNull })
+    .replace('"__chat_raw_rating__"', raw) + '\n';
+  const originalLines = lines(chat.texts[key]);
+  const input = changedChat({ [key]: () => originalLines.map((line, n) => n < values.length
+    ? rawRating(JSON.parse(line), values[n][1], values[n][2]) : line).join('') });
+  await cstage(input); const saved = await transferSnapshot(), p = await cplan(); chatFlags(p, input); assert.deepEqual(p.conflicts, []);
+  for (const [n, [label, raw, sqlNull]] of values.entries()) {
+    const line = lines(input.texts[key])[n], rowId = JSON.parse(line).id;
+    // Layer 1: private raw JSON duplicate/depth checks, independently of the jsonb row validator.
+    assert.equal(await scalar(db, 'SELECT private.employee_transfer_chat_unique_json($1::json)', [line]), true, label);
+    // Layer 2: real public cstage + SQL29 plan above; check typed values and stored original bytes.
+    assert.equal(await scalar(db, `SELECT body->'rating_data'=$3::jsonb
+      AND body->'rating_data_sql_null'=to_jsonb($4::boolean) FROM private.employee_transfer_chat_input($1,$2) WHERE id=$5`,
+    [task.job_id, key, raw, sqlNull, rowId]), true, label);
+    assert.equal(await scalar(db, `SELECT EXISTS(SELECT 1 FROM private.employee_transfer_staging WHERE job_id=$1
+      AND table_key='chat-in:'||$2 AND strpos(payload->>'ndjson',$3)>0)`, [task.job_id, key, line]), true, label);
+    modules.validateChatRow(line, key);
+  }
+  const first = JSON.parse(originalLines[0]);
+  const invalid = [rawRating(first, nest(33), false), rawRating(first, '{"nested":{"id":1,"\\u0069d":2}}', false)];
+  for (const line of invalid) {
+    assert.equal(await scalar(db, 'SELECT private.employee_transfer_chat_unique_json($1::json)', [line]), false);
+    // jsonb alone discards duplicate keys, so rejection must also be exercised through raw stage.
+    await assert.rejects(cchunk(key, 0, line), /Invalid chat import row/i);
+    assert.deepEqual(await transferSnapshot(), saved);
+  }
+  await assert.rejects(cchunk(key, 0, rawRating(first, '[]', true)), /Invalid chat import row/i);
+  assert.deepEqual(await cplan(), p); assert.deepEqual(await transferSnapshot(), saved);
+  assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); assert.equal(await permits(), 0); await stillClosed();
+}));
+
+test('chat transfer: visibility follows only target_employee_ids including NULL members and never falls back to legacy single employee', () => transaction(async () => {
+  const before = await business(), original = await triggers(), originalTransfer = await transferSnapshot();
+  for (const sourceArray of [null, []]) await chatSavepoint(async () => {
+    const input = changedChat({ simulated_customers: changeChatRow(row => row.id === CH.exact,
+      { target_employee_ids: sourceArray, target_employee_id: F.history }) });
+    await cstage(input);
+    const staged = await scalar(db, "SELECT body FROM private.employee_transfer_chat_input($1,'simulated_customers') WHERE id=$2", [task.job_id, CH.exact]);
+    assert.deepEqual(staged.target_employee_ids, sourceArray); assert.equal(staged.target_employee_id, F.history);
+    for (const [label, targetArray, expectedMissing] of [
+      ['restricted history', [F.history], [F.noHeartbeat, F.empty]],
+      ['SQL NULL open to all despite legacy', null, []], ['empty open to all despite legacy', [], []],
+      ['only NULL is not open', [null], EMPLOYEES], ['history plus NULL', [F.history, null], [F.noHeartbeat, F.empty]],
+    ]) await chatSavepoint(async () => {
+      // Deliberate target-only drift stays local and restores the exact protective trigger modes.
+      await localChange(db, 'public.simulated_customers', `UPDATE public.simulated_customers
+        SET target_employee_ids=$2::uuid[],target_employee_id=$3 WHERE id=$1`, [CH.targetExact, targetArray, F.history]);
+      const targetBefore = await business(), saved = await transferSnapshot(), p = await cplan(); chatFlags(p, input); assert.deepEqual(p.conflicts, []);
+      const role = p.roles.find(row => row.source_id === CH.exact);
+      assert.equal(role.match, 'exact'); assert.equal(role.target_id, CH.targetExact); assert.equal(role.multi_source_target, false);
+      assert.deepEqual([...role.visibility_employee_ids].sort(), [...expectedMissing].sort(), label);
+      assert.equal(role.needs_confirmation, expectedMissing.length > 0, label);
+      const fresh = p.roles.find(row => row.source_id === CH.fresh);
+      assert.equal(fresh.match, 'new'); assert.equal(fresh.target_id, null); assert.equal(fresh.needs_confirmation, false);
+      assert.deepEqual(fresh.visibility_employee_ids, [], 'new role has no target visibility difference');
+      const freshSource = JSON.parse(lines(input.texts.simulated_customers).find(line => JSON.parse(line).id === CH.fresh));
+      assert.deepEqual(freshSource.target_employee_ids, [F.empty]);
+      assert.deepEqual(await scalar(db, "SELECT body FROM private.employee_transfer_chat_input($1,'simulated_customers') WHERE id=$2", [task.job_id, CH.fresh]), freshSource);
+      assert.deepEqual(await cplan(), p); assert.deepEqual(await business(), targetBefore); assert.deepEqual(await transferSnapshot(), saved);
+      assert.deepEqual(await triggers(), original); assert.equal(await permits(), 0);
+    });
+  });
+  assert.deepEqual(await business(), before); assert.deepEqual(await transferSnapshot(), originalTransfer);
+  assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
 // Last: real COMMITs are intentional. No outer rollback can masquerade as cross-request continuation.
 test('separate committed activity transactions resume via a new activityApi, then cancellation preserves history and dirty maintenance', async () => {
   let p; const outside = await business(db, true), original = await triggers();
