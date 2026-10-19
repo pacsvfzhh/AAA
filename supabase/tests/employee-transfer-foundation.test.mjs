@@ -35,6 +35,8 @@ const criticalMigrations = [
   '20261102000018_restore_employee_finance.sql',
   '20261102000019_export_stage_employee_activity.sql',
   '20261102000020_restore_employee_activity.sql',
+  '20261102000021_export_stage_employee_verification.sql',
+  '20261102000022_restore_employee_verification_media.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -124,6 +126,15 @@ const publicFunctions = [
   'employee_export_activity_verify(uuid,uuid)', 'employee_export_activity_close(uuid,uuid)',
   'employee_import_activity_bind(uuid,uuid,jsonb)', 'employee_import_activity_stage(uuid,uuid,text,integer,text)',
   'get_employee_import_activity_plan(uuid,uuid)', 'employee_import_activity_apply(uuid,uuid,uuid,text)', 'employee_import_activity_verify(uuid,uuid)',
+  'employee_export_verification_begin(uuid,text,uuid)', 'get_employee_export_verification_page(uuid,uuid,text,text,integer)',
+  'employee_export_verification_verify(uuid,uuid)', 'employee_export_verification_close(uuid,uuid)',
+  'employee_import_verification_bind(uuid,uuid,jsonb)', 'employee_import_verification_stage(uuid,uuid,text,integer,text)',
+  'get_employee_transfer_verification_media(uuid,uuid,text)', 'employee_import_verification_media_bind(uuid,uuid,jsonb)',
+  'get_employee_import_verification_plan(uuid,uuid)', 'employee_import_verification_apply(uuid,uuid,uuid,text)', 'employee_import_verification_verify(uuid,uuid)',
+];
+const serviceOnlyFunctions = [
+  'employee_transfer_verification_media_authorize(uuid,uuid,text,text)',
+  'employee_transfer_verification_media_commit(uuid,uuid,text,text,integer,text,text,text,text)',
 ];
 
 async function checkCatalog(db) {
@@ -145,6 +156,22 @@ async function checkCatalog(db) {
     assert.equal(functions[0].anon_execute, true, name);
     assert.equal(functions[0].authenticated_execute, true, name);
     assert.equal(functions[0].public_execute, false, name);
+  }
+  for (const name of serviceOnlyFunctions) {
+    const functions = await rows(db, `SELECT prosecdef, proconfig,
+      has_function_privilege('anon', oid, 'EXECUTE') AS anon_execute,
+      has_function_privilege('authenticated', oid, 'EXECUTE') AS authenticated_execute,
+      has_function_privilege('service_role', oid, 'EXECUTE') AS service_role_execute,
+      EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f', proowner)))
+        WHERE grantee = 0 AND privilege_type = 'EXECUTE') AS public_execute
+      FROM pg_proc WHERE oid = to_regprocedure($1)`, [`public.${name}`]);
+    assert.equal(functions.length, 1, `missing public.${name}`);
+    assert.equal(functions[0].prosecdef, true, name);
+    assert.ok(functions[0].proconfig.includes('search_path=pg_catalog, public, private, pg_temp'), name);
+    assert.equal(functions[0].anon_execute, false, name);
+    assert.equal(functions[0].authenticated_execute, false, name);
+    assert.equal(functions[0].public_execute, false, name);
+    assert.equal(functions[0].service_role_execute, true, name);
   }
   const helpers = await rows(db, `SELECT oid, proname,
     EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f', proowner)))
