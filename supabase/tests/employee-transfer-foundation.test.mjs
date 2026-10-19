@@ -37,6 +37,8 @@ const criticalMigrations = [
   '20261102000020_restore_employee_activity.sql',
   '20261102000021_export_stage_employee_verification.sql',
   '20261102000022_restore_employee_verification_media.sql',
+  '20261102000023_export_stage_site_notifications.sql',
+  '20261102000024_check_site_notification_links.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -131,6 +133,10 @@ const publicFunctions = [
   'employee_import_verification_bind(uuid,uuid,jsonb)', 'employee_import_verification_stage(uuid,uuid,text,integer,text)',
   'get_employee_transfer_verification_media(uuid,uuid,text)', 'employee_import_verification_media_bind(uuid,uuid,jsonb)',
   'get_employee_import_verification_plan(uuid,uuid)', 'employee_import_verification_apply(uuid,uuid,uuid,text)', 'employee_import_verification_verify(uuid,uuid)',
+  'employee_export_notifications_begin(uuid,text,uuid)', 'get_employee_export_notifications_page(uuid,uuid,text,text,integer)',
+  'employee_export_notifications_verify(uuid,uuid)', 'employee_export_notifications_close(uuid,uuid)',
+  'employee_import_notifications_bind(uuid,uuid,jsonb)', 'employee_import_notifications_stage(uuid,uuid,text,integer,text)',
+  'get_employee_import_notifications_plan(uuid,uuid)',
 ];
 const serviceOnlyFunctions = [
   'employee_transfer_verification_media_authorize(uuid,uuid,text,text)',
