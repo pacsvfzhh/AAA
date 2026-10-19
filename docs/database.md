@@ -261,13 +261,21 @@ NOTIFY pgrst, 'reload schema';
 - 固定13表记录备份明文8MiB/密文9MiB；独立文件完整认证/行摘要核对后才传连续128KiB密文并封存，绑定计划/任务/站点/包；密文可由原超管的新会话跨任务过期/取消取回。media_included=false、media_pending/automation_pending=true、can_apply_configuration=false；无通知业务许可/发送/发奖/financial_operations重放/账号启用或dirty维护解除，不能将记录备份视为完整可恢复备份。详见计划第32节。
 - 本轮7迁移测试文件分组1524项，双站236按46/44/60/86互斥组完整执行；没有访问正式库、部署SQL/Edge/前端或修改Storage/权限/cron，无UI/浏览器/真实Storage或原生PG并发性能验收。
 
+## 通知媒体及实际恢复（SQL26/27，本地未部署）
+
+- 新增8个RPC，不新增表：`get_employee_transfer_notification_media`、`employee_import_notification_media_bind`、仅service_role的`employee_transfer_notification_media_authorize/commit`，以及`employee_import_notifications_begin/chunk/verify`、STABLE的`get_employee_import_notifications_restore_status`；均固定search_path/超管与同包任务鉴权，类型及120秒客户端等待同步，不放宽数据库执行上限。
+- 仅使用通知原文可证明的三桶引用，完整不可变文件目录、本站Edge读写/回读和读前代次绑定；来源媒体与目标链接映射保存在原任务/暂存。来源与目标漂移、外链或无法识别的编码媒体阻断，限制/类型见计划第33节；无Storage策略/cron改动。
+- begin要求最新无冲突计划、原独立备份已封存、身份资金真实核验及完整媒体回执；来源覆盖三配置、精确成员、暂停多余任务且不删除目标文件/历史证据。任务记下来源启停状态，当前全部方案/任务暂停。逐块≤200行恢复其余历史；循环执行/消息外键分阶段链接，投递序列分配新号并保留来源顺序，租约清空，奖励只保留关联不重新入账。
+- 每请求只授权固定表，保留ALWAYS守卫/外键/内容保护；只精确旁路审核过的规范化与快照副作用并恢复原状态。收件留证触发器不旁路，仅收件阶段附加`private.content_audit_recipient_versions`写许可；逐行核对人工收件快照，旧证据冲突拒绝覆盖。异常回滚当前批、已提交状态可用新API继续；verify须最终代次媒体回读，不启用员工或解除dirty维护。
+- 四客户端/服务文件902项、新增SQL恢复8项分两组通过、foundation/scope70项及聊天6/稽核48项通过；554份迁移保持12项既有历史失败及107根表/948列。未访问/改动正式环境或部署SQL/Edge/前端，无UI/真实Storage/原生PG时限/全站验收；自动任务续接和全站协调仍待实现。
+
 ## 类型与测试
 - `src/types/database.ts` 手工维护（没有生成脚本）：新增 RPC 时补充 `Functions` 的 `Args` / `Returns`；改表时同步 `Row` / `Insert` / `Update`。
 - `supabase/tests/audit-cleanup.test.mjs`：用 PGlite 加载缩减版 schema，再执行指定的真实迁移；每个测试在事务中执行后回滚。运行 `npm run test:audit-cleanup`。
 - `supabase/tests/service-chat-scale.test.mjs`：先装入正式库现行的会话摘要与分组 RPC（取自旧迁移），在混合数据（跨组旧会话、已归档员工、停用/紧急组、富卡、空时间消息、空聊天表）上记录结果，再执行 `20261101000002` 并逐行对比；另验证 `get_admin_chat_unread_counts` 的范围、无效/停用会话拒绝与执行权限。运行 `npm run test:service-chat`。
 - `supabase/tests/work-session-stop.test.mjs`：装入现行的开工/停工/恢复 RPC，先复现「主动停工后刷新被自动恢复」，再执行 `20261101000003` 验证主动停工不再恢复、刷新（beacon 停工）仍会恢复、停工后重新开工再刷新仍会恢复，以及权限。运行 `npm run test:work-session`。
-- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对当前 552 份 SQL 回放中的 12 项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名 RPC 和私有表权限；新增/变化/缺失失败阻断。测试使用 platform/baseline 替身，**不是全部迁移成功或真实空库建库证明**。
-- `supabase/tests/support/transfer-scope.mjs` 与 `employee-transfer-scope.test.mjs`：固化本地 107 张根表、948 列及业务迁移意图，拒绝未知/缺失表列、类型/空值性漂移；不是导出授权清单，也不表示转换已实现。scope实际测试文件为18/18，严格回放552份SQL；根表覆盖不含独立分区，实际目标库仍须重新核对。
+- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对当前 554 份 SQL 回放中的 12 项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名 RPC 和私有表权限；新增/变化/缺失失败阻断。测试使用 platform/baseline 替身，**不是全部迁移成功或真实空库建库证明**。
+- `supabase/tests/support/transfer-scope.mjs` 与 `employee-transfer-scope.test.mjs`：固化本地 107 张根表、948 列及业务迁移意图，拒绝未知/缺失表列、类型/空值性漂移；不是导出授权清单，也不表示转换已实现。scope实际测试文件为18/18，严格回放554份SQL；根表覆盖不含独立分区，实际目标库仍须重新核对。
 - `employee-transfer-production-scope.test.mjs` 单独核对正式 96 根表/871 列及独立目录 SHA-256，与本地 107 表配置不可混用；`employee-transfer-triggers.test.mjs` 验证真实迁移 SQL 的精确状态恢复、回执和提交门禁（使用 PGlite，不是原生多连接测试）。
 - `npm run test:employee-transfer` 运行加密、ZIP 清单/容器、增量 SHA-256、基础回放、双结构库存、触发器、共享设置导出/导入、来源覆盖与备份/API、产品专用数据库/客户端、派单交单导出/目标预检及导入准备/独立备份、持续维护、派单配置、交单原文/使用计数及同包员工身份/精简订单及来源成员/used防双计数及资金六表、登录/工时/停工标记三表、实名15列及证件媒体SQL/API/客户端/Edge分层测试；本轮新增通知/广播/范本及自动化13表原文/关联预检；第31节曾对34文件分组覆盖6058项；第32节新增配置计划/独立通知记录备份后，本轮只对7文件分组覆盖1524项，其中activity-db236按46/44/60/86互斥名称组实际执行。单组跳过不计通过，合并无遗漏；不把历史总数当本轮完整总命令通过。全站往返、管理员/配置/自动化/真实Storage及界面验收尚未完成，不以fakeStorage替代实际媒体验收。专项命令为 `test:employee-transfer:crypto`、`:foundation`、`:scope`。
 - `supabase/tests/employee-transfer-verification-{api,client,media}.test.mjs`与扩展的`employee-transfer-activity-db.test.mjs`分别验证实名API、NDJSON/媒体客户端、Edge/fakeStorage及真实迁移SQL；最终147+581项证据与未覆盖边界见上节，不是完整加密归档往返或真实Storage验收。

@@ -206,7 +206,7 @@ test('real transfer orchestration plus API validates thirteen server page/stage 
 
 // Exercise the actual existing Supabase fetch policy with an injected createClient transport.
 // Only the native fetch is mocked; no database, real network or environment key is used.
-test('all seven RPCs use120s; writes never retry; truly read-only page/plan retain existing get_ policy', async () => {
+test('notification RPCs use120s; explicit restore/media writes never retry and read-only status retains get_ policy', async () => {
   const transport = await build({ entryPoints: [`${root}src/lib/supabase.ts`], bundle: true, write: false, platform: 'browser', format: 'esm',
     define: { 'import.meta.env.VITE_SUPABASE_URL': '"https://unit-test.invalid"', 'import.meta.env.VITE_SUPABASE_ANON_KEY': '"unit-test"' },
     plugins: [{ name: 'capture-fetch', setup(builder) { builder.onResolve({ filter: /^@supabase\/supabase-js$/ }, () => ({ path: 'client', namespace: 'mock' }));
@@ -216,15 +216,21 @@ test('all seven RPCs use120s; writes never retry; truly read-only page/plan reta
   const timeoutMock = mock.method(globalThis, 'setTimeout', (fn, delay, ...args) => { timers.push(delay); return nativeSetTimeout(fn, delay === 250 ? 0 : delay, ...args); });
   try {
     const { supabase } = await import(`data:text/javascript;base64,${Buffer.from(transport.outputFiles[0].text).toString('base64')}`);
-    for (const name of WRITES) { hits = 0; timers.length = 0; const res = await supabase.request(`https://unit-test.invalid/rest/v1/rpc/${name}`, { method: 'POST', body: '{}' });
+    for (const name of [...WRITES, 'employee_import_notification_media_bind', 'employee_transfer_notification_media_authorize',
+      'employee_transfer_notification_media_commit', 'employee_import_notifications_begin', 'employee_import_notifications_chunk', 'employee_import_notifications_verify']) {
+      hits = 0; timers.length = 0; const res = await supabase.request(`https://unit-test.invalid/rest/v1/rpc/${name}`, { method: 'POST', body: '{}' });
       assert.equal(res.status, 503); assert.equal(hits, 1, name); assert.deepEqual(timers, [120000], name); }
-    for (const name of READS) { hits = 0; timers.length = 0; const res = await supabase.request(`https://unit-test.invalid/rest/v1/rpc/${name}`, { method: 'POST', body: '{}' });
+    for (const name of [...READS, 'get_employee_transfer_notification_media', 'get_employee_import_notifications_restore_status']) {
+      hits = 0; timers.length = 0; const res = await supabase.request(`https://unit-test.invalid/rest/v1/rpc/${name}`, { method: 'POST', body: '{}' });
       assert.equal(res.status, 503); assert.equal(hits, 3, name); assert.deepEqual(timers, [120000, 250, 120000, 250, 120000], name); }
     fail = false; timers.length = 0; await supabase.request('https://unit-test.invalid/rest/v1/rpc/unrelated_write', { method: 'POST' }); assert.deepEqual(timers, [8000]);
   } finally { timeoutMock.mock.restore(); fetchMock.mock.restore(); }
 });
-test('database declares exactly the seven local RPCs and no notification apply/import-close contract', async () => {
+test('records-only API stays separate from explicit SQL27 restore and cannot implicitly apply or close', async () => {
   const types = await readFile(`${root}src/types/database.ts`, 'utf8');
-  for (const name of [...WRITES, ...READS]) assert.ok(types.includes(`      ${name}: {`));
-  assert.equal(/employee_import_notifications_(?:apply|verify|close):/.test(types), false);
+  for (const name of [...WRITES, ...READS, 'employee_import_notifications_begin', 'employee_import_notifications_chunk',
+    'employee_import_notifications_verify', 'get_employee_import_notifications_restore_status']) assert.ok(types.includes(`      ${name}: {`));
+  assert.equal(/employee_import_notifications_(?:apply|close):/.test(types), false);
+  const recordsApi = await readFile(`${root}src/lib/employeeTransfer/notificationsApi.ts`, 'utf8');
+  assert.equal(/employee_import_notifications_(?:begin|chunk|verify)|notificationsRestoreApi/.test(recordsApi), false);
 });
