@@ -17,8 +17,8 @@ import tls from 'node:tls';
 import { createSites, adminLogin, rpc as baseRpc, rows, scalar } from './support/transfer-harness.mjs';
 import { NEW, OLD, PASSWORDS, buildNewSite } from './support/transfer-fixtures.mjs';
 
-// Run directly with node --test. Do not skip absent/broken 19–22 or extend the 12-failure baseline.
-const migration = '20261102000022_restore_employee_verification_media.sql';
+// Run directly with node --test. Do not skip absent/broken 19–24 or extend the 12-failure baseline.
+const migration = '20261102000024_check_site_notification_links.sql';
 const KEYS = {
   shared: ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members', 'admin_configs', 'system_configs', 'history_cleanup_config'],
   dispatch: ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders', 'dispatch_group_members', 'valid_order_data', 'used_order_data'],
@@ -26,6 +26,10 @@ const KEYS = {
   finance: ['wallets', 'wallet_balance_baselines', 'wallet_ledger_entries', 'wallet_transactions', 'withdrawals', 'wallet_reconciliation_audit'],
   activity: ['employee_login_history', 'work_sessions', 'work_stop_markers'],
   verification: ['verification_requests'],
+  notifications: ['notification_automation_plans', 'notification_automation_tasks', 'notification_automation_plan_members',
+    'notification_automation_task_recipients', 'notification_automation_progress', 'notification_automation_executions',
+    'notification_automation_date_runs', 'notification_automation_failures', 'messages', 'message_recipients',
+    'message_templates', 'broadcast_messages', 'broadcast_recipients'],
 };
 const ACTIVITY = ['public.employee_login_history', 'public.work_sessions', 'private.employee_work_stop_markers'];
 const FLAGS = { maintenance: true, financial_data_pending: true, dependencies_pending: true, replacement_ready: false, full_site_complete: false };
@@ -46,7 +50,7 @@ function chunks(text) {
   return result;
 }
 let replay, source, db, session, sourceSession, branch, emergency, other, modules;
-let packageId, dispatch, identity, finance, activity, verification, task, guarded;
+let packageId, dispatch, identity, finance, activity, verification, notifications, task, guarded;
 let verificationDb;
 let sequence = 0;
 async function transaction(fn, site = db, commit = false) {
@@ -105,9 +109,9 @@ function transport(site = db, token = session) {
   } });
 }
 async function capture(kind) {
-  const sourceBefore = ['activity', 'verification'].includes(kind) ? await business(source) : null;
+  const sourceBefore = ['activity', 'verification', 'notifications'].includes(kind) ? await business(source) : null;
   const job = await on(source, `employee_export_${kind}_begin`, { p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root,
-    ...(['identity', 'finance', 'activity', 'verification'].includes(kind) ? { p_package_id: packageId } : {}) });
+    ...(['identity', 'finance', 'activity', 'verification', 'notifications'].includes(kind) ? { p_package_id: packageId } : {}) });
   assert.equal(job.success, true);
   const texts = {}, pages = {};
   for (const key of KEYS[kind]) {
@@ -117,6 +121,7 @@ async function capture(kind) {
       assert.equal(page.sha256, hash(page.ndjson)); assert.equal(page.count, lines(page.ndjson).length);
       assert.ok(page.count <= 200); assert.ok(Buffer.byteLength(page.ndjson) <= 262144);
       if (kind === 'activity') modules.validateActivityPage(page, key, after);
+      if (kind === 'notifications') modules.validateNotificationsPage(page, key, after);
       pages[key].push(page.count); text += page.ndjson; after = page.next_after;
     } while (after !== null);
     texts[key] = text;
@@ -321,8 +326,116 @@ async function assertVerificationRestored() {
   assert.equal(await scalar(db, "SELECT count(*)::int FROM public.verification_requests WHERE id_front_url LIKE 'https://source.%' OR id_back_url LIKE 'https://source.%' OR selfie_url LIKE 'https://source.%'"), 0);
 }
 
+const N = { plan: id(6001), rootPlan: id(6002), recurring: id(6101), annual: id(6102), firstLogin: id(6103),
+  hidden: id(6104), execution: id(6201), failed: id(6202), historical: id(6203),
+  manual: id(7001), automatic: id(7002), manualRecipient: id(7101), autoRecipient: id(7102), template: id(7301), broadcast: id(7401) };
+const BIG_STAGE = '9007199254740993';
+const ERROR_TEXT = 'synthetic diagnostic must never leave source';
+const UNKNOWN_MEDIA = 'https://unmanaged.invalid/never-fetch-notification.png';
+async function seedNotifications(site) {
+  // All normal protection/FK/business triggers stay enabled. Only real bonus SQL creates money.
+  await site.query(`INSERT INTO public.notification_automation_plans(id,owner_admin_id,name,status,activated_at,created_at,updated_at)
+    VALUES($1,$3,'來源方案 Alpha','active','2020-01-01T00:00:00.123456Z','2019-01-01','2020-01-01'),
+      ($2,$4,'沒有員工也必須導出','archived',NULL,'2019-01-01','2020-01-01')`, [N.plan, N.rootPlan, OLD.branch, OLD.root]);
+  for (const [taskId, name, trigger, mode, threshold, month, day, owner, planId, status, shared] of [
+    [N.recurring, '循環基線', 'total_orders', 'recurring', 10, null, null, OLD.branch, N.plan, 'active', false],
+    [N.annual, '年度日期', 'annual_date', 'reach_once', 1, 2, 29, OLD.branch, N.plan, 'paused', false],
+    [N.firstLogin, '首次登入', 'first_login', 'reach_once', 1, null, null, OLD.branch, N.plan, 'paused', false],
+    [N.hidden, '無成員舊範本', 'daily_orders', 'reach_once', 2, null, null, OLD.root, null, 'draft', true],
+  ]) await site.query(`INSERT INTO public.notification_automation_tasks(id,owner_admin_id,name,trigger_type,trigger_mode,threshold_value,
+      annual_month,annual_day,plan_id,status,is_shared_template,title_template,content_template,version,activated_at,starts_at,
+      created_at,updated_at,reward_enabled,reward_amount,recipient_scope,delivery_mode)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'原標題𠮷','<p>原內容 {{employee_name}}</p>',7,
+      '2020-01-02T03:04:05.123456Z','2020-01-01','2019-01-01','2020-01-02',true,7.25,'selected','realtime_with_login_fallback')`,
+    [taskId, owner, name, trigger, mode, threshold, month, day, planId, status, shared]);
+  await site.query(`INSERT INTO public.notification_automation_plan_members(plan_id,user_id,created_at)
+    VALUES($1,$2,'2021-02-03T04:05:06.654321Z'),($1,$3,'2021-03-04T05:06:07.000001Z')`, [N.plan, F.history, F.noHeartbeat]);
+  await site.query(`INSERT INTO public.notification_automation_task_recipients(task_id,user_id,created_at)
+    VALUES($1,$2,'2021-02-03T04:05:06.654321Z'),($1,$3,'2021-03-04T05:06:07.000001Z')`, [N.recurring, F.history, F.noHeartbeat]);
+  await site.query(`INSERT INTO public.notification_automation_progress(task_id,user_id,last_metric,last_stage,last_period_key,updated_at)
+    VALUES($1,$2,$4::numeric,$5::bigint,'all_time','2023-01-01T00:00:00.123456Z'),($1,$3,0,0,'all_time','2023-01-02')`,
+    [N.recurring, F.history, F.noHeartbeat, PRECISE, BIG_STAGE]);
+  await site.query(`INSERT INTO public.notification_automation_date_runs(task_id,task_version,period_key,created_at)
+    SELECT $1,7,'year-'||lpad(n::text,4,'0'),'2024-02-29T01:02:03.654321Z' FROM generate_series(1,203) AS s(n)`, [N.annual]);
+  const snapshot = JSON.stringify({ trigger_type: 'total_orders', trigger_mode: 'recurring', threshold_value: 10,
+    minimum_daily_orders: null, minimum_daily_work_minutes: null });
+  await site.query(`INSERT INTO public.notification_automation_executions(id,task_id,task_version,owner_admin_id,user_id,employee_username,
+      period_key,stage,actual_value,trigger_snapshot,title_snapshot,content_snapshot,reward_amount,reward_currency,status,executed_at,plan_id)
+    VALUES($1,$2,7,$3,$4,'歷史員工名稱','all_time',$5::bigint,20,$6::jsonb,'原標題','原內容',7.25,'USDC','processing',
+      '2023-04-05T06:07:08.123456Z',$7)`, [N.execution, N.recurring, OLD.branch, F.history, BIG_STAGE, snapshot, N.plan]);
+  await site.query(`INSERT INTO public.messages(id,sender_id,sender_username,title,content,message_type,priority,notification_category,
+      reward_amount,reward_currency,automation_execution_id,audit_origin,delivery_mode,created_at)
+    VALUES($1,$3,'branch','手動獎勵','<p>手動𠮷</p>','login_popup','high','performance_reward',12.5,'USDC',NULL,'manual_admin','login_only','2023-04-05T06:07:08.123456Z'),
+      ($2,$3,'branch','自動獎勵','<p>循環獎勵</p>','realtime','normal','performance_reward',7.25,'USDC',$4,'automation','realtime_with_login_fallback','2023-04-05T06:07:08.654321Z')`,
+    [N.manual, N.automatic, OLD.branch, N.execution]);
+  await site.query(`INSERT INTO public.message_recipients(id,message_id,recipient_id,is_read,read_at,is_shown,shown_at,delivery_channel,delivered_at,delivery_sequence,
+      delivery_claim_token,delivery_claim_channel,delivery_claim_until,delivery_completed_claim_token,created_at)
+    VALUES($1,$3,$5,true,'2023-04-06T00:00:00.123456Z',true,'2023-04-05','login_popup','2023-04-05',$6::bigint,
+      $7,'login_popup','2099-01-01',$8,'2023-04-05T06:07:08.123456Z'),
+      ($2,$4,$5,false,NULL,false,NULL,NULL,NULL,$6::bigint+1,NULL,NULL,NULL,NULL,'2023-04-05T06:07:08.654321Z')`,
+    [N.manualRecipient, N.autoRecipient, N.manual, N.automatic, F.history, BIG_STAGE, id(7991), id(7992)]);
+  await scalar(site, 'SELECT private.credit_performance_bonus($1,$2,12.5,$3,$4,$5,$6)',
+    [F.history, OLD.branch, 'USDC', N.manualRecipient, id(7993), 'local manual bonus']);
+  const bonus = await scalar(site, 'SELECT private.credit_performance_bonus($1,$2,7.25,$3,$4,$5,$6)',
+    [F.history, OLD.branch, 'USDC', N.autoRecipient, N.execution, 'local automatic bonus']);
+  await site.query(`UPDATE public.notification_automation_executions SET message_id=$2,wallet_transaction_id=$3,status='succeeded',
+    completed_at='2023-04-05T06:08:09.000001Z' WHERE id=$1`, [N.execution, N.automatic, bonus]);
+  await site.query(`INSERT INTO public.notification_automation_executions(id,task_version,employee_username,period_key,stage,actual_value,
+      trigger_snapshot,title_snapshot,content_snapshot,status,error_message,executed_at,completed_at)
+    VALUES($1,1,'已不存在的歷史員工','legacy',1,0,$3::jsonb,'失敗','失敗','failed',$4,'2022-01-01','2022-01-01'),
+      ($2,1,'可空歷史關聯','legacy',1,0,$3::jsonb,'歷史','歷史','failed',NULL,'2022-01-01',NULL)`,
+    [N.failed, N.historical, snapshot, ERROR_TEXT]);
+  await site.query(`INSERT INTO public.notification_automation_failures(task_id,user_id,owner_admin_id,attempts,last_error,first_failed_at,last_failed_at)
+    VALUES($1,$2,$3,3,$4,'2022-01-01T00:00:00.123456Z','2022-01-02T00:00:00.654321Z')`, [N.recurring, F.history, OLD.branch, ERROR_TEXT]);
+  await site.query(`INSERT INTO public.messages(id,sender_id,sender_username,title,content,message_type,priority,audit_origin,delivery_mode,created_at)
+    SELECT ('72000000-0000-4000-8000-'||lpad(to_hex(10000+n),12,'0'))::uuid,$1,'branch','普通通知 '||n,
+      E'<p>原文𠮷 é é \\n</p>','realtime','normal','manual_admin','realtime_only',NULL FROM generate_series(1,203) AS s(n)`, [OLD.branch]);
+  await site.query(`INSERT INTO public.message_recipients(id,message_id,recipient_id,is_read,is_shown,created_at)
+    SELECT ('72000000-0000-4000-8000-'||lpad(to_hex(11000+n),12,'0'))::uuid,
+      ('72000000-0000-4000-8000-'||lpad(to_hex(10000+n),12,'0'))::uuid,$1,NULL,NULL,NULL FROM generate_series(1,203) AS s(n)`, [F.noHeartbeat]);
+  await site.query(`INSERT INTO public.message_templates(id,admin_id,name,title,content,message_type,priority,sort_order,delivery_mode)
+    VALUES($1,$2,'無收件人的範本','原標題','<img src="'||$3||'">','realtime','urgent',9,'realtime_only')`, [N.template, OLD.root, UNKNOWN_MEDIA]);
+  await site.query(`INSERT INTO public.broadcast_messages(id,admin_id,message_content,message_type,image_url,target_type,target_admin_id,sent_count,created_at)
+    VALUES($1,NULL,'歷史廣播','image',$2,'all',NULL,NULL,NULL)`, [N.broadcast, UNKNOWN_MEDIA]);
+  await site.query(`INSERT INTO public.broadcast_recipients(id,broadcast_id,employee_id,is_read,read_at,created_at)
+    VALUES($1,$2,$3,true,'2023-01-01T00:00:00.654321Z',NULL)`, [id(7402), N.broadcast, F.history]);
+}
+const nbind = (input = notifications, extra = {}) => rpc('employee_import_notifications_bind', { ...auth(), p_catalog: input.catalog, ...extra });
+const nchunk = (key, no, text, extra = {}) => rpc('employee_import_notifications_stage', { ...auth(), p_table_key: key, p_chunk_no: no, p_ndjson: text, ...extra });
+const nplan = (extra = {}) => rpc('get_employee_import_notifications_plan', { ...auth(), ...extra });
+async function nstage(input = notifications, { omit = null, transform = (_key, _no, text) => text } = {}) {
+  await nbind(input);
+  for (const key of KEYS.notifications) for (const [no, text] of chunks(input.texts[key]).entries()) {
+    if (omit === `${key}:${no}`) continue;
+    const raw = transform(key, no, text), receipt = await nchunk(key, no, raw);
+    assert.deepEqual(modules.validateNotificationsStage(receipt, lines(raw).length, Buffer.byteLength(raw), hash(raw)), receipt);
+  }
+}
+// Rehash untrusted input files only; never manufacture private verified/map/done receipts.
+function changedNotifications(changes) {
+  const texts = { ...notifications.texts };
+  for (const [key, change] of Object.entries(changes)) texts[key] = lines(change(texts[key])).sort((a, b) =>
+    JSON.parse(a).id.localeCompare(JSON.parse(b).id)).join('');
+  return { texts, catalog: { ...notifications.catalog, tables: KEYS.notifications.map(key => ({ key, rows: lines(texts[key]).length,
+    bytes: Buffer.byteLength(texts[key]), row_hashes_sha256: hash(lines(texts[key]).map(hash).join('')) })) } };
+}
+const changeNotificationRow = (match, fields) => text => lines(text).map(line => {
+  const row = JSON.parse(line); return match(row) ? JSON.stringify({ ...row, ...fields }) + '\n' : line;
+}).join('');
+const ncounts = () => Object.fromEntries(notifications.catalog.tables.map(t => [t.key, t.rows]));
+function notificationFlags(p) {
+  flags(p); assert.equal(p.checked, true); assert.equal(p.can_restore, false);
+  for (const key of ['restore_pending', 'media_pending', 'automation_pending']) assert.equal(p[key], true, key);
+  assert.deepEqual(p.counts, ncounts()); assert.equal(p.employees, 3); assert.equal(p.rewards, 2);
+  assert.deepEqual(modules.validateNotificationsPlan(p), p);
+}
+const transferSnapshot = (site = db) => rows(site, ['private.employee_transfer_jobs', 'private.employee_transfer_staging',
+  'private.employee_transfer_events', 'private.employee_transfer_write_permits', 'private.employee_transfer_maintenance',
+  'public.financial_operations', 'public.notification_automation_queue', 'public.wallet_reconciliation_queue'].map(name =>
+  `SELECT '${name}' AS name,COALESCE(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb)::text AS body FROM ${name} AS r`).join(' UNION ALL '));
+
 before(async () => {
-  const noNetwork = () => assert.fail('activity/verification DB tests prohibit all network and real Storage access');
+  const noNetwork = () => assert.fail('activity/verification/notifications DB tests prohibit all network and real Storage access');
   mock.method(globalThis, 'fetch', noNetwork);
   for (const [object, methods] of [[http, ['request', 'get']], [https, ['request', 'get']], [net, ['connect', 'createConnection']], [tls, ['connect']]])
     for (const method of methods) mock.method(object, method, noNetwork);
@@ -358,7 +471,7 @@ before(async () => {
     session_created_at=now(),last_heartbeat_at=now() WHERE id=$1`, [F.history, SOURCE_SESSION]);
   await source.query(`INSERT INTO public.employee_financial_sessions(user_id,token_hash,tab_id,session_marker,expires_at)
     VALUES($1,private.hash_financial_token($2),'source-tab-must-not-transfer',$2,now()+interval '1 day')`, [F.history, SOURCE_SESSION]);
-  // No orders; legal zero wallets keep all finance checks real without copying its unrelated negative fixtures.
+  // No orders; clear initial wallets before adding real performance bonuses below.
   await transaction(async () => {
     const disabled = await scalar(source, "SELECT private.employee_transfer_bypass_triggers(ARRAY['wallets','employee_login_history','work_sessions'])");
     await source.exec('DELETE FROM public.wallet_balance_baselines; DELETE FROM public.wallet_ledger_entries; UPDATE public.wallets SET available_balance=0,frozen_balance=0');
@@ -381,6 +494,7 @@ before(async () => {
     await source.query("INSERT INTO private.employee_work_stop_markers(user_id,stopped_at) VALUES($1,'2023-04-05T06:07:08.123456Z'),($2,'2024-02-29T12:34:56.654321Z')", [F.history, F.noHeartbeat]);
     await source.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)', [JSON.stringify(disabled)]);
   }, source, true);
+  await transaction(() => seedNotifications(source), source, true);
   await db.query("INSERT INTO public.admins(id,username,password_hash,role,is_active) VALUES($1,'activity-other-root',extensions.crypt($2,extensions.gen_salt('bf',4)),'super_admin',true)", [id(900), PASSWORDS.root]);
   await db.query('INSERT INTO public.financial_admin_credentials(admin_id,password_hash) SELECT id,password_hash FROM public.admins WHERE id=$1', [id(900)]);
   session = await adminLogin(db, 'root', PASSWORDS.root); sourceSession = await adminLogin(source, 'root', PASSWORDS.root);
@@ -391,6 +505,7 @@ before(async () => {
     export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';
     export {createSharedSettingsReplacementSession,createDispatchImportSession} from './src/lib/employeeTransfer/api.ts';
     export * from './src/lib/employeeTransfer/activityApi.ts'; export * from './src/lib/employeeTransfer/activityTransfer.ts';
+    export * from './src/lib/employeeTransfer/notificationsApi.ts'; export * from './src/lib/employeeTransfer/notificationsTransfer.ts';
     export {setHarness} from 'activity-db:state';`, resolveDir: root }, bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2020',
     plugins: [{ name: 'local-activity-anon-sql', setup(builder) {
       builder.onResolve({ filter: /^(?:activity-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'activity-db' }));
@@ -405,19 +520,25 @@ before(async () => {
   dispatch = await transaction(() => capture('dispatch'), source, true); identity = await transaction(() => capture('identity'), source, true);
   finance = await transaction(() => capture('finance'), source, true); activity = await transaction(() => capture('activity'), source, true);
   verification = await transaction(() => capture('verification'), source, true);
+  notifications = await transaction(() => capture('notifications'), source, true);
+  assert.deepEqual(modules.validateNotificationsCatalog(notifications.catalog), notifications.catalog);
+  assert.deepEqual(notifications.catalog.identity_catalog, identity.catalog); assert.deepEqual(notifications.catalog.finance_catalog, finance.catalog);
   assert.deepEqual(activity.catalog.identity_catalog, identity.catalog); assert.deepEqual(finance.catalog.identity_catalog, identity.catalog);
   // Commit this expensive authentic prerequisite chain once; individual activity tests roll back to it.
   await transaction(async () => { const r = await prepare('dispatch', dispatch); task = r.job; await ready(r.plan); await stillClosed(); }, db, true);
 }, { timeout: 240000 });
 after(async () => { try {
   assert.equal(globalThis.fetch.mock.callCount(), 0, 'no fetch, including fake Storage URLs');
+  for (const [object, methods] of [[http, ['request', 'get']], [https, ['request', 'get']], [net, ['connect', 'createConnection']], [tls, ['connect']]])
+    for (const method of methods) assert.equal(object[method].mock.callCount(), 0, `no network ${method}`);
   await Promise.all([source?.close(), db?.close(), verificationDb?.close()]);
 } finally { mock.restoreAll(); } });
 
-test('549 real migrations preserve exactly the 12 historical failures and install activity 19/20 and verification 21/22', () => {
-  assert.equal(replay.files.length, 549); assert.equal(replay.failures.length, 12); assert.equal(replay.validation.freshDatabaseVerified, false); assert.equal(replay.files.at(-1), migration);
+test('551 real migrations preserve exactly the 12 historical failures and install activity 19/20, verification 21/22 and notifications 23/24', () => {
+  assert.equal(replay.files.length, 551); assert.equal(replay.failures.length, 12); assert.equal(replay.validation.freshDatabaseVerified, false); assert.equal(replay.files.at(-1), migration);
   for (const file of ['20261102000019_export_stage_employee_activity.sql', '20261102000020_restore_employee_activity.sql',
-    '20261102000021_export_stage_employee_verification.sql']) assert.ok(replay.files.includes(file));
+    '20261102000021_export_stage_employee_verification.sql', '20261102000022_restore_employee_verification_media.sql',
+    '20261102000023_export_stage_site_notifications.sql']) assert.ok(replay.files.includes(file));
 });
 for (const [name, args] of [
   ['employee_export_activity_begin', ['p_admin_session_token', 'p_admin_password', 'p_package_id']],
@@ -692,6 +813,292 @@ test('same-length raw-byte corruption cannot satisfy the catalog digest even wit
   for (const key of KEYS.activity) for (const [no, text] of chunks(activity.texts[key]).entries()) await stageChunk(key, no, key === 'employee_login_history' ? text.replace('12345678901234567890.12345678901234567890', '12345678901234567890.12345678901234567891') : text);
   const before = await business(); await assert.rejects(plan(), /catalog|verification|digest/i); assert.deepEqual(await business(), before); assert.equal(await permits(), 0);
 }));
+
+test('notifications public RPCs have exact signatures, browser grants and a genuinely STABLE direct-read plan', () => transaction(async () => {
+  for (const [name, args] of [
+    ['employee_export_notifications_begin', ['p_admin_session_token', 'p_admin_password', 'p_package_id']],
+    ['get_employee_export_notifications_page', ['p_admin_session_token', 'p_job_token', 'p_table_key', 'p_after', 'p_limit']],
+    ['employee_export_notifications_verify', ['p_admin_session_token', 'p_job_token']],
+    ['employee_export_notifications_close', ['p_admin_session_token', 'p_job_token']],
+    ['employee_import_notifications_bind', ['p_admin_session_token', 'p_job_token', 'p_catalog']],
+    ['employee_import_notifications_stage', ['p_admin_session_token', 'p_job_token', 'p_table_key', 'p_chunk_no', 'p_ndjson']],
+    ['get_employee_import_notifications_plan', ['p_admin_session_token', 'p_job_token']],
+  ]) {
+    const found = await rows(db, `SELECT oid,proargnames,prosecdef,provolatile,prosrc,proconfig,
+      EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS everyone
+      FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=$1`, [name]);
+    assert.equal(found.length, 1); const fn = found[0]; assert.deepEqual(fn.proargnames, args); assert.equal(fn.prosecdef, true);
+    assert.equal(fn.everyone, false); assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+    for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), role !== 'service_role');
+    if (name === 'get_employee_import_notifications_plan') {
+      assert.equal(fn.provolatile, 's'); assert.match(fn.prosrc, /FROM private\.employee_transfer_jobs/);
+      assert.doesNotMatch(fn.prosrc, /private\.employee_transfer_job\s*\(|\b(?:UPDATE|INSERT|DELETE)\b/i);
+    }
+  }
+  const helpers = await rows(db, "SELECT oid,proname FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_%notifications%'");
+  assert.ok(helpers.length >= 10);
+  for (const fn of helpers) for (const role of ['anon', 'authenticated', 'service_role'])
+    assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), false, fn.proname);
+  for (const role of ['anon', 'authenticated', 'service_role']) for (const relation of ['private.employee_transfer_jobs', 'private.employee_transfer_staging'])
+    for (const permission of ['INSERT', 'UPDATE', 'DELETE']) assert.equal(await scalar(db, 'SELECT has_table_privilege($1,$2,$3)', [role, relation, permission]), false);
+  assert.equal(await scalar(db, `SELECT count(*)::int FROM pg_proc WHERE pronamespace='public'::regnamespace
+    AND proname IN ('employee_import_notifications_apply','employee_import_notifications_verify','employee_import_notifications_close')`), 0);
+}));
+
+test('notifications raw SQL pages export every row of all 13 tables, composite cursors, bigint strings and only sanitized failures', () => transaction(async () => {
+  assert.deepEqual(KEYS.notifications, [...modules.NOTIFICATIONS_TABLE_KEYS]);
+  for (const key of KEYS.notifications) {
+    const table = notifications.catalog.tables.find(t => t.key === key), text = notifications.texts[key];
+    assert.equal(table.rows, await scalar(source, `SELECT count(*)::int FROM public.${key}`), key);
+    assert.ok(table.rows > 0, key); assert.equal(table.bytes, Buffer.byteLength(text)); assert.equal(table.row_hashes_sha256, hash(lines(text).map(hash).join('')));
+    const virtual = ['notification_automation_plan_members', 'notification_automation_task_recipients', 'notification_automation_progress', 'notification_automation_date_runs', 'notification_automation_failures'].includes(key);
+    let extra = "'{}'::jsonb";
+    if (virtual) extra = `jsonb_build_object('id',${key === 'notification_automation_plan_members' ? 'r.user_id::text' : key === 'notification_automation_date_runs'
+      ? "r.task_id::text||':'||lpad(r.task_version::text,10,'0')||':'||r.period_key" : "r.task_id::text||':'||r.user_id::text"})`;
+    if (key === 'notification_automation_progress') extra += "||jsonb_build_object('last_stage',r.last_stage::text)";
+    if (key === 'notification_automation_executions') extra += "||jsonb_build_object('stage',r.stage::text,'error_message',CASE WHEN r.error_message IS NULL THEN NULL ELSE 'redacted migration error' END)";
+    if (key === 'notification_automation_failures') extra += "||jsonb_build_object('last_error','redacted migration error'::text)";
+    if (key === 'message_recipients') extra += "||jsonb_build_object('delivery_sequence',r.delivery_sequence::text)";
+    const expected = await rows(source, `SELECT body::text||E'\\n' AS line FROM (SELECT (to_jsonb(r)-ARRAY['delivery_claim_token',
+      'delivery_claim_channel','delivery_claim_until','delivery_completed_claim_token']::text[])||${extra} AS body FROM public.${key} AS r) AS s ORDER BY body->>'id' COLLATE "C"`);
+    assert.equal(text, expected.map(r => r.line).join(''), key);
+    for (const line of lines(text)) modules.validateNotificationsRow(line, key);
+  }
+  for (const key of ['messages', 'message_recipients', 'notification_automation_date_runs']) assert.deepEqual(notifications.pages[key], [200, key.endsWith('date_runs') ? 3 : 5]);
+  assert.match(notifications.texts.notification_automation_progress, new RegExp(PRECISE.replace('.', '\\.')));
+  assert.equal(JSON.parse(lines(notifications.texts.notification_automation_progress)[0]).last_stage, BIG_STAGE);
+  assert.equal(JSON.parse(lines(notifications.texts.notification_automation_executions)[0]).stage, BIG_STAGE);
+  const recipients = lines(notifications.texts.message_recipients).map(line => JSON.parse(line));
+  assert.equal(recipients[0].delivery_sequence, BIG_STAGE);
+  assert.doesNotMatch(notifications.texts.message_recipients, /delivery_claim|completed_claim|7991|7992/);
+  assert.ok(await scalar(source, 'SELECT delivery_claim_token IS NOT NULL FROM public.message_recipients WHERE id=$1', [N.manualRecipient]));
+  assert.match(notifications.texts.notification_automation_failures, /redacted migration error/);
+  assert.doesNotMatch(Object.values(notifications.texts).join(''), new RegExp(ERROR_TEXT));
+  assert.match(notifications.texts.notification_automation_plan_members, /2021-02-03T04:05:06.654321/);
+  assert.match(notifications.texts.message_templates, /無收件人的範本/); assert.match(notifications.texts.notification_automation_tasks, /無成員舊範本/);
+  assert.equal((await on(source, 'get_employee_transfer_log', { p_admin_session_token: sourceSession })).last_export_at, null);
+}, source));
+
+test('notifications checked preflight never restores, pays, starts automation or mutates business, heartbeat, summary or staging', () => transaction(async () => {
+  const before = await business(), original = await triggers();
+  assert.equal((await state()).activity_restore, undefined); assert.equal((await state()).verification_restore, undefined);
+  assert.equal(await scalar(db, "SELECT sum(amount)::text FROM public.wallet_transactions WHERE type='performance_bonus'"), '19.75');
+  await nstage(); const saved = await transferSnapshot();
+  const p = await nplan(); notificationFlags(p); assert.deepEqual(p.conflicts, []);
+  assert.deepEqual(await nplan(), p); assert.deepEqual(await transferSnapshot(), saved);
+  assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); await stillClosed();
+  for (const key of KEYS.notifications) assert.equal(await scalar(db, `SELECT count(*)::int FROM public.${key}`), 0, key);
+  const historical = JSON.parse(lines(notifications.texts.notification_automation_executions).find(line => JSON.parse(line).id === N.historical));
+  for (const key of ['task_id', 'plan_id', 'owner_admin_id', 'user_id', 'message_id', 'wallet_transaction_id']) assert.equal(historical[key], null);
+  assert.match(notifications.texts.message_templates, /unmanaged.invalid/); assert.equal(p.media_pending, true);
+}));
+
+test('notifications immutable bind and repeated raw chunks preserve exact receipts; missing blocks, order and byte drift are rejected', () => transaction(async () => {
+  const before = await business(); await nbind(); assert.equal((await nbind()).repeated, true);
+  const altered = changedNotifications({ messages: text => text.replace('普通通知 1', '其他通知 1') });
+  await assert.rejects(nbind(altered), /immutable/i);
+  const parts = chunks(notifications.texts.messages);
+  await assert.rejects(nchunk('messages', 1, parts[1]), /catalog|cursor order/i);
+  await assert.rejects(nchunk('messages', 0, lines(parts[0]).reverse().join('')), /strictly ordered/i);
+  await nchunk('messages', 0, parts[0]); assert.equal((await nchunk('messages', 0, parts[0])).repeated, true);
+  await assert.rejects(nchunk('messages', 0, parts[0].replace('手動獎勵', '其他獎勵')), /content changed/i);
+  await assert.rejects(nchunk('messages', 1, parts[0]), /catalog|cursor order/i);
+  await nstage(notifications, { omit: 'messages:1' }); await assert.rejects(nplan(), /staged catalog verification failed/i);
+  await nchunk('messages', 1, parts[1].replace('普通通知', '其他通知'));
+  const saved = await transferSnapshot(); await assert.rejects(nplan(), /staged catalog verification failed/i);
+  assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before); await stillClosed();
+}));
+
+test('notifications empty optional date table still requires an explicit immutable empty staging chunk', () => transaction(async () => {
+  const input = changedNotifications({ notification_automation_date_runs: () => '' }); input.catalog.date_runs_supported = false;
+  assert.deepEqual(modules.validateNotificationsCatalog(input.catalog), input.catalog);
+  await nstage(input, { omit: 'notification_automation_date_runs:0' }); await assert.rejects(nplan(), /staged catalog verification failed/i);
+  const receipt = await nchunk('notification_automation_date_runs', 0, '');
+  assert.deepEqual(receipt, { success: true, rows: 0, bytes: 0, sha256: hash(''), repeated: false });
+  assert.equal((await nchunk('notification_automation_date_runs', 0, '')).repeated, true);
+  await assert.rejects(nchunk('notification_automation_date_runs', 1, ''), /empty chunk/i);
+  const saved = await transferSnapshot(), before = await business(), p = await nplan();
+  assert.equal(p.counts.notification_automation_date_runs, 0); assert.deepEqual(p.conflicts, []); assert.equal(p.can_restore, false);
+  assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before); await stillClosed();
+}));
+
+test('notifications stage rejects unknown/lease/duplicate keys, unsafe snapshots, malformed composite and bigint values without partial staging', () => transaction(async () => {
+  await nbind(); const saved = await transferSnapshot(), before = await business();
+  const line = lines(notifications.texts.message_recipients)[0], execution = lines(notifications.texts.notification_automation_executions)[0];
+  for (const text of [line.replace('{', '{"unexpected":1,'), line.replace('{', '{"delivery_claim_token":null,'),
+    line.replace('{', '{"delivery_claim_channel":null,'), line.replace('{', '{"delivery_claim_until":null,'), line.replace('{', '{"delivery_completed_claim_token":null,'),
+    line.replace('{', '{"id":"' + N.manualRecipient + '",'), line.replace('{', '{"\\u0069d":"' + N.manualRecipient + '",'),
+    line.replace(`"${BIG_STAGE}"`, BIG_STAGE), line.replace(BIG_STAGE, '9223372036854775808'), line.slice(0, -1)])
+    await assert.rejects(nchunk('message_recipients', 0, text), /Invalid notifications/i);
+  await assert.rejects(nchunk('notification_automation_executions', 0, execution.replace('"trigger_type":', '"threshold_value":1,"trigger_type":')), /Invalid notifications/i);
+  await assert.rejects(nchunk('notification_automation_failures', 0, notifications.texts.notification_automation_failures.replace('redacted migration error', ERROR_TEXT)), /Invalid notifications/i);
+  await assert.rejects(nchunk('notification_automation_progress', 0, notifications.texts.notification_automation_progress.replace(`${N.recurring}:${F.history}`, F.history)), /Invalid notifications/i);
+  await assert.rejects(nchunk('messages', 0, notifications.texts.messages), /row limit/i);
+  for (const key of ['orders', 'notifications-done', 'notification_automation_queue', null]) await assert.rejects(nchunk(key, 0, ''), /Unsupported/i);
+  assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before);
+}));
+
+for (const [label, change] of [
+  ['package', c => { const p = randomUUID(); c.package_id = p; c.identity_catalog.package_id = p; c.finance_catalog.package_id = p; c.finance_catalog.identity_catalog.package_id = p; }],
+  ['site', c => { const s = randomUUID(); c.site_id = s; c.identity_catalog.site_id = s; c.finance_catalog.site_id = s; c.finance_catalog.identity_catalog.site_id = s; }],
+  ['identity raw digest', c => { c.identity_catalog.tables[0].row_hashes_sha256 = hash('untrusted changed identity'); c.finance_catalog.identity_catalog = structuredClone(c.identity_catalog); }],
+  ['finance raw digest', c => { c.finance_catalog.tables[0].row_hashes_sha256 = hash('untrusted changed finance'); }],
+]) test(`notifications bind rejects changed ${label} instead of forging prerequisite maps`, () => transaction(async () => {
+  const catalog = structuredClone(notifications.catalog); change(catalog); const before = await business();
+  await assert.rejects(nbind({ catalog }), /binding|source|catalog|identity|finance/i); assert.deepEqual(await business(), before);
+  assert.equal((await state()).notifications_catalog, undefined); await stillClosed();
+}));
+
+for (const [label, changes, conflict] of [
+  ['unmapped employee', { broadcast_recipients: changeNotificationRow(() => true, { employee_id: F.outsider }) }, 'source_employee_missing'],
+  ['unmapped administrator', { message_templates: changeNotificationRow(() => true, { admin_id: F.outsider }) }, 'source_admin_unmapped'],
+  ['missing parent', { notification_automation_tasks: changeNotificationRow(r => r.id === N.recurring, { source_task_id: F.outsider }) }, 'source_reference_missing'],
+  ['cross-owner plan', { notification_automation_tasks: changeNotificationRow(r => r.id === N.recurring, { plan_id: N.rootPlan }) }, 'source_scope_mismatch'],
+  ['case-folded plan uniqueness', { notification_automation_plans: text => text + JSON.stringify({ ...JSON.parse(lines(text)[0]), id: id(6999), name: '來源方案 ALPHA' }) + '\n' }, 'source_unique_collision'],
+  ['reward amount', { messages: changeNotificationRow(r => r.id === N.manual, { reward_amount: 12.6 }) }, 'reward_link_mismatch'],
+  ['reward user', { message_recipients: changeNotificationRow(r => r.id === N.autoRecipient, { recipient_id: F.noHeartbeat }),
+    notification_automation_executions: changeNotificationRow(r => r.id === N.execution, { user_id: F.noHeartbeat }) }, 'reward_link_mismatch'],
+  ['reward reference', { message_recipients: changeNotificationRow(r => r.id === N.autoRecipient, { id: id(7199) }) }, 'reward_link_mismatch'],
+  ['reward operation', { messages: changeNotificationRow(r => r.id === N.automatic, { automation_execution_id: id(6299) }),
+    notification_automation_executions: changeNotificationRow(r => r.id === N.execution, { id: id(6299) }) }, 'reward_link_mismatch'],
+  ['wrong finance transaction', { notification_automation_executions: changeNotificationRow(r => r.id === N.execution, { wallet_transaction_id: null }) }, 'reward_link_mismatch'],
+  ['succeeded missing message', { notification_automation_executions: changeNotificationRow(r => r.id === N.execution, { message_id: null }) }, 'reward_link_mismatch'],
+  ['succeeded reverse execution', { messages: changeNotificationRow(r => r.id === N.automatic, { automation_execution_id: null, audit_origin: 'manual_admin' }) }, 'reward_link_mismatch'],
+  ['succeeded sender mismatch', { messages: changeNotificationRow(r => r.id === N.automatic, { sender_id: OLD.root }) }, 'reward_link_mismatch'],
+  ['succeeded currency mismatch', { messages: changeNotificationRow(r => r.id === N.automatic, { reward_currency: 'USD' }) }, 'reward_link_mismatch'],
+  ['processing warning', { notification_automation_executions: changeNotificationRow(r => r.id === N.historical, { status: 'processing' }) }, 'unfinished_execution'],
+]) test(`notifications preflight explicitly reports ${label}; no restore or money movement is permitted`, () => transaction(async () => {
+  const input = changedNotifications(changes); await nstage(input); const saved = await transferSnapshot(), before = await business(), original = await triggers();
+  const p = await nplan(); flags(p); assert.equal(p.checked, true); assert.equal(p.can_restore, false);
+  assert.equal(p.restore_pending, true); assert.equal(p.media_pending, true); assert.equal(p.automation_pending, true);
+  assert.ok(p.conflicts.includes(conflict), JSON.stringify(p.conflicts));
+  assert.deepEqual(await nplan(), p); assert.deepEqual(await transferSnapshot(), saved);
+  assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+for (const [label, token] of [['secondary', () => branch], ['emergency', () => emergency], ['another super-admin', () => other], ['invalid session', randomUUID]])
+  test(`notifications import rejects ${label} for bind, stage and direct-read plan`, () => transaction(async () => {
+    await nstage(); const before = await business(), saved = await transferSnapshot(), extra = { p_admin_session_token: token() };
+    for (const action of [() => nbind(notifications, extra), () => nchunk('messages', 0, chunks(notifications.texts.messages)[0], extra), () => nplan(extra)])
+      await assert.rejects(action(), /Super administrator|invalid or expired/i);
+    assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before); assert.equal(await permits(), 0);
+  }));
+
+for (const [label, sql, args] of [
+  ['expired session', "UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1", () => [NEW.root]],
+  ['expired job', "UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", () => [task.job_id]],
+  ['stale heartbeat', "UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1", () => [task.job_id]],
+]) test(`notifications continuation rejects ${label} without refreshing the direct-read plan heartbeat`, () => transaction(async () => {
+  await nstage(); await db.query(sql, args()); const saved = await transferSnapshot(), before = await business();
+  await assert.rejects(nplan(), /invalid or expired/i); assert.deepEqual(await transferSnapshot(), saved);
+  for (const action of [() => nbind(), () => nchunk('messages', 0, chunks(notifications.texts.messages)[0])]) await assert.rejects(action(), /invalid or expired/i);
+  assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before); assert.equal(await scalar(db, 'SELECT dirty FROM private.employee_transfer_maintenance'), true);
+}));
+
+test('notifications canceled dispatch task and foreign export token cannot be used for notification staging or planning', () => transaction(async () => {
+  await nstage(); await rpc('employee_transfer_cancel', auth()); const saved = await transferSnapshot(), before = await business();
+  for (const action of [() => nbind(), () => nchunk('messages', 0, chunks(notifications.texts.messages)[0]), () => nplan()]) await assert.rejects(action(), /invalid or expired/i);
+  await transaction(async () => {
+    const exp = await on(source, 'employee_export_notifications_begin', { p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root, p_package_id: packageId });
+    await assert.rejects(nplan({ p_job_token: exp.job_token }), /invalid or expired/i);
+  }, source);
+  assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before); await stillClosed();
+}));
+
+for (const [label, relation, sql] of [
+  ['identity', 'public.users', "UPDATE public.users SET remarks='notification identity drift' WHERE id=$1"],
+  ['finance', 'public.wallets', "UPDATE public.wallets SET updated_at='2001-01-01' WHERE user_id=$1"],
+]) test(`notifications plan rechecks real ${label} content, not a cached verified flag`, () => transaction(async () => {
+  await nstage(); await localChange(db, relation, sql, [F.history]); const saved = await transferSnapshot(), before = await business();
+  for (const action of [() => nplan(), () => nbind()]) await assert.rejects(action(), /changed|verification|content/i);
+  assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before); assert.equal(await permits(), 0);
+}));
+
+test('notifications real API/Transfer streams bytes, resumes committed staging on a reopened database and plans inside READ ONLY', async () => {
+  const originalDb = db; let clone;
+  try {
+    const captured = await transaction(async () => {
+      transport(source, sourceSession); const exp = modules.createNotificationsExportSession(packageId, PASSWORDS.root), catalog = await exp.begin(), files = new Map();
+      const result = await modules.exportNotificationsData(exp.source, { async append(path, bytes) {
+        files.set(path, Buffer.concat([files.get(path) ?? Buffer.alloc(0), Buffer.from(bytes)]));
+      }, async abort() { assert.fail('successful notifications export must not abort'); } });
+      assert.equal(result.rows, Object.values(ncounts()).reduce((a, b) => a + b, 0)); await exp.close(); return { catalog, files };
+    }, source);
+    clone = new PGlite({ loadDataDir: await originalDb.dumpDataDir('none'), extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await clone.waitReady; db = clone;
+    const before = await business(), original = await triggers(); let p;
+    await transaction(async () => {
+      transport(); const imp = modules.createNotificationsImportSession(task.job_token); let discarded = 0;
+      const result = await modules.stageNotificationsImport(captured.catalog, { open(path) { return (async function* () {
+        const raw = captured.files.get(path); assert.ok(raw); for (let n = 0; n < raw.length; n += 53) yield raw.subarray(n, n + 53);
+      })(); }, async abort() { discarded++; } }, imp.target);
+      assert.equal(discarded, 1); p = result.plan; notificationFlags(p); assert.deepEqual(p.conflicts, []);
+    }, db, true);
+    const dump = await db.dumpDataDir('none'); await db.close(); clone = new PGlite({ loadDataDir: dump, extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await clone.waitReady; db = clone;
+    await transaction(async () => {
+      transport(); const resumed = modules.createNotificationsImportSession(task.job_token); assert.equal((await resumed.target.bind(captured.catalog)).repeated, true);
+      for (const key of KEYS.notifications) for (const [no, text] of chunks(notifications.texts[key]).entries()) assert.equal((await resumed.target.stage(key, no, text)).repeated, true);
+      assert.deepEqual(await resumed.plan(), p);
+    }, db, true);
+    const saved = await transferSnapshot();
+    // Must be the first transaction statement, not a savepoint pretending to be read-only.
+    await db.exec('BEGIN; SET TRANSACTION READ ONLY');
+    try { assert.deepEqual(await nplan(), p); await db.exec('COMMIT'); } catch (error) { await db.exec('ROLLBACK'); throw error; }
+    assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original);
+    await transaction(async () => { await stillClosed(); await rpc('employee_transfer_cancel', auth()); }, db, true);
+    await transaction(async () => { await assert.rejects(nplan(), /invalid or expired/i); await stillClosed(); });
+  } finally { await clone?.close(); db = originalDb; transport(); }
+});
+
+const nexport = (extra = {}) => on(source, 'employee_export_notifications_begin', {
+  p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root, p_package_id: packageId, ...extra });
+test('notifications source password, role, job ownership, protocol, page limits and canonical composite cursors are enforced', () => transaction(async () => {
+  assert.equal((await nexport({ p_admin_password: 'wrong-local-password' })).success, false);
+  const secondary = await adminLogin(source, 'branch', PASSWORDS.branch);
+  await assert.rejects(nexport({ p_admin_session_token: secondary, p_admin_password: PASSWORDS.branch }), /Super administrator/i);
+  const exp = await nexport();
+  for (const name of ['get_employee_export_notifications_page', 'employee_export_notifications_verify', 'employee_export_notifications_close'])
+    await assert.rejects(on(source, name, { ...auth(exp, secondary), ...(name.endsWith('_page') ? { p_table_key: 'messages' } : {}) }), /Super administrator|invalid or expired/i);
+  for (const key of ['notification_automation_queue', 'financial_operations', null]) await assert.rejects(on(source, 'get_employee_export_notifications_page', { ...auth(exp, sourceSession), p_table_key: key }), /Unsupported/i);
+  for (const limit of [0, 201, null]) await assert.rejects(on(source, 'get_employee_export_notifications_page', { ...auth(exp, sourceSession), p_table_key: 'messages', p_limit: limit }), /page size/i);
+  for (const cursor of [F.history, `${N.annual}:7:year-0001`, `${N.annual}:0000000007:year-9999`]) await assert.rejects(on(source, 'get_employee_export_notifications_page', {
+    ...auth(exp, sourceSession), p_table_key: 'notification_automation_date_runs', p_after: cursor }), /cursor/i);
+  for (const name of ['employee_export_activity_verify', 'employee_export_finance_verify', 'employee_export_finish']) await assert.rejects(on(source, name, {
+    ...auth(exp, sourceSession), ...(name.endsWith('finish') ? { p_summary: {} } : {}) }), /protocol/i);
+  await on(source, 'employee_export_notifications_verify', auth(exp, sourceSession)); await on(source, 'employee_export_notifications_close', auth(exp, sourceSession));
+  const expired = await nexport(); await source.query("UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", [expired.job_id]);
+  await assert.rejects(on(source, 'employee_export_notifications_verify', auth(expired, sourceSession)), /invalid or expired/i);
+  await on(source, 'employee_transfer_cancel', auth(expired, sourceSession)); const canceled = await nexport(); await on(source, 'employee_transfer_cancel', auth(canceled, sourceSession));
+  await assert.rejects(on(source, 'employee_export_notifications_verify', auth(canceled, sourceSession)), /invalid or expired/i);
+}, source));
+
+for (const [label, relation, sql, args] of [
+  ['notification same count', 'public.messages', "UPDATE public.messages SET title='same-count notification drift' WHERE id=$1", [N.manual]],
+  ['automation baseline same count', 'public.notification_automation_progress', 'UPDATE public.notification_automation_progress SET last_stage=last_stage+1 WHERE user_id=$1', [F.history]],
+  ['identity same count', 'public.users', "UPDATE public.users SET remarks='same-count identity drift' WHERE id=$1", [F.history]],
+  ['finance same count', 'public.wallets', "UPDATE public.wallets SET updated_at='2001-01-01' WHERE user_id=$1", [F.history]],
+]) test(`notifications source verify and close reject ${label} even after an earlier successful verification`, () => transaction(async () => {
+  const exp = await nexport(); await assert.rejects(on(source, 'employee_export_notifications_close', auth(exp, sourceSession)), /not been verified/i);
+  await on(source, 'employee_export_notifications_verify', auth(exp, sourceSession));
+  if (relation === 'public.messages') {
+    // Use the existing audit protection correctly; never disable an unknown source trigger.
+    await source.query("SELECT set_config('content_audit.actor',$1,true),set_config('content_audit.operation',$2,true)", [OLD.root, randomUUID()]);
+  }
+  await source.query(sql, args); const before = await business(source);
+  for (const name of ['employee_export_notifications_verify', 'employee_export_notifications_close']) await assert.rejects(on(source, name, auth(exp, sourceSession)), /source changed/i);
+  assert.deepEqual(await business(source), before);
+}, source));
+
+test('notifications source alone supports absent date_runs as an empty capability, without claiming legacy maintenance compatibility', () => transaction(async () => {
+  // Local rollback-only DDL; do not call the old maintenance assert, which still requires this table.
+  await source.exec('DROP TABLE public.notification_automation_date_runs');
+  const exp = await nexport(); assert.equal(exp.catalog.date_runs_supported, false);
+  const table = exp.catalog.tables.find(t => t.key === 'notification_automation_date_runs');
+  assert.deepEqual(table, { key: 'notification_automation_date_runs', rows: 0, bytes: 0, row_hashes_sha256: hash('') });
+  const page = await on(source, 'get_employee_export_notifications_page', { ...auth(exp, sourceSession), p_table_key: table.key, p_after: null, p_limit: 200 });
+  assert.deepEqual(modules.validateNotificationsPage(page, table.key, null), { table_key: table.key, count: 0, ndjson: '', next_after: null, sha256: hash('') });
+  assert.deepEqual(modules.validateNotificationsCatalog(exp.catalog), exp.catalog);
+  await on(source, 'employee_export_notifications_verify', auth(exp, sourceSession)); await on(source, 'employee_export_notifications_close', auth(exp, sourceSession));
+}, source));
 
 // The original activity suite continues against its unchanged finance-ready database. Verification
 // tests share a separate real stage/apply/verify snapshot, with each existing transaction rolled back.
