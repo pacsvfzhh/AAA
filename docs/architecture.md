@@ -56,6 +56,7 @@
 | `employeeTransfer/activityTransfer.ts`、`activityApi.ts` | employee-activity-v1固定登录/工时/停工标记三表，完整绑定identity目录及已核验身份/成员/资金的真实内容；原始NDJSON、嵌套JSON精度与SQL NULL/JSON null区分保真，旧session_id按来源站/员工脱敏。显式bind/stage/plan→逐员工事务apply→verify，不自动重试/启用/解除维护；未结束工时严格最后心跳收尾、无心跳用开始时间，已结束原值不变。真实提交进度/幂等续接/清理期间取消暂存提示、冲突和漂移阻断；实名及证件媒体后续见下一行，通知仍需奖励/自动化关联；无UI/浏览器或原生PG验收，未部署 |
 | `employeeTransfer/verificationTransfer.ts`、`verificationApi.ts` | employee-verification-v1固定verification_requests全部15列原文，绑定同包identity目录及已核验身份/成员/资金/活动实际内容；显式bind/stage/plan→逐员工事务apply→媒体最终recheckImport→SQL verify。只写实名申请，不改users.is_verified或关触发器；审阅人只取同包服务器admin map，残留/UUID/缺映射/漂移阻断。真实回执计数、续接重取服务器计划，无自动重试/启用/解除维护，无UI，未部署 |
 | `employeeTransfer/verificationMedia.ts` | 实名记录与实际证件文件子阶段：严格三目录/员工UUID引用，SQL inventory与不可变文件tuple目录，Edge受控下载/上传/回读及URL映射；全量验证原始NDJSON和媒体后才写、媒体二遍hash。单文件50MiB/3000文件、记录与媒体合计1GiB、单卷manifest仍最多4096条目；不是全站媒体/多卷。进度只认实际确认，错误脱敏、临时清理与取消仍提示服务器资料可能存在，不自动删除或假回滚，未部署 |
+| `employeeTransfer/notificationsTransfer.ts`、`notificationsApi.ts` | site-notifications-v1固定通知/收件/广播/范本和自动化13表，绑定同包完整identity与finance目录；原文numeric/微秒、bigint字符串和C顺序组合游标，两遍校验后不可变暂存、只读关联预检。租约排除、原始错误脱敏，保留自动化执行/奖金引用；只在确认后计进度，失败/取消清临时区且提示server暂存可能存在，不自动重试/close。无业务apply/媒体/自动化恢复，can_restore恒false；未接UI、未部署，见计划第31节 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |

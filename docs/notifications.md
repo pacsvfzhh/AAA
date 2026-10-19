@@ -44,6 +44,14 @@
 - 未分组任务（`plan_id IS NULL`）：方案改版前建立的旧任务。新版页面在电脑版左侧只列方案，没有「未分組任務」入口（只有手机版下拉选单可选），新建任务也必须属于方案。bb 名下两条「654」（从旧模板复制，一条启用、一条草稿）因此在电脑版看不到，2026-10-09 按用户要求删除（`20261031000003_delete_legacy_ungrouped_notification_tasks.sql`）；正式库已没有未分组任务。如果以后又出现这类任务，需要先给电脑版补上入口。
 - 迁移：`20260918231458_create_notification_automation_system.sql`、`20260922001942_harden_all_notification_automation_triggers.sql`、`20260922185616_accelerate_notification_automation_queue.sql`、`20261101000000_scale_notification_automation_processing.sql`。
 
+## 资料迁移子阶段（2026-10-19，UTC+8，本地未部署）
+
+- 新SQL23/24与`employeeTransfer/notificationsTransfer.ts`、`notificationsApi.ts`仅完成原文导出、同包暂存和关联预检。固定13表：方案、任务、方案成员、任务指定收件人、进度、执行、年度标记、失败、通知、通知收件人、通知范本、广播、广播收件人。公告/分类不纳入；无收件历史的方案/任务/范本也导出，不静默过滤无法对应的历史记录。
+- NDJSON保留numeric、NULL与微秒；stage/last_stage/delivery_sequence用十进制字符串，组合主键附加虚拟id并按C顺序分页。四个投递领取/完成租约字段不导出，已读/展示/实际投递状态保留；失败只传固定脱敏文本或原NULL，不搬原始错误。触发快照仅审核过的五键及可选年度月/日。date_runs缺表时只声明空能力，不擅自建表，也不代表旧维护协议已兼容正式缺表。
+- 导入绑定原dispatch-import任务及完整identity_catalog/finance_catalog，要求真实独立备份、dirty维护、管理员映射、身份及资金前置。暂存不调用发送/发奖函数，不写业务表/队列或增加流水/账本/financial_operations；预检核对执行—通知—收件—performance_bonus的员工、金额、币种、引用与自动执行operation_id，以及成员归属/唯一键。被删除通知的旧奖励若需档案才能解释，当前显式报告冲突，不自动修钱或猜关联。
+- `get_employee_import_notifications_plan`为STABLE直接鉴权读取任务，同一快照核验，不续heartbeat或保存计划；本地READ ONLY事务验证通过。无冲突也can_restore=false，restore_pending/media_pending/automation_pending=true；checked只表示原文与关联预检完成。导出verify/close也明确media_pending、不推进全站导出时间，close前再次检查来源、身份和资金漂移。
+- 通知API/客户端710项、双站新增43项及原活动/实名回归分组通过，整体34文件6058项覆盖，详见迁移计划第31节。**本轮未访问或修改正式环境，未部署SQL/Edge/前端或调整Storage/权限/cron，无UI/导航或浏览器演练。** 同名配置备份/留证覆盖、真实通知媒体、实际恢复及执行去重/自动化续接仍待实现，不把本阶段当员工或全站完成。
+
 ## 公告 `AnnouncementManagement.tsx` + `TiptapEditor.tsx`
 - 表 `announcements`，直接表操作（不经稽核）。二级只管理自己的公告；超管可管理全部，并设置全局公告与轮播。支持发布时间、隐藏、置顶排序；正文上限 500KB。
 - 媒体存储桶：编辑器插入的图片/视频/封面 → `announcement-images`；正文里的 base64 图片经 `processContentImages` → `template-images`；Word 导入的图片 → `chat-images`。删除公告时会尝试清理正文图片（`src/lib/storageCleanup.ts`）。
