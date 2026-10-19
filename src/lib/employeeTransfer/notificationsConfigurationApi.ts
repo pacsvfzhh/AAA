@@ -1,6 +1,7 @@
 import { getAdminFinancialSessionToken } from '../auth';
 import { supabase } from '../supabase';
 import { dispatchTransferChecks } from './dispatchTransfer';
+import { Sha256 } from './sha256';
 import {
   NOTIFICATIONS_TABLE_KEYS, NOTIFICATIONS_CONFLICT_REASONS, validateNotificationsCatalog,
   validateNotificationsPage, notificationsCursor, type NotificationsCatalog, type NotificationsCounts,
@@ -47,6 +48,9 @@ export interface NotificationConfigurationPlan {
   target_hash: string; plan_hash: string;
 }
 export function validateNotificationConfigurationPlan(value: unknown, catalog: NotificationsCatalog): NotificationConfigurationPlan {
+  try { return configurationPlan(value, validateNotificationsCatalog(catalog)); } catch { invalid(); }
+}
+function configurationPlan(value: unknown, catalog: NotificationsCatalog): NotificationConfigurationPlan {
   const record = object(value, ['scope', 'records', 'retire_tasks', 'members_removed', 'conflicts', 'counts', 'checked',
     'backup_required', 'can_prepare_backup', 'can_apply_configuration', 'media_pending', 'automation_pending', 'maintenance',
     'replacement_ready', 'full_site_complete', 'target_hash', 'plan_hash']);
@@ -62,7 +66,7 @@ export function validateNotificationConfigurationPlan(value: unknown, catalog: N
   if (new Set(conflicts).size !== conflicts.length || record.can_prepare_backup !== (conflicts.length === 0)) invalid();
   const expectedRows = catalog.tables.filter(t => configurationKeys.some(key => key === t.key)).reduce((n, t) => n + t.rows, 0);
   const seen = new Set<string>();
-  const records = list(record.records, expectedRows).map(value => {
+  const records: NotificationConfigurationPlan['records'] = list(record.records, expectedRows).map(value => {
     const item = object(value, ['table_key', 'source_id', 'target_id', 'action']);
     const table_key = configurationKeys.find(key => key === item.table_key);
     const action = item.action;
@@ -73,6 +77,13 @@ export function validateNotificationConfigurationPlan(value: unknown, catalog: N
     return { table_key, source_id, target_id, action };
   });
   if (records.length !== expectedRows) invalid();
+  const targets = new Map<string, NotificationConfigurationPlan['records']>();
+  for (const item of records) {
+    const key = `${item.table_key}:${item.target_id}`;
+    targets.set(key, [...(targets.get(key) ?? []), item]);
+  }
+  for (const entries of targets.values()) if (entries.length > 1
+    && (!conflicts.includes('notification_many_to_one') || entries.some(item => item.action !== 'conflict'))) invalid();
   for (const key of configurationKeys) if (records.filter(r => r.table_key === key).length !== counts[key]) invalid();
   const retire_tasks = list(record.retire_tasks, 500000).map(uuid);
   if (new Set(retire_tasks).size !== retire_tasks.length
@@ -105,7 +116,10 @@ export interface NotificationConfigurationSession {
   backup(planHash: string, signal?: AbortSignal): Promise<NotificationConfigurationBackup>;
 }
 export function createNotificationConfigurationSession(jobToken: string, input: NotificationsCatalog): NotificationConfigurationSession {
-  const auth = uuid(getAdminFinancialSessionToken()), token = uuid(jobToken), catalog = validateNotificationsCatalog(input);
+  const { auth, token, catalog } = (() => {
+    try { return { auth: uuid(getAdminFinancialSessionToken()), token: uuid(jobToken), catalog: validateNotificationsCatalog(input) }; }
+    catch { invalid(); }
+  })();
   const args = () => ({ p_admin_session_token: auth, p_job_token: token });
   let busy = false, lastPlan: NotificationConfigurationPlan | null = null;
   const exclusive = async <T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
@@ -148,6 +162,7 @@ export function createNotificationConfigurationSession(jobToken: string, input: 
           source: {
             catalog(readSignal) { return exclusive(async () => structuredClone(descriptor.catalog), readSignal); },
             page(key, after, readSignal) {
+              verified = false;
               return exclusive(async () => {
                 if (!NOTIFICATIONS_TABLE_KEYS.includes(key)) invalid();
                 if (after !== null) notificationsCursor(key, after);
@@ -159,6 +174,7 @@ export function createNotificationConfigurationSession(jobToken: string, input: 
               }, readSignal);
             },
             verify(readSignal) {
+              verified = false;
               return exclusive(async () => {
                 verified = false;
                 const result = await response(() => {
@@ -218,4 +234,3 @@ export function createNotificationConfigurationSession(jobToken: string, input: 
     },
   };
 }
-import { Sha256 } from './sha256';

@@ -2429,6 +2429,34 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: import('../lib/employeeTransfer/notificationsTransfer').NotificationsPlan;
       };
+      get_employee_import_notification_configuration_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/notificationsConfigurationApi').NotificationConfigurationPlan;
+      };
+      employee_import_notification_backup_prepare: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/notificationsBackup').NotificationsBackupDescriptor;
+      };
+      get_employee_import_notification_backup_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_backup_id: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: import('../lib/employeeTransfer/notificationsTransfer').NotificationsPage;
+      };
+      employee_import_notification_backup_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_backup_id: string };
+        Returns: import('../lib/employeeTransfer/notificationsBackup').NotificationsBackupVerification;
+      };
+      employee_import_notification_backup_append: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_backup_id: string; p_chunk_no: number; p_hex: string };
+        Returns: import('../lib/employeeTransfer/notificationsBackup').NotificationsBackupAppendReceipt;
+      };
+      employee_import_notification_backup_seal: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_backup_id: string; p_sha256: string; p_bytes: number };
+        Returns: import('../lib/employeeTransfer/notificationsBackup').NotificationsBackupSealReceipt;
+      };
+      get_employee_notification_saved_backup_chunk: {
+        Args: { p_admin_session_token: string; p_backup_id: string; p_chunk_no: number };
+        Returns: { backup_id: string; chunk_no: number; hex: string; sha256: string; bytes: number; chunks: number };
+      };
       employee_export_verification_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeVerificationCatalog; scope: 'employee-verification'; full_site_complete: false }
