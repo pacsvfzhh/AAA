@@ -39,6 +39,7 @@ const criticalMigrations = [
   '20261102000022_restore_employee_verification_media.sql',
   '20261102000023_export_stage_site_notifications.sql',
   '20261102000024_check_site_notification_links.sql',
+  '20261102000025_prepare_notification_configuration.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -69,7 +70,7 @@ function resource({ exec = async () => {}, dump = async () => new Blob(), ready 
 const transferTables = [
   'employee_transfer_site', 'employee_transfer_jobs', 'employee_transfer_events',
   'employee_transfer_staging', 'employee_transfer_excluded_columns', 'employee_transfer_trigger_policy',
-  'employee_transfer_shared_backups', 'employee_transfer_maintenance', 'employee_transfer_write_permits',
+  'employee_transfer_shared_backups', 'employee_transfer_notification_backups', 'employee_transfer_maintenance', 'employee_transfer_write_permits',
 ];
 const publicFunctions = [
   'employee_transfer_cancel(uuid,uuid)', 'get_employee_transfer_log(uuid,integer)',
@@ -137,6 +138,10 @@ const publicFunctions = [
   'employee_export_notifications_verify(uuid,uuid)', 'employee_export_notifications_close(uuid,uuid)',
   'employee_import_notifications_bind(uuid,uuid,jsonb)', 'employee_import_notifications_stage(uuid,uuid,text,integer,text)',
   'get_employee_import_notifications_plan(uuid,uuid)',
+  'get_employee_import_notification_configuration_plan(uuid,uuid)', 'employee_import_notification_backup_prepare(uuid,uuid,text)',
+  'get_employee_import_notification_backup_page(uuid,uuid,uuid,text,text,integer)',
+  'employee_import_notification_backup_verify(uuid,uuid,uuid)', 'employee_import_notification_backup_append(uuid,uuid,uuid,integer,text)',
+  'employee_import_notification_backup_seal(uuid,uuid,uuid,text,integer)', 'get_employee_notification_saved_backup_chunk(uuid,uuid,integer)',
 ];
 const serviceOnlyFunctions = [
   'employee_transfer_verification_media_authorize(uuid,uuid,text,text)',

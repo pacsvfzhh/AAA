@@ -52,6 +52,13 @@
 - `get_employee_import_notifications_plan`为STABLE直接鉴权读取任务，同一快照核验，不续heartbeat或保存计划；本地READ ONLY事务验证通过。无冲突也can_restore=false，restore_pending/media_pending/automation_pending=true；checked只表示原文与关联预检完成。导出verify/close也明确media_pending、不推进全站导出时间，close前再次检查来源、身份和资金漂移。
 - 通知API/客户端710项、双站新增43项及原活动/实名回归分组通过，整体34文件6058项覆盖，详见迁移计划第31节。**本轮未访问或修改正式环境，未部署SQL/Edge/前端或调整Storage/权限/cron，无UI/导航或浏览器演练。** 同名配置备份/留证覆盖、真实通知媒体、实际恢复及执行去重/自动化续接仍待实现，不把本阶段当员工或全站完成。
 
+## 通知配置覆盖前独立备份（2026-10-19，UTC+8，本地未部署）
+
+- SQL25及`notificationsConfigurationApi.ts`提供同包配置对应计划：方案按映射管理员+大小写折叠名称，任务按管理员/方案/精确名称/共享标志，范本按管理员/精确名称；与现有方案唯一索引一致。列出需移出成员及目标多余任务，空来源名单不保留旧成员，只预览不改业务；范围外方案成员占用、歧义/ID冲突及已有相关通知/奖励/执行等真实历史均阻断，不删除历史证据。范围内成员允许按来源调整，不取并集。
+- 独立RLS私有`employee_transfer_notification_backups`避免覆盖原派单备份；冻结目标13表记录，`notificationsBackup.ts`独立加密保存、完整回读认证、密文重读上传与封存，原超管可在任务取消/过期后取回sealed密文。未封存记录与临时明文随任务结束清理，派单已封存备份不变。实际行指纹包含被排除的租约和原始错误，投影相同的漂移也拒绝。
+- 记录备份明文8MiB/密文9MiB上限，超限拒绝不截断；页200行/256KiB、行64KiB。**没有实际文件，media_included=false；备份不代表对象可完整还原，不能因此开放覆盖。** 配置apply、通知历史恢复与自动化续接尚未提供，can_apply_configuration=false，媒体/自动化pending保持；不发通知/奖金、不启用员工、不解除维护。
+- 本轮新备份/API510项通过，扩展双站增加46项，实际完整分组与限制见迁移计划第32节。测试修正多对一映射漏检和预取消验证残留上传权限等问题；未访问正式环境、未部署SQL/Edge/前端或调整Storage/权限/cron，无UI/浏览器或真实Storage验收。
+
 ## 公告 `AnnouncementManagement.tsx` + `TiptapEditor.tsx`
 - 表 `announcements`，直接表操作（不经稽核）。二级只管理自己的公告；超管可管理全部，并设置全局公告与轮播。支持发布时间、隐藏、置顶排序；正文上限 500KB。
 - 媒体存储桶：编辑器插入的图片/视频/封面 → `announcement-images`；正文里的 base64 图片经 `processContentImages` → `template-images`；Word 导入的图片 → `chat-images`。删除公告时会尝试清理正文图片（`src/lib/storageCleanup.ts`）。

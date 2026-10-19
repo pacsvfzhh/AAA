@@ -18,9 +18,7 @@ CREATE TABLE private.employee_transfer_notification_backups (
 ALTER TABLE private.employee_transfer_notification_backups ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON private.employee_transfer_notification_backups FROM PUBLIC, anon, authenticated, service_role;
 
--- The pinned inventory rejects EVERY new relation, including private transfer metadata.
--- Add only this reviewed RLS/no-grants table to its exact exclusions; do not weaken guards,
--- change the guarded business-table manifest, or replace any existing backup/cleanup function.
+-- The exact inventory must admit this private metadata table without exempting business writes.
 DO $notification_inventory$
 DECLARE v_definition text;v_anchor constant text:='''private.employee_transfer_shared_backups'',''private.employee_transfer_site''';
 BEGIN
@@ -148,10 +146,9 @@ BEGIN
     WHERE m.plan_id=ANY(v_matched) AND NOT EXISTS(
       SELECT 1 FROM private.employee_transfer_notifications_input(p_job.id,'notification_automation_plan_members') AS s
       WHERE s.body->>'user_id'=m.user_id::text AND v_plans->>(s.body->>'plan_id')=m.plan_id::text);
-  -- No implicit detach, even when another replaced plan happens to be in this package.
   IF EXISTS(SELECT 1 FROM private.employee_transfer_notifications_input(p_job.id,'notification_automation_plan_members') AS s
     JOIN public.notification_automation_plan_members AS m ON m.user_id=(s.body->>'user_id')::uuid
-    WHERE m.plan_id::text IS DISTINCT FROM v_plans->>(s.body->>'plan_id')) THEN
+    WHERE m.plan_id::text IS DISTINCT FROM v_plans->>(s.body->>'plan_id') AND NOT m.plan_id=ANY(v_matched)) THEN
     v_conflicts:=v_conflicts||'"target_member_outside_plan"'::jsonb;
   END IF;
 
@@ -204,8 +201,7 @@ BEGIN
 END;
 $$;
 
--- Lock order: configuration advisory lock -> 13 relations (fixed protocol order) -> queue -> job -> backup.
--- Missing date_runs is a capability, never an instruction to create a table.
+-- Lock order: configuration -> protocol relations -> queue -> job -> backup.
 CREATE FUNCTION private.employee_transfer_notification_lock()
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$

@@ -515,6 +515,7 @@ before(async () => {
     export {createSharedSettingsReplacementSession,createDispatchImportSession} from './src/lib/employeeTransfer/api.ts';
     export * from './src/lib/employeeTransfer/activityApi.ts'; export * from './src/lib/employeeTransfer/activityTransfer.ts';
     export * from './src/lib/employeeTransfer/notificationsApi.ts'; export * from './src/lib/employeeTransfer/notificationsTransfer.ts';
+    export * from './src/lib/employeeTransfer/notificationsConfigurationApi.ts';
     export {setHarness} from 'activity-db:state';`, resolveDir: root }, bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2020',
     plugins: [{ name: 'local-activity-anon-sql', setup(builder) {
       builder.onResolve({ filter: /^(?:activity-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'activity-db' }));
@@ -1656,6 +1657,19 @@ test('notification configuration source empty member list previews removal of ev
   const p = await ncplan(); assert.equal(p.members_removed, 2); assert.deepEqual(p.conflicts, []); assert.equal(p.can_apply_configuration, false);
 }));
 
+test('notification configuration permits source membership moves between matched plans without changing either target yet', () => transaction(async () => {
+  const secondSource = id(18300), secondTarget = id(18301);
+  const input = changedNotifications({ notification_automation_plans: text => {
+    const row = JSON.parse(lines(text).find(line => JSON.parse(line).id === N.plan));
+    return text + JSON.stringify({ ...row, id: secondSource, name: '來源第二方案' }) + '\n';
+  } });
+  await nstage(input); const owner = (await state()).identity_restore.admin_map[OLD.branch];
+  await targetPlan(C.plan, '來源方案 Alpha', owner); await targetPlan(secondTarget, '來源第二方案', owner); await targetMember(F.history, secondTarget);
+  const before = await business(), p = await ncplan();
+  assert.deepEqual(p.conflicts, []); assert.equal(p.members_removed, 1); assert.equal(p.can_prepare_backup, true);
+  assert.equal(p.can_apply_configuration, false); assert.deepEqual(await business(), before); await stillClosed();
+}));
+
 test('notification configuration refuses employees assigned to a different target plan instead of silently detaching', () => transaction(async () => {
   await nstage(); await targetPlan(C.outside, '范围外方案', (await state()).identity_restore.admin_map[OLD.branch]); await targetMember(F.history, C.outside);
   const p = await ncplan(), before = await business(); assert.ok(p.conflicts.includes('target_member_outside_plan')); await assert.rejects(nbprepare(p), /conflict-free/); assert.deepEqual(await business(), before);
@@ -1759,20 +1773,21 @@ test('notification backup freezes all 13 projected tables with raw precision, ha
 }));
 
 test('notification backup uses real independent encrypted file readback, append/seal, then survives task cancellation', () => transaction(async () => {
-  await nstage(); await allTargetNotifications(); const before = await business(), original = await triggers(), b = await nbprepare(await ncplan());
+  await nstage(); await allTargetNotifications(); transport();
+  const client = modules.createNotificationConfigurationSession(task.job_token, notifications.catalog);
+  const configuration = await client.plan(); const bundle = await client.backup(configuration.plan_hash), b = bundle.descriptor;
+  const before = await business(), original = await triggers();
   const shared = await rows(db, 'SELECT * FROM private.employee_transfer_shared_backups WHERE id=$1', [task.job_id]);
   const dir = await mkdtemp(join(tmpdir(), 'notification-db-independent-')), path = join(dir, 'notifications.edx'); let opens = 0;
   const plain = new Map();
   try {
-    const saved = await modules.createNotificationsBackup(b, {
-      async catalog() { return (await nbprepare(await ncplan())).catalog; }, page: (key, after) => nbpage(b, key, after), verify: () => nbverify(b),
-    }, {
+    const saved = await modules.createNotificationsBackup(b, bundle.source, {
       async append(name, bytes) { plain.set(name, [...(plain.get(name) ?? []), Buffer.from(bytes)]); },
       open(name) { return (async function* () { yield* plain.get(name) ?? []; })(); }, async abort() { plain.clear(); },
     }, {
       async write(stream) { const f = await open(path, 'wx'); try { for await (const bytes of stream) await f.writeFile(bytes); await f.sync(); } finally { await f.close(); } },
       open() { opens++; return disk(path); },
-    }, { append(no, hex) { assert.equal(opens, 2); return nbappend(b, no, Buffer.from(hex, 'hex')); }, seal: (sha, bytes) => nbseal(b, Buffer.alloc(0), { p_sha256: sha, p_bytes: bytes }) },
+    }, { append(no, hex) { assert.equal(opens, 2); return bundle.receiver.append(no, hex); }, seal: (sha, bytes) => bundle.receiver.seal(sha, bytes) },
     'local-notification-independent-backup-passphrase');
     assert.equal(opens, 2); assert.equal(plain.size, 0); assert.equal(saved.sealReceipt.media_pending, true);
     const file = []; for await (const part of disk(path)) file.push(Buffer.from(part)); const cipher = Buffer.concat(file);
