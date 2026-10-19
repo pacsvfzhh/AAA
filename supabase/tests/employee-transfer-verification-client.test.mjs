@@ -5,8 +5,7 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
-// All transport/storage/auth is synthetic and in-memory. No process.env, real
-// credentials, database, network, genuine identity documents or disk output.
+// Synthetic in-memory fixtures only; network and real credentials/documents are forbidden.
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'https://local-fixture.supabase.co';
 const PREFIX = '/storage/v1/object/public/verification-documents/';
@@ -95,6 +94,7 @@ const api = await import(`data:text/javascript;base64,${Buffer.from(compiled.out
 function harness(f = fixture(), direction = 'import') {
   const h = { f, admin: ADMIN, direction, events: [], calls: [], fetches: [], objects: new Map(), bound: null,
     receipts: new Map(), checked: new Set(), recordBound: false, staged: false, applied: false, cleanup: 0,
+    recordCatalog: null, recordRaw: null, appliedEmployees: new Set(), appliedRecords: new Map(),
     beforeFetch: null, afterFetch: null, beforeRpc: null, beforeRead: null, beforeWrite: null, beforeAbort: null,
     beforeAppend: null, beforeStage: null, beforePlan: null, paths: null, opens: new Map(), contents: new Map(f.contents) };
   const refs = () => f.media.map(file => ({ key: file.key, source_url: file.source_url, bucket: 'verification-documents',
@@ -114,8 +114,10 @@ function harness(f = fixture(), direction = 'import') {
     }
     assert.equal(name, 'employee_import_verification_media_bind');
     assert.equal(h.staged, true, 'real record staging is a prerequisite');
-    h.bound = structuredClone(args.p_files);
-    return { data: { success: true, scope: 'employee-verification-media', files: h.bound.length, bytes: h.bound.reduce((n, x) => n + x.bytes, 0), repeated: false, full_site_complete: false } };
+    const repeated = h.bound !== null;
+    if (repeated) assert.deepEqual(args.p_files, h.bound, 'media binding is immutable');
+    else h.bound = structuredClone(args.p_files);
+    return { data: { success: true, scope: 'employee-verification-media', files: h.bound.length, bytes: h.bound.reduce((n, x) => n + x.bytes, 0), repeated, full_site_complete: false } };
   });
   const edgeRpc = async (name, args) => {
     h.events.push(name);
@@ -124,7 +126,8 @@ function harness(f = fixture(), direction = 'import') {
       const bound = direction === 'import' ? h.bound?.find(x => x.key === file.key) : h.receipts.get(file.key) ?? null;
       if (direction === 'import' && !bound) return { error: { message: SECRET } };
       return { data: { direction, key: file.key, source_url: file.source_url, bucket: 'verification-documents',
-        path: direction === 'export' ? file.source_url.split(PREFIX)[1] : targetPath(file), file: bound } };
+        path: direction === 'export' ? file.source_url.split(PREFIX)[1] : targetPath(file), file: bound,
+        generation: direction === 'export' ? 'export' : String(h.appliedEmployees.size) } };
     }
     assert.equal(name, 'employee_transfer_verification_media_commit');
     assert.equal(args.p_storage_origin, ORIGIN);
@@ -144,7 +147,8 @@ function harness(f = fixture(), direction = 'import') {
       async download(bucket, path) {
         assert.equal(bucket, 'verification-documents'); h.events.push('store-read');
         if (h.beforeRead) { const override = await h.beforeRead(path); if (override) return override; }
-        return { data: h.objects.get(path), error: h.objects.has(path) ? null : { message: SECRET } };
+        const blob = h.objects.get(path);
+        return blob ? { data: new Response(blob.stream()), error: null } : { data: null, error: { message: SECRET } };
       },
       async upload(bucket, path, bytes, options) {
         assert.equal(bucket, 'verification-documents'); assert.equal(options.upsert, false); h.events.push('store-upload');
@@ -173,7 +177,7 @@ function harness(f = fixture(), direction = 'import') {
       const n = (h.opens.get(path) ?? 0) + 1; h.opens.set(path, n); h.events.push(`open:${path}:${n}`);
       return (async function* () {
         const bytes = h.contents.get(path); assert.ok(bytes, 'fixture missing');
-        // Snapshot simulates immutable quarantined files. Drift tests change the next open.
+        // Producer buffers must not change an already-open file.
         const copy = new Uint8Array(bytes);
         for (let i = 0; i < copy.length; i += 17) yield copy.subarray(i, i + 17);
       })();
@@ -190,18 +194,49 @@ function harness(f = fixture(), direction = 'import') {
     async abort(reason) { redacted(reason); h.cleanup++; h.events.push('cleanup'); if (h.beforeAbort) await h.beforeAbort(); h.sink.stored.clear(); },
   };
   h.target = {
-    async bind(cat, signal) { assert.deepEqual(cat, f.catalog); h.events.push('record-bind'); h.recordBound = true; h.recordSignal = signal; return { success: true, scope: 'employee-verification', full_site_complete: false, repeated: false }; },
+    async bind(cat, signal) {
+      assert.deepEqual(cat, f.catalog); h.events.push('record-bind');
+      const repeated = h.recordBound;
+      if (repeated) assert.deepEqual(cat, h.recordCatalog, 'record catalog binding is immutable');
+      else h.recordCatalog = structuredClone(cat);
+      h.recordBound = true; h.recordSignal = signal;
+      return { success: true, scope: 'employee-verification', full_site_complete: false, repeated };
+    },
     async stage(key, n, raw, signal) {
       h.events.push('record-stage'); assert.equal(key, KEY); assert.equal(n, 0); assert.equal(raw, f.raw); assert.equal(h.recordBound, true); h.recordSignal = signal;
-      if (h.beforeStage) await h.beforeStage(); h.staged = true;
-      return { success: true, rows: f.catalog.tables[0].rows, bytes: Buffer.byteLength(raw), sha256: sha(raw), repeated: false };
+      if (h.beforeStage) await h.beforeStage();
+      const repeated = h.staged;
+      if (repeated) assert.equal(raw, h.recordRaw, 'repeated stage accepts only identical bytes');
+      else h.recordRaw = raw;
+      h.staged = true;
+      return { success: true, rows: f.catalog.tables[0].rows, bytes: Buffer.byteLength(raw), sha256: sha(raw), repeated };
     },
     async plan() {
       h.events.push('record-plan'); if (h.beforePlan) { const override = await h.beforePlan(); if (override) return override; }
-      const ready = h.bound && f.media.every(x => h.receipts.has(x.key));
-      return { scope: 'employee-verification', can_restore: Boolean(ready), counts: { verification_requests: f.catalog.tables[0].rows }, employees: 1,
+      const ready = h.bound && h.bound.every(x => {
+        const stored = h.receipts.get(x.key);
+        return stored && JSON.stringify(stored) === JSON.stringify(x);
+      });
+      return { scope: 'employee-verification', can_restore: Boolean(ready), counts: { verification_requests: f.catalog.tables[0].rows }, employees: f.catalog.identity_catalog.tables[0].rows,
         conflicts: ready ? [] : ['media_incomplete'], plan_hash: 'a'.repeat(64), ...flags };
     },
+    apply() { assert.fail('automatic apply forbidden'); },
+    verify() { assert.fail('automatic verify forbidden'); },
+    close() { assert.fail('automatic close forbidden'); },
+  };
+  h.apply = async employeeId => {
+    assert.equal((await h.target.plan()).can_restore, true);
+    const records = h.recordRaw.split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(r => r.user_id === employeeId);
+    assert.ok(records.length);
+    for (const record of records) {
+      for (const field of ['id_front_url', 'id_back_url', 'selfie_url']) {
+        if (record[field] !== null) record[field] = ORIGIN + PREFIX + h.targetPath(h.bound.find(file => file.source_url === record[field]));
+      }
+      const previous = h.appliedRecords.get(record.id);
+      if (previous) assert.deepEqual(previous, record);
+      else h.appliedRecords.set(record.id, record);
+    }
+    h.appliedEmployees.add(employeeId);
   };
   h.source = {
     async catalog() { h.events.push('catalog'); return f.catalog; },
@@ -233,7 +268,7 @@ for (const [type, bytes] of SAMPLES) test(`real handler export/import: ${type}, 
   assert.ok(imported.events.indexOf('record-bind') > imported.events.indexOf(`open:${mediaPath(f.media[0])}:1`));
   assert.equal(progress.filter(x => x.phase === 'upload').at(-1).files, 1);
   assert.equal(imported.checked.size, 0, 'no implicit final readback or SQL verify/apply/close');
-  // Fake employee apply is outside this client; SQL ultimately owns its timestamp check.
+  // SQL owns the apply/readback timestamp check.
   imported.applied = true;
   await imported.session.recheckImport(f.media);
   assert.equal(imported.checked.size, 1);
@@ -379,7 +414,7 @@ test('extra server inventory file prevents media bind/upload after actual raw st
 });
 test('upload readback drift leaves object intact, no retry/delete or fake rollback', async () => {
   const h = harness();
-  h.beforeRead = () => ({ data: new Blob([Uint8Array.of(255, 216, 255, 5)]), error: null });
+  h.beforeRead = () => ({ data: new Response(Uint8Array.of(255, 216, 255, 5)), error: null });
   await assert.rejects(h.stage(), failed(true)); assert.equal(h.objects.size, 1); assert.equal(h.fetches.length, 1); assert.equal(h.cleanup, 1);
 });
 test('explicit final import recheck detects same-size post-apply drift', async () => {
@@ -453,6 +488,105 @@ test('empty history uses actual empty raw stage and real media binding/plan; no 
 function multiFixture() {
   const r = row(); r.id_back_url = ORIGIN + PREFIX + `id-back/${USER}-second.jpg`; r.selfie_url = ORIGIN + PREFIX + `selfie/${USER}-third.jpg`;
   return fixture({ raw: JSON.stringify(r) + '\n' });
+}
+function twoEmployeeFixture() {
+  const first = row(), employeeId = '66666666-6666-4666-8666-666666666666';
+  const second = { ...row(ORIGIN + PREFIX + `id-front/${employeeId}-fixture.jpg`), id: employeeId, user_id: employeeId };
+  const f = fixture({ raw: [first, second].map(r => JSON.stringify(r) + '\n').join('') });
+  f.catalog.identity_catalog.tables[0].rows = 2;
+  f.catalog.identity_catalog.tables[0].bytes = 1000;
+  return f;
+}
+function reopen(h) {
+  h.contents = new Map([...h.f.contents].map(([path, bytes]) => [path, new Uint8Array(bytes)]));
+  h.session = api.createVerificationMediaSession(JOB, 'import', h.fetch);
+}
+for (const partialApply of [false, true]) test(`same-package replay after actual Edge uploads, ${partialApply ? 'one of two employees applied' : 'no employee applied'}`, async () => {
+  const f = twoEmployeeFixture(), h = harness(f), first = await h.stage();
+  assert.equal(first.plan.can_restore, true); assert.equal(h.objects.size, f.media.length);
+  if (partialApply) await h.apply(USER);
+  assert.equal(h.appliedEmployees.size, partialApply ? 1 : 0);
+  const serverPlan = await h.target.plan();
+  assert.equal(serverPlan.can_restore, true); assert.deepEqual(serverPlan.conflicts, []);
+  const records = structuredClone([...h.appliedRecords]), employees = [...h.appliedEmployees];
+  const bound = structuredClone(h.bound), raw = h.recordRaw, serverCatalog = structuredClone(h.recordCatalog);
+  const objects = new Map(h.objects), opens = new Map(h.opens), fetchCount = h.fetches.length, callCount = h.calls.length, eventCount = h.events.length;
+  const input = structuredClone({ catalog: f.catalog, media: f.media, manifest: f.manifest });
+  reopen(h);
+  const progress = [], result = await h.stage({ onProgress: p => progress.push(p) });
+  assert.deepEqual(result.plan, serverPlan); assert.equal(result.fullSiteComplete, false);
+  assert.deepEqual([...h.appliedRecords], records); assert.deepEqual([...h.appliedEmployees], employees);
+  assert.equal(h.recordRaw, raw); assert.equal(raw, f.raw); assert.deepEqual(h.recordCatalog, serverCatalog); assert.deepEqual(h.bound, bound);
+  assert.deepEqual({ catalog: f.catalog, media: f.media, manifest: f.manifest }, input);
+  assert.equal(h.opens.get(RECORD_PATH) - opens.get(RECORD_PATH), 3);
+  for (const file of f.media) {
+    assert.equal(h.opens.get(mediaPath(file)) - opens.get(mediaPath(file)), 2);
+    assert.equal(h.objects.get(h.targetPath(file)), objects.get(h.targetPath(file)), 'occupied object is not overwritten');
+    assert.deepEqual(new Uint8Array(await h.objects.get(h.targetPath(file)).arrayBuffer()), f.contents.get(mediaPath(file)));
+  }
+  assert.equal(h.cleanup, 2); assert.equal(h.contents.size, 0); assert.equal(h.objects.size, objects.size);
+  assert.deepEqual(h.fetches.slice(fetchCount).map(x => x.action), ['upload', 'upload']);
+  assert.deepEqual(h.calls.slice(callCount).map(x => x.name), ['get_employee_transfer_verification_media', 'get_employee_transfer_verification_media', 'employee_import_verification_media_bind']);
+  assert.deepEqual(progress.filter(p => p.phase === 'upload').map(p => p.files), [1, 2]);
+  const replayEvents = h.events.slice(eventCount);
+  for (const file of f.media) assert.ok(replayEvents.indexOf(`open:${mediaPath(file)}:3`) < replayEvents.indexOf('record-bind'));
+  assert.equal(replayEvents.filter(e => e === 'record-stage').length, 1);
+  assert.equal(replayEvents.filter(e => e === 'store-read').length, 2);
+  assert.equal(replayEvents.some(e => /apply|verify|close|recheck/.test(e)), false);
+  assert.equal(h.checked.size, 0);
+});
+for (const change of ['tuple', 'catalog', 'record', 'first-read-media', 'second-read-media', 'inventory']) test(`approved replay still rejects ${change} drift without altering existing employees/files`, async () => {
+  const f = twoEmployeeFixture(), h = harness(f); await h.stage(); await h.apply(USER);
+  const records = structuredClone([...h.appliedRecords]), bound = structuredClone(h.bound), objects = new Map(h.objects), raw = h.recordRaw;
+  const beforeFetch = h.fetches.length, beforeCalls = h.calls.length;
+  reopen(h);
+  if (change === 'tuple') {
+    const file = f.media[0], bytes = new Uint8Array(JPG); bytes[4] ^= 1;
+    file.sha256 = sha(bytes); h.contents.set(mediaPath(file), bytes);
+    f.manifest.entries.find(e => e.path === mediaPath(file)).sha256 = file.sha256;
+  } else if (change === 'catalog') {
+    f.raw = f.raw.replace('approved', 'rejected'); f.catalog.tables = catalog(f.raw).tables;
+    h.contents.set(RECORD_PATH, bytesOf(f.raw));
+    f.manifest.entries[0] = { path: RECORD_PATH, kind: 'ndjson', bytes: Buffer.byteLength(f.raw), sha256: sha(f.raw) };
+  } else if (change === 'record') h.contents.set(RECORD_PATH, bytesOf(f.raw.replace('approved', 'rejected')));
+  else if (change === 'first-read-media') h.contents.set(mediaPath(f.media.at(-1)), bytesOf('corrupt'));
+  else if (change === 'second-read-media') {
+    h.beforeRpc = name => { if (name === 'employee_import_verification_media_bind') {
+      const bytes = new Uint8Array(JPG); bytes[4] ^= 1; h.contents.set(mediaPath(f.media[0]), bytes);
+    } };
+  } else h.beforeRpc = name => name === 'get_employee_transfer_verification_media'
+    ? { data: { scope: 'employee-verification-media', direction: 'import', files: [], full_site_complete: false } } : null;
+  await assert.rejects(h.stage(), failed(!['record', 'first-read-media'].includes(change)));
+  assert.equal(h.fetches.length, beforeFetch); assert.equal(h.cleanup, 2); assert.equal(h.contents.size, 0);
+  assert.deepEqual([...h.appliedRecords], records); assert.deepEqual(h.bound, bound); assert.equal(h.recordRaw, raw);
+  for (const [path, blob] of objects) assert.equal(h.objects.get(path), blob);
+  if (change === 'tuple') assert.deepEqual(h.calls.slice(beforeCalls).map(x => x.name), ['get_employee_transfer_verification_media']);
+});
+test('replay cannot replace immutable media binding even if inventory omits its existing tuple', async () => {
+  const f = fixture(), h = harness(f); await h.stage();
+  const bound = structuredClone(h.bound), objects = new Map(h.objects), calls = h.calls.length, fetches = h.fetches.length;
+  reopen(h);
+  const bytes = new Uint8Array(JPG); bytes[4] ^= 1;
+  f.media[0].sha256 = sha(bytes); h.contents.set(mediaPath(f.media[0]), bytes);
+  f.manifest.entries[1].sha256 = sha(bytes);
+  h.beforeRpc = name => name === 'get_employee_transfer_verification_media' ? { data: {
+    scope: 'employee-verification-media', direction: 'import', full_site_complete: false,
+    files: [{ key: f.media[0].key, source_url: f.media[0].source_url, bucket: 'verification-documents', path: f.media[0].source_url.split(PREFIX)[1], file: null }],
+  } } : null;
+  await assert.rejects(h.stage(), failed(true));
+  assert.equal(h.calls.at(-1).name, 'employee_import_verification_media_bind'); assert.equal(h.calls.length - calls, 3);
+  assert.equal(h.fetches.length, fetches); assert.deepEqual(h.bound, bound); assert.deepEqual(h.objects, objects); assert.equal(h.cleanup, 2);
+});
+for (const conflict of ['verification_target_not_empty', 'verification_uuid_collision', 'source_employee_missing', 'verification_admin_unmapped']) {
+  for (const hasMedia of [true, false]) test(`no media_incomplete: ${conflict} blocks uploads/binding with ${hasMedia ? 'media' : 'no media'}`, async () => {
+    const h = harness(hasMedia ? fixture() : fixture({ raw: '' }));
+    const plan = { scope: 'employee-verification', can_restore: false, counts: { verification_requests: h.f.catalog.tables[0].rows }, employees: 1,
+      conflicts: [conflict], plan_hash: 'b'.repeat(64), ...flags };
+    h.beforePlan = () => structuredClone(plan);
+    await assert.rejects(h.stage(), failed(true));
+    assert.equal(h.staged, true); assert.equal(h.bound, null); assert.equal(h.calls.length, 0); assert.equal(h.fetches.length, 0);
+    assert.equal(h.cleanup, 1); assert.equal(h.contents.size, 0); assert.equal(plan.can_restore, false); assert.deepEqual(plan.conflicts, [conflict]);
+  });
 }
 test('all media files must validate before the FIRST record bind, even when the final file is corrupt', async () => {
   const f = multiFixture(), h = harness(f), last = f.media.at(-1);
@@ -537,10 +671,12 @@ test('refreshed server plan is returned unchanged if still conflicted; no fabric
   const r = await h.stage(); assert.equal(r.plan.can_restore, false); assert.deepEqual(r.plan.conflicts, ['verification_admin_unmapped']);
   assert.equal(r.plan.plan_hash, 'b'.repeat(64)); assert.equal(h.cleanup, 1);
 });
-test('successful raw staging cannot invent media readiness or bypass media_incomplete', async () => {
+test('approved server plan never skips inventory/tuple correspondence', async () => {
   const h = harness(); h.beforePlan = () => ({ scope: 'employee-verification', can_restore: true, counts: { verification_requests: 1 }, employees: 1,
     conflicts: [], plan_hash: 'a'.repeat(64), ...flags });
+  h.beforeRpc = () => ({ data: { scope: 'employee-verification-media', direction: 'import', files: [], full_site_complete: false } });
   await assert.rejects(h.stage(), failed(true)); assert.equal(h.bound, null); assert.equal(h.fetches.length, 0);
+  assert.equal(h.calls[0].name, 'get_employee_transfer_verification_media');
 });
 for (const direction of ['import', 'export']) test(`${direction} cleanup failures before any server write retain accurate uncertainty`, async () => {
   const h = harness(fixture({ url: '' }), direction); h.beforeAbort = () => { throw Error(SECRET); };

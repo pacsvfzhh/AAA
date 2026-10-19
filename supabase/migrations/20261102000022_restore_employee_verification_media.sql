@@ -4,24 +4,23 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 CREATE FUNCTION private.employee_transfer_verification_media_refs(p_job private.employee_transfer_jobs,p_export boolean)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
-DECLARE v_query text;v_rows jsonb;v_row jsonb;v_field text;v_url text;v_path text;v_key text;v_refs jsonb:='{}';
+DECLARE v_query text;v_row record;v_field text;v_url text;v_path text;v_key text;v_refs jsonb:='{}';
 BEGIN
   IF p_export IS NULL THEN RAISE EXCEPTION 'An explicit verification media mode is required.';END IF;
   IF p_export THEN
-    v_query:=private.employee_transfer_verification_query('verification_requests');
-    EXECUTE 'SELECT COALESCE(jsonb_agg(body),''[]''::jsonb) FROM ('||v_query||') AS r' INTO v_rows;
+    v_query:='SELECT body FROM ('||private.employee_transfer_verification_query('verification_requests')||') AS r';
   ELSE
-    SELECT COALESCE(jsonb_agg(body),'[]'::jsonb) INTO v_rows FROM private.employee_transfer_verification_input(p_job.id,'verification_requests');
+    v_query:='SELECT body FROM private.employee_transfer_verification_input($1,''verification_requests'')';
   END IF;
-  FOR v_row IN SELECT value FROM jsonb_array_elements(v_rows) LOOP
+  FOR v_row IN EXECUTE v_query USING p_job.id LOOP
     FOREACH v_field IN ARRAY ARRAY['id_front_url','id_back_url','selfie_url'] LOOP
-      v_url:=v_row->>v_field;
+      v_url:=v_row.body->>v_field;
       IF v_url IS NULL THEN CONTINUE;END IF;
       IF length(v_url)>512 OR v_url !~ '^https://[a-z0-9-]+[.]supabase[.]co/storage/v1/object/public/verification-documents/(id-front|id-back|selfie)/[0-9a-f-]{36}-[A-Za-z0-9._-]+[.][A-Za-z0-9]{1,8}$' THEN
         RAISE EXCEPTION 'Unmanaged verification document URL; no file was omitted.';
       END IF;
       v_path:=split_part(v_url,'/verification-documents/',2);
-      IF split_part(v_path,'/',2) NOT LIKE (v_row->>'user_id')||'-%' OR length(split_part(v_path,'/',2))>128
+      IF split_part(v_path,'/',2) NOT LIKE (v_row.body->>'user_id')||'-%' OR length(split_part(v_path,'/',2))>128
         OR v_path ~ '[.][.]' THEN RAISE EXCEPTION 'Verification document path does not belong to its employee.';END IF;
       v_key:=encode(extensions.digest(convert_to(v_url,'UTF8'),'sha256'),'hex');
       v_refs:=v_refs||jsonb_build_object(v_key,jsonb_build_object('key',v_key,'source_url',v_url,'bucket','verification-documents','path',v_path));
@@ -125,16 +124,18 @@ BEGIN
     v_path:=split_part(v_ref->>'path','/',1)||'/'||left(split_part(v_ref->>'path','/',2),36)||'-transfer-'||
       left(encode(extensions.digest(convert_to(v_job.id::text||':'||p_object_key,'UTF8'),'sha256'),'hex'),32)||'.'||lower(substring(v_ref->>'path' FROM '[.]([A-Za-z0-9]{1,8})$'));
   END IF;
-  RETURN jsonb_build_object('direction',v_direction,'key',p_object_key,'bucket','verification-documents','path',v_path,'source_url',v_ref->>'source_url','file',v_file);
+  RETURN jsonb_build_object('direction',v_direction,'key',p_object_key,'bucket','verification-documents','path',v_path,'source_url',v_ref->>'source_url','file',v_file,
+    'generation',CASE WHEN v_direction='export' THEN 'export' ELSE COALESCE(v_job.summary#>>'{verification_restore,completed_employees}','0') END);
 END;
 $$;
 
-CREATE FUNCTION public.employee_transfer_verification_media_commit(p_admin_session_token uuid,p_job_token uuid,p_action text,p_object_key text,p_bytes integer,p_sha256 text,p_content_type text,p_storage_origin text)
+CREATE FUNCTION public.employee_transfer_verification_media_commit(p_admin_session_token uuid,p_job_token uuid,p_action text,p_object_key text,p_bytes integer,p_sha256 text,p_content_type text,p_storage_origin text,p_generation text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_context jsonb;v_job private.employee_transfer_jobs%ROWTYPE;v_direction text;v_file jsonb;v_n integer;v_previous jsonb;v_table text;v_origin text;
 BEGIN
   v_context:=public.employee_transfer_verification_media_authorize(p_admin_session_token,p_job_token,p_action,p_object_key);v_direction:=v_context->>'direction';
+  IF p_generation IS NULL OR p_generation IS DISTINCT FROM v_context->>'generation' THEN RAISE EXCEPTION 'Verification media read generation changed; read the file again.';END IF;
   IF p_storage_origin IS NULL OR p_storage_origin !~ '^https://[a-z0-9-]+[.]supabase[.]co$'
     OR p_bytes IS NULL OR p_bytes NOT BETWEEN 1 AND 52428800 OR p_sha256 IS NULL OR p_sha256 !~ '^[0-9a-f]{64}$'
     OR p_content_type IS NULL OR p_content_type NOT IN ('image/jpeg','image/png','image/gif','image/webp','application/pdf') THEN RAISE EXCEPTION 'Invalid verified document receipt.';END IF;
@@ -148,7 +149,7 @@ BEGIN
   v_table:='verification-media-'||v_direction;
   SELECT payload INTO v_previous FROM private.employee_transfer_staging WHERE job_id=v_job.id AND employee_id='00000000-0000-0000-0000-000000000000' AND table_key=v_table AND chunk_no=v_n;
   INSERT INTO private.employee_transfer_staging(job_id,employee_id,table_key,chunk_no,row_count,payload) VALUES(v_job.id,'00000000-0000-0000-0000-000000000000',v_table,v_n,1,
-    jsonb_build_object('file',v_file,'path',v_context->>'path','storage_origin',p_storage_origin,'checked',p_action IN ('recheck-export','recheck-import') OR COALESCE((v_previous->>'checked')::boolean,false),'checked_at',clock_timestamp()))
+    jsonb_build_object('file',v_file,'path',v_context->>'path','storage_origin',p_storage_origin,'generation',p_generation,'checked',p_action IN ('recheck-export','recheck-import') OR COALESCE((v_previous->>'checked')::boolean,false),'checked_at',clock_timestamp()))
     ON CONFLICT(job_id,employee_id,table_key,chunk_no) DO UPDATE SET payload=EXCLUDED.payload;
   IF v_direction='import' THEN UPDATE private.employee_transfer_jobs SET summary=summary||jsonb_build_object('verification_storage_origin',p_storage_origin) WHERE id=v_job.id;END IF;
   RETURN jsonb_build_object('success',true,'key',p_object_key,'bytes',p_bytes,'sha256',p_sha256,'content_type',p_content_type,'full_site_complete',false);
@@ -180,7 +181,7 @@ BEGIN
     v_file:=p_job.summary->'verification_media_files'->(v_ref.no::integer);
     SELECT payload INTO v_receipt FROM private.employee_transfer_staging WHERE job_id=p_job.id AND employee_id='00000000-0000-0000-0000-000000000000' AND table_key='verification-media-import' AND chunk_no=v_ref.no;
     IF v_receipt IS NULL OR v_receipt->'file' IS DISTINCT FROM v_file OR v_file->'source_url' IS DISTINCT FROM v_ref.value->'source_url' THEN RETURN false;END IF;
-    IF p_final AND (v_receipt->>'checked' IS DISTINCT FROM 'true' OR (v_receipt->>'checked_at')::timestamptz<(p_job.summary#>>'{verification_restore,last_applied_at}')::timestamptz) THEN RETURN false;END IF;
+    IF p_final AND (v_receipt->>'generation' IS DISTINCT FROM COALESCE(p_job.summary#>>'{verification_restore,completed_employees}','0') OR v_receipt->>'checked' IS DISTINCT FROM 'true' OR (v_receipt->>'checked_at')::timestamptz<(p_job.summary#>>'{verification_restore,last_applied_at}')::timestamptz) THEN RETURN false;END IF;
   END LOOP;
   RETURN true;
 END;
@@ -337,8 +338,8 @@ BEGIN
   FOR v_function IN SELECT oid::regprocedure FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_%' LOOP EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC,anon,authenticated,service_role',v_function);END LOOP;
   REVOKE ALL ON FUNCTION public.get_employee_transfer_verification_media(uuid,uuid,text),public.employee_import_verification_media_bind(uuid,uuid,jsonb),public.get_employee_import_verification_plan(uuid,uuid),public.employee_import_verification_apply(uuid,uuid,uuid,text),public.employee_import_verification_verify(uuid,uuid) FROM PUBLIC,anon,authenticated,service_role;
   GRANT EXECUTE ON FUNCTION public.get_employee_transfer_verification_media(uuid,uuid,text),public.employee_import_verification_media_bind(uuid,uuid,jsonb),public.get_employee_import_verification_plan(uuid,uuid),public.employee_import_verification_apply(uuid,uuid,uuid,text),public.employee_import_verification_verify(uuid,uuid) TO anon,authenticated;
-  REVOKE ALL ON FUNCTION public.employee_transfer_verification_media_authorize(uuid,uuid,text,text),public.employee_transfer_verification_media_commit(uuid,uuid,text,text,integer,text,text,text) FROM PUBLIC,anon,authenticated,service_role;
-  GRANT EXECUTE ON FUNCTION public.employee_transfer_verification_media_authorize(uuid,uuid,text,text),public.employee_transfer_verification_media_commit(uuid,uuid,text,text,integer,text,text,text) TO service_role;
+  REVOKE ALL ON FUNCTION public.employee_transfer_verification_media_authorize(uuid,uuid,text,text),public.employee_transfer_verification_media_commit(uuid,uuid,text,text,integer,text,text,text,text) FROM PUBLIC,anon,authenticated,service_role;
+  GRANT EXECUTE ON FUNCTION public.employee_transfer_verification_media_authorize(uuid,uuid,text,text),public.employee_transfer_verification_media_commit(uuid,uuid,text,text,integer,text,text,text,text) TO service_role;
 END;
 $$;
 NOTIFY pgrst,'reload schema';

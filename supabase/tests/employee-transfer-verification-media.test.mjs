@@ -37,14 +37,16 @@ const SAMPLES = [
 const [JPEG_TYPE, JPEG] = SAMPLES[0];
 const rawError = extra => ({ message: `${SECRET} ${ADMIN} ${JOB} ${URL}`, details: SECRET, ...extra });
 const logs = ['log', 'info', 'warn', 'error', 'debug', 'trace'].map(name => mock.method(console, name, () => {}));
-mock.method(globalThis, 'fetch', () => assert.fail('network is forbidden'));
+const denyFetch = () => assert.fail('network is forbidden');
+mock.method(globalThis, 'fetch', denyFetch);
+let expectedFetchCalls = 0;
 const unhandled = [];
 const onUnhandled = reason => unhandled.push(reason);
 process.on('unhandledRejection', onUnhandled);
 after(async () => {
   await nextTurn();
   for (const log of logs) assert.equal(log.mock.callCount(), 0, 'no sensitive console logging');
-  assert.equal(globalThis.fetch.mock.callCount(), 0, 'no fetch/SSRF or automatic network retry');
+  assert.equal(globalThis.fetch.mock.callCount(), expectedFetchCalls, 'only explicitly injected fake fetch; no SSRF/retry');
   assert.deepEqual(unhandled, [], 'no uncaught secrets/rejections');
   process.off('unhandledRejection', onUnhandled);
   mock.restoreAll();
@@ -58,13 +60,14 @@ const receipt = file => ({ success: true, key: file.key, bytes: file.bytes, sha2
 const commands = ['download', 'recheck-export', 'upload', 'recheck-import'];
 function harness({ direction = 'export', bytes = JPEG, type = JPEG_TYPE, file = direction === 'import' ? tuple(bytes, type) : null, origin } = {}) {
   const h = { calls: [], objects: new Map(), removed: 0, ctx: { direction, key: KEY, bucket: BUCKET,
-    path: direction === 'export' ? PATH : IMPORT_PATH, source_url: URL, file }, authorize: null, commit: null, read: null, write: null };
+    path: direction === 'export' ? PATH : IMPORT_PATH, source_url: URL, file, generation: direction === 'export' ? 'export' : '0' }, authorize: null, commit: null, read: null, write: null };
   if (direction === 'export') h.objects.set(PATH, new Blob([bytes], { type: 'application/x-untrusted' }));
   h.rpc = async (name, args) => {
     h.calls.push({ op: name, args: structuredClone(args) });
     assert.ok([AUTH, COMMIT].includes(name), 'Edge must not close/cancel a job or use another RPC');
     if (name === AUTH) return h.authorize ? h.authorize(args) : { data: structuredClone(h.ctx), error: null };
     if (h.commit) return h.commit(args);
+    assert.equal(args.p_generation, h.ctx.generation, 'commit binds the generation captured BEFORE object read');
     return { data: { success: true, key: args.p_object_key, bytes: args.p_bytes, sha256: args.p_sha256,
       content_type: args.p_content_type, full_site_complete: false }, error: null };
   };
@@ -73,7 +76,9 @@ function harness({ direction = 'export', bytes = JPEG, type = JPEG_TYPE, file = 
       h.calls.push({ op: 'download', bucket, path });
       assert.equal(bucket, BUCKET);
       if (h.read) return h.read(bucket, path);
-      return h.objects.has(path) ? { data: h.objects.get(path), error: null } : { data: null, error: rawError({ status: 404 }) };
+      const blob = h.objects.get(path);
+      return blob ? { data: new Response(blob.stream(), { headers: { 'content-type': blob.type } }), error: null } :
+        { data: new Response(SECRET, { status: 404 }), error: null };
     },
     async upload(bucket, path, data, options) {
       h.calls.push({ op: 'upload', bucket, path, options: { ...options }, bytes: data.length, sha256: sha(data) });
@@ -142,7 +147,7 @@ for (const [index, [type, bytes]] of SAMPLES.entries()) {
     assert.equal(res.headers.get('content-disposition'), 'attachment');
     assert.deepEqual(operations(h), [AUTH, 'download', COMMIT]);
     assert.deepEqual(h.calls[0].args, { p_admin_session_token: ADMIN, p_job_token: JOB, p_action: 'download', p_object_key: KEY });
-    assert.deepEqual(h.calls[2].args, { ...h.calls[0].args, p_bytes: bytes.length, p_sha256: sha(bytes), p_content_type: type, p_storage_origin: SOURCE });
+    assert.deepEqual(h.calls[2].args, { ...h.calls[0].args, p_bytes: bytes.length, p_sha256: sha(bytes), p_content_type: type, p_storage_origin: SOURCE, p_generation: 'export' });
   });
   test(`golden upload ${index}: ${type}, streamed request and mandatory storage readback before commit`, async () => {
     const h = harness({ direction: 'import', bytes, type });
@@ -202,12 +207,11 @@ for (const field of ['bytes', 'sha256', 'content_type']) {
   }
 }
 
-test('SDK Blob >50MiB rejected BEFORE arrayBuffer; no truncation', async () => {
-  let read = 0;
-  class Oversize extends Blob { get size() { return MAX_MEDIA_BYTES + 1; } async arrayBuffer() { read++; throw Error(SECRET); } }
-  const h = harness(); h.read = () => ({ data: new Oversize(), error: null });
+test('declared >50MiB Response rejected before reading even the first chunk', async () => {
+  const s = streamOf([JPEG], { cancelError: true });
+  const h = harness(); h.read = () => ({ data: new Response(s.stream, { headers: { 'content-length': `${MAX_MEDIA_BYTES + 1}` } }), error: null });
   await failed(await h.handler(request()), 422, 'INVALID_MEDIA');
-  assert.equal(read, 0); assert.deepEqual(operations(h), [AUTH, 'download']);
+  assert.equal(s.reads, 0); assert.equal(s.cancels, 1); assert.deepEqual(operations(h), [AUTH, 'download']);
 });
 test('50MiB inclusive boundary is accepted with exact bytes/digest, not sliced', async () => {
   const bytes = new Uint8Array(MAX_MEDIA_BYTES); bytes.set(JPEG);
@@ -218,10 +222,10 @@ test('50MiB inclusive boundary is accepted with exact bytes/digest, not sliced',
   assert.equal(res.headers.get('x-transfer-sha256'), sha(bytes));
   assert.equal(h.calls.at(-1).args.p_bytes, MAX_MEDIA_BYTES);
 });
-test('lying/truncated SDK Blob size cannot commit', async () => {
-  class Truncated extends Blob { get size() { return JPEG.length + 1; } }
-  const h = harness(); h.read = () => ({ data: new Truncated([JPEG]), error: null });
-  await failed(await h.handler(request()), 502, 'TRANSFER_FAILED');
+test('lying/truncated Response Content-Length cannot commit', async () => {
+  const s = streamOf([JPEG]);
+  const h = harness(); h.read = () => ({ data: new Response(s.stream, { headers: { 'content-length': `${JPEG.length + 1}` } }), error: null });
+  await failed(await h.handler(request()), 422, 'INVALID_MEDIA');
   assert.ok(!operations(h).includes(COMMIT));
 });
 for (const chunks of [[JPEG.subarray(0, 2)], [], [JPEG, Uint8Array.of(1)], [new Uint8Array(MAX_MEDIA_BYTES + 1)]]) {
@@ -451,7 +455,7 @@ for (const variant of ['different bytes', 'different type', 'missing', 'download
       if (variant === 'missing') return { data: null, error: null };
       if (variant === 'download error') return { data: null, error: rawError() };
       const different = JPEG.slice(); different[4] ^= 1;
-      return { data: new Blob([variant === 'different bytes' ? different : variant === 'different type' ? SAMPLES[1][1] : variant === 'empty' ? new Uint8Array() : new Uint8Array(JPEG.length)]), error: null };
+      return { data: new Response(variant === 'different bytes' ? different : variant === 'different type' ? SAMPLES[1][1] : variant === 'empty' ? new Uint8Array() : new Uint8Array(JPEG.length)), error: null };
     };
     const res = await h.handler(request('upload', JPEG));
     await failed(res, ['missing', 'download error'].includes(variant) ? 502 : 422, ['missing', 'download error'].includes(variant) ? 'TRANSFER_FAILED' : 'INVALID_MEDIA');
@@ -530,7 +534,7 @@ test('abort after upload leaves file and returns generic uncertain result withou
 });
 test('abort during final storage readback never commits or deletes', async () => {
   const h = harness({ direction: 'import' }); const controller = new AbortController();
-  h.read = () => { controller.abort(Error(SECRET)); return { data: new Blob([JPEG]), error: null }; };
+  h.read = () => { controller.abort(Error(SECRET)); return { data: new Response(JPEG), error: null }; };
   await failed(await h.handler(request('upload', JPEG, {}, { signal: controller.signal })), 502, 'TRANSFER_FAILED');
   assert.deepEqual(operations(h), [AUTH, 'upload', 'download']); assert.ok(h.objects.has(IMPORT_PATH)); assert.equal(h.removed, 0);
 });
@@ -554,9 +558,9 @@ for (const change of [ctx => ({ ...ctx, extra: SECRET }), ctx => { delete ctx.fi
     await failed(await h.handler(request()), 502, 'TRANSFER_FAILED'); noStorage(h);
   });
 }
-test('Blob.arrayBuffer rejection cannot escape or leak backend secrets', async () => {
-  class BrokenBlob extends Blob { async arrayBuffer() { throw Error(SECRET); } }
-  const h = harness(); h.read = () => ({ data: new BrokenBlob([JPEG]), error: null });
+test('Response read rejection cannot escape or leak backend secrets', async () => {
+  const s = streamOf([JPEG.subarray(0, 2)], { error: true });
+  const h = harness(); h.read = () => ({ data: new Response(s.stream), error: null });
   await failed(await h.handler(request()), 502, 'TRANSFER_FAILED'); assert.deepEqual(operations(h), [AUTH, 'download']);
 });
 test('abort while commit is in flight cannot report success or fake rollback', async () => {
@@ -565,10 +569,184 @@ test('abort while commit is in flight cannot report success or fake rollback', a
   await failed(await h.handler(request('upload', JPEG, {}, { signal: controller.signal })), 502, 'TRANSFER_FAILED');
   assert.deepEqual(operations(h), [AUTH, 'upload', 'download', COMMIT]); assert.ok(h.objects.has(IMPORT_PATH)); assert.equal(h.removed, 0);
 });
+for (const generation of ['0', '1', '499999', '500000']) {
+  test(`import generation ${generation} is passed unchanged to commit`, async () => {
+    const h = harness({ direction: 'import' }); h.ctx.generation = generation;
+    assert.equal((await h.handler(request('upload', JPEG))).status, 200);
+    assert.equal(h.calls.at(-1).args.p_generation, generation);
+  });
+}
+for (const [direction, values] of [
+  ['export', [null, undefined, '', '0', 'Export', 'export\n', 0]],
+  ['import', [null, undefined, '', 'export', 0, 500000, '-1', '+1', '01', '1.0', '1e2', '500001', '999999999999999999999', ' 1', '1 ', '1\n', '1\u2028']],
+]) {
+  for (const generation of values) test(`${direction} rejects invalid generation ${typeof generation}/${String(generation).length}`, async () => {
+    const h = harness({ direction }); h.ctx.generation = generation;
+    await failed(await h.handler(request(direction === 'export' ? 'download' : 'upload', direction === 'export' ? undefined : JPEG)), 502, 'TRANSFER_FAILED');
+    noStorage(h);
+  });
+}
+test('legacy authorize shape without generation fails closed', async () => {
+  const h = harness(); delete h.ctx.generation;
+  await failed(await h.handler(request()), 502, 'TRANSFER_FAILED'); noStorage(h);
+});
+for (const action of ['upload', 'recheck-import']) {
+  for (const before of ['0', '499999']) test(`${action}: apply during delayed read changes generation ${before}, cannot mark final checked`, async () => {
+    const h = harness({ direction: 'import' }); h.ctx.generation = before;
+    if (action === 'recheck-import') h.objects.set(IMPORT_PATH, new Blob([JPEG]));
+    let release, reading;
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { reading = resolve; });
+    h.read = async () => { reading(); await gate; return { data: new Response(JPEG), error: null }; };
+    let finalChecked = false;
+    h.commit = args => {
+      assert.equal(args.p_generation, before, 'must not refresh generation after downloading');
+      if (args.p_generation !== h.ctx.generation) return { data: null, error: rawError({ reason: 'generation changed during final apply' }) };
+      finalChecked = true; return { data: receipt(tuple()), error: null };
+    };
+    const pending = h.handler(request(action, action === 'upload' ? JPEG : undefined));
+    await started;
+    h.ctx.generation = String(Number(before) + 1); // Last apply commits while the old read is in flight.
+    release();
+    await failed(await pending, 502, 'TRANSFER_FAILED');
+    assert.equal(finalChecked, false);
+    assert.equal(operations(h).filter(op => op === AUTH).length, 1);
+    assert.equal(operations(h).filter(op => op === COMMIT).length, 1);
+    assert.equal(h.calls.at(-1).args.p_generation, before);
+    assert.ok(h.objects.has(IMPORT_PATH)); assert.equal(h.removed, 0);
+    assert.deepEqual(new Uint8Array(await h.objects.get(IMPORT_PATH).arrayBuffer()), JPEG);
+  });
+}
+function largeResponse(total = 55 * 1024 * 1024, headers = {}, cancelPromise) {
+  const chunkSize = 64 * 1024;
+  const s = { reads: 0, produced: 0, cancels: 0, ended: false };
+  const stream = new ReadableStream({
+    pull(controller) {
+      s.reads++;
+      if (s.produced === total) { s.ended = true; controller.close(); return; }
+      const chunk = new Uint8Array(Math.min(chunkSize, total - s.produced));
+      if (s.produced === 0) chunk.set(JPEG.subarray(0, Math.min(JPEG.length, chunk.length)));
+      s.produced += chunk.length; controller.enqueue(chunk);
+    },
+    cancel() { s.cancels++; return cancelPromise; },
+  }, { highWaterMark: 0 });
+  s.response = new Response(stream, { headers });
+  s.response.blob = () => assert.fail('Response.blob forbidden');
+  s.response.arrayBuffer = () => assert.fail('Response.arrayBuffer forbidden');
+  return s;
+}
+test('unknown 55MiB response stops/cancels at first chunk over 50MiB, before stream end', async () => {
+  const s = largeResponse(); const h = harness(); h.read = () => ({ data: s.response, error: null });
+  await failed(await h.handler(request()), 422, 'INVALID_MEDIA');
+  assert.equal(s.produced, MAX_MEDIA_BYTES + 64 * 1024);
+  assert.equal(s.reads, MAX_MEDIA_BYTES / (64 * 1024) + 1);
+  assert.equal(s.ended, false); assert.equal(s.cancels, 1);
+  assert.ok(s.produced < 55 * 1024 * 1024); assert.deepEqual(operations(h), [AUTH, 'download']);
+});
+test('declared 55MiB response cancels before producing any bytes', async () => {
+  const s = largeResponse(undefined, { 'content-length': `${55 * 1024 * 1024}` }); const h = harness();
+  h.read = () => ({ data: s.response, error: null });
+  await failed(await h.handler(request()), 422, 'INVALID_MEDIA');
+  assert.equal(s.produced, 0); assert.equal(s.reads, 0); assert.equal(s.cancels, 1); assert.equal(s.ended, false);
+});
+for (const action of commands) {
+  test(`${action}: known tuple bounds download at expected bytes, not global 50MiB`, async () => {
+    const s = streamOf([JPEG, Uint8Array.of(1), new Uint8Array(1024 * 1024)], { cancelError: true });
+    const h = harness({ direction: action === 'upload' || action === 'recheck-import' ? 'import' : 'export', file: tuple() });
+    h.read = () => ({ data: new Response(s.stream), error: null });
+    await failed(await h.handler(request(action, action === 'upload' ? JPEG : undefined)), 422, 'INVALID_MEDIA');
+    assert.equal(s.reads, 2); assert.equal(s.cancels, 1); assert.ok(!operations(h).includes(COMMIT)); assert.equal(h.removed, 0);
+    if (action === 'upload') assert.ok(h.objects.has(IMPORT_PATH));
+  });
+}
+test('overflow does not wait for untrusted cancellation promise or drain tail', { timeout: 2000 }, async () => {
+  const s = largeResponse(undefined, {}, new Promise(() => {})); const h = harness({ file: tuple() });
+  h.read = () => ({ data: s.response, error: null });
+  await failed(await h.handler(request()), 422, 'INVALID_MEDIA');
+  assert.equal(s.reads, 1); assert.equal(s.cancels, 1); assert.equal(s.ended, false);
+});
+for (const header of ['-1', '1.0', '1e1', '+9', '09', 'NaN', 'Infinity', '9, 9', '999999999999999999999']) {
+  test(`invalid download Content-Length ${header} rejected without consuming body`, async () => {
+    const s = streamOf([JPEG]); const h = harness();
+    h.read = () => ({ data: new Response(s.stream, { headers: { 'content-length': header } }), error: null });
+    await failed(await h.handler(request()), 502, 'TRANSFER_FAILED');
+    assert.equal(s.reads, 0); assert.equal(s.cancels, 1); assert.ok(!operations(h).includes(COMMIT));
+  });
+}
+for (const length of [0, JPEG.length - 1, JPEG.length + 1, MAX_MEDIA_BYTES + 1]) {
+  test(`known tuple rejects declared download length ${length} before reading`, async () => {
+    const s = streamOf([JPEG]); const h = harness({ file: tuple() });
+    h.read = () => ({ data: new Response(s.stream, { headers: { 'content-length': `${length}` } }), error: null });
+    await failed(await h.handler(request()), 422, 'INVALID_MEDIA');
+    assert.equal(s.reads, 0); assert.equal(s.cancels, 1);
+  });
+}
+for (const [length, chunks] of [[JPEG.length - 1, [JPEG]], [JPEG.length + 1, [JPEG]], [JPEG.length, [JPEG, Uint8Array.of(1)]], [JPEG.length, [JPEG.subarray(0, 2)]]]) {
+  test('unknown tuple still verifies actual bytes against declared length', async () => {
+    const s = streamOf(chunks); const h = harness();
+    h.read = () => ({ data: new Response(s.stream, { headers: { 'content-length': `${length}` } }), error: null });
+    await failed(await h.handler(request()), 422, 'INVALID_MEDIA'); assert.ok(!operations(h).includes(COMMIT));
+  });
+}
+for (const status of [201, 206, 301, 302, 303, 307, 308, 401, 403, 404, 500]) {
+  test(`download status ${status} rejected without reading/following Location`, async () => {
+    const s = streamOf([JPEG], { cancelError: true }); const h = harness();
+    h.read = () => ({ data: new Response(s.stream, { status, headers: { location: 'http://127.0.0.1/' + SECRET } }), error: null });
+    await failed(await h.handler(request()), 502, 'TRANSFER_FAILED');
+    assert.equal(s.reads, 0); assert.equal(s.cancels, 1); assert.deepEqual(operations(h), [AUTH, 'download']);
+  });
+}
+for (const property of ['redirected', 'content-range']) {
+  test(`download ${property} must not bypass full-object verification`, async () => {
+    const s = streamOf([JPEG]); const h = harness(); const response = new Response(s.stream);
+    if (property === 'redirected') Object.defineProperty(response, property, { value: true }); else response.headers.set(property, 'bytes 0-8/55');
+    h.read = () => ({ data: response, error: null });
+    await failed(await h.handler(request()), 502, 'TRANSFER_FAILED'); assert.equal(s.reads, 0); assert.equal(s.cancels, 1);
+  });
+}
+for (const encoding of ['gzip', 'br', 'deflate', 'identity,gzip', '']) {
+  test(`reject non-identity Content-Encoding ${encoding.length} before streaming`, async () => {
+    const s = streamOf([JPEG]); const h = harness();
+    h.read = () => ({ data: new Response(s.stream, { headers: { 'content-encoding': encoding } }), error: null });
+    await failed(await h.handler(request()), 502, 'TRANSFER_FAILED'); assert.equal(s.reads, 0); assert.equal(s.cancels, 1);
+  });
+}
+for (const known of [true, false]) {
+  test(`valid Response with Content-Length and identity works (${known ? 'known' : 'unknown'} tuple) without buffering APIs`, async () => {
+    const s = streamOf([JPEG.subarray(0, 2), JPEG.subarray(2)]); const h = harness({ file: known ? tuple() : null });
+    const response = new Response(s.stream, { headers: { 'content-length': `${JPEG.length}`, 'content-encoding': 'identity' } });
+    response.blob = response.arrayBuffer = () => assert.fail('unbounded response API forbidden');
+    h.read = () => ({ data: response, error: null });
+    const res = await h.handler(request()); assert.equal(res.status, 200);
+    assert.deepEqual(new Uint8Array(await res.arrayBuffer()), JPEG); assert.equal(s.reads, 3);
+  });
+}
+test('no-body 200 response rejected as empty media', async () => {
+  const h = harness(); h.read = () => ({ data: new Response(null), error: null });
+  await failed(await h.handler(request()), 422, 'INVALID_MEDIA'); assert.ok(!operations(h).includes(COMMIT));
+});
+test('response body non-byte chunk is cancelled and sanitized', async () => {
+  const s = streamOf([SECRET]); const h = harness(); h.read = () => ({ data: new Response(s.stream), error: null });
+  await failed(await h.handler(request()), 502, 'TRANSFER_FAILED'); assert.equal(s.cancels, 1);
+});
+test('abort pending download read cancels HTTP stream without hanging', { timeout: 2000 }, async () => {
+  const controller = new AbortController(); const h = harness(); let reading, cancels = 0;
+  const started = new Promise(resolve => { reading = resolve; });
+  const body = new ReadableStream({ pull() { reading(); }, cancel() { cancels++; return new Promise(() => {}); } }, { highWaterMark: 0 });
+  h.read = () => ({ data: new Response(body), error: null });
+  const pending = h.handler(request('download', undefined, {}, { signal: controller.signal }));
+  await started; controller.abort(Error(SECRET));
+  await failed(await pending, 502, 'TRANSFER_FAILED'); assert.equal(cancels, 1); assert.deepEqual(operations(h), [AUTH, 'download']);
+});
 test('SQL22 contract: service_role-only authorize/commit, commit itself reauthorizes', async () => {
   const sql = await readFile(`${root}supabase/migrations/20261102000022_restore_employee_verification_media.sql`, 'utf8');
   assert.match(sql, /CREATE FUNCTION public\.employee_transfer_verification_media_authorize\(p_admin_session_token uuid,p_job_token uuid,p_action text,p_object_key text\)/);
-  assert.match(sql, /CREATE FUNCTION public\.employee_transfer_verification_media_commit\(p_admin_session_token uuid,p_job_token uuid,p_action text,p_object_key text,p_bytes integer,p_sha256 text,p_content_type text,p_storage_origin text\)/);
+  const commitArgs = sql.match(/CREATE FUNCTION public\.employee_transfer_verification_media_commit\(([^)]+)\)/)?.[1];
+  assert.ok(commitArgs, 'media commit must exist');
+  assert.deepEqual(commitArgs.split(',').map(arg => arg.trim()).sort(),
+    ['p_admin_session_token uuid', 'p_job_token uuid', 'p_action text', 'p_object_key text', 'p_bytes integer', 'p_sha256 text', 'p_content_type text', 'p_storage_origin text', 'p_generation text'].sort());
+  assert.match(sql, /'generation'/);
+  assert.match(sql, /p_generation IS (?:NULL|DISTINCT FROM)/);
   assert.match(sql, /v_context:=public\.employee_transfer_verification_media_authorize\(p_admin_session_token,p_job_token,p_action,p_object_key\)/);
   assert.match(sql, /REVOKE ALL ON FUNCTION public\.employee_transfer_verification_media_authorize\([^;]+FROM PUBLIC,anon,authenticated,service_role/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.employee_transfer_verification_media_authorize\([^;]+TO service_role/);
@@ -594,7 +772,8 @@ test('Deno index and handler strictly typecheck against locally installed SDK wi
 test('thin Deno index injects env service client with no auth persistence, header forwarding, network or retry', async () => {
   const h = harness({ direction: 'import' }); let handle; let creates = 0; let env = [];
   const sdk = { rpc: h.rpc, storage: { from(bucket) { return {
-    download: path => h.store.download(bucket, path), upload: (path, bytes, options) => h.store.upload(bucket, path, bytes, options),
+    download() { assert.fail('SDK download would buffer the entire Blob'); },
+    upload: (path, bytes, options) => h.store.upload(bucket, path, bytes, options),
   }; } } };
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'Deno');
   const stateKey = '__employeeTransferOfflineSdk';
@@ -607,6 +786,14 @@ test('thin Deno index injects env service client with no auth persistence, heade
     env: { get(name) { env.push(name); return name === 'SUPABASE_URL' ? TARGET : SECRET; } },
     serve(handler) { handle = handler; },
   } });
+  globalThis.fetch.mock.mockImplementation(async (url, options) => {
+    expectedFetchCalls++;
+    assert.equal(url, `${TARGET}/storage/v1/object/${BUCKET}/${h.ctx.path}`);
+    assert.equal(options.method, 'GET'); assert.equal(options.redirect, 'error');
+    assert.deepEqual(options.headers, { Authorization: `Bearer ${SECRET}`, apikey: SECRET, 'Accept-Encoding': 'identity' });
+    const result = await h.store.download(BUCKET, h.ctx.path);
+    return result.data;
+  });
   try {
     const result = await build({ entryPoints: [`${entry}index.ts`], bundle: true, write: false, format: 'esm', platform: 'browser',
       plugins: [{ name: 'offline-supabase-only', setup(builder) {
@@ -619,7 +806,28 @@ test('thin Deno index injects env service client with no auth persistence, heade
     assert.equal(res.status, 200); assert.equal(creates, 1);
     assert.deepEqual(operations(h), [AUTH, 'upload', 'download', COMMIT]);
     assert.equal(h.calls.at(-1).args.p_storage_origin, TARGET);
+    assert.equal(h.calls.at(-1).args.p_generation, '0');
+    const imported = structuredClone(h.ctx);
+    h.ctx = { ...h.ctx, direction: 'export', generation: 'export', path: PATH, source_url: TARGET + PREFIX + PATH, file: null };
+    h.ctx.key = sha(h.ctx.source_url);
+    const s = largeResponse(); h.read = () => ({ data: s.response, error: null });
+    await failed(await handle(request('download', undefined, { 'x-transfer-object-key': h.ctx.key })), 422, 'INVALID_MEDIA');
+    assert.equal(s.produced, MAX_MEDIA_BYTES + 64 * 1024); assert.equal(s.cancels, 1); assert.equal(s.ended, false);
+    h.ctx = imported;
+    const redirected = streamOf([JPEG]);
+    h.read = () => ({ data: new Response(redirected.stream, { status: 302, headers: { location: 'http://127.0.0.1/' + SECRET } }), error: null });
+    const beforeRedirect = expectedFetchCalls;
+    await failed(await handle(request('recheck-import')), 502, 'TRANSFER_FAILED');
+    assert.equal(expectedFetchCalls, beforeRedirect + 1); assert.equal(redirected.reads, 0); assert.equal(redirected.cancels, 1);
+    const safePath = h.ctx.path; h.ctx.path = '../' + SECRET;
+    await failed(await handle(request('recheck-import')), 502, 'TRANSFER_FAILED');
+    assert.equal(expectedFetchCalls, beforeRedirect + 1, 'malicious authorized path never reaches raw fetch'); h.ctx.path = safePath;
+    const initialFetches = expectedFetchCalls;
+    globalThis.fetch.mock.mockImplementation(() => { expectedFetchCalls++; throw Error(`${SECRET} ${URL}`); });
+    await failed(await handle(request('recheck-import')), 502, 'TRANSFER_FAILED');
+    assert.equal(expectedFetchCalls, initialFetches + 1, 'raw fetch failure never retries');
   } finally {
+    globalThis.fetch.mock.mockImplementation(denyFetch);
     delete globalThis[stateKey];
     if (previous) Object.defineProperty(globalThis, 'Deno', previous); else delete globalThis.Deno;
   }

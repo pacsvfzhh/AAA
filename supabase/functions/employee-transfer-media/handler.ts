@@ -22,7 +22,7 @@ const CORS = {
 type Result = { data?: unknown; error?: unknown };
 export type MediaRpc = (name: string, args: Record<string, unknown>) => PromiseLike<Result>;
 export interface MediaStore {
-  download(bucket: string, path: string): PromiseLike<Result>;
+  download(bucket: string, path: string): PromiseLike<{ data?: Response | null; error?: unknown }>;
   upload(bucket: string, path: string, bytes: Uint8Array, options: { upsert: false; contentType: string }): PromiseLike<Result>;
 }
 export interface MediaHandlerDependencies {
@@ -34,7 +34,7 @@ export interface MediaHandlerDependencies {
 
 type RecordValue = Record<string, unknown>;
 type FileTuple = { key: string; source_url: string; bytes: number; sha256: string; content_type: string };
-type Context = { direction: string; key: string; bucket: string; path: string; source_url: string; file: FileTuple | null };
+type Context = { direction: string; key: string; bucket: string; path: string; source_url: string; file: FileTuple | null; generation: string };
 
 // All failures have fixed, non-sensitive responses, including uncertain writes.
 class Failure extends Error {
@@ -82,8 +82,11 @@ async function digest(bytes: Uint8Array, crypto: Pick<Crypto, 'subtle'>): Promis
 }
 async function context(value: unknown, action: string, key: string, origin: string, crypto: Pick<Crypto, 'subtle'>): Promise<Context> {
   const direction = action === 'download' || action === 'recheck-export' ? 'export' : 'import';
-  if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file']) ||
+  if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation']) ||
     value.direction !== direction || value.key !== key || value.bucket !== BUCKET || !safePath(value.path)) fail();
+  const generation = value.generation;
+  if (typeof generation !== 'string' || (direction === 'export' ? generation !== 'export' :
+    generation !== generation.trim() || !/^(0|[1-9][0-9]{0,5})$/.test(generation) || Number(generation) > 500000)) fail();
   const path = sourcePath(value.source_url);
   if (await digest(new TextEncoder().encode(value.source_url as string), crypto) !== key) fail();
   if (direction === 'export') {
@@ -95,7 +98,7 @@ async function context(value: unknown, action: string, key: string, origin: stri
       name.slice(name.lastIndexOf('.') + 1) !== sourceName.slice(sourceName.lastIndexOf('.') + 1).toLowerCase()) fail();
   }
   const file = value.file === null && action === 'download' ? null : fileTuple(value.file, key, value.source_url as string);
-  return { direction, key, bucket: BUCKET, path: value.path, source_url: value.source_url as string, file };
+  return { direction, key, bucket: BUCKET, path: value.path, source_url: value.source_url as string, file, generation };
 }
 
 // Recognition only, not a complete file decoder or antivirus scanner. Never trust
@@ -161,14 +164,60 @@ function isOccupied(error: unknown): boolean {
   // Never classify a free-form message (which may include sensitive data).
   return record(error) && (error.statusCode === '409' || error.statusCode === 409 || error.status === 409);
 }
-async function download(store: MediaStore, ctx: Context): Promise<Uint8Array> {
+function cancelStream(body: ReadableStream<Uint8Array> | null): void {
+  // Do not await an untrusted stream's cancellation promise or drain its tail.
+  try { void body?.cancel().catch(() => {}); } catch { /* No backend errors escape. */ }
+}
+async function download(store: MediaStore, ctx: Context, signal: AbortSignal): Promise<Uint8Array> {
   const result = await store.download(BUCKET, ctx.path);
-  if (result.error || !(result.data instanceof Blob)) fail();
-  // The SDK already materializes a Blob; reject its size BEFORE arrayBuffer.
-  if (!result.data.size || result.data.size > MAX_MEDIA_BYTES) fail(422, 'INVALID_MEDIA');
-  const bytes = new Uint8Array(await result.data.arrayBuffer());
-  if (bytes.length !== result.data.size || bytes.length > MAX_MEDIA_BYTES) fail();
-  return bytes;
+  if (!(result.data instanceof Response)) fail();
+  const response = result.data;
+  try {
+    const encoding = response.headers.get('content-encoding');
+    if (result.error || response.status !== 200 || response.redirected || response.headers.has('content-range') ||
+      (encoding !== null && encoding.toLowerCase() !== 'identity') || signal.aborted) fail();
+    const header = response.headers.get('content-length');
+    let declared: number | null = null;
+    if (header !== null) {
+      if (!/^(0|[1-9][0-9]{0,8})$/.test(header)) fail();
+      declared = Number(header);
+      if (!declared || declared > MAX_MEDIA_BYTES || (ctx.file && declared !== ctx.file.bytes)) fail(422, 'INVALID_MEDIA');
+    }
+    const expected = ctx.file?.bytes ?? declared;
+    const limit = expected ?? MAX_MEDIA_BYTES;
+    if (!response.body) fail(422, 'INVALID_MEDIA');
+    const reader = response.body.getReader();
+    const onAbort = () => { void reader.cancel().catch(() => {}); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    // Known tuples allocate only their size. Unknown streams grow a single
+    // buffer geometrically, capped at 50MiB; no retained/unbounded chunk list.
+    let output = new Uint8Array(expected ?? Math.min(64 * 1024, limit));
+    let length = 0;
+    try {
+      while (true) {
+        if (signal.aborted) fail();
+        const { done, value } = await reader.read();
+        if (signal.aborted) fail();
+        if (done) break;
+        if (!(value instanceof Uint8Array)) fail();
+        if (value.length > limit - length) fail(422, 'INVALID_MEDIA');
+        if (length + value.length > output.length) {
+          const grown = new Uint8Array(Math.min(limit, Math.max(length + value.length, output.length * 2)));
+          grown.set(output.subarray(0, length)); output = grown;
+        }
+        output.set(value, length); length += value.length;
+      }
+      if (!length || (expected !== null && length !== expected)) fail(422, 'INVALID_MEDIA');
+      return output.subarray(0, length);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+      void reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  } catch (error) {
+    cancelStream(response.body);
+    throw error;
+  }
 }
 function receipt(file: FileTuple) {
   return { success: true, key: file.key, bytes: file.bytes, sha256: file.sha256, content_type: file.content_type, full_site_complete: false };
@@ -214,23 +263,24 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
         file = await inspect(bytes, ctx, crypto);
         if (request.signal.aborted) fail(400, 'INVALID_REQUEST');
         const uploaded = await deps.store.upload(BUCKET, ctx.path, bytes, { upsert: false, contentType: file.content_type });
-        bytes = undefined; // Release the upload buffer before materializing SDK readback.
+        bytes = undefined; // Release the upload buffer before bounded streaming readback.
         if (uploaded.error && !isOccupied(uploaded.error)) fail();
         if (request.signal.aborted) fail();
         // Also mandatory for occupied paths: no overwrite, delete or retry.
         // A failure from this point on may leave an object behind, even if commit
         // reauthorization rejects cancellation/expiry. Never pretend to roll back.
-        const readback = await download(deps.store, ctx);
+        const readback = await download(deps.store, ctx, request.signal);
         const verified = await inspect(readback, ctx, crypto);
         if (!sameFile(file, verified)) fail();
       } else {
         await readBounded(request, 0, 0);
-        bytes = await download(deps.store, ctx);
+        bytes = await download(deps.store, ctx, request.signal);
         file = await inspect(bytes, ctx, crypto);
       }
       if (request.signal.aborted) fail();
       const committed = await deps.rpc('employee_transfer_verification_media_commit', {
         ...args, p_bytes: file.bytes, p_sha256: file.sha256, p_content_type: file.content_type, p_storage_origin: origin,
+        p_generation: ctx.generation, // Never reauthorize/refresh this after reading the object.
       });
       if (committed.error || !validCommit(committed.data, file) || request.signal.aborted) fail();
       if (action === 'download') {

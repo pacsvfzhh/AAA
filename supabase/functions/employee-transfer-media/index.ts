@@ -19,7 +19,15 @@ Deno.serve(createEmployeeTransferMediaHandler({
   supabaseUrl,
   rpc: (name, args) => client().rpc(name, args),
   store: {
-    download: (bucket, path) => client().storage.from(bucket).download(path),
+    // The handler validates the raw path and fixed bucket before invoking this.
+    // Fetch only this env origin; never fetch source_url or follow redirects.
+    download: async (bucket, path) => ({
+      data: await fetch(`${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/${bucket}/${path}`, {
+        method: 'GET', redirect: 'error',
+        headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey, 'Accept-Encoding': 'identity' },
+      }),
+      error: null,
+    }),
     upload: (bucket, path, bytes, options) => client().storage.from(bucket).upload(path, bytes, options),
   },
 }));

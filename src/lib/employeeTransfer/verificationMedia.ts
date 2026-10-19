@@ -12,8 +12,7 @@ import {
   type VerificationPlan,
 } from './verificationTransfer';
 
-// Controlled single verification substage only: no UI, whole-site completion, multi-volume,
-// task close/cancel, object deletion or automatic retry. Never fetch a source_url directly.
+// Single substage only; no direct source-URL fetches, automatic retries, deletion or task completion.
 export const VERIFICATION_MEDIA_LIMITS = Object.freeze({ maxFiles: 3000, maxFileBytes: 50 * 1024 * 1024, maxTotalBytes: 1024 * 1024 * 1024 });
 export type VerificationMediaDirection = 'export' | 'import';
 export type VerificationMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'application/pdf';
@@ -31,12 +30,11 @@ export interface VerificationMediaSession {
   readonly direction: VerificationMediaDirection;
   inventory(signal?: AbortSignal): Promise<VerificationMediaInventory>;
   bind(files: readonly VerificationMediaFile[], signal?: AbortSignal): Promise<void>;
-  // A bounded, validated buffer; callers must await a temporary sink before counting progress.
+  // Count progress only after the temporary sink confirms the write.
   download(reference: VerificationMediaReference, signal?: AbortSignal): Promise<{ file: VerificationMediaFile; bytes: Uint8Array }>;
   upload(file: VerificationMediaFile, bytes: Uint8Array, signal?: AbortSignal): Promise<void>;
   recheckExport(files: readonly VerificationMediaFile[], signal?: AbortSignal): Promise<void>;
-  // Explicitly call AFTER ALL employee apply calls complete, THEN call the SQL verification API.
-  // Only SQL can prove that this readback is later than the last employee apply.
+  // Call after all employee applies and before SQL verify; SQL enforces readback freshness.
   recheckImport(files: readonly VerificationMediaFile[], signal?: AbortSignal): Promise<void>;
 }
 export interface VerificationMediaProgress {
@@ -50,10 +48,9 @@ export interface VerificationBundle {
   catalog: VerificationCatalog; media: VerificationMediaFile[]; entries: ManifestEntry[];
   rows: number; bytes: number; fullSiteComplete: false;
 }
-// The caller MUST authenticate the complete encrypted container through real EOF before
-// exposing these isolated, reopenable, immutable payload files. Do not pass a live decoder.
+// Expose only isolated immutable files after complete container EOF authentication.
 export interface VerificationBundleFiles extends VerificationImportFiles {
-  // Exact payload paths (manifest.json is metadata, not a payload); no omitted/extra files.
+  // Include every payload path, but not manifest.json.
   paths(): readonly string[];
 }
 export interface VerificationBundleInput {
@@ -76,8 +73,7 @@ export class VerificationMediaError extends Error {
 }
 function invalid(): never { throw new VerificationMediaError(false, false); }
 function check(signal?: AbortSignal): void { if (signal?.aborted) throw new VerificationMediaError(false, true); }
-// Deliberately await each operation, even after abort. Do not race a write then let it
-// finish after cleanup/return. Execution is serial (one worker, no detached workers).
+// Serial awaits prevent writes from outliving abort cleanup.
 async function settled<T>(operation: () => PromiseLike<T>, signal?: AbortSignal): Promise<T> {
   check(signal);
   const result = await operation();
@@ -143,7 +139,7 @@ function same(a: VerificationMediaFile, b: VerificationMediaFile): boolean {
 function reference(value: unknown): VerificationMediaReference {
   const record = object(value, ['key', 'source_url', 'bucket', 'path', 'file']);
   const ref = source(record.source_url), key = hash(record.key);
-  // Inventory always returns SOURCE paths, even for import. Target paths are server-owned.
+  // Inventory paths are source paths; target paths remain server-owned.
   if (key !== sha(encoder.encode(ref.url)) || record.bucket !== BUCKET || record.path !== ref.path) invalid();
   const file = record.file === null ? null : tuple(record.file);
   if (file && (file.key !== key || file.source_url !== ref.url)) invalid();
@@ -181,8 +177,7 @@ function receipt(value: unknown, file: VerificationMediaFile): void {
     || record.sha256 !== file.sha256 || record.content_type !== file.content_type) invalid();
 }
 
-// Accept a transport, never an endpoint/key override. Tests replace RPC/auth modules and
-// compile fixture env values; production always uses the current Vite environment.
+// Endpoint and key must come from the current environment, not caller input.
 export function createVerificationMediaSession(
   jobToken: string, direction: VerificationMediaDirection, transport: typeof fetch = globalThis.fetch,
 ): VerificationMediaSession {
@@ -197,7 +192,7 @@ export function createVerificationMediaSession(
     if (typeof apiKey !== 'string' || !apiKey || apiKey !== apiKey.trim() || /[\r\n]/.test(apiKey)) invalid();
   } catch { throw new VerificationMediaError(false, false); }
   let busy = false;
-  // Read-only inventory is harmless; every Edge action can commit a server receipt.
+  // Every Edge action can commit a receipt, including downloads.
   const run = async <T>(operation: (mark: () => void) => Promise<T>, signal?: AbortSignal): Promise<T> => {
     let mayExist = false;
     try {
@@ -222,14 +217,14 @@ export function createVerificationMediaSession(
       headers: { apikey: apiKey, 'Content-Type': 'application/octet-stream', 'x-transfer-action': action,
         'x-admin-session-token': admin, 'x-transfer-job-token': jobToken, 'x-transfer-object-key': key }, body });
     if (signal?.aborted || !res.ok || res.redirected) {
-      try { await res.body?.cancel(); } catch { /* Redacted, including a late response after local abort. */ }
+      try { await res.body?.cancel(); } catch { /* Never expose transport errors. */ }
       invalid();
     }
     return res;
   };
   const command = async (action: string, file: VerificationMediaFile, mark: () => void, signal?: AbortSignal, bytes?: Uint8Array) => {
     const res = await post(action, file.key, mark, signal, bytes);
-    // Receipts are tiny. Never parse an unbounded JSON/error response.
+    // Bound receipts before JSON parsing.
     const raw = await readBytes(res.body, 4096, signal);
     receipt(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)), file);
   };
@@ -276,7 +271,7 @@ export function createVerificationMediaSession(
       if (direction !== 'import') invalid();
       const file = tuple(input);
       if (!(inputBytes instanceof Uint8Array) || inputBytes.length !== file.bytes) invalid();
-      const bytes = new Uint8Array(inputBytes); // Do not retain a producer's mutable view across fetch awaits.
+      const bytes = new Uint8Array(inputBytes); // Isolate mutable producer buffers across awaits.
       inspect(file, bytes);
       await command('upload', file, mark, signal, bytes);
     }, signal),
@@ -302,7 +297,6 @@ async function* checkedChunks(
       yield next.value; check(signal);
     }
   } finally {
-    // Drain/cancel serially, with no pending worker capable of writing after cleanup.
     if (reader) { try { if (!ended) await reader.cancel(); } finally { reader.releaseLock(); } }
     else if (!ended && iterator?.return) await iterator.return();
   }
@@ -355,8 +349,7 @@ export async function exportVerificationBundle(
   try {
     if (media.direction !== 'export') invalid();
     const refs = new Map<string, VerificationMediaReference>();
-    // exportVerificationData validates raw pages, order and row-hash catalog. Inspect
-    // URLs in those same bytes before the sink receives them; never reserialize records.
+    // Validate URLs in the original bytes; never reserialize records.
     const data = await exportVerificationData({
       catalog: () => settled(() => sourceApi.catalog(options.signal), options.signal),
       page: (key, after) => settled(() => sourceApi.page(key, after, options.signal), options.signal),
@@ -367,8 +360,8 @@ export async function exportVerificationBundle(
         for (const line of new TextDecoder('utf-8', { fatal: true }).decode(raw).split('\n').slice(0, -1)) refsFromRow(line, refs);
         await settled(() => sink.append(path, raw, options.signal), options.signal);
       },
-      async abort() { /* The outer owner performs exactly one real cleanup. */ },
-    }); // No abort race around pending record sink writes.
+      async abort() { /* Defer cleanup to the outer owner. */ },
+    }); // Avoid the inner exporter's abort race around sink writes.
     const available = await settled(() => media.inventory(options.signal), options.signal);
     const expected = sortedRefs(refs);
     if (available.files.length !== expected.length || available.files.some((f, i) => f.key !== expected[i].key || f.source_url !== expected[i].source_url)) invalid();
@@ -378,7 +371,7 @@ export async function exportVerificationBundle(
     const files: VerificationMediaFile[] = [], entries: ManifestEntry[] = [...data.entries];
     let bytes = data.bytes;
     for (const ref of available.files) {
-      mayExist = true; // Download itself records a server-owned receipt.
+      mayExist = true;
       const downloaded = await settled(() => media.download(ref, options.signal), options.signal);
       bytes += downloaded.file.bytes;
       if (bytes > limits.maxTotalBytes) invalid();
@@ -400,7 +393,7 @@ export async function exportVerificationBundle(
 
 function bundle(input: VerificationBundleInput, files: VerificationBundleFiles): { catalog: VerificationCatalog; media: VerificationMediaFile[]; manifest: VolumeManifest } {
   const catalog = validateVerificationCatalog(input.catalog), media = tuples(input.media);
-  // Snapshot untrusted arrays/entries before calling the general manifest validator.
+  // Snapshot untrusted descriptors before validation.
   const raw = object(input.manifest, ['version', 'scope', 'exportId', 'volumeId', 'sourceSiteId', 'createdAt', 'volumeIndex', 'volumeCount', 'entries']);
   const entries = array(raw.entries, limits.maxFiles + 1).map(e => object(e, ['path', 'kind', 'bytes', 'sha256']));
   const manifest = validateManifest({ ...raw, entries });
@@ -472,14 +465,12 @@ export async function stageVerificationBundle(
     check(options.signal);
     if (media.direction !== 'import') invalid();
     const checked = bundle(input, files);
-    // ALL raw records, paths, actual file digests and tuple relations are checked
-    // before ANY record bind/stage, media bind or upload can start.
+    // Validate all plaintext before any server write.
     const recordEntry = checked.manifest.entries.find(e => e.kind === 'ndjson')!;
     matches(await scanRecords(files, checked.catalog, recordEntry, options.signal), checked.media);
     for (const file of checked.media) await scanMedia(files, file, options.signal);
     progress(options, 'validate', checked.media.length, checked.manifest.entries.reduce((n, e) => n + e.bytes, 0), checked.catalog.tables[0].rows);
-    // Adapt the existing real two-pass record stager: defer only its cleanup to this
-    // outer owner. Await each target call without racing abort, so no late writes.
+    // Defer inner cleanup so media remains available for its second read.
     const staged = await stageVerificationImport(checked.catalog, {
       open: path => checkedChunks(files.open(path), options.signal),
       async abort() { /* Outer finally owns all plaintext. */ },
@@ -489,25 +480,26 @@ export async function stageVerificationBundle(
       plan: () => settled(() => target.plan(options.signal), options.signal),
     }, { onProgress: p => {
       if (p.phase === 'stage') progress(options, 'stage', 0, p.bytes, p.rows);
-    } }); // Do not give the existing stager a signal that could race outstanding writes.
+    } }); // Inner abort races must not release outstanding writes.
     const stagedPlan = validateVerificationPlan(staged.plan);
-    if (checked.media.length && (stagedPlan.can_restore || !stagedPlan.conflicts.includes('media_incomplete'))) invalid();
+    // A server-approved plan may resume; unrelated conflicts must not trigger uploads.
+    if (!stagedPlan.can_restore && !stagedPlan.conflicts.includes('media_incomplete')) invalid();
     check(options.signal);
     matches((await settled(() => media.inventory(options.signal), options.signal)).files, checked.media);
     mayExist = true;
     await settled(() => media.bind(checked.media, options.signal), options.signal);
     let uploaded = 0, bytes = recordEntry.bytes;
     for (const file of checked.media) {
-      const raw = await scanMedia(files, file, options.signal, true); // Second media read; hash AGAIN before upload.
+      const raw = await scanMedia(files, file, options.signal, true); // Detect drift before uploading.
       await settled(() => media.upload(file, raw, options.signal), options.signal);
       uploaded++; bytes += file.bytes;
       progress(options, 'upload', uploaded, bytes, staged.rows);
     }
-    // Obtain the REAL refreshed server plan, never patch media_incomplete locally.
+    // Never patch server approval locally.
     const plan = validateVerificationPlan(await settled(() => target.plan(options.signal), options.signal));
     if (plan.counts.verification_requests !== checked.catalog.tables[0].rows || plan.employees !== checked.catalog.identity_catalog.tables[0].rows) invalid();
     result = { plan, files: uploaded, bytes, rows: staged.rows, fullSiteComplete: false, serverStagingOrUploadsMayExist: true };
-  } catch { /* Fixed, non-sensitive error after awaited plaintext cleanup. */ }
+  } catch { /* Report only after plaintext cleanup. */ }
   await discard(files, mayExist, options.signal);
   if (!result || options.signal?.aborted) throw new VerificationMediaError(mayExist, options.signal?.aborted === true);
   return result;
