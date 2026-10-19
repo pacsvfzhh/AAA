@@ -989,8 +989,12 @@ test('notifications public RPCs have exact signatures, browser grants and a genu
     assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), false, fn.proname);
   for (const role of ['anon', 'authenticated', 'service_role']) for (const relation of ['private.employee_transfer_jobs', 'private.employee_transfer_staging'])
     for (const permission of ['INSERT', 'UPDATE', 'DELETE']) assert.equal(await scalar(db, 'SELECT has_table_privilege($1,$2,$3)', [role, relation, permission]), false);
-  assert.equal(await scalar(db, `SELECT count(*)::int FROM pg_proc WHERE pronamespace='public'::regnamespace
-    AND proname IN ('employee_import_notifications_apply','employee_import_notifications_verify','employee_import_notifications_close')`), 0);
+  const restore = await rows(db, `SELECT proname FROM pg_proc WHERE pronamespace='public'::regnamespace
+    AND proname IN ('employee_import_notifications_apply','employee_import_notifications_close',
+      'employee_import_notifications_begin','employee_import_notifications_chunk','employee_import_notifications_verify',
+      'get_employee_import_notifications_restore_status') ORDER BY proname COLLATE "C"`);
+  assert.deepEqual(restore.map(fn => fn.proname), ['employee_import_notifications_begin', 'employee_import_notifications_chunk',
+    'employee_import_notifications_verify', 'get_employee_import_notifications_restore_status']);
 }));
 
 test('notifications raw SQL pages export every row of all 13 tables, composite cursors, bigint strings and only sanitized failures', () => transaction(async () => {

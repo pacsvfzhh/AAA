@@ -59,6 +59,7 @@
 | `employeeTransfer/notificationsTransfer.ts`、`notificationsApi.ts` | site-notifications-v1固定通知/收件/广播/范本和自动化13表，绑定同包完整identity与finance目录；原文numeric/微秒、bigint字符串和C顺序组合游标，两遍校验后不可变暂存、只读关联预检。租约排除、原始错误脱敏，保留自动化执行/奖金引用；只在确认后计进度，失败/取消清临时区且提示server暂存可能存在，不自动重试/close。无业务apply/媒体/自动化恢复，can_restore恒false；未接UI、未部署，见计划第31节 |
 | `employeeTransfer/notificationsConfigurationApi.ts`、`notificationsBackup.ts` | 同包通知配置对应与历史冲突计划→显式冻结13表记录备份→独立密文保存→清明文→整卷回读/行摘要核验→第三遍密文上传封存；8MiB明文/9MiB密文，动态加载容器，公开副本不改绑定，确认后才计进度。取消/结果不明无自动重试或回滚，sealed密文由原超管新会话取回。独立私有表不占原派单备份；无实际媒体、业务apply/自动化恢复或维护放行，无UI、未部署，见计划第32节 |
 | `employeeTransfer/notificationsMedia.ts`、`notificationsRestoreApi.ts` | SQL26/27通知13表与三桶实际图片/影片/附件迁移、受控Edge/哈希/代次/URL改写，以及独立封存备份后的同名配置来源覆盖和分块历史恢复。保持方案/任务暂停、员工停用与dirty维护；收件留证保留，循环外键分阶段链接，投递序列换算但不发送/发奖。完整回执与status后显式续接，不自动写重试；无UI、真实Storage或全站放行，未部署，见计划第33节 |
+| `employeeTransfer/chatTransfer.ts`、`chatApi.ts` | site-chat-v1十表固定原文导出、同包identity/finance绑定、双遍验证后不可变暂存及服务端角色合并只读预检；包含空角色/未引用模板、富卡及评分，SQL NULL/JSON null与精度保真。角色按服务器管理员映射/服务类型匹配，歧义、多旧合一、可见性差集和错链显式报告；目标漂移改变计划。每次重新取会话、真实确认后计进度，无自动写重试；无业务apply/媒体上传或URL改写，can_restore=false，账号停用/dirty维护继续，无UI、未部署，见计划第34节 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |

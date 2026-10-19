@@ -23,6 +23,15 @@
 - 已读：浏览器端只能更新 `customer_employee_conversations` 的 `is_read`、`read_at` 两列（正式库列级权限），不能直接改消息内容。
 - 后台发文字：消息 id 在浏览器用 `crypto.randomUUID()` 生成并随 INSERT 写入；发送中的消息放在 `pendingImageMessagesRef`（与上传中的图片共用），`pendingConfirmAfterRef` 记下 INSERT 返回时的消息加载请求号，只有之后发起的加载才能确认或移除它。这样员工消息与后台发送同时发生时，刚发的消息不会被缓存/旧加载结果暂时盖掉，也不会显示两条。单条删除成功后要同时从这两个 Map 移除该 id，否则删除后的缓存恢复会把它短暂放回来。两个后台页（「模擬客戶」「經理」）做法相同。
 
+## 聊天资料迁移子阶段（2026-10-20，UTC+8，本地未部署）
+
+- SQL28/29与`src/lib/employeeTransfer/chatTransfer.ts`、`chatApi.ts`提供十表固定原文导出、同包身份/资金绑定、不可变暂存及服务端只读合并预检。包含所有角色、模板/自动消息、富卡、聊天、工单、备注关注、自动消息已发记录和评分，不因角色尚无聊天或内容未被引用而遗漏。
+- 原文保留HTML、精度、UTF-8、NULL和微秒；`rating_data_sql_null`虚拟标记区分SQL NULL与JSON null，备注用角色/员工复合游标。页200行/256KiB、行64KiB、每表100万行/512MiB、总1GiB，角色最多2000条，超限明确阻断；不代表已通过真实大规模或anon 3秒验收。
+- 同角色判定限映射管理员及工作区：编号与名称相同、唯一同名可建议合并；同名多候选/仅编号冲突、多旧合一、指定员工可见性需确认。可见性只依当前`target_employee_ids`数组，NULL/空数组代表不限制，不回退legacy单值；目标数组中的NULL元素不影响差集计算。新建角色没有向已有目标追加员工的差集，来源原名单仍保留。
+- 预检核对员工/管理员、富卡/工单/自动消息/评分关系；未冻结富卡仅检查可解析，不解冻、净化或重写快照。目标原文哈希纳入计划；STABLE计划可在READ ONLY事务中运行，不写业务数据或续心跳。
+- **尚无聊天业务恢复、角色实际合并、聊天/头像/富卡媒体搬迁或URL改写。** `can_restore=false`、`media_pending=true`，账号停用和dirty维护不解除；原文导出close不更新全站成功时间。后续必须补独立目标备份、合并确认、工单/富卡冲突处理及自动消息已发对应，不能把预检通过当作已恢复聊天。
+- 新客户端/API67项和数据库新增12项通过；本轮未访问或修改正式库、未部署SQL/Edge/前端，无Storage/权限/cron或UI改动，也未做浏览器/真实Storage演练。完整回归口径和后续阻断见`employee-data-transfer-plan.md`第34节。
+
 ## 缓存与实时
 - `src/lib/serviceWorkspaceCache.ts`：按管理员 + 工作区缓存分组、客户/员工与会话摘要；组件另按 `customerId:employeeId` 缓存消息。
 - Realtime：`customer_employee_conversations` 的 INSERT/UPDATE/DELETE → 短延迟刷新，另每 15 秒兜底刷新工作区摘要；后台已打开的会话也每 15 秒兜底刷新消息与已读状态（页面不可见或正在翻看旧消息时跳过）。
