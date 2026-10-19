@@ -40,6 +40,11 @@ const PRECISE = '12345678901234567890.12345678901234567890';
 const SOURCE_SESSION = id(8001);
 const hash = text => createHash('sha256').update(text).digest('hex');
 const lines = text => text.match(/[^\n]*\n/g) ?? [];
+// Protocol IDs are ASCII and sorted as text COLLATE "C", never with locale-specific collation.
+const compareRawIds = (left, right) => {
+  const a = JSON.parse(left).id, b = JSON.parse(right).id;
+  return a < b ? -1 : a > b ? 1 : 0;
+};
 function chunks(text) {
   const result = []; let part = '', count = 0;
   for (const line of lines(text)) {
@@ -198,7 +203,7 @@ async function localChange(site, relation, sql, args = []) {
 }
 // Mutate untrusted activity files, not server verification/mapping state or the real identity catalog.
 function changedInput(key, change) {
-  const ordered = lines(change(activity.texts[key])).sort((a, b) => JSON.parse(a).id.localeCompare(JSON.parse(b).id)).join('');
+  const ordered = lines(change(activity.texts[key])).sort(compareRawIds).join('');
   const texts = { ...activity.texts, [key]: ordered };
   return { texts, catalog: { ...activity.catalog, tables: KEYS.activity.map(key => ({ key, rows: lines(texts[key]).length,
     bytes: Buffer.byteLength(texts[key]), row_hashes_sha256: hash(lines(texts[key]).map(hash).join('')) })) } };
@@ -414,8 +419,7 @@ async function nstage(input = notifications, { omit = null, transform = (_key, _
 // Rehash untrusted input files only; never manufacture private verified/map/done receipts.
 function changedNotifications(changes) {
   const texts = { ...notifications.texts };
-  for (const [key, change] of Object.entries(changes)) texts[key] = lines(change(texts[key])).sort((a, b) =>
-    JSON.parse(a).id.localeCompare(JSON.parse(b).id)).join('');
+  for (const [key, change] of Object.entries(changes)) texts[key] = lines(change(texts[key])).sort(compareRawIds).join('');
   return { texts, catalog: { ...notifications.catalog, tables: KEYS.notifications.map(key => ({ key, rows: lines(texts[key]).length,
     bytes: Buffer.byteLength(texts[key]), row_hashes_sha256: hash(lines(texts[key]).map(hash).join('')) })) } };
 }
@@ -878,6 +882,20 @@ test('notifications raw SQL pages export every row of all 13 tables, composite c
   assert.match(notifications.texts.message_templates, /無收件人的範本/); assert.match(notifications.texts.notification_automation_tasks, /無成員舊範本/);
   assert.equal((await on(source, 'get_employee_transfer_log', { p_admin_session_token: sourceSession })).last_export_at, null);
 }, source));
+
+test('notifications mixed-case and punctuation period cursors use C text order in real SQL staging and preflight', () => transaction(async () => {
+  const key = 'notification_automation_date_runs', original = JSON.parse(lines(notifications.texts[key])[0]);
+  const periods = ['a:1', 'Z', 'a', '_'];
+  const input = changedNotifications({ [key]: () => periods.map(period_key => JSON.stringify({ ...original,
+    id: `${original.task_id}:0000000007:${period_key}`, period_key }) + '\n').join('') });
+  const ordered = lines(input.texts[key]).map(line => JSON.parse(line));
+  assert.deepEqual(ordered.map(row => row.period_key), ['Z', '_', 'a', 'a:1']);
+  modules.validateNotificationsPage({ table_key: key, count: ordered.length, ndjson: input.texts[key], next_after: null,
+    sha256: hash(input.texts[key]) }, key, null);
+  await nstage(input); const saved = await transferSnapshot(), before = await business(), p = await nplan();
+  assert.equal(p.counts[key], periods.length); assert.deepEqual(p.conflicts, []); assert.equal(p.checked, true); assert.equal(p.can_restore, false);
+  assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before); await stillClosed();
+}));
 
 test('notifications checked preflight never restores, pays, starts automation or mutates business, heartbeat, summary or staging', () => transaction(async () => {
   const before = await business(), original = await triggers();
