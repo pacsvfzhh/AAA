@@ -315,9 +315,10 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_refs jsonb;v_urls text[];v_url text;v_ref jsonb;v_receipt jsonb;v_map jsonb:='{}';v_rest text;v_result text:='';v_next record;
 BEGIN
   IF p_content IS NULL THEN RETURN NULL;END IF;
+  v_urls:=private.employee_transfer_notification_media_urls(p_content,false);
+  IF cardinality(v_urls)=0 THEN RETURN p_content;END IF;
   IF NOT private.employee_transfer_notification_media_ready(p_job) THEN RAISE EXCEPTION 'Verified target notification media is required before rewriting.';END IF;
   v_refs:=private.employee_transfer_notification_media_refs(p_job,false);
-  v_urls:=private.employee_transfer_notification_media_urls(p_content,false);
   FOREACH v_url IN ARRAY v_urls LOOP
     SELECT value INTO v_ref FROM jsonb_array_elements(v_refs) WHERE value->>'source_url'=v_url;
     IF v_ref IS NULL THEN RAISE EXCEPTION 'Notification rewrite URL is outside the verified package.';END IF;

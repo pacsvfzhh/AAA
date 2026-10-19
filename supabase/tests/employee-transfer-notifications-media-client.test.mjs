@@ -40,7 +40,7 @@ const SAMPLES = [
   ['announcement-images', 'webp', 'image/webp', bytesOf('RIFF----WEBP-synthetic')],
   ['chat-images', 'pdf', 'application/pdf', bytesOf('%PDF-1.7\nsynthetic')],
   ['template-images', 'mp4', 'video/mp4', Uint8Array.of(0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0, 105, 115, 111, 109, 109, 112, 52, 50)],
-  ['announcement-images', 'webm', 'video/webm', Uint8Array.of(26, 69, 223, 163, 1, 2, 3, 4)],
+  ['announcement-images', 'webm', 'video/webm', Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x87, 0x42, 0x82, 0x84, ...bytesOf('webm')])],
 ];
 const URLS = SAMPLES.map(([bucket, ext], index) => `${ORIGIN}${PREFIX}${bucket}/folder/${index}-fixture.${ext}`);
 function row(key) {
@@ -334,7 +334,7 @@ for (const value of ['', URLS[0] + '\n', 'https://evil.invalid/x.jpg']) test(`br
 
 test('plain Storage attachments, mixed attribute case, harmless hyperlinks, quoted >, null direct image remain exact', async () => {
   const f = fixture({ editRow(r, key, urls) {
-    if (key === 'messages') r.content += ` text ${urls[4]} <a href="https://docs.invalid/guide">guide</a><span title='a > b' data-file="${urls[4]}">附件</span>`;
+    if (key === 'messages') r.content += ` text ${urls[4]} <a href="https://docs.invalid/guide">guide</a><span style="color: red; text-align: center" title='a > b' data-file="${urls[4]}"><strong>附件</strong><br /></span>`;
     if (key === 'broadcast_messages') r.image_url = null;
   } }), h = harness(f); const result = await h.stage();
   assert.equal(result.files, 7); assert.equal(h.staged.get('messages'), f.texts.messages); assert.equal(h.cleanup, 1);
@@ -371,8 +371,36 @@ for (const [label, mutate] of bundleMutations) test(`complete preflight: ${label
 });
 for (const key of TABLES) test(`every table's real bytes/digest verified before writes: ${key}`, async () => {
   const f = fixture(), h = harness(f), path = recordPath(key);
-  h.contents.set(path, bytesOf(f.texts[key].replace('原文', '篡改')));
-  await assert.rejects(h.stage(), failed(false)); assert.equal(h.calls.length, 0); assert.equal(h.cleanup, 1);
+  // Every table has this valid timestamp; some contain no free-text 原文 field.
+  const original = h.contents.get(path), changed = bytesOf(f.texts[key].replace(TIME, TIME.replace('12:34', '13:34')));
+  assert.equal(changed.length, original.length); assert.notDeepEqual(changed, original);
+  assert.notEqual(sha(changed), sha(original)); h.contents.set(path, changed);
+  await assert.rejects(h.stage(), failed(false)); assert.equal(h.calls.length, 0); assert.equal(h.fetches.length, 0);
+  assert.equal(h.cleanup, 1); assert.equal(h.contents.size, 0);
+});
+test('strict MP4 ftyp and finite WebM DocType checks reject matching hashes before record writes or uploads', async () => {
+  const invalidVideos = [
+    ['video/mp4', SAMPLES[5][3].subarray(0, 12)],
+    ['video/mp4', SAMPLES[5][3].subarray(0, 20)],
+    ['video/mp4', Uint8Array.from([0, 0, 0, 0, ...SAMPLES[5][3].subarray(4)])],
+    ['video/mp4', Uint8Array.from([0, 0, 0, 21, ...SAMPLES[5][3].subarray(4)])],
+    ['video/mp4', Uint8Array.from([0, 0, 0, 16, ...bytesOf('ftypheic'), 0, 0, 0, 0])],
+    ['video/webm', SAMPLES[6][3].subarray(0, 4)],
+    ['video/webm', Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, ...bytesOf('webm')])],
+    ['video/webm', Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0xff, ...SAMPLES[6][3].subarray(5)])],
+    ['video/webm', Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x87, 0x42, 0x86, 0x84, ...bytesOf('webm')])],
+    ['video/webm', Uint8Array.from([...SAMPLES[6][3].subarray(0, 8), ...bytesOf('xxxx')])],
+  ];
+  for (const [type, bytes] of invalidVideos) {
+    const f = fixture(), file = f.media.find(file => file.content_type === type), path = mediaPath(file);
+    Object.assign(file, tuple(file.source_url, bytes, type)); f.contents.set(path, bytes);
+    Object.assign(f.manifest.entries.find(entry => entry.path === path), { bytes: bytes.length, sha256: sha(bytes) });
+    const h = harness(f); await assert.rejects(h.stage(), failed(false));
+    assert.equal(h.calls.length, 0); assert.equal(h.fetches.length, 0); assert.equal(h.cleanup, 1);
+    await assert.rejects(h.session.upload(file, bytes), failed(false)); assert.equal(h.fetches.length, 0);
+    const out = harness(f, 'export'); await assert.rejects(out.export(), failed(true));
+    assert.equal(out.fetches.at(-1).action, 'download'); assert.equal(out.stored.size, 0); assert.equal(out.cleanup, 1);
+  }
 });
 test('aggregate1GiB/media limits and exact path list checked before opening plaintext', async () => {
   const f = fixture(), h = harness(f);
@@ -473,10 +501,11 @@ for (const operation of ['stage', 'export']) test(`${operation} pre-cancel sends
   const run = operation === 'export' ? api.exportNotificationsBundle(h.records.source, h.sink, h.session, { signal: c.signal }) : h.stage({ signal: c.signal });
   await assert.rejects(run, failed(false, true)); assert.equal(h.calls.length, 0); assert.equal(h.fetches.length, 0); assert.equal(h.cleanup, 1);
 });
-for (const phase of ['record-stage', 'upload', 'record-sink', 'media-sink']) test(`pending ${phase}: await settlement before abort cleanup; progress only after confirmation`, async () => {
+for (const phase of ['record-bind', 'record-stage', 'record-plan', 'upload', 'record-sink', 'media-sink']) test(`pending ${phase}: await settlement before abort cleanup; progress only after confirmation`, async () => {
   const exporting = phase.endsWith('sink'), h = harness(fixture(), exporting ? 'export' : 'import'), gate = deferred(), entered = deferred(), c = new AbortController(), progress = [];
   const wait = async () => { entered.resolve(); await gate.promise; };
-  if (phase === 'record-stage') h.beforeRpc = async name => { if (name === 'employee_import_notifications_stage') await wait(); };
+  const recordRpc = { 'record-bind': 'employee_import_notifications_bind', 'record-stage': 'employee_import_notifications_stage', 'record-plan': 'get_employee_import_notifications_plan' }[phase];
+  if (recordRpc) h.beforeRpc = async name => { if (name === recordRpc) await wait(); };
   if (phase === 'upload') h.afterTransport = async (response, action) => { if (action === 'upload') await wait(); return response; };
   if (exporting) h.beforeAppend = async path => { if (phase === 'media-sink' ? path.startsWith('media/') : path === recordPath(TABLES[0])) await wait(); };
   let finished = false;

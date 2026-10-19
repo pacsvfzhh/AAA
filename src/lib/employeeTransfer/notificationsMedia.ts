@@ -161,6 +161,54 @@ function matches(refs: readonly NotificationsMediaReference[], files: readonly N
     if (refs[i].key !== files[i].key || refs[i].source_url !== files[i].source_url || (refs[i].file && !same(refs[i].file!, files[i]))) invalid();
   }
 }
+// Keep video signatures identical to employee-transfer-media/handler.ts.
+function ebmlNumber(bytes: Uint8Array, offset: number, end: number, id = false): { value: number; length: number } | null {
+  if (offset >= end) return null;
+  let mask = 0x80, length = 1;
+  while (mask && !(bytes[offset] & mask)) { mask >>= 1; length++; }
+  if (!mask || length > (id ? 4 : 8) || offset + length > end) return null;
+  let value = id ? bytes[offset] : bytes[offset] & (mask - 1);
+  let unknown = !id && value === mask - 1;
+  for (let i = 1; i < length; i++) {
+    value = value * 256 + bytes[offset + i];
+    unknown = unknown && bytes[offset + i] === 0xff;
+  }
+  return unknown || !Number.isSafeInteger(value) ? null : { value, length };
+}
+function isWebm(bytes: Uint8Array): boolean {
+  const header = ebmlNumber(bytes, 4, bytes.length);
+  if (!header || !header.value || header.value > 4096) return false;
+  let offset = 4 + header.length;
+  const end = offset + header.value;
+  if (end > bytes.length) return false;
+  let webm = false;
+  while (offset < end) {
+    const id = ebmlNumber(bytes, offset, end, true);
+    if (!id) return false;
+    offset += id.length;
+    const size = ebmlNumber(bytes, offset, end);
+    if (!size) return false;
+    offset += size.length;
+    if (size.value > end - offset) return false;
+    if (id.value === 0x4282) {
+      if (webm || size.value !== 4 || bytes[offset] !== 0x77 || bytes[offset + 1] !== 0x65 ||
+        bytes[offset + 2] !== 0x62 || bytes[offset + 3] !== 0x6d) return false;
+      webm = true;
+    }
+    offset += size.value;
+  }
+  return webm;
+}
+function isMp4(bytes: Uint8Array): boolean {
+  if (bytes.length < 16) return false;
+  const size = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
+  if (size < 16 || size > bytes.length || (size - 16) % 4 !== 0) return false;
+  const brands = new Set(['isom', 'iso2', 'iso3', 'iso4', 'iso5', 'iso6', 'iso7', 'iso8', 'iso9', 'mp41', 'mp42', 'avc1', 'dash', 'M4V ']);
+  for (let offset = 8; offset < size; offset += offset === 8 ? 8 : 4) {
+    if (brands.has(String.fromCharCode(...bytes.subarray(offset, offset + 4)))) return true;
+  }
+  return false;
+}
 function detect(bytes: Uint8Array): NotificationsMediaType {
   const starts = (signature: number[], offset = 0) => signature.every((b, i) => bytes[offset + i] === b);
   if (bytes.length >= 3 && starts([255, 216, 255])) return 'image/jpeg';
@@ -169,8 +217,8 @@ function detect(bytes: Uint8Array): NotificationsMediaType {
   if (bytes.length >= 12 && starts([82, 73, 70, 70]) && starts([87, 69, 66, 80], 8)) return 'image/webp';
   if (bytes.length >= 5 && starts([37, 80, 68, 70, 45])) return 'application/pdf';
   // Signatures only, not media decoding or a security scan.
-  if (bytes.length >= 12 && starts([102, 116, 121, 112], 4)) return 'video/mp4';
-  if (bytes.length >= 4 && starts([26, 69, 223, 163])) return 'video/webm';
+  if (starts([102, 116, 121, 112], 4) && isMp4(bytes)) return 'video/mp4';
+  if (starts([26, 69, 223, 163]) && isWebm(bytes)) return 'video/webm';
   return invalid();
 }
 function inspect(file: NotificationsMediaFile, bytes: Uint8Array): void {
@@ -422,9 +470,10 @@ export async function exportNotificationsBundle(
     const refs = new Map<string, NotificationsMediaReference>();
     // Validate URLs in the original bytes; never reserialize records.
     const data = await exportNotificationsData({
-      catalog: () => settled(() => sourceApi.catalog(options.signal), options.signal),
-      page: (key, after) => settled(() => sourceApi.page(key, after, options.signal), options.signal),
-      verify: () => settled(() => sourceApi.verify(options.signal), options.signal),
+      // Record API adapters race AbortSignal; let each request settle before outer cleanup.
+      catalog: () => settled(() => sourceApi.catalog(), options.signal),
+      page: (key, after) => settled(() => sourceApi.page(key, after), options.signal),
+      verify: () => settled(() => sourceApi.verify(), options.signal),
     }, {
       async append(path, raw) {
         check(options.signal);
@@ -459,7 +508,7 @@ export async function exportNotificationsBundle(
     mayExist = true;
     await settled(() => media.recheckExport(files, options.signal), options.signal);
     // The old verify attests records only and still explicitly says media_pending.
-    validateNotificationsVerification(await settled(() => sourceApi.verify(options.signal), options.signal));
+    validateNotificationsVerification(await settled(() => sourceApi.verify(), options.signal));
     return { catalog: data.catalog, media: files, entries, rows: data.rows, bytes, fullSiteComplete: false };
   } catch {
     await discard(sink, mayExist, options.signal);
@@ -532,13 +581,14 @@ async function* checkedRecordFile(files: NotificationsBundleFiles, entry: Manife
   if (bytes !== entry.bytes || digest.digestHex() !== entry.sha256) invalid();
 }
 async function scanMedia(files: NotificationsImportFiles, file: NotificationsMediaFile, signal?: AbortSignal, collect = false): Promise<Uint8Array> {
-  const digest = new Sha256(), head = new Uint8Array(12), output = new Uint8Array(collect ? file.bytes : 0);
+  const digest = new Sha256(), output = new Uint8Array(collect ? file.bytes : 0);
+  // Complete video headers can exceed 12 bytes. Reuse the upload buffer, bounded to 50 MiB.
+  const head = collect ? output : new Uint8Array(file.content_type.startsWith('video/') ? file.bytes : 12);
   let used = 0;
   await consume(files.open(notificationsMediaEntryPath(file)), async chunk => {
     if (chunk.length > NOTIFICATIONS_TRANSFER_LIMITS.maxInputBytes || chunk.length > file.bytes - used) invalid();
     const copy = new Uint8Array(chunk);
     if (used < head.length) head.set(copy.subarray(0, head.length - used), used);
-    if (collect) output.set(copy, used);
     digest.update(copy); used += copy.length;
   }, signal);
   if (used !== file.bytes || digest.digestHex() !== file.sha256 || detect(head.subarray(0, Math.min(used, head.length))) !== file.content_type) invalid();
@@ -571,9 +621,10 @@ export async function stageNotificationsBundle(
       },
       async abort() { /* Outer finally owns all plaintext. */ },
     }, {
-      bind: catalog => settled(() => { mayExist = true; return target.bind(catalog, options.signal); }, options.signal),
-      stage: (key, no, raw) => settled(() => target.stage(key, no, raw, options.signal), options.signal),
-      plan: () => settled(() => target.plan(options.signal), options.signal),
+      // Do not pass the signal to adapters that reject before their RPC actually settles.
+      bind: catalog => settled(() => { mayExist = true; return target.bind(catalog); }, options.signal),
+      stage: (key, no, raw) => settled(() => target.stage(key, no, raw), options.signal),
+      plan: () => settled(() => target.plan(), options.signal),
     }, { onProgress: p => {
       if (p.phase === 'stage') progress(options, 'stage', 0, p.bytes, p.rows);
     } }); // Inner abort races must not release outstanding writes.
@@ -592,7 +643,7 @@ export async function stageNotificationsBundle(
       progress(options, 'upload', uploaded, bytes, staged.rows);
     }
     // Never patch server approval locally.
-    const plan = validateNotificationsPlan(await settled(() => target.plan(options.signal), options.signal));
+    const plan = validateNotificationsPlan(await settled(() => target.plan(), options.signal));
     if (checked.catalog.tables.some(table => plan.counts[table.key] !== table.rows) || plan.employees !== checked.catalog.identity_catalog.tables[0].rows) invalid();
     result = { plan, files: uploaded, bytes, rows: staged.rows, fullSiteComplete: false, serverStagingOrUploadsMayExist: true };
   } catch { /* Report only after plaintext cleanup. */ }

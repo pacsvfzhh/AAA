@@ -40,6 +40,8 @@ const criticalMigrations = [
   '20261102000023_export_stage_site_notifications.sql',
   '20261102000024_check_site_notification_links.sql',
   '20261102000025_prepare_notification_configuration.sql',
+  '20261102000026_transfer_notification_media.sql',
+  '20261102000027_restore_site_notifications.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -142,10 +144,15 @@ const publicFunctions = [
   'get_employee_import_notification_backup_page(uuid,uuid,uuid,text,text,integer)',
   'employee_import_notification_backup_verify(uuid,uuid,uuid)', 'employee_import_notification_backup_append(uuid,uuid,uuid,integer,text)',
   'employee_import_notification_backup_seal(uuid,uuid,uuid,text,integer)', 'get_employee_notification_saved_backup_chunk(uuid,uuid,integer)',
+  'get_employee_transfer_notification_media(uuid,uuid,text)', 'employee_import_notification_media_bind(uuid,uuid,jsonb)',
+  'employee_import_notifications_begin(uuid,uuid,text)', 'employee_import_notifications_chunk(uuid,uuid,integer)',
+  'employee_import_notifications_verify(uuid,uuid)', 'get_employee_import_notifications_restore_status(uuid,uuid)',
 ];
 const serviceOnlyFunctions = [
   'employee_transfer_verification_media_authorize(uuid,uuid,text,text)',
   'employee_transfer_verification_media_commit(uuid,uuid,text,text,integer,text,text,text,text)',
+  'employee_transfer_notification_media_authorize(uuid,uuid,text,text)',
+  'employee_transfer_notification_media_commit(uuid,uuid,text,text,integer,text,text,text,text)',
 ];
 
 async function checkCatalog(db) {

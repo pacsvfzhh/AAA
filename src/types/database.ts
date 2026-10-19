@@ -2457,6 +2457,44 @@ export interface Database {
         Args: { p_admin_session_token: string; p_backup_id: string; p_chunk_no: number };
         Returns: { backup_id: string; chunk_no: number; hex: string; sha256: string; bytes: number; chunks: number };
       };
+      get_employee_transfer_notification_media: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_direction: 'export' | 'import' };
+        Returns: import('../lib/employeeTransfer/notificationsMedia').NotificationsMediaInventory;
+      };
+      employee_import_notification_media_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string;
+          p_files: import('../lib/employeeTransfer/notificationsMedia').NotificationsMediaFile[] };
+        Returns: { success: true; scope: 'site-notifications-media'; files: number; bytes: number; repeated: boolean; full_site_complete: false };
+      };
+      employee_transfer_notification_media_authorize: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: EmployeeVerificationMediaAction; p_object_key: string };
+        Returns: { direction: 'export' | 'import'; key: string;
+          bucket: import('../lib/employeeTransfer/notificationsMedia').NotificationsMediaBucket; path: string; source_url: string;
+          file: import('../lib/employeeTransfer/notificationsMedia').NotificationsMediaFile | null; generation: string };
+      };
+      employee_transfer_notification_media_commit: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: EmployeeVerificationMediaAction; p_object_key: string;
+          p_bytes: number; p_sha256: string; p_content_type: import('../lib/employeeTransfer/notificationsMedia').NotificationsMediaType;
+          p_storage_origin: string; p_generation: string };
+        Returns: { success: true; key: string; bytes: number; sha256: string;
+          content_type: import('../lib/employeeTransfer/notificationsMedia').NotificationsMediaType; full_site_complete: false };
+      };
+      employee_import_notifications_begin: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/notificationsRestoreApi').NotificationsRestoreReceipt;
+      };
+      employee_import_notifications_chunk: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_chunk_no: number };
+        Returns: import('../lib/employeeTransfer/notificationsRestoreApi').NotificationsRestoreReceipt;
+      };
+      employee_import_notifications_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/notificationsRestoreApi').NotificationsRestoreReceipt;
+      };
+      get_employee_import_notifications_restore_status: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/notificationsRestoreApi').NotificationsRestoreReceipt;
+      };
       employee_export_verification_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeVerificationCatalog; scope: 'employee-verification'; full_site_complete: false }

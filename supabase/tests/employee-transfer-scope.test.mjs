@@ -299,7 +299,7 @@ test('strict local replay attempts all migrations once and matches the fixed 107
   const result = await replayMigrations({ strict: true });
   try {
     assert.deepEqual(result.files, diskFiles, 'no skipped, truncated or selected migration replay');
-    assert.equal(result.files.length, 552, 'migration baseline changed: review before updating the inventory');
+    assert.equal(result.files.length, 554, 'migration baseline changed: review before updating the inventory');
     assert.equal(EXPECTED_REPLAY_FAILURES.length, 12);
     assert.deepEqual(result.failures, EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message })));
     assert.equal(result.validation.matched.length, 12);

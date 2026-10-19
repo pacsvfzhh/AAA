@@ -13,13 +13,12 @@ const stages = ['notification_automation_executions', 'messages', 'execution_lin
 type Operation = 'begin' | 'chunk' | 'verify' | 'status';
 type RpcName = 'employee_import_notifications_begin' | 'employee_import_notifications_chunk'
   | 'employee_import_notifications_verify' | 'get_employee_import_notifications_restore_status';
-// This task owns only two files. Keep the four new RPC signatures local until the
-// coordinator adds them to Database. No untyped supabase client or heavy ZIP/media import.
 type RpcArgs = { p_admin_session_token: string; p_job_token: string; p_plan_hash?: string; p_chunk_no?: number };
-type RestoreQuery = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): RestoreQuery };
-const rpc = (name: RpcName, args: RpcArgs) => (supabase as unknown as {
-  rpc(name: RpcName, args: RpcArgs): RestoreQuery;
-}).rpc(name, args);
+const rpc = (name: RpcName, args: RpcArgs) => {
+  if (name === 'employee_import_notifications_begin') return supabase.rpc(name, { ...args, p_plan_hash: args.p_plan_hash! });
+  if (name === 'employee_import_notifications_chunk') return supabase.rpc(name, { ...args, p_chunk_no: args.p_chunk_no! });
+  return supabase.rpc(name, args);
+};
 const failure = 'Notification restore outcome is unknown or unconfirmed; committed records or media may exist. Read server status and reconcile before explicitly retrying. Cancellation does not prove rollback. No automatic write retry, sending, bonus credit, activation, maintenance release or close was performed.';
 function invalid(): never { throw new Error(failure); }
 function aborted(signal?: AbortSignal): void {
