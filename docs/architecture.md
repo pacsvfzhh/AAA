@@ -42,7 +42,7 @@
 |---|---|
 | `contentAudit.ts` | 调用 Edge Function `content-audit` 的全部封装（留证改删、永久删除、私有附件读取） |
 | `employeeTransfer/crypto.ts` | WebCrypto 流式分块认证，解密可绑定预期包/卷和取消信号；须等整卷 EOF/结束认证后才可提交业务资料；独立解密工具为 `scripts/decrypt-employee-export.mjs` |
-| `employeeTransfer/container.ts`、`manifest.ts`、`sha256.ts` | 双遍读取不可变临时文件，生成标准 STORED ZIP32；流式校验文件哈希/清单/卷集合/中央目录及外层结束认证，受大小与路径白名单限制。sink 仅写临时隔离区，abort 须阻断包括迟到完成在内的全部写入；真实临时文件适配器、媒体传输、业务导入导出及页面尚未接入 |
+| `employeeTransfer/container.ts`、`manifest.ts`、`sha256.ts` | 双遍读取不可变临时文件，生成标准 STORED ZIP32；流式校验文件哈希/清单/卷集合/中央目录及外层结束认证，受大小与路径白名单限制。sink 仅写临时隔离区，abort 须阻断包括迟到完成在内的全部写入；真实浏览器临时文件适配器、全站业务/媒体协调及页面尚未接入；实名证件媒体本地子阶段见下文，不代表完整媒体迁移 |
 | `employeeTransfer/sharedExport.ts`、`api.ts` | 管理员/共享设置七表的固定协议分页导出，原始 NDJSON 哈希、写入后真实计数及源快照核对；清理失败显式标记不可复用。仅子阶段、不标全站完成，尚无浏览器磁盘适配或后台页面，未部署 |
 | `employeeTransfer/sharedImport.ts`、`api.ts` | 七表两遍校验/暂存并取得干跑；create-only 与同名来源 replacement 分入口，业务 apply 独立确认、不自动执行。replacement 冻结备份 descriptor/计划与接收器，公开对象副本不能改变内部绑定；账号启用、全站协调/续接与页面仍待实现 |
 | `employeeTransfer/replacementBackup.ts` | 七表冻结快照写临时文件→加密保存独立文件→重读完整认证及清单对照→重读密文按128KiB上传/回执→封存；最大9MiB，不自动apply/重试。失败清临时明文、不删除独立密文；封存结果不明须核对，真实浏览器磁盘适配/恢复向导仍待接入 |
@@ -50,10 +50,12 @@
 | `employeeTransfer/dispatchTransfer.ts`、`api.ts` | 派单/交单七表固定投影、主键游标分页导出；页SHA-256、逐行原始字节SHA-256串摘要与源前后核对，保留高精度原文，不经浮点重序列化；写临时区确认后才计数，清理失败显式报错。专用任务提供显式close/cancel，不自动结束/重试；目标只读预检始终replacement_ready=false，整批导入、浏览器磁盘/多卷/页面未接入，未部署 |
 | `employeeTransfer/dispatchImport.ts`、`dispatchBackup.ts`、`api.ts` | 七表先全验证再begin、二遍原文校验/分块暂存与真实确认进度；干跑只准备、不提供apply。冻结目标备份实际独立加密保存→回读认证/行摘要/清单及文件哈希→再读密文上传封存，明文8MiB/密文9MiB超限阻断，来源暂存仍总1GiB；公开descriptor不改变闭包绑定。本地Abort不自动发取消RPC，失败明确暂存/封存结果不明并清临时明文；轻量API不加载ZIP/加密依赖。独立维护/配置阶段见下行；同站恢复和页面未实现，未部署 |
 | `employeeTransfer/api.ts`（维护/配置/交单原文） | 显式enterMaintenance→configurationPlan→applyConfiguration，再显式beginValidData→applyValidDataChunk→verifyValidData，不自动执行或重试；严格冻结回执校验数量、分块游标及verified，dependencies_pending/maintenance=true、全站完成false。新会话可查询维护或撤回未写入且未变化的原任务，dirty禁止解除；来源四配置表/默认组Base和内容及valid原文/计数已可恢复，配置阶段目标成员清空，后续identityApi建立可信员工/订单对应，dependencyApi再恢复源成员和used。每块服务器提交后才有进度，结果不明不假回滚。屏障不代表停用cron/Storage，无法替代完整恢复核对或页面；未部署 |
-| `employeeTransfer/identityTransfer.ts`、`identityApi.ts` | employee-identity-v1三表固定原文分页/行摘要/源前后核对；已认证隔离文件先全验证再bind到原派单任务、第二遍stage及真实回执计数，显式plan→begin→chunk→verify，不新建导入任务、不自动执行/重试/启用。保留账号14业务列/凭据4列/订单7列，业务归属只取同包共享服务器映射；逐行/数量/全部占位值核验后才提供私有身份对应。无冲突分支实际建停用员工与零钱包、不建财务基准或重复发佣金；资金待接，成员/used后续依赖阶段见下一行，full_site_complete=false。轻量API不加载ZIP/crypto，无UI，未部署 |
-| `employeeTransfer/dependencyApi.ts` | 复用原派单任务显式plan→begin→chunk→verify及新工厂重取计划/进度，不传客户端ID图/行；服务端重核同包身份、来源配置和valid完整内容后恢复来源成员和used，used计数触发器精确旁路/恢复，valid计数/最后使用时间不变。冻结严格回执、互斥/取消/结果不明不自动重试，真实提交后才计进度；资金/其他历史待处理、维护继续，无UI，未部署 |
+| `employeeTransfer/identityTransfer.ts`、`identityApi.ts` | employee-identity-v1三表固定原文分页/行摘要/源前后核对；已认证隔离文件先全验证再bind到原派单任务、第二遍stage及真实回执计数，显式plan→begin→chunk→verify，不新建导入任务、不自动执行/重试/启用。保留账号14业务列/凭据4列/订单7列，业务归属只取同包共享服务器映射；逐行/数量/全部占位值核验后才提供私有身份对应。无冲突分支实际建停用员工与零钱包、不建财务基准或重复发佣金；资金回填见finance模块，成员/used后续依赖阶段见下一行，full_site_complete=false。轻量API不加载ZIP/crypto，无UI，未部署 |
+| `employeeTransfer/dependencyApi.ts` | 复用原派单任务显式plan→begin→chunk→verify及新工厂重取计划/进度，不传客户端ID图/行；服务端重核同包身份、来源配置和valid完整内容后恢复来源成员和used，used计数触发器精确旁路/恢复，valid计数/最后使用时间不变。冻结严格回执、互斥/取消/结果不明不自动重试，真实提交后才计进度；资金后续见finance模块，其余历史按独立阶段接入、维护继续，无UI，未部署 |
 | `employeeTransfer/financeTransfer.ts`、`financeApi.ts` | employee-finance-v1固定六表原文流式导出、双遍验证后同任务bind/stage/plan，目录须匹配已恢复的完整identity_catalog；bigint ID/游标用十进制字符串、按数值排序，金额不经浮点重序列化。显式逐员工apply/全量verify、服务端真实提交后计数及新工厂幂等续接；六表一个事务、账本/审计重编号与基准换算、pending冻结/账本收入公式及全字段重验，不重复发佣金或改写旧差异。临时明文清理与结果不明显式提示，不自动重试/启用/解除维护；其余历史/自动化/页面及原生PG时延验收待做，未部署 |
-| `employeeTransfer/activityTransfer.ts`、`activityApi.ts` | employee-activity-v1固定登录/工时/停工标记三表，完整绑定identity目录及已核验身份/成员/资金的真实内容；原始NDJSON、嵌套JSON精度与SQL NULL/JSON null区分保真，旧session_id按来源站/员工脱敏。显式bind/stage/plan→逐员工事务apply→verify，不自动重试/启用/解除维护；未结束工时严格最后心跳收尾、无心跳用开始时间，已结束原值不变。真实提交进度/幂等续接/清理期间取消暂存提示、冲突和漂移阻断；实名/通知需媒体及自动化关联后另接，无UI/浏览器或原生PG验收，未部署 |
+| `employeeTransfer/activityTransfer.ts`、`activityApi.ts` | employee-activity-v1固定登录/工时/停工标记三表，完整绑定identity目录及已核验身份/成员/资金的真实内容；原始NDJSON、嵌套JSON精度与SQL NULL/JSON null区分保真，旧session_id按来源站/员工脱敏。显式bind/stage/plan→逐员工事务apply→verify，不自动重试/启用/解除维护；未结束工时严格最后心跳收尾、无心跳用开始时间，已结束原值不变。真实提交进度/幂等续接/清理期间取消暂存提示、冲突和漂移阻断；实名及证件媒体后续见下一行，通知仍需奖励/自动化关联；无UI/浏览器或原生PG验收，未部署 |
+| `employeeTransfer/verificationTransfer.ts`、`verificationApi.ts` | employee-verification-v1固定verification_requests全部15列原文，绑定同包identity目录及已核验身份/成员/资金/活动实际内容；显式bind/stage/plan→逐员工事务apply→媒体最终recheckImport→SQL verify。只写实名申请，不改users.is_verified或关触发器；审阅人只取同包服务器admin map，残留/UUID/缺映射/漂移阻断。真实回执计数、续接重取服务器计划，无自动重试/启用/解除维护，无UI，未部署 |
+| `employeeTransfer/verificationMedia.ts` | 实名记录与实际证件文件子阶段：严格三目录/员工UUID引用，SQL inventory与不可变文件tuple目录，Edge受控下载/上传/回读及URL映射；全量验证原始NDJSON和媒体后才写、媒体二遍hash。单文件50MiB/3000文件、记录与媒体合计1GiB、单卷manifest仍最多4096条目；不是全站媒体/多卷。进度只认实际确认，错误脱敏、临时清理与取消仍提示服务器资料可能存在，不自动删除或假回滚，未部署 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |
@@ -68,6 +70,17 @@
 | `devicePerformance.ts` / `useDeviceOptimization.ts` | 按设备性能降级动画、列表与图片；只在视口宽度变化时重新检测（手机地址栏收展只改高度），GPU 纹理上限只探测一次并释放 WebGL 上下文；没有常驻帧率监测（需要实测帧率的界面自行短时采样，见派单等待面板） |
 | `responsiveBreakpoints.ts` / `useResponsive.ts` | 断点与响应式 Hook |
 | `useCompanyName.ts` / `useCurrencyUnit.ts` | 公司名称与货币单位 |
+
+## 实名与证件媒体服务子阶段（2026-10-19，UTC+8，本地未部署）
+
+- 仓库有两个Edge源码目录：`supabase/functions/content-audit/`（已在正式）及`supabase/functions/employee-transfer-media/`（新`index.ts`环境适配、`handler.ts`受控传输，未配置/部署）。`supabase/config.toml`仍只有旧process-orders/cleanup-dispatch，本轮不改。未来新服务部署须单独说明影响、确认`verify_jwt=false`，其内部由SQL验证管理员session/job，不放宽桶权限或把serviceKey给浏览器。
+- SQL21/22复用私有任务/暂存及原dispatch-import dirty维护、独立封存备份和同包管理员回执。媒体库存/目录绑定供已验证浏览器会话使用，authorize/commit仅service_role。逐员工仅verification_requests写许可，保留ALWAYS维护/外键和全部保护，不关trigger；申请status与users.is_verified独立，不能联动覆盖。NULL媒体链接保留。
+- 导出只认服务端固定环境的本站supabase.co公开对象URL、verification-documents固定桶与id-front/id-back/selfie三目录及所属员工UUID；外链/他站/签名参数/未知格式阻断不漏文件。目标服务器路径为`folder/employeeUUID-transfer-<SHA-256(job_id:key)前32位>.ext`，兼容既有删除留证清理；upsert=false、不覆写或删除旧文件，同任务同tuple须回读哈希/大小/MIME一致才复用，异内容路径冲突拒绝。
+- Edge raw Storage fetch仅向固定环境origin带服务凭据，流式读取≤50MiB；响应头及正文共同受90秒下载超时与Abort控制，不先用SDK download缓冲Blob。JPEG/PNG/GIF/WebP/PDF魔数只识别MIME，不是完整解码/病毒扫描。上传后服务readback，全部员工apply后再显式recheckImport+SQL verify；读前授权generation绑定已提交员工代次，commit拒绝期间apply导致的旧代次，不能读后更新授权冒充最终回读。
+- SDK upload不能强制中止，失败/取消可能遗留对象或暂存；不自动delete/重试或假回滚，错误脱敏。客户端使用整卷EOF认证后的隔离文件，NDJSON与全部媒体先全验证再写，媒体上传前二遍hash；实际写入/一致回执才计进度。清临时明文期间取消也提示服务器资料可能存在，清理不明不可复用。尚无真实浏览器磁盘适配或完整加密归档往返证据。
+- 最终完整activity-db147/147（原61+新增86），实名API123/客户端130/Edge328共581/581，其他28迁移文件分组4575/4575，32文件合计5303/5303；scope真实文件18/18、foundation47/47含新增2项，严格549份SQL仍12旧失败，106表/937列未变。最终日志`/tmp/verification-db-complete.log`零失败/取消/skip，早期失败、多次完整命令超时不计通过；聊天6/稽核48/工时6另60项，typecheck/lint/build和格式检查通过。独立复审发现目录SQL语法/数组类型、回读代次竞态、SDK Blob缓冲、响应头取消及客户端续接门禁，均已修复并回归复核。
+- 以上为PGlite、合成媒体回执及fakeStorage/注入传输分层测试，非真实Storage或全站验收。原生PG/PostgREST并发/anon3秒/大员工性能、真实Storage/CORS/Edge限额、浏览器磁盘、完整归档往返、多卷/整站演练均未验；无UI/导航，不可正式迁移。账号停用、dirty维护及pending标记不变，replacement_ready/full_site_complete仍false；通知奖励/自动化、聊天/档案、同名员工备份封存、全站协调核对/任务恢复放行、其他媒体/多卷/公告轮播排除和页面仍待做，详情见迁移计划第30节。
+- 本轮未访问/改变正式库数据，未部署SQL/Edge/前端，无Storage/权限/cron调整；仅调用Supabase文档搜索，不是正式数据访问。本次只同步文档；前端完整功能做好后仍待用户自行部署，正式操作逐项确认。
 
 ## 样式与界面约定
 - Tailwind 自定义断点：`xs` 360、`sm` 480、`md` 600、`lg` 1025、`xl` 1280、`2xl` 1536（与 Tailwind 默认值不同）。

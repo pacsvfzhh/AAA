@@ -17,6 +17,15 @@
 
 ---
 
+## 2026-10-19 · 实现实名资料与证件文件同包迁移（未部署）
+- 需求：继续本地补齐实名记录与实际证件文件迁移，不能只复制旧站链接，不提前启用员工或恢复营业。
+- 改动：新增迁移计划第30节并更新当前状态，第29节保留当时未完成描述/历史测试数并引用第30节。实名固定verification_requests全部15列原文，同包identity_catalog及已核验身份/成员/资金/活动前置，逐员工事务只许可实名表，不关trigger或改users.is_verified（与申请status独立）；审阅人仅服务器同包admin map，残留/UUID/缺映射/漂移阻断。媒体SQL inventory/不可变目录及service-only authorize/commit，浏览器无serviceKey；本站supabase.co固定verification-documents三目录/所属员工UUID，拒外链/签名参数/未知格式且不漏文件，NULL链接保留。
+- 改动：目标路径folder/employeeUUID-transfer-<SHA-256(job_id:key)前32位>.ext兼容删除留证清理；upsert=false、不覆写/删除旧文件，同任务同tuple仅实际回读一致才复用，异内容冲突拒绝。Edge固定环境raw Storage fetch有界流式读取≤50MiB、响应头/正文共90秒超时与Abort，逐文件实际hash/size/MIME比较，上传后readback、全部apply后显式recheckImport+SQLverify；generation绑定读前已提交员工代次，防读前apply后commit竞态。JPEG/PNG/GIF/WebP/PDF魔数非完整解码/病毒扫描；最多3000文件、记录加媒体≤1GiB、单卷仍受manifest4096条目限制，非无限全站媒体。SDK上传不可强制中止，失败可能留对象，无自动delete/假回滚/写重试；原始NDJSON和媒体全量验证后才写、媒体二遍hash、真实确认才计进度，错误脱敏/临时清理期间取消仍警告server数据可能存在。
+- 文件：新增`20261102000021_export_stage_employee_verification.sql`、`20261102000022_restore_employee_verification_media.sql`、`verificationTransfer.ts`/`verificationApi.ts`/`verificationMedia.ts`、`supabase/functions/employee-transfer-media/{index,handler}.ts`及三份实名专项；扩展活动双站、基础权限与范围库存测试，更新RPC类型、超时/计划禁止重试及五份既有文档。目录地图更新为两个Edge源码目录，只有content-audit已在正式。
+- 数据库/服务端：**未访问/改变任何正式库数据，未部署SQL/Edge/前端，无Storage/权限/cron调整；仅调用Supabase文档搜索，非正式数据访问。** 新Edge未配置/部署，本轮不改config；未来须单独说明影响并确认verify_jwt=false（内部验证session/job），不放宽桶权限。无UI/导航，账号停用、dirty维护及所有pending标记不变，replacement_ready/full_site_complete仍false；前端完整功能做好后仍待用户部署，不能正式迁移。
+- 验证：最终完整activity-db147/147（原61+新增86），实名API123/client130/Edge328共581/581，其他28迁移测试文件分组4575/4575，32文件合计5303/5303；foundation47/47含本轮新增2项，scope实际文件18/18并回放549份SQL。聊天6/稽核48/工时6另60项，typecheck/lint/build及格式检查通过。多次完整命令超时、早期失败和过滤局部通过不计最终通过；`/tmp/verification-db-complete.log`全文件147零失败/取消/skip，三文件见`/tmp/verification-clients-complete.log`，其余取最终分组/重跑日志，不声称单次完整命令通过。严格549份SQL仍精确保留原12旧失败，106表/937列未变，非干净建库或全站完成证明。
+- 备注：独立复审发现目录SQL语法/数组类型、回读代次竞态、SDK先Blob缓冲、响应头取消及客户端续接门禁，均已修复并回归复核。本地PGlite/合成媒体回执/fakeStorage是分层验证，不等于真实Storage验收；原生PG/PostgREST并发/anon3秒/大员工性能、真实Storage/CORS/Edge限额、浏览器磁盘、完整加密归档往返/多卷/整站演练均未验。通知奖励/自动化、聊天/档案、同名员工备份封存、全站协调核对/任务恢复放行、其他媒体/多卷/公告轮播排除和页面仍待做；正式操作逐项另行确认。
+
 ## 2026-10-19 · 完成登录与工时历史同包恢复（未部署）
 - 需求：继续本地补齐员工历史，保留登录设备/IP、真实历史时间、工时及主动停工标记，不复制有效会话、不提前恢复营业。
 - 改动：新增employee-activity-v1三表原文导出/暂存、保存计划、逐员工事务apply及全量verify，精确绑定同包identity目录和已核验的身份/成员/资金实际内容。旧登录会话按来源站和员工脱敏；嵌套设备JSON保留原始数值及SQL NULL/JSON null区别。仅未结束工时按最后心跳结束、无心跳按开始时间结束，分钟四舍五入；已结束历史原值不改。UUID冲突、目标残留、超限或漂移阻断，重复/续接重核全部字段，资金及范围外业务不变。
