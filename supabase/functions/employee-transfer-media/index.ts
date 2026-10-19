@@ -1,7 +1,8 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.57.4';
 import { createEmployeeTransferMediaHandler } from './handler.ts';
 
-// verify_jwt=false is safe only because SQL22 revalidates both tokens at commit.
+// SQL22 (verification) / SQL26 (notifications) revalidate both tokens at commit.
+// Any future verify_jwt=false deployment still requires separate approval.
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 let db: SupabaseClient | undefined;

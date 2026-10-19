@@ -9,8 +9,17 @@ const ORIGIN_PATTERN = /^https:\/\/[a-z0-9-]+\.supabase\.co$/;
 const PATH_PATTERN = new RegExp(`^(id-front|id-back|selfie)/(${UUID})-[A-Za-z0-9._-]+\\.[A-Za-z0-9]{1,8}$`);
 const IMPORT_NAME = new RegExp(`^${UUID}-transfer-[0-9a-f]{32}\\.[a-z0-9]{1,8}$`);
 const TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf']);
+const NOTIFICATION_TYPES = new Set([...TYPES, 'video/mp4', 'video/webm']);
+const NOTIFICATION_BUCKETS = new Set(['announcement-images', 'chat-images', 'template-images']);
+const NOTIFICATION_PATH = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.[A-Za-z0-9]{1,8}$/;
+const NOTIFICATION_IMPORT_PATH = new RegExp(`^${UUID}/transfer-[0-9a-f]{32}\\.[a-z0-9]{1,8}$`);
+const RPCS = {
+  verification: { authorize: 'employee_transfer_verification_media_authorize', commit: 'employee_transfer_verification_media_commit' },
+  notifications: { authorize: 'employee_transfer_notification_media_authorize', commit: 'employee_transfer_notification_media_commit' },
+};
+type Scope = keyof typeof RPCS;
 const ACTIONS = new Set(['download', 'recheck-export', 'upload', 'recheck-import']);
-const ALLOWED_HEADERS = 'authorization, apikey, content-type, x-client-info, x-transfer-action, x-admin-session-token, x-transfer-job-token, x-transfer-object-key';
+const ALLOWED_HEADERS = 'authorization, apikey, content-type, x-client-info, x-transfer-action, x-transfer-scope, x-admin-session-token, x-transfer-job-token, x-transfer-object-key';
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -69,52 +78,126 @@ function sourcePath(value: unknown): string {
   if (!safePath(path)) fail();
   return path;
 }
-function fileTuple(value: unknown, key: string, source: string): FileTuple {
+function safeNotificationPath(value: unknown): value is string {
+  return typeof value === 'string' && value === value.trim() && NOTIFICATION_PATH.test(value) &&
+    !value.includes('..') && !value.split('/').includes('.');
+}
+function notificationSourcePath(value: unknown, bucket: string): string {
+  if (typeof value !== 'string' || value.length > 1024) fail();
+  const prefix = `/storage/v1/object/public/${bucket}/`;
+  const split = value.indexOf(prefix);
+  if (split < 0 || !isOrigin(value.slice(0, split))) fail();
+  const path = value.slice(split + prefix.length);
+  if (!safeNotificationPath(path)) fail();
+  return path;
+}
+function fileTuple(value: unknown, key: string, source: string, scope: Scope): FileTuple {
   if (!record(value) || !exact(value, ['key', 'source_url', 'bytes', 'sha256', 'content_type']) ||
     value.key !== key || value.source_url !== source || !Number.isSafeInteger(value.bytes) ||
     (value.bytes as number) < 1 || (value.bytes as number) > MAX_MEDIA_BYTES ||
     typeof value.sha256 !== 'string' || value.sha256.length !== 64 || !KEY_PATTERN.test(value.sha256) ||
-    typeof value.content_type !== 'string' || !TYPES.has(value.content_type)) fail();
+    typeof value.content_type !== 'string' || !(scope === 'notifications' ? NOTIFICATION_TYPES : TYPES).has(value.content_type)) fail();
   return value as FileTuple;
 }
 async function digest(bytes: Uint8Array, crypto: Pick<Crypto, 'subtle'>): Promise<string> {
   const result = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
   return Array.from(new Uint8Array(result), byte => byte.toString(16).padStart(2, '0')).join('');
 }
-async function context(value: unknown, action: string, key: string, origin: string, crypto: Pick<Crypto, 'subtle'>): Promise<Context> {
+async function context(value: unknown, action: string, key: string, origin: string, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<Context> {
   const direction = action === 'download' || action === 'recheck-export' ? 'export' : 'import';
   if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation']) ||
-    value.direction !== direction || value.key !== key || value.bucket !== BUCKET || !safePath(value.path)) fail();
+    value.direction !== direction || value.key !== key || typeof value.bucket !== 'string') fail();
+  if (scope === 'verification' ? value.bucket !== BUCKET || !safePath(value.path) :
+    !NOTIFICATION_BUCKETS.has(value.bucket) || !safeNotificationPath(value.path)) fail();
+  if (typeof value.path !== 'string') fail();
   const generation = value.generation;
   if (typeof generation !== 'string' || (direction === 'export' ? generation !== 'export' :
     generation !== generation.trim() || !/^(0|[1-9][0-9]{0,5})$/.test(generation) || Number(generation) > 500000)) fail();
-  const path = sourcePath(value.source_url);
+  const path = scope === 'verification' ? sourcePath(value.source_url) : notificationSourcePath(value.source_url, value.bucket);
   if (await digest(new TextEncoder().encode(value.source_url as string), crypto) !== key) fail();
   if (direction === 'export') {
-    if (value.source_url !== origin + PUBLIC_PREFIX + path || value.path !== path) fail();
+    const prefix = scope === 'verification' ? PUBLIC_PREFIX : `/storage/v1/object/public/${value.bucket}/`;
+    if (value.source_url !== origin + prefix + path || value.path !== path) fail();
+  } else if (scope === 'notifications') {
+    if (!NOTIFICATION_IMPORT_PATH.test(value.path) ||
+      value.path.slice(value.path.lastIndexOf('.') + 1) !== path.slice(path.lastIndexOf('.') + 1).toLowerCase()) fail();
   } else {
     const [folder, name] = value.path.split('/');
     const [sourceFolder, sourceName] = path.split('/');
     if (folder !== sourceFolder || name.slice(0, 36) !== sourceName.slice(0, 36) || !IMPORT_NAME.test(name) ||
       name.slice(name.lastIndexOf('.') + 1) !== sourceName.slice(sourceName.lastIndexOf('.') + 1).toLowerCase()) fail();
   }
-  const file = value.file === null && action === 'download' ? null : fileTuple(value.file, key, value.source_url as string);
-  return { direction, key, bucket: BUCKET, path: value.path, source_url: value.source_url as string, file, generation };
+  const file = value.file === null && action === 'download' ? null : fileTuple(value.file, key, value.source_url as string, scope);
+  return { direction, key, bucket: value.bucket, path: value.path, source_url: value.source_url as string, file, generation };
 }
 
-// Only byte signatures establish MIME; caller metadata is not evidence.
-function detectType(bytes: Uint8Array): string {
+// Finite EBML header elements only: finding the word "webm" somewhere is not evidence.
+function ebmlNumber(bytes: Uint8Array, offset: number, end: number, id = false): { value: number; length: number } | null {
+  if (offset >= end) return null;
+  let mask = 0x80; let length = 1;
+  while (mask && !(bytes[offset] & mask)) { mask >>= 1; length++; }
+  if (!mask || length > (id ? 4 : 8) || offset + length > end) return null;
+  let value = id ? bytes[offset] : bytes[offset] & (mask - 1);
+  let unknown = !id && value === mask - 1;
+  for (let i = 1; i < length; i++) {
+    value = value * 256 + bytes[offset + i];
+    unknown = unknown && bytes[offset + i] === 0xff;
+  }
+  return unknown || !Number.isSafeInteger(value) ? null : { value, length };
+}
+function isWebm(bytes: Uint8Array): boolean {
+  const header = ebmlNumber(bytes, 4, bytes.length);
+  if (!header || !header.value || header.value > 4096) return false;
+  let offset = 4 + header.length;
+  const end = offset + header.value;
+  if (end > bytes.length) return false;
+  let webm = false;
+  while (offset < end) {
+    const id = ebmlNumber(bytes, offset, end, true);
+    if (!id) return false;
+    offset += id.length;
+    const size = ebmlNumber(bytes, offset, end);
+    if (!size) return false;
+    offset += size.length;
+    if (size.value > end - offset) return false;
+    if (id.value === 0x4282) {
+      if (webm || size.value !== 4 || bytes[offset] !== 0x77 || bytes[offset + 1] !== 0x65 ||
+        bytes[offset + 2] !== 0x62 || bytes[offset + 3] !== 0x6d) return false;
+      webm = true;
+    }
+    offset += size.value;
+  }
+  return webm;
+}
+function isMp4(bytes: Uint8Array): boolean {
+  if (bytes.length < 16) return false;
+  const size = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
+  // A complete ordinary ftyp box: major brand, minor version and whole compatible brands.
+  // Extended/EOF-sized boxes are deliberately unsupported, not guessed from metadata.
+  if (size < 16 || size > bytes.length || (size - 16) % 4 !== 0) return false;
+  const brands = new Set(['isom', 'iso2', 'iso3', 'iso4', 'iso5', 'iso6', 'iso7', 'iso8', 'iso9', 'mp41', 'mp42', 'avc1', 'dash', 'M4V ']);
+  for (let offset = 8; offset < size; offset += offset === 8 ? 8 : 4) {
+    if (brands.has(String.fromCharCode(...bytes.subarray(offset, offset + 4)))) return true;
+  }
+  return false;
+}
+// Only byte signatures establish MIME; caller metadata is not evidence. Not a decoder/AV scan.
+function detectType(bytes: Uint8Array, scope: Scope): string {
   const starts = (signature: number[], offset = 0) => signature.every((byte, index) => bytes[offset + index] === byte);
   if (bytes.length >= 3 && starts([0xff, 0xd8, 0xff])) return 'image/jpeg';
   if (bytes.length >= 8 && starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
   if (bytes.length >= 6 && (starts([0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) || starts([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))) return 'image/gif';
   if (bytes.length >= 12 && starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return 'image/webp';
   if (bytes.length >= 5 && starts([0x25, 0x50, 0x44, 0x46, 0x2d])) return 'application/pdf';
+  if (scope === 'notifications') {
+    if (starts([0x66, 0x74, 0x79, 0x70], 4) && isMp4(bytes)) return 'video/mp4';
+    if (starts([0x1a, 0x45, 0xdf, 0xa3]) && isWebm(bytes)) return 'video/webm';
+  }
   fail(422, 'INVALID_MEDIA');
 }
-async function inspect(bytes: Uint8Array, ctx: Context, crypto: Pick<Crypto, 'subtle'>): Promise<FileTuple> {
+async function inspect(bytes: Uint8Array, ctx: Context, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<FileTuple> {
   if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) fail(422, 'INVALID_MEDIA');
-  const actual = { key: ctx.key, source_url: ctx.source_url, bytes: bytes.length, sha256: await digest(bytes, crypto), content_type: detectType(bytes) };
+  const actual = { key: ctx.key, source_url: ctx.source_url, bytes: bytes.length, sha256: await digest(bytes, crypto), content_type: detectType(bytes, scope) };
   if (ctx.file && !sameFile(ctx.file, actual)) fail(422, 'INVALID_MEDIA');
   return actual;
 }
@@ -176,7 +259,7 @@ async function download(store: MediaStore, ctx: Context, requestSignal: AbortSig
   let response: Response | undefined;
   try {
     if (signal.aborted) fail();
-    const result = await store.download(BUCKET, ctx.path, signal);
+    const result = await store.download(ctx.bucket, ctx.path, signal);
     if (!(result.data instanceof Response)) fail();
     response = result.data;
     const encoding = response.headers.get('content-encoding');
@@ -251,6 +334,10 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
       }
       if (request.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       if (!origin || !crypto?.subtle) fail(500, 'TRANSFER_FAILED');
+      const rawScope = request.headers.get('x-transfer-scope') ?? 'verification';
+      if (rawScope !== 'verification' && rawScope !== 'notifications') fail(400, 'INVALID_REQUEST');
+      const scope: Scope = rawScope;
+      const rpcs = RPCS[scope];
       const action = request.headers.get('x-transfer-action') ?? '';
       const admin = request.headers.get('x-admin-session-token') ?? '';
       const job = request.headers.get('x-transfer-job-token') ?? '';
@@ -259,9 +346,9 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
         request.signal.aborted || request.headers.has('content-encoding') || request.headers.has('content-range')) fail(400, 'INVALID_REQUEST');
       const length = declaredLength(request, action === 'upload' ? MAX_MEDIA_BYTES : 0);
       const args = { p_admin_session_token: admin, p_job_token: job, p_action: action, p_object_key: key };
-      const authorized = await deps.rpc('employee_transfer_verification_media_authorize', args);
+      const authorized = await deps.rpc(rpcs.authorize, args);
       if (authorized.error || authorized.data === null || authorized.data === undefined) fail(403, 'NOT_AUTHORIZED');
-      const ctx = await context(authorized.data, action, key, origin, crypto);
+      const ctx = await context(authorized.data, action, key, origin, crypto, scope);
       if (request.signal.aborted) fail(400, 'INVALID_REQUEST');
       let bytes: Uint8Array | undefined;
       let file: FileTuple;
@@ -269,24 +356,24 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
         const expected = ctx.file!;
         if (length !== null && length !== expected.bytes) fail(400, 'INVALID_REQUEST');
         bytes = await readBounded(request, expected.bytes, expected.bytes);
-        file = await inspect(bytes, ctx, crypto);
+        file = await inspect(bytes, ctx, crypto, scope);
         if (request.signal.aborted) fail(400, 'INVALID_REQUEST');
         // The SDK cannot abort an upload; cancellation cannot promise a rollback.
-        const uploaded = await deps.store.upload(BUCKET, ctx.path, bytes, { upsert: false, contentType: file.content_type });
+        const uploaded = await deps.store.upload(ctx.bucket, ctx.path, bytes, { upsert: false, contentType: file.content_type });
         bytes = undefined; // Release the upload buffer before bounded streaming readback.
         if (uploaded.error && !isOccupied(uploaded.error)) fail();
         if (request.signal.aborted) fail();
         // Readback may fail after storage wrote the object; never delete or fake rollback.
         const readback = await download(deps.store, ctx, request.signal);
-        const verified = await inspect(readback, ctx, crypto);
+        const verified = await inspect(readback, ctx, crypto, scope);
         if (!sameFile(file, verified)) fail();
       } else {
         await readBounded(request, 0, 0);
         bytes = await download(deps.store, ctx, request.signal);
-        file = await inspect(bytes, ctx, crypto);
+        file = await inspect(bytes, ctx, crypto, scope);
       }
       if (request.signal.aborted) fail();
-      const committed = await deps.rpc('employee_transfer_verification_media_commit', {
+      const committed = await deps.rpc(rpcs.commit, {
         ...args, p_bytes: file.bytes, p_sha256: file.sha256, p_content_type: file.content_type, p_storage_origin: origin,
         p_generation: ctx.generation, // Never reauthorize/refresh this after reading the object.
       });

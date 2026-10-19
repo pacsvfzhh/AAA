@@ -1,13 +1,10 @@
 import { getAdminFinancialSessionToken } from '../auth';
 import { supabase } from '../supabase';
 import { dispatchTransferChecks } from './dispatchTransfer';
-import type { NotificationsCatalog, NotificationsCounts } from './notificationsTransfer';
+import { NOTIFICATIONS_TABLE_KEYS, validateNotificationsCatalog, type NotificationsCatalog, type NotificationsCounts } from './notificationsTransfer';
 
-const { object, count, uuid, hash, withSignal } = dispatchTransferChecks;
-const keys = ['notification_automation_plans', 'notification_automation_tasks', 'notification_automation_plan_members',
-  'notification_automation_task_recipients', 'notification_automation_progress', 'notification_automation_executions',
-  'notification_automation_date_runs', 'notification_automation_failures', 'messages', 'message_recipients',
-  'message_templates', 'broadcast_messages', 'broadcast_recipients'] as const;
+const { object, count, withSignal } = dispatchTransferChecks;
+const keys = NOTIFICATIONS_TABLE_KEYS;
 const initialKeys = ['notification_automation_plans', 'notification_automation_tasks', 'message_templates',
   'notification_automation_plan_members', 'notification_automation_task_recipients'] as const;
 const stages = ['notification_automation_executions', 'messages', 'execution_links', 'message_recipients',
@@ -28,34 +25,21 @@ function invalid(): never { throw new Error(failure); }
 function aborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException(failure, 'AbortError');
 }
-function array(value: unknown): unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) invalid();
-  const size = count(Object.getOwnPropertyDescriptor(value, 'length')?.value, 13);
-  if (Reflect.ownKeys(value).length !== size + 1) invalid();
-  return Array.from({ length: size }, (_, n) => {
-    const field = Object.getOwnPropertyDescriptor(value, String(n));
-    if (!field?.enumerable || !('value' in field)) invalid();
-    return field.value;
-  });
+function uuid(value: unknown): string {
+  const result = dispatchTransferChecks.uuid(value);
+  if (result.length !== 36) invalid();
+  return result;
+}
+function hash(value: unknown): string {
+  const result = dispatchTransferChecks.hash(value);
+  if (result.length !== 64) invalid();
+  return result;
 }
 function totalsFromCatalog(input: NotificationsCatalog): { totals: NotificationsCounts; siteId: string; packageId: string } {
-  const catalog = object(input, ['version', 'scope', 'site_id', 'package_id', 'identity_catalog', 'finance_catalog',
-    'date_runs_supported', 'tables', 'full_site_complete']);
-  if (catalog.version !== 1 || catalog.scope !== 'site-notifications' || catalog.full_site_complete !== false
-    || typeof catalog.date_runs_supported !== 'boolean') invalid();
-  const siteId = uuid(catalog.site_id), packageId = uuid(catalog.package_id);
-  const tables = array(catalog.tables);
-  if (tables.length !== keys.length) invalid();
-  const totals = Object.fromEntries(tables.map((value, i) => {
-    const table = object(value, ['key', 'rows', 'bytes', 'row_hashes_sha256']);
-    if (table.key !== keys[i]) invalid();
-    const rows = count(table.rows, 500000), bytes = count(table.bytes, 268435456);
-    if ((rows === 0) !== (bytes === 0) || (keys[i] === 'notification_automation_date_runs' && !catalog.date_runs_supported && rows !== 0)) invalid();
-    hash(table.row_hashes_sha256);
-    return [keys[i], rows];
-  })) as NotificationsCounts;
-  if (tables.reduce<number>((sum, value) => sum + count(object(value, ['key', 'rows', 'bytes', 'row_hashes_sha256']).bytes), 0) > 1073741824) invalid();
-  return { totals, siteId, packageId };
+  // Validate and snapshot the entire same-package identity/finance dependency chain, not just table totals.
+  const catalog = validateNotificationsCatalog(input);
+  const totals = Object.fromEntries(catalog.tables.map(table => [table.key, table.rows])) as NotificationsCounts;
+  return { totals, siteId: catalog.site_id, packageId: catalog.package_id };
 }
 export interface NotificationsRestoreReceipt {
   readonly success: true;
@@ -97,7 +81,8 @@ export function createNotificationsRestoreSession(jobToken: string, catalog: Not
     const rows = totals[key === 'execution_links' ? 'notification_automation_executions' : key];
     return Array.from({ length: Math.max(1, Math.ceil(rows / 200)) }, (_, n) => ({ key, rows: Math.min(200, rows - n * 200) }));
   });
-  let busy = false, reconciled = false, confirmed: NotificationsRestoreReceipt | null = null;
+  let busy = false, reconciled = false, requiresStatus = false;
+  let confirmed: NotificationsRestoreReceipt | null = null;
   function validate(value: unknown, operation: Operation, planHash?: string, chunkNo?: number): NotificationsRestoreReceipt {
     const result = object(value, ['success', 'scope', 'operation', 'plan_hash', 'source_site_id', 'package_id', 'stage', 'counts', 'totals', 'next_chunk',
       'total_chunks', 'linked_executions', 'generation', 'verified', 'repeated', 'chunk_no', 'rows', 'automation_pending',
@@ -108,7 +93,8 @@ export function createNotificationsRestoreSession(jobToken: string, catalog: Not
       || result.automation_pending !== true || result.maintenance !== true || result.replacement_ready !== false
       || result.full_site_complete !== false || result.total_chunks !== work.length || typeof result.verified !== 'boolean'
       || typeof result.repeated !== 'boolean' || result.generation !== String(next)
-      || (planHash !== undefined && digest !== planHash) || (confirmed && (digest !== confirmed.plan_hash || next < confirmed.next_chunk))) invalid();
+      || (planHash !== undefined && digest !== planHash) || (confirmed && (digest !== confirmed.plan_hash || next < confirmed.next_chunk
+        || (confirmed.verified && !result.verified)))) invalid();
     const expected = Object.fromEntries(keys.map(key => [key, initialKeys.some(k => k === key) ? totals[key] : 0])) as NotificationsCounts;
     let linked = 0;
     for (const item of work.slice(0, next)) {
@@ -121,11 +107,13 @@ export function createNotificationsRestoreSession(jobToken: string, catalog: Not
     if (result.stage !== stage || result.linked_executions !== linked || (result.verified && next !== work.length)) invalid();
     if (operation === 'chunk') {
       if (chunkNo === undefined || result.chunk_no !== chunkNo || result.rows !== work[chunkNo]?.rows
-        || next <= chunkNo || (!result.repeated && next !== chunkNo + 1)) invalid();
+        || next <= chunkNo || (!result.repeated && next !== chunkNo + 1)
+        || (confirmed && chunkNo < confirmed.next_chunk && !result.repeated)) invalid();
     } else if (result.chunk_no !== null || result.rows !== 0) invalid();
-    if (operation === 'begin' && !result.repeated && (next !== 0 || result.verified)) invalid();
+    if (operation === 'begin' && !result.repeated && (confirmed !== null || next !== 0 || result.verified)) invalid();
     if (operation === 'status' && !result.repeated) invalid();
-    if (operation === 'verify' && (!result.verified || next !== work.length || linked !== totals.notification_automation_executions)) invalid();
+    if (operation === 'verify' && (!result.verified || next !== work.length || linked !== totals.notification_automation_executions
+      || (confirmed?.verified && !result.repeated))) invalid();
     return Object.freeze({ success: true, scope: 'site-notifications', operation, plan_hash: digest,
       source_site_id: setup.siteId, package_id: setup.packageId, stage,
       counts: Object.freeze({ ...expected }), totals: Object.freeze({ ...totals }), next_chunk: next, total_chunks: work.length,
@@ -134,10 +122,12 @@ export function createNotificationsRestoreSession(jobToken: string, catalog: Not
       automation_pending: true, maintenance: true, replacement_ready: false, full_site_complete: false });
   }
   async function request(operation: Operation, signal?: AbortSignal, planHash?: string, chunkNo?: number): Promise<NotificationsRestoreReceipt> {
-    aborted(signal);
     if (busy) throw new Error('A notification restore request is already in progress.');
     busy = true;
+    let dispatched = false;
     try {
+      aborted(signal);
+      if (operation !== 'status' && requiresStatus) invalid();
       if (operation === 'begin') hash(planHash);
       if (operation === 'chunk') {
         count(chunkNo, work.length - 1);
@@ -150,6 +140,7 @@ export function createNotificationsRestoreSession(jobToken: string, catalog: Not
       if (operation === 'chunk') args.p_chunk_no = chunkNo;
       const name: RpcName = operation === 'status' ? 'get_employee_import_notifications_restore_status' : `employee_import_notifications_${operation}`;
       const { data, error } = await withSignal(() => {
+        dispatched = true;
         const query = rpc(name, args);
         return signal ? query.abortSignal(signal) : query;
       }, signal);
@@ -159,10 +150,15 @@ export function createNotificationsRestoreSession(jobToken: string, catalog: Not
       aborted(signal);
       confirmed = receipt;
       reconciled = true;
+      requiresStatus = false;
       return receipt;
     } catch {
+      // Even inspecting an untrusted signal can throw. Never expose its getter, reason or backend error.
+      let cancelled = false;
+      try { cancelled = signal?.aborted === true; } catch { /* Keep the failure redacted. */ }
       reconciled = false;
-      if (signal?.aborted) throw new DOMException(failure, 'AbortError');
+      requiresStatus = requiresStatus || dispatched || cancelled || confirmed !== null;
+      if (cancelled) throw new DOMException(failure, 'AbortError');
       throw new Error(failure);
     } finally { busy = false; }
   }
