@@ -35,7 +35,7 @@ function row(key, n = 1) {
 const line = (key, n = 1) => JSON.stringify(row(key, n)).replace('"precise":0', `"precise":${PRECISE}`) + '\n';
 const page = (key, raw, next_after = null) => ({ table_key: key, count: lines(raw).length, ndjson: raw, next_after, sha256: sha(raw) });
 const ack = raw => ({ success: true, rows: lines(raw).length, bytes: Buffer.byteLength(raw), sha256: sha(raw), repeated: false });
-const bound = () => ({ success: true, scope: 'site-chat', repeated: false, full_site_complete: false });
+const bound = () => ({ success: true, scope: 'site-chat', repeated: false, media_pending: true, full_site_complete: false });
 const verified = () => ({ verified: true, scope: 'site-chat', media_pending: true, full_site_complete: false });
 const flags = () => ({ maintenance: true, financial_data_pending: true, dependencies_pending: true, replacement_ready: false, full_site_complete: false });
 function catalog(texts) {
@@ -104,6 +104,19 @@ for (const key of TABLES) test(`${key}: fixed inventory columns, nullability, wr
   const extra = row(key); extra.secret = SECRET; assert.throws(() => api.validateChatRow(JSON.stringify(extra), key), redacted);
   for (const name of ['id', '\\u0069d']) assert.throws(() => api.validateChatRow(line(key).replace('{', `{"${name}":"${row(key).id}",`), key));
 });
+test('bind media_pending is required, true and retained; unknown fields remain rejected', async () => {
+  assert.deepEqual(api.validateChatBind(bound()), bound());
+  for (const mode of ['false', 'missing', 'unknown']) {
+    const receipt = bound();
+    if (mode === 'missing') delete receipt.media_pending;
+    else if (mode === 'false') receipt.media_pending = false;
+    else receipt.extra = true;
+    assert.throws(() => api.validateChatBind(receipt));
+    const f = fixture(); f.target.bind = async () => { f.calls.bind++; return receipt; };
+    await assert.rejects(run(f), e => redacted(e) && e.stagingMayExist);
+    assert.equal(f.calls.bind, 1); assert.equal(f.calls.stages.length, 0); assert.equal(f.calls.plan, 0); assert.equal(f.calls.cleanup, 1);
+  }
+});
 test('physical text administrator IDs are not coerced to UUIDs', () => {
   for (const key of ['cs_message_templates', 'customer_auto_messages']) { const r = row(key); r.admin_id = 'legacy-admin-text'; api.validateChatRow(JSON.stringify(r), key); }
 });
@@ -116,6 +129,14 @@ test('SQL NULL marker is required and distinguishes JSON null and every raw JSON
   }
   for (const marker of [null, 'false', 0]) assert.throws(() => api.validateChatRow(JSON.stringify({ ...row(key), rating_data_sql_null: marker }), key));
   const r = row(key); delete r.rating_data_sql_null; assert.throws(() => api.validateChatRow(JSON.stringify(r), key));
+});
+test('SQL NULL and JSON null remain separate original rows through both reads and staging', async () => {
+  const f = fixture(0), key = TABLES[4];
+  f.texts[key] = [true, false].map((sqlNull, i) => JSON.stringify({ ...row(key, i + 1), rating_data: null, rating_data_sql_null: sqlNull }) + '\n').join('');
+  f.cat = catalog(f.texts); await run(f);
+  const staged = f.calls.stages.find(s => s.key === key);
+  assert.equal(staged.raw, f.texts[key]); assert.deepEqual(lines(staged.raw).map(s => JSON.parse(s).rating_data_sql_null), [true, false]);
+  assert.equal(f.calls.open.filter(path => path === api.chatEntryPath(key)).length, 2);
 });
 test('nested rating JSON preserves number lexemes, limits depth32 and rejects escaped duplicates/invalid Unicode', () => {
   const key = TABLES[4], raw = line(key);

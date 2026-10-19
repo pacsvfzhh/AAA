@@ -80,8 +80,8 @@ export function createChatExportSession(packageId: string, adminPassword: string
             });
             return signal ? query.abortSignal(signal) : query;
           }, value => {
-            const record = object(value, ['success', 'job_id', 'job_token', 'site_id', 'catalog', 'scope', 'full_site_complete']);
-            if (record.success !== true || record.scope !== 'site-chat' || record.full_site_complete !== false) invalid();
+            const record = object(value, ['success', 'job_id', 'job_token', 'site_id', 'catalog', 'scope', 'media_pending', 'full_site_complete']);
+            if (record.success !== true || record.scope !== 'site-chat' || record.media_pending !== true || record.full_site_complete !== false) invalid();
             const snapshot = validateChatCatalog(record.catalog);
             if (snapshot.package_id !== packageId || uuid(record.site_id) !== snapshot.site_id) invalid();
             return { catalog: snapshot, jobId: uuid(record.job_id), jobToken: uuid(record.job_token) };

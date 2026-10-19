@@ -2398,6 +2398,37 @@ export interface Database {
       };
     };
     Functions: {
+      employee_export_chat_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
+        Returns: { success: true; job_id: string; job_token: string; site_id: string;
+          catalog: import('../lib/employeeTransfer/chatTransfer').ChatCatalog;
+          scope: 'site-chat'; media_pending: true; full_site_complete: false };
+      };
+      get_employee_export_chat_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: import('../lib/employeeTransfer/chatTransfer').ChatPage;
+      };
+      employee_export_chat_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { verified: true; scope: 'site-chat'; media_pending: true; full_site_complete: false };
+      };
+      employee_export_chat_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { success: true; scope: 'site-chat'; media_pending: true; full_site_complete: false };
+      };
+      employee_import_chat_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string;
+          p_catalog: import('../lib/employeeTransfer/chatTransfer').ChatCatalog };
+        Returns: { success: true; scope: 'site-chat'; repeated: boolean; media_pending: true; full_site_complete: false };
+      };
+      employee_import_chat_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: { success: true; rows: number; bytes: number; sha256: string; repeated: boolean };
+      };
+      get_employee_import_chat_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/chatTransfer').ChatPlan;
+      };
       employee_export_notifications_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string;

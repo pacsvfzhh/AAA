@@ -22,7 +22,7 @@ const raw = JSON.stringify({ id: SESSION, customer_id: SESSION, employee_id: OTH
   source_type: 'ccc_service', title: null, rich_card_content_id: null, subtitle: null, source_template_id: null, source_auto_message_id: null,
   content_frozen: false, rating_data_sql_null: false }).replace('"amount":0', '"amount":12345678901234567890.12345678901234567890') + '\n';
 const ack = (text = raw) => ({ success: true, rows: text ? text.split('\n').length - 1 : 0, bytes: Buffer.byteLength(text), sha256: sha(text), repeated: false });
-const bound = () => ({ success: true, scope: 'site-chat', repeated: false, full_site_complete: false });
+const bound = () => ({ success: true, scope: 'site-chat', repeated: false, media_pending: true, full_site_complete: false });
 const verified = () => ({ verified: true, scope: 'site-chat', media_pending: true, full_site_complete: false });
 const closed = () => ({ success: true, scope: 'site-chat', media_pending: true, full_site_complete: false });
 function catalog(withMessage = true) {
@@ -35,7 +35,7 @@ function catalog(withMessage = true) {
     tables: TABLES.map(key => ({ key, rows: key === KEY && withMessage ? 1 : 0, bytes: key === KEY && withMessage ? Buffer.byteLength(raw) : 0,
       row_hashes_sha256: sha(key === KEY && withMessage ? sha(raw) : '') })), full_site_complete: false };
 }
-const begin = () => ({ success: true, job_id: JOB, job_token: TOKEN, site_id: SITE, catalog: catalog(), scope: 'site-chat', full_site_complete: false });
+const begin = () => ({ success: true, job_id: JOB, job_token: TOKEN, site_id: SITE, catalog: catalog(), scope: 'site-chat', media_pending: true, full_site_complete: false });
 const page = (text = raw, key = KEY) => ({ table_key: key, count: text ? text.split('\n').length - 1 : 0, ndjson: text, next_after: null, sha256: sha(text) });
 const plan = () => ({ scope: 'site-chat', checked: true, can_restore: false, restore_pending: true, media_pending: true,
   counts: Object.fromEntries(catalog().tables.map(t => [t.key, t.rows])), employees: 0, roles: [], conflicts: [], plan_hash: 'a'.repeat(64),
@@ -140,6 +140,16 @@ for (const operation of ['begin', 'page', 'verify', 'close', 'bind', 'stage', 'p
     await assert.rejects(fn(), e => redacted(e) && /unknown|unconfirmed/.test(e.message)); assert.equal(h.calls.length, before + 1);
     if (operation === 'begin') { assert.equal(s.identity(), null); await assert.rejects(s.begin()); assert.equal(h.calls.length, before + 1); }
   }
+});
+for (const operation of ['begin', 'bind']) for (const mode of ['false', 'missing']) test(`${operation} rejects ${mode} media_pending without confirming or retrying`, async () => {
+  const h = harness(), s = operation === 'begin' ? api.createChatExportSession(PACKAGE, SECRET) : api.createChatImportSession(TOKEN);
+  const result = operation === 'begin' ? begin() : bound();
+  if (mode === 'missing') delete result.media_pending; else result.media_pending = false;
+  h.respond(result);
+  await assert.rejects(operation === 'begin' ? s.begin() : s.target.bind(catalog()), redacted);
+  if (operation === 'begin') { assert.equal(s.identity(), null); await assert.rejects(s.begin()); }
+  else { await assert.rejects(s.target.stage(KEY, 0, raw)); await assert.rejects(s.plan()); }
+  assert.equal(h.calls.length, 1);
 });
 test('malformed begin/verify/close/bind/stage responses fail closed and cannot confer completion', async () => {
   for (const corrupt of [v => { v.media_pending = false; }, v => { v.full_site_complete = true; }, v => { v.extra = SECRET; }]) {

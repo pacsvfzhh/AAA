@@ -217,11 +217,13 @@ export function validateChatVerification(value: unknown): {
   if (record.verified !== true || record.scope !== 'site-chat' || record.media_pending !== true || record.full_site_complete !== false) invalid();
   return { verified: true, scope: 'site-chat', media_pending: true, full_site_complete: false };
 }
-export function validateChatBind(value: unknown): { success: true; scope: 'site-chat'; full_site_complete: false; repeated: boolean } {
-  const record = object(value, ['success', 'scope', 'full_site_complete', 'repeated']);
-  if (record.success !== true || record.scope !== 'site-chat' || record.full_site_complete !== false
+export function validateChatBind(value: unknown): {
+  success: true; scope: 'site-chat'; media_pending: true; full_site_complete: false; repeated: boolean;
+} {
+  const record = object(value, ['success', 'scope', 'media_pending', 'full_site_complete', 'repeated']);
+  if (record.success !== true || record.scope !== 'site-chat' || record.media_pending !== true || record.full_site_complete !== false
     || typeof record.repeated !== 'boolean') invalid();
-  return { success: true, scope: 'site-chat', full_site_complete: false, repeated: record.repeated };
+  return { success: true, scope: 'site-chat', media_pending: true, full_site_complete: false, repeated: record.repeated };
 }
 export function validateChatClose(value: unknown): {
   success: true; scope: 'site-chat'; media_pending: true; full_site_complete: false;

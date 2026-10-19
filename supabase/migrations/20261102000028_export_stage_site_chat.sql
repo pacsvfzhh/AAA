@@ -82,6 +82,26 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION private.employee_transfer_chat_unique_json(p_value json,p_depth integer DEFAULT 0)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE v_item json;
+BEGIN
+  IF json_typeof(p_value) IN ('object','array') AND p_depth>32 THEN RETURN false;END IF;
+  IF json_typeof(p_value)='object' THEN
+    IF (SELECT count(*)<>count(DISTINCT key) FROM json_each(p_value)) THEN RETURN false;END IF;
+    FOR v_item IN SELECT value FROM json_each(p_value) LOOP
+      IF NOT private.employee_transfer_chat_unique_json(v_item,p_depth+1) THEN RETURN false;END IF;
+    END LOOP;
+  ELSIF json_typeof(p_value)='array' THEN
+    FOR v_item IN SELECT value FROM json_array_elements(p_value) LOOP
+      IF NOT private.employee_transfer_chat_unique_json(v_item,p_depth+1) THEN RETURN false;END IF;
+    END LOOP;
+  END IF;
+  RETURN true;
+END;
+$$;
+
 CREATE FUNCTION private.employee_transfer_check_chat_row(p_key text,p_row jsonb)
 RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
@@ -108,9 +128,7 @@ BEGIN
       PERFORM (v_value#>>'{}')::integer;
     ELSIF v_type='boolean' THEN IF jsonb_typeof(v_value)<>'boolean' THEN RAISE EXCEPTION 'Invalid chat boolean.';END IF;
     ELSIF v_type='text' THEN IF jsonb_typeof(v_value)<>'string' THEN RAISE EXCEPTION 'Invalid chat text.';END IF;
-    ELSIF v_type='jsonb' THEN
-      -- rating_data 为任意原始对象或 NULL，不投影其内部业务字段或重序列化数值。
-      IF jsonb_typeof(v_value)<>'object' THEN RAISE EXCEPTION 'Invalid chat rating data.';END IF;
+    ELSIF v_type='jsonb' THEN NULL;
     ELSIF v_type='timestamp with time zone' THEN
       IF jsonb_typeof(v_value)<>'string' OR (v_value#>>'{}') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?(Z|\+00:00)$' THEN RAISE EXCEPTION 'Invalid chat timestamp.';END IF;
       v_time:=(v_value#>>'{}')::timestamptz;
@@ -319,7 +337,7 @@ BEGIN
     IF octet_length(v_line)+1>65536 THEN RAISE EXCEPTION 'Chat row exceeds limits.';END IF;
     BEGIN
       v_json:=v_line::json;
-      IF json_typeof(v_json) IS DISTINCT FROM 'object' OR NOT private.employee_transfer_unique_json(v_json) THEN RAISE EXCEPTION 'Invalid JSON';END IF;
+      IF json_typeof(v_json) IS DISTINCT FROM 'object' OR NOT private.employee_transfer_chat_unique_json(v_json) THEN RAISE EXCEPTION 'Invalid JSON';END IF;
       PERFORM private.employee_transfer_check_chat_row(p_table_key,v_json::jsonb);
     EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'Invalid chat import row.' USING ERRCODE='22023';END;
     IF v_cursor IS NOT NULL AND v_cursor COLLATE "C">=(v_json->>'id') COLLATE "C" THEN RAISE EXCEPTION 'Chat rows must be strictly ordered.';END IF;
@@ -375,7 +393,7 @@ $$;
 -- 只撤销本文件新增函数的权限，保持既有媒体 service_role RPC 授权及旧函数 ACL 不变。
 REVOKE ALL ON FUNCTION private.employee_transfer_chat_keys(),private.employee_transfer_chat_spec(),
   private.employee_transfer_chat_relation(text),private.employee_transfer_chat_schema(),
-  private.employee_transfer_chat_cursor(text,jsonb),private.employee_transfer_chat_query(text),
+  private.employee_transfer_chat_cursor(text,jsonb),private.employee_transfer_chat_query(text),private.employee_transfer_chat_unique_json(json,integer),
   private.employee_transfer_check_chat_row(text,jsonb),private.employee_transfer_check_chat_catalog(jsonb),
   private.employee_transfer_chat_catalog(uuid),private.employee_transfer_chat_owner(private.employee_transfer_jobs),
   private.employee_transfer_chat_input(uuid,text),private.employee_transfer_check_chat_input(private.employee_transfer_jobs)
