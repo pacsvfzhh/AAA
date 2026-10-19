@@ -422,6 +422,7 @@ function mediaUrls(content: string, direct: boolean): string[] {
         if (!quoted || value === null) invalid();
         urls.push(value);
       } else if (field === 'href' && value !== null) {
+        if (value.includes('&')) invalid();
         if (/^[ \t\n\r\f\v]*(data|blob):/i.test(value)) invalid();
         if (/\/storage\/v1\/object\//i.test(value)) {
           if (!quoted) invalid();

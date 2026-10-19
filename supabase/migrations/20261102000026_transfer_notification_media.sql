@@ -55,6 +55,7 @@ BEGIN
         IF NOT v_quoted OR v_value IS NULL THEN RAISE EXCEPTION 'Notification media attributes must have quoted URLs.';END IF;
         v_urls:=array_append(v_urls,v_value);
       ELSIF v_attr='href' THEN
+        IF strpos(v_value,'&')>0 THEN RAISE EXCEPTION 'Encoded notification attachment URLs are unsupported; no file was omitted.';END IF;
         IF v_value ~* '^[[:space:]]*(data|blob):' THEN RAISE EXCEPTION 'Inline notification attachments are unsupported.';END IF;
         IF v_value ~* '/storage/v1/object/' THEN
           IF NOT v_quoted THEN RAISE EXCEPTION 'Notification storage attachment URLs must be quoted.';END IF;

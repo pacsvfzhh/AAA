@@ -307,6 +307,8 @@ const unsafe = [
   '<script>anything</script>', '<STYLE>nothing</STYLE>', '<img src="unterminated>', '<img src>', '<img src="">', '<img /broken>',
   `<p style="background:url(${URLS[0]})">x</p>`, '<p style="background:u&#114;l(x)">x</p>', '<p style="background:u\\72l(x)">x</p>',
   '<p style="/*hidden*/">x</p>', '<a href="data:application/pdf,x">x</a>', '<a href="BLOB:x">x</a>',
+  `<a href="${URLS[4].replace('/storage/', '/storage&#47;')}">attachment</a>`,
+  `<a href="${URLS[4].replace('https:', 'https&colon;')}">attachment</a>`,
   `<a href=${URLS[4]}>pdf</a>`, `<a href="${URLS[0].replace('/public/', '/sign/')}?token=x">x</a>`,
   URLS[0] + '?token=secret', URLS[0] + '#fragment', URLS[0] + '&amp;x', URLS[0] + '%20', URLS[0] + ',unsafe',
   URLS[0].replace('https:', 'http:'), URLS[0].replace('.supabase.co', '.supabase.co.evil.invalid'), URLS[0].replace('https://', 'https://user:password@'),

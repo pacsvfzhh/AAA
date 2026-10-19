@@ -68,6 +68,7 @@ BEGIN
   FOREACH v_key IN ARRAY private.employee_transfer_notifications_keys() LOOP
     IF private.employee_transfer_notifications_relation(v_key) IS NOT NULL THEN EXECUTE format('LOCK TABLE ONLY public.%I IN ACCESS EXCLUSIVE MODE',v_key); END IF;
   END LOOP;
+  LOCK TABLE private.content_audit_recipient_versions IN ACCESS EXCLUSIVE MODE;
   LOCK TABLE public.notification_automation_queue IN SHARE MODE;
   PERFORM pg_advisory_xact_lock_shared(hashtextextended('employee-transfer-maintenance',0));
 END;
@@ -99,7 +100,7 @@ $$;
 
 -- Standalone precise bypass, leaving the old transfer policy and all SQL24/25 contracts unchanged.
 -- Reviewed side effects: mode normalization, inheriting CURRENT task delivery mode,
--- execution plan re-snapshot, and audit recipient-version DML outside the thirteen tables.
+-- execution plan re-snapshot. Recipient evidence is retained by its original trigger.
 -- There are no baseline/queue/updated_at triggers on these tables in the audited inventory.
 CREATE FUNCTION private.employee_transfer_notification_restore_bypass(p_restore jsonb DEFAULT NULL)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
@@ -114,7 +115,7 @@ BEGIN
       FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace='public'::regnamespace AND (c.relname,t.tgname) IN (
         ('messages','sync_messages_delivery_mode'),('messages','inherit_automation_message_delivery_mode'),
         ('message_templates','sync_message_templates_delivery_mode'),('notification_automation_tasks','sync_notification_automation_tasks_delivery_mode'),
-        ('notification_automation_executions','snapshot_notification_automation_execution_plan'),('message_recipients','remember_content_audit_recipient'));
+        ('notification_automation_executions','snapshot_notification_automation_execution_plan'));
     FOR v_item IN SELECT value FROM jsonb_array_elements(v_entries) LOOP
       EXECUTE format('ALTER TABLE ONLY public.%I DISABLE TRIGGER %I',v_item->>'table',v_item->>'trigger');
     END LOOP;
@@ -149,7 +150,9 @@ BEGIN
     RAISE EXCEPTION 'Unsupported notification write permit.';
   END IF;
   INSERT INTO private.employee_transfer_write_permits(transaction_id,job_id,table_names)
-    SELECT pg_current_xact_id(),p_job.id,array_agg('public.'||key) FROM unnest(p_keys) AS s(key);
+    SELECT pg_current_xact_id(),p_job.id,array_agg('public.'||key)||
+      CASE WHEN 'message_recipients'=ANY(p_keys) THEN ARRAY['private.content_audit_recipient_versions'] ELSE ARRAY[]::text[] END
+      FROM unnest(p_keys) AS s(key);
 END;
 $$;
 
@@ -250,6 +253,11 @@ BEGIN
     ELSE 't.id=r.id' END;
   EXECUTE format('SELECT to_jsonb(t) FROM public.%I t,jsonb_populate_record(NULL::public.%I,$1) r WHERE %s',p_key,p_key,v_where) INTO v_actual USING p_row;
   IF v_actual IS DISTINCT FROM p_row THEN RAISE EXCEPTION 'Notification committed row differs in content or references.'; END IF;
+  IF p_key='message_recipients' AND EXISTS(SELECT 1 FROM public.messages WHERE id=(p_row->>'message_id')::uuid AND automation_execution_id IS NULL)
+    AND NOT EXISTS(SELECT 1 FROM private.content_audit_recipient_versions WHERE message_id=(p_row->>'message_id')::uuid
+      AND recipient_id=(p_row->>'recipient_id')::uuid AND recipient_data=p_row) THEN
+    RAISE EXCEPTION 'Restored notification recipient evidence is missing or changed.';
+  END IF;
 END;
 $$;
 
@@ -381,6 +389,10 @@ BEGIN
     RAISE EXCEPTION 'A current conflict-free notification plan and independent sealed backup are required.';
   END IF;
   PERFORM private.employee_transfer_notification_check_snapshot(v_backup);
+  IF EXISTS(SELECT 1 FROM private.content_audit_recipient_versions AS v
+    JOIN private.employee_transfer_notifications_input(v_job.id,'messages') AS m ON m.id=v.message_id::text) THEN
+    RAISE EXCEPTION 'Target notification recipient evidence already exists; no evidence was overwritten.';
+  END IF;
   IF NOT COALESCE(private.employee_transfer_notification_media_ready(v_job,false),false) THEN RAISE EXCEPTION 'Verified notification media is required before begin.'; END IF;
   FOREACH v_key IN ARRAY private.employee_transfer_notifications_keys() LOOP
     SELECT count(*) INTO v_total FROM private.employee_transfer_notifications_input(v_job.id,v_key);

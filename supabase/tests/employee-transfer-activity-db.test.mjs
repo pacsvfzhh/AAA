@@ -516,6 +516,7 @@ before(async () => {
     export * from './src/lib/employeeTransfer/activityApi.ts'; export * from './src/lib/employeeTransfer/activityTransfer.ts';
     export * from './src/lib/employeeTransfer/notificationsApi.ts'; export * from './src/lib/employeeTransfer/notificationsTransfer.ts';
     export * from './src/lib/employeeTransfer/notificationsConfigurationApi.ts';
+    export * from './src/lib/employeeTransfer/notificationsRestoreApi.ts';
     export {setHarness} from 'activity-db:state';`, resolveDir: root }, bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2020',
     plugins: [{ name: 'local-activity-anon-sql', setup(builder) {
       builder.onResolve({ filter: /^(?:activity-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'activity-db' }));
@@ -2003,7 +2004,8 @@ const nrBegin = (p, extra = {}) => rpc('employee_import_notifications_begin', { 
 const nrChunk = (no, extra = {}) => rpc('employee_import_notifications_chunk', { ...auth(), p_chunk_no: no, ...extra });
 const nrVerify = (extra = {}) => rpc('employee_import_notifications_verify', { ...auth(), ...extra });
 const nrStatus = (extra = {}) => rpc('get_employee_import_notifications_restore_status', { ...auth(), ...extra });
-const nrOutside = () => business().then(values => values.filter(r => !KEYS.notifications.some(key => r.name === `public.${key}`)));
+const nrOutside = () => business().then(values => values.filter(r => r.name !== 'private.content_audit_recipient_versions'
+  && !KEYS.notifications.some(key => r.name === `public.${key}`)));
 const nrWorkKeys = input => ['notification_automation_executions', 'messages', 'execution_links', 'message_recipients', 'broadcast_messages',
   'broadcast_recipients', 'notification_automation_progress', 'notification_automation_date_runs', 'notification_automation_failures']
   .flatMap(key => Array(Math.max(1, Math.ceil(lines(input.texts[key === 'execution_links' ? 'notification_automation_executions' : key]).length / 200))).fill(key));
@@ -2054,6 +2056,12 @@ async function nrAssertRows({ input, p }) {
   assert.deepEqual(sequenceRows.map(r => r.id), sourceOrder.map(r => r.id));
   for (let i = 1; i < sequenceRows.length; i++) assert.ok(BigInt(sequenceRows[i].seq) > BigInt(sequenceRows[i - 1].seq));
   const seq = Object.fromEntries(sequenceRows.map(r => [r.id, r.seq]));
+  const recipientEvidence = await rows(db, `SELECT r.id FROM public.message_recipients r JOIN public.messages m ON m.id=r.message_id
+    LEFT JOIN private.content_audit_recipient_versions v ON v.message_id=r.message_id AND v.recipient_id=r.recipient_id AND v.recipient_data=to_jsonb(r)
+    WHERE m.automation_execution_id IS NULL AND v.message_id IS NULL`);
+  assert.deepEqual(recipientEvidence, [], 'manual recipient snapshots are complete and exact');
+  assert.equal(await scalar(db, `SELECT count(*)::int FROM private.content_audit_recipient_versions v JOIN public.messages m ON m.id=v.message_id
+    WHERE m.automation_execution_id IS NOT NULL`), 0, 'automated recipients do not acquire manual evidence');
   for (const key of KEYS.notifications) {
     let text = input.texts[key];
     for (const [from, to] of Object.entries({ ...adminMap, ...map })) text = text.replaceAll(from, to);
@@ -2107,6 +2115,158 @@ test('notification restore SQL27 replaces exact members, pauses extra tasks, pre
   assert.deepEqual(await rows(db, 'SELECT to_jsonb(r)::text AS body FROM public.notification_automation_tasks r WHERE plan_id=$1', [C.outside]), unrelated);
   assert.deepEqual(await nrOutside(), outside); assert.deepEqual(await triggers(), original); await stillClosed();
 }));
+
+// SQL-only acceptance: nrMedia supplies synthetic Edge attestations, NEVER actual Storage evidence.
+async function nrSavepoint(fn) {
+  const point = `notification_restore_${++sequence}`; await db.exec(`SAVEPOINT ${point}`);
+  try { return await fn(); }
+  finally { await db.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); }
+}
+async function nrRejectUnchanged(actions, pattern) {
+  const before = await business(), saved = await transferSnapshot(), original = await triggers();
+  for (const action of actions) await assert.rejects(action(), pattern);
+  assert.deepEqual(await business(), before); assert.deepEqual(await transferSnapshot(), saved);
+  assert.deepEqual(await triggers(), original); assert.equal(await permits(), 0);
+}
+
+test('notification media SQL26 refuses entity-encoded attachment URLs instead of omitting their files', () => transaction(async () => {
+  for (const url of [NR_URLS[2].replace('/storage/', '/storage&#47;'), NR_URLS[2].replace('https:', 'https&colon;')]) {
+    await nrSavepoint(() => assert.rejects(scalar(db, 'SELECT private.employee_transfer_notification_media_urls($1,false)', [`<a href="${url}">attachment</a>`]), /Encoded notification attachment URLs/));
+  }
+  assert.deepEqual(await scalar(db, 'SELECT private.employee_transfer_notification_media_urls($1,false)', ['<a href="https://docs.invalid/guide">guide</a>']), []);
+}));
+
+test('notification restore SQL27 acceptance blocks missing sealed backup and incomplete media before any business write', () => transaction(async () => {
+  const input = nrInput(); await nstage(input); const p = await ncplan(), before = await business();
+  await nrRejectUnchanged([() => nrBegin(p)], /independent sealed backup/);
+  await nrSavepoint(async () => {
+    await nbprepare(p); await nrRejectUnchanged([() => nrBegin(p)], /independent sealed backup/);
+  });
+  await nrSeal(input, p);
+  await nrSavepoint(async () => {
+    await localChange(db, 'private.content_audit_recipient_versions', `INSERT INTO private.content_audit_recipient_versions(message_id,recipient_id,recipient_data)
+      VALUES($1,$2,'{"historical_evidence":true}'::jsonb)`, [N.manual, F.history]);
+    await nrRejectUnchanged([() => nrBegin(p)], /recipient evidence already exists/);
+  });
+  await nrRejectUnchanged([() => nrBegin(p)], /Verified notification media/);
+  await nrMediaBind();
+  for (const file of nrFiles().slice(0, -1)) await nrCommit(file);
+  await nrRejectUnchanged([() => nrBegin(p)], /Verified notification media/);
+  assert.deepEqual(await business(), before); assert.equal((await state()).notification_restore, undefined); await stillClosed();
+}));
+
+test('notification restore SQL27 acceptance rechecks post-begin configuration finance triggers and expired or foreign authority', () => transaction(async () => {
+  const prepared = await nrReady(); const begun = await nrBegin(prepared.p); assert.equal(begun.next_chunk, 0);
+  for (const [relation, sql, args, pattern] of [
+    ['public.notification_automation_tasks', "UPDATE public.notification_automation_tasks SET title_template='post-begin drift' WHERE id=$1", [N.recurring], /target fingerprint changed/],
+    ['public.wallets', 'UPDATE public.wallets SET available_balance=available_balance+1 WHERE user_id=$1', [F.history], /differ|changed|finance|wallet/i],
+    [null, 'ALTER TABLE public.messages DISABLE TRIGGER classify_notification_origin', [], /Unreviewed notification restore triggers/],
+  ]) await nrSavepoint(async () => {
+    if (relation) await localChange(db, relation, sql, args); else await db.exec(sql);
+    await nrRejectUnchanged([() => nrBegin(prepared.p), () => nrChunk(0), () => nrVerify(), () => nrStatus()], pattern);
+  });
+  const denied = extra => [() => nrBegin(prepared.p, extra), () => nrChunk(0, extra), () => nrVerify(extra), () => nrStatus(extra)];
+  for (const token of [branch, emergency, other, randomUUID()])
+    await nrRejectUnchanged(denied({ p_admin_session_token: token }), /Super administrator|invalid or expired/i);
+  await nrRejectUnchanged(denied({ p_job_token: randomUUID() }), /invalid or expired/i);
+  for (const [sql, args] of [
+    ["UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1", [NEW.root]],
+    ["UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", [task.job_id]],
+    ["UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1", [task.job_id]],
+  ]) await nrSavepoint(async () => { await db.query(sql, args); await nrRejectUnchanged(denied({}), /invalid or expired/i); });
+  assert.equal((await nrStatus()).next_chunk, 0); await stillClosed();
+}));
+
+test('notification restore SQL27 acceptance late chunk exception rolls back rows maps progress permits and triggers then status allows explicit retry', () => transaction(async () => {
+  const outside = await nrOutside(), prepared = await nrReady(), begun = await nrBegin(prepared.p);
+  const recipientChunk = nrWorkKeys(prepared.input).indexOf('message_recipients'); assert.ok(recipientChunk > 0);
+  await nrChunks(begun, recipientChunk); const status = await nrStatus(), original = await triggers();
+  // Inject AFTER all 200 recipient writes/mappings while the real write permit still exists.
+  // No protective trigger, FK, maintenance guard or permit is disabled/manufactured by this test.
+  await db.exec(`CREATE FUNCTION public.notification_restore_late_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.action='trigger_restore' THEN
+      IF (SELECT count(*) FROM public.message_recipients)<>200 OR (SELECT count(*) FROM private.employee_transfer_write_permits)<>1
+        THEN RAISE EXCEPTION 'SQL27 late-failure precondition was not reached'; END IF;
+      RAISE EXCEPTION 'late SQL27 chunk failure';
+    END IF; RETURN NEW; END $$;
+    CREATE TRIGGER notification_restore_late_fail BEFORE INSERT ON private.employee_transfer_events FOR EACH ROW EXECUTE FUNCTION public.notification_restore_late_fail()`);
+  await nrRejectUnchanged([() => nrChunk(recipientChunk)], /late SQL27 chunk failure/);
+  assert.deepEqual(await nrStatus(), status);
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key IN ('notification-delivery-map','notification-restore-done') AND (table_key='notification-delivery-map' OR chunk_no=$2)", [task.job_id, recipientChunk]), 0);
+  assert.equal(await scalar(db, 'SELECT private.employee_transfer_pending_trigger_bypass() IS NULL'), true);
+  await db.exec('DROP TRIGGER notification_restore_late_fail ON private.employee_transfer_events; DROP FUNCTION public.notification_restore_late_fail()');
+  const retried = await nrChunk(status.next_chunk); assert.equal(retried.repeated, false); assert.equal(retried.next_chunk, recipientChunk + 1);
+  const written = await business(), maps = await rows(db, "SELECT * FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key='notification-delivery-map' ORDER BY employee_id", [task.job_id]);
+  assert.equal(maps.length, 200); const reconciled = await nrStatus(); assert.equal(reconciled.next_chunk, recipientChunk + 1);
+  const repeated = await nrChunk(recipientChunk); assert.equal(repeated.repeated, true); assert.equal(repeated.generation, reconciled.generation);
+  assert.deepEqual(await business(), written); assert.deepEqual(await rows(db, "SELECT * FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key='notification-delivery-map' ORDER BY employee_id", [task.job_id]), maps);
+  await nrChunks(reconciled); await nrMedia('recheck-import'); assert.equal((await nrVerify()).verified, true); await nrAssertRows(prepared);
+  assert.deepEqual(await nrOutside(), outside); assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+test('notification restore SQL27 acceptance final requires every file rechecked at current generation and rejects delayed old commits', () => transaction(async () => {
+  const prepared = await nrReady(), begun = await nrBegin(prepared.p), files = nrFiles();
+  await nrRejectUnchanged([() => nrVerify()], /restore is incomplete/);
+  await nrMedia('recheck-import'); const delayed = await nrAuthorize(files[0], 'recheck-import'); assert.equal(delayed.generation, '0');
+  const complete = await nrChunks(begun); assert.notEqual(complete.generation, delayed.generation);
+  await nrRejectUnchanged([() => nrCommit(files[0], 'recheck-import', { p_generation: delayed.generation })], /read generation changed/);
+  await nrRejectUnchanged([() => nrVerify()], /Final notification media readback is incomplete/);
+  for (const file of files.slice(0, -1)) await nrCommit(file, 'recheck-import');
+  await nrRejectUnchanged([() => nrVerify()], /Final notification media readback is incomplete/);
+  const last = files.at(-1); await nrCommit(last, 'upload'); // Current generation alone is NOT a recheck.
+  await nrRejectUnchanged([() => nrVerify()], /Final notification media readback is incomplete/);
+  await nrCommit(last, 'recheck-import'); const verified = await nrVerify(); assert.equal(verified.verified, true); assert.equal(verified.repeated, false);
+  const before = await business(); assert.equal((await nrVerify()).repeated, true); assert.equal((await nrStatus()).verified, true);
+  await nrAssertRows(prepared); assert.deepEqual(await business(), before); await stillClosed();
+}));
+
+// Last notification test: a dump clone provides REAL independent request COMMITs, not savepoints.
+// Keep the original activity commit/cancel test below absolutely last and its database untouched.
+test('notification restore SQL27 acceptance committed clone resumes real anon SQL through new notificationsRestoreApi factories after lost response', async () => {
+  const originalDb = db, originalBusiness = await business(), originalTransfer = await transferSnapshot(); let clone;
+  try {
+    clone = new PGlite({ loadDataDir: await db.dumpDataDir('none'), extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await clone.waitReady; db = clone;
+    const outside = await nrOutside(), originalTriggers = await triggers(); let prepared;
+    await transaction(async () => { prepared = await nrReady(); }, db, true);
+    const calls = []; let loseChunkResponse = true;
+    modules.setHarness({ token: session, rpc(name, args) {
+      const query = { abortSignal() { return query; }, then(resolve, reject) {
+        calls.push(name);
+        return transaction(() => on(db, name, args), db, true).then(data => {
+          if (name === 'employee_import_notifications_chunk' && loseChunkResponse) {
+            loseChunkResponse = false; throw new Error('synthetic response loss AFTER SQL COMMIT');
+          }
+          return { data, error: null };
+        }).then(resolve, reject);
+      } }; return query;
+    } });
+    const first = modules.createNotificationsRestoreSession(task.job_token, prepared.input.catalog);
+    assert.equal((await first.begin(prepared.p.plan_hash)).next_chunk, 0);
+    await assert.rejects(first.chunk(0), /outcome is unknown or unconfirmed/); assert.equal(calls.length, 2);
+    await assert.rejects(first.chunk(0), /outcome is unknown or unconfirmed/); assert.equal(calls.length, 2, 'no automatic or unreconciled write retry');
+    const resumed = modules.createNotificationsRestoreSession(task.job_token, prepared.input.catalog), saved = await transferSnapshot();
+    const status = await resumed.status(); assert.equal(status.next_chunk, 1); assert.equal(status.generation, '1'); assert.equal(status.verified, false);
+    assert.deepEqual(await transferSnapshot(), saved, 'STABLE status does not renew heartbeat');
+    const written = await business(); assert.equal((await resumed.chunk(0)).repeated, true); assert.deepEqual(await business(), written);
+    let receipt = status;
+    for (let no = status.next_chunk; no < status.total_chunks; no++) receipt = await resumed.chunk(no);
+    assert.equal(receipt.stage, 'ready_to_verify');
+    await transaction(() => nrMedia('recheck-import'), db, true); // Synthetic attestations, not Storage reads.
+    const final = modules.createNotificationsRestoreSession(task.job_token, prepared.input.catalog);
+    assert.equal((await final.status()).next_chunk, receipt.total_chunks); assert.equal((await final.verify()).verified, true);
+    assert.equal((await final.verify()).repeated, true);
+    await transaction(async () => {
+      await nrAssertRows(prepared); assert.deepEqual(await nrOutside(), outside); assert.deepEqual(await triggers(), originalTriggers); await stillClosed();
+    }, db, true);
+    const restored = await business(); await transaction(() => rpc('employee_transfer_cancel', auth()), db, true);
+    await assert.rejects(final.status(), /outcome is unknown or unconfirmed/);
+    await transaction(async () => {
+      assert.deepEqual(await business(), restored); assert.equal((await nbget(prepared.backup)).backup_id, prepared.backup.backup_id); await stillClosed();
+    }, db, true);
+    assert.equal(calls.filter(name => name === 'employee_import_notifications_chunk').length, receipt.total_chunks + 1);
+  } finally { db = originalDb; await clone?.close(); transport(); }
+  assert.deepEqual(await business(), originalBusiness); assert.deepEqual(await transferSnapshot(), originalTransfer);
+});
 
 // Last: real COMMITs are intentional. No outer rollback can masquerade as cross-request continuation.
 test('separate committed activity transactions resume via a new activityApi, then cancellation preserves history and dirty maintenance', async () => {
