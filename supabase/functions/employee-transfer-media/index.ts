@@ -1,14 +1,12 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.57.4';
 import { createEmployeeTransferMediaHandler } from './handler.ts';
 
-// Deployment may use verify_jwt=false: SQL22 authenticates BOTH the administrator
-// session and transfer job on authorize AND commit. No config is changed here.
+// verify_jwt=false is safe only because SQL22 revalidates both tokens at commit.
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 let db: SupabaseClient | undefined;
 function client() {
-  // Lazy initialization keeps configuration/SDK failures inside the handler's
-  // sanitized error boundary. Never forward a caller's Authorization header.
+  // Lazy creation keeps configuration failures inside the sanitized error boundary.
   if (!serviceKey) throw new Error('TRANSFER_FAILED');
   return db ??= createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -19,11 +17,10 @@ Deno.serve(createEmployeeTransferMediaHandler({
   supabaseUrl,
   rpc: (name, args) => client().rpc(name, args),
   store: {
-    // The handler validates the raw path and fixed bucket before invoking this.
-    // Fetch only this env origin; never fetch source_url or follow redirects.
-    download: async (bucket, path) => ({
+    // Only the validated env-origin path may receive service credentials.
+    download: async (bucket, path, signal) => ({
       data: await fetch(`${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/${bucket}/${path}`, {
-        method: 'GET', redirect: 'error',
+        method: 'GET', redirect: 'error', signal,
         headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey, 'Accept-Encoding': 'identity' },
       }),
       error: null,

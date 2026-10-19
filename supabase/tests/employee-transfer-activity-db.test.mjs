@@ -707,10 +707,8 @@ function verificationTest(name, run) {
         try {
           await staged.waitReady; db = staged;
           await transaction(async () => { await verifiedActivity(); await assertRestored(); await stillClosed(); }, staged, true);
-          const dump = await staged.dumpDataDir('none');
-          verificationDb = new PGlite({ loadDataDir: dump, extensions: { pgcrypto, pg_trgm, uuid_ossp } });
-          await verificationDb.waitReady;
-        } finally { await staged.close(); }
+          verificationDb = staged;
+        } catch (error) { await staged.close(); throw error; }
       }
       db = verificationDb;
       return await run();

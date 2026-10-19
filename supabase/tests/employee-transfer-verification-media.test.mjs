@@ -7,8 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import ts from 'typescript';
 
-// Only repository source is read. No fixtures on disk, env credentials, network,
-// database or genuine media are used; esbuild emits exclusively into memory.
+// Synthetic media and in-memory builds keep credentials, disk fixtures and network out of tests.
 const root = fileURLToPath(new globalThis.URL('../../', import.meta.url));
 const entry = `${root}supabase/functions/employee-transfer-media/`;
 const SOURCE = 'https://source-fixture.supabase.co';
@@ -36,6 +35,9 @@ const SAMPLES = [
 ];
 const [JPEG_TYPE, JPEG] = SAMPLES[0];
 const rawError = extra => ({ message: `${SECRET} ${ADMIN} ${JOB} ${URL}`, details: SECRET, ...extra });
+// Initialize Node's experimental timer warning before enforcing application log silence.
+void mock.timers;
+await nextTurn();
 const logs = ['log', 'info', 'warn', 'error', 'debug', 'trace'].map(name => mock.method(console, name, () => {}));
 const denyFetch = () => assert.fail('network is forbidden');
 mock.method(globalThis, 'fetch', denyFetch);
@@ -54,7 +56,7 @@ after(async () => {
 const compiled = await build({ entryPoints: [`${entry}handler.ts`], bundle: true, write: false,
   platform: 'browser', format: 'esm', target: 'es2020' });
 const api = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
-const { createEmployeeTransferMediaHandler: factory, MAX_MEDIA_BYTES } = api;
+const { createEmployeeTransferMediaHandler: factory, MAX_MEDIA_BYTES, MEDIA_DOWNLOAD_TIMEOUT_MS } = api;
 const tuple = (bytes = JPEG, type = JPEG_TYPE) => ({ key: KEY, source_url: URL, bytes: bytes.length, sha256: sha(bytes), content_type: type });
 const receipt = file => ({ success: true, key: file.key, bytes: file.bytes, sha256: file.sha256, content_type: file.content_type, full_site_complete: false });
 const commands = ['download', 'recheck-export', 'upload', 'recheck-import'];
@@ -72,10 +74,10 @@ function harness({ direction = 'export', bytes = JPEG, type = JPEG_TYPE, file = 
       content_type: args.p_content_type, full_site_complete: false }, error: null };
   };
   h.store = {
-    async download(bucket, path) {
-      h.calls.push({ op: 'download', bucket, path });
-      assert.equal(bucket, BUCKET);
-      if (h.read) return h.read(bucket, path);
+    async download(bucket, path, signal) {
+      h.calls.push({ op: 'download', bucket, path, signal });
+      assert.equal(bucket, BUCKET); assert.ok(signal instanceof AbortSignal);
+      if (h.read) return h.read(bucket, path, signal);
       const blob = h.objects.get(path);
       return blob ? { data: new Response(blob.stream(), { headers: { 'content-type': blob.type } }), error: null } :
         { data: new Response(SECRET, { status: 404 }), error: null };
@@ -738,6 +740,115 @@ test('abort pending download read cancels HTTP stream without hanging', { timeou
   await started; controller.abort(Error(SECRET));
   await failed(await pending, 502, 'TRANSFER_FAILED'); assert.equal(cancels, 1); assert.deepEqual(operations(h), [AUTH, 'download']);
 });
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+for (const action of commands) {
+  for (const cause of ['request abort', 'deadline']) {
+    test(`${action}: ${cause} ends pending headers using the derived store signal`, { timeout: 2000 }, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      assert.equal(MEDIA_DOWNLOAD_TIMEOUT_MS, 90_000);
+      const controller = new AbortController(); const started = deferred();
+      const h = harness({ direction: action === 'upload' || action === 'recheck-import' ? 'import' : 'export', file: action === 'download' ? null : tuple() });
+      let aborts = 0;
+      h.read = (_bucket, _path, signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => { aborts++; reject(Error(`${SECRET} ${URL}`)); }, { once: true });
+        started.resolve(signal);
+      });
+      const req = request(action, action === 'upload' ? JPEG : undefined, {}, { signal: controller.signal });
+      let settled = false;
+      const pending = h.handler(req).then(res => { settled = true; return res; });
+      const signal = await started.promise;
+      assert.notEqual(signal, req.signal); assert.equal(signal.aborted, false);
+      t.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS - 1); await nextTurn();
+      assert.equal(signal.aborted, false); assert.equal(settled, false);
+      if (cause === 'request abort') controller.abort(Error(SECRET)); else t.mock.timers.tick(1);
+      await failed(await pending, 502, 'TRANSFER_FAILED');
+      assert.equal(signal.aborted, true); assert.ok(!String(signal.reason).includes(SECRET));
+      assert.equal(aborts, 1); assert.ok(!operations(h).includes(COMMIT)); assert.equal(h.removed, 0);
+      assert.deepEqual(operations(h), action === 'upload' ? [AUTH, 'upload', 'download'] : [AUTH, 'download']);
+      if (action === 'upload') assert.ok(h.objects.has(IMPORT_PATH));
+      controller.abort(Error(SECRET)); t.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS);
+      assert.equal(aborts, 1);
+    });
+  }
+}
+for (const cause of ['request abort', 'deadline']) {
+  test(`${cause} still interrupts body after almost the entire deadline was spent waiting for headers`, { timeout: 2000 }, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const controller = new AbortController(); const headersStarted = deferred(); const headersReady = deferred(); const reading = deferred();
+    const h = harness({ direction: 'import' }); let cancels = 0; let reads = 0;
+    const body = new ReadableStream({
+      pull(output) { if (reads++ === 0) output.enqueue(JPEG.subarray(0, 2)); else reading.resolve(); },
+      cancel() { cancels++; return new Promise(() => {}); },
+    }, { highWaterMark: 0 });
+    h.read = (_bucket, _path, signal) => { headersStarted.resolve(signal); return headersReady.promise; };
+    const req = request('upload', JPEG, {}, { signal: controller.signal });
+    let settled = false;
+    const pending = h.handler(req).then(res => { settled = true; return res; });
+    const signal = await headersStarted.promise;
+    t.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS - 1);
+    headersReady.resolve({ data: new Response(body), error: null });
+    await reading.promise;
+    assert.equal(signal.aborted, false); assert.equal(settled, false);
+    if (cause === 'request abort') controller.abort(Error(SECRET)); else t.mock.timers.tick(1);
+    await failed(await pending, 502, 'TRANSFER_FAILED');
+    assert.equal(signal.aborted, true); assert.equal(cancels, 1); assert.equal(reads, 2);
+    assert.deepEqual(operations(h), [AUTH, 'upload', 'download']); assert.ok(h.objects.has(IMPORT_PATH)); assert.equal(h.removed, 0);
+  });
+}
+for (const outcome of ['success', 'headers failure', 'HTTP failure', 'body failure', 'overflow']) {
+  test(`download ${outcome} clears its timer and detaches the request listener`, { timeout: 2000 }, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const controller = new AbortController(); const h = harness({ file: tuple() }); let captured;
+    h.read = (_bucket, _path, signal) => {
+      captured = signal;
+      if (outcome === 'headers failure') throw Error(SECRET);
+      const s = streamOf(outcome === 'overflow' ? [JPEG, Uint8Array.of(1)] : outcome === 'body failure' ? [JPEG.subarray(0, 2)] : [JPEG], { error: outcome === 'body failure' });
+      return { data: new Response(s.stream, { status: outcome === 'HTTP failure' ? 503 : 200 }), error: null };
+    };
+    const req = request('download', undefined, {}, { signal: controller.signal });
+    const added = t.mock.method(req.signal, 'addEventListener');
+    const removed = t.mock.method(req.signal, 'removeEventListener');
+    const res = await h.handler(req);
+    if (outcome === 'success') { assert.equal(res.status, 200); assert.deepEqual(new Uint8Array(await res.arrayBuffer()), JPEG); }
+    else await failed(res, outcome === 'overflow' ? 422 : 502, outcome === 'overflow' ? 'INVALID_MEDIA' : 'TRANSFER_FAILED');
+    assert.equal(added.mock.callCount(), 1); assert.equal(removed.mock.callCount(), 1);
+    assert.equal(added.mock.calls[0].arguments[0], 'abort');
+    assert.equal(added.mock.calls[0].arguments[1], removed.mock.calls[0].arguments[1]);
+    t.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS * 2); controller.abort(Error(SECRET));
+    assert.equal(captured.aborted, false, 'no deadline or caller listener remains active after completion');
+  });
+}
+test('each explicit read gets a fresh deadline and completion cannot cancel a later read', { timeout: 2000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = harness({ file: tuple() }); let first;
+  h.read = (_bucket, _path, signal) => { first = signal; return { data: new Response(JPEG), error: null }; };
+  assert.equal((await h.handler(request())).status, 200);
+  t.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS - 1);
+  const started = deferred();
+  h.read = (_bucket, _path, signal) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(Error(SECRET)), { once: true }); started.resolve(signal);
+  });
+  const pending = h.handler(request()); const second = await started.promise;
+  assert.notEqual(first, second); t.mock.timers.tick(1); assert.equal(second.aborted, false);
+  t.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS - 1);
+  await failed(await pending, 502, 'TRANSFER_FAILED'); assert.equal(second.aborted, true); assert.equal(first.aborted, false);
+});
+test('SDK upload cannot be forcibly aborted and never claims rollback while pending', { timeout: 2000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = harness({ direction: 'import' }); const controller = new AbortController(); const started = deferred(); const result = deferred();
+  h.write = () => { started.resolve(); return result.promise; };
+  let settled = false;
+  const pending = h.handler(request('upload', JPEG, {}, { signal: controller.signal })).then(res => { settled = true; return res; });
+  await started.promise; controller.abort(Error(SECRET)); t.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS * 2); await nextTurn();
+  assert.equal(settled, false); assert.deepEqual(operations(h), [AUTH, 'upload']);
+  h.objects.set(IMPORT_PATH, new Blob([JPEG])); result.resolve({ data: { path: IMPORT_PATH }, error: null });
+  await failed(await pending, 502, 'TRANSFER_FAILED'); assert.ok(h.objects.has(IMPORT_PATH)); assert.equal(h.removed, 0);
+  assert.deepEqual(operations(h), [AUTH, 'upload']);
+});
 test('SQL22 contract: service_role-only authorize/commit, commit itself reauthorizes', async () => {
   const sql = await readFile(`${root}supabase/migrations/20261102000022_restore_employee_verification_media.sql`, 'utf8');
   assert.match(sql, /CREATE FUNCTION public\.employee_transfer_verification_media_authorize\(p_admin_session_token uuid,p_job_token uuid,p_action text,p_object_key text\)/);
@@ -769,7 +880,7 @@ test('Deno index and handler strictly typecheck against locally installed SDK wi
   assert.equal(diagnostics.length, 0, ts.formatDiagnostics(diagnostics,
     { getCanonicalFileName: value => value, getCurrentDirectory: () => root, getNewLine: () => '\n' }));
 });
-test('thin Deno index injects env service client with no auth persistence, header forwarding, network or retry', async () => {
+test('thin Deno index injects env service client with no auth persistence, header forwarding, network or retry', async t => {
   const h = harness({ direction: 'import' }); let handle; let creates = 0; let env = [];
   const sdk = { rpc: h.rpc, storage: { from(bucket) { return {
     download() { assert.fail('SDK download would buffer the entire Blob'); },
@@ -789,9 +900,9 @@ test('thin Deno index injects env service client with no auth persistence, heade
   globalThis.fetch.mock.mockImplementation(async (url, options) => {
     expectedFetchCalls++;
     assert.equal(url, `${TARGET}/storage/v1/object/${BUCKET}/${h.ctx.path}`);
-    assert.equal(options.method, 'GET'); assert.equal(options.redirect, 'error');
+    assert.equal(options.method, 'GET'); assert.equal(options.redirect, 'error'); assert.ok(options.signal instanceof AbortSignal);
     assert.deepEqual(options.headers, { Authorization: `Bearer ${SECRET}`, apikey: SECRET, 'Accept-Encoding': 'identity' });
-    const result = await h.store.download(BUCKET, h.ctx.path);
+    const result = await h.store.download(BUCKET, h.ctx.path, options.signal);
     return result.data;
   });
   try {
@@ -826,6 +937,39 @@ test('thin Deno index injects env service client with no auth persistence, heade
     globalThis.fetch.mock.mockImplementation(() => { expectedFetchCalls++; throw Error(`${SECRET} ${URL}`); });
     await failed(await handle(request('recheck-import')), 502, 'TRANSFER_FAILED');
     assert.equal(expectedFetchCalls, initialFetches + 1, 'raw fetch failure never retries');
+    for (const phase of ['headers', 'body']) {
+      for (const cause of ['request abort', 'deadline']) {
+        await t.test(`raw fetch ${phase}: ${cause} terminates with no commit/retry/delete`, { timeout: 2000 }, async child => {
+          child.mock.timers.enable({ apis: ['setTimeout'] });
+          const controller = new AbortController(); const started = deferred(); const before = expectedFetchCalls;
+          let aborts = 0; let cancels = 0;
+          const historyStart = h.calls.length;
+          globalThis.fetch.mock.mockImplementation((_url, options) => {
+            expectedFetchCalls++;
+            assert.ok(options.signal instanceof AbortSignal);
+            if (phase === 'headers') return new Promise((_resolve, reject) => {
+              options.signal.addEventListener('abort', () => { aborts++; reject(Error(`${SECRET} ${URL}`)); }, { once: true });
+              started.resolve(options.signal);
+            });
+            options.signal.addEventListener('abort', () => { aborts++; }, { once: true });
+            return Promise.resolve(new Response(new ReadableStream({
+              pull() { started.resolve(options.signal); }, cancel() { cancels++; throw Error(SECRET); },
+            }, { highWaterMark: 0 })));
+          });
+          const req = request('upload', JPEG, {}, { signal: controller.signal });
+          const pending = handle(req); const signal = await started.promise;
+          assert.notEqual(signal, req.signal);
+          child.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS - 1); assert.equal(signal.aborted, false);
+          if (cause === 'request abort') controller.abort(Error(SECRET)); else child.mock.timers.tick(1);
+          await failed(await pending, 502, 'TRANSFER_FAILED');
+          assert.equal(signal.aborted, true); assert.ok(!String(signal.reason).includes(SECRET));
+          assert.equal(aborts, 1); assert.equal(expectedFetchCalls, before + 1); assert.equal(cancels, phase === 'body' ? 1 : 0);
+          assert.deepEqual(h.calls.slice(historyStart).map(call => call.op), [AUTH, 'upload']);
+          assert.ok(h.objects.has(IMPORT_PATH)); assert.equal(h.removed, 0);
+          child.mock.timers.tick(MEDIA_DOWNLOAD_TIMEOUT_MS); controller.abort(Error(SECRET)); assert.equal(aborts, 1);
+        });
+      }
+    }
   } finally {
     globalThis.fetch.mock.mockImplementation(denyFetch);
     delete globalThis[stateKey];

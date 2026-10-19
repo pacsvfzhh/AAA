@@ -1,4 +1,5 @@
 export const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
+export const MEDIA_DOWNLOAD_TIMEOUT_MS = 90_000;
 const BUCKET = 'verification-documents';
 const PUBLIC_PREFIX = '/storage/v1/object/public/verification-documents/';
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -22,7 +23,7 @@ const CORS = {
 type Result = { data?: unknown; error?: unknown };
 export type MediaRpc = (name: string, args: Record<string, unknown>) => PromiseLike<Result>;
 export interface MediaStore {
-  download(bucket: string, path: string): PromiseLike<{ data?: Response | null; error?: unknown }>;
+  download(bucket: string, path: string, signal: AbortSignal): PromiseLike<{ data?: Response | null; error?: unknown }>;
   upload(bucket: string, path: string, bytes: Uint8Array, options: { upsert: false; contentType: string }): PromiseLike<Result>;
 }
 export interface MediaHandlerDependencies {
@@ -101,8 +102,7 @@ async function context(value: unknown, action: string, key: string, origin: stri
   return { direction, key, bucket: BUCKET, path: value.path, source_url: value.source_url as string, file, generation };
 }
 
-// Recognition only, not a complete file decoder or antivirus scanner. Never trust
-// the request's Content-Type, Blob.type or a filename extension as evidence.
+// Only byte signatures establish MIME; caller metadata is not evidence.
 function detectType(bytes: Uint8Array): string {
   const starts = (signature: number[], offset = 0) => signature.every((byte, index) => bytes[offset + index] === byte);
   if (bytes.length >= 3 && starts([0xff, 0xd8, 0xff])) return 'image/jpeg';
@@ -124,8 +124,7 @@ function sameFile(a: FileTuple, b: FileTuple): boolean {
 async function cancelBody(request: Request): Promise<void> {
   try { await request.body?.cancel(); } catch { /* Never expose stream/backend errors. */ }
 }
-// Allocate only the known bounded length for upload, or zero bytes for commands.
-// No Request.arrayBuffer(), unbounded chunk list or extra full-size concatenation.
+// A fixed bounded buffer avoids unbounded chunk retention and concatenation.
 async function readBounded(request: Request, limit: number, expected: number | null): Promise<Uint8Array> {
   const reader = request.body?.getReader();
   if (!reader) { if (expected && expected > 0) fail(400, 'INVALID_REQUEST'); return new Uint8Array(); }
@@ -160,19 +159,26 @@ function declaredLength(request: Request, max: number): number | null {
   return size;
 }
 function isOccupied(error: unknown): boolean {
-  // Supabase Storage may return HTTP 400 with a structured 409 statusCode.
-  // Never classify a free-form message (which may include sensitive data).
+  // Storage can wrap a structured 409 in HTTP 400; free-form messages are unsafe.
   return record(error) && (error.statusCode === '409' || error.statusCode === 409 || error.status === 409);
 }
 function cancelStream(body: ReadableStream<Uint8Array> | null): void {
   // Do not await an untrusted stream's cancellation promise or drain its tail.
   try { void body?.cancel().catch(() => {}); } catch { /* No backend errors escape. */ }
 }
-async function download(store: MediaStore, ctx: Context, signal: AbortSignal): Promise<Uint8Array> {
-  const result = await store.download(BUCKET, ctx.path);
-  if (!(result.data instanceof Response)) fail();
-  const response = result.data;
+async function download(store: MediaStore, ctx: Context, requestSignal: AbortSignal): Promise<Uint8Array> {
+  const controller = new AbortController();
+  const onRequestAbort = () => controller.abort();
+  const timer = setTimeout(() => controller.abort(), MEDIA_DOWNLOAD_TIMEOUT_MS);
+  requestSignal.addEventListener('abort', onRequestAbort, { once: true });
+  if (requestSignal.aborted) onRequestAbort();
+  const signal = controller.signal;
+  let response: Response | undefined;
   try {
+    if (signal.aborted) fail();
+    const result = await store.download(BUCKET, ctx.path, signal);
+    if (!(result.data instanceof Response)) fail();
+    response = result.data;
     const encoding = response.headers.get('content-encoding');
     if (result.error || response.status !== 200 || response.redirected || response.headers.has('content-range') ||
       (encoding !== null && encoding.toLowerCase() !== 'identity') || signal.aborted) fail();
@@ -189,8 +195,7 @@ async function download(store: MediaStore, ctx: Context, signal: AbortSignal): P
     const reader = response.body.getReader();
     const onAbort = () => { void reader.cancel().catch(() => {}); };
     signal.addEventListener('abort', onAbort, { once: true });
-    // Known tuples allocate only their size. Unknown streams grow a single
-    // buffer geometrically, capped at 50MiB; no retained/unbounded chunk list.
+    // Capped geometric growth avoids retaining an unbounded list of chunks.
     let output = new Uint8Array(expected ?? Math.min(64 * 1024, limit));
     let length = 0;
     try {
@@ -215,8 +220,12 @@ async function download(store: MediaStore, ctx: Context, signal: AbortSignal): P
       reader.releaseLock();
     }
   } catch (error) {
-    cancelStream(response.body);
+    cancelStream(response?.body ?? null);
     throw error;
+  } finally {
+    // Headers alone are not completion; stalled response bodies need the same deadline.
+    clearTimeout(timer);
+    requestSignal.removeEventListener('abort', onRequestAbort);
   }
 }
 function receipt(file: FileTuple) {
@@ -262,13 +271,12 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
         bytes = await readBounded(request, expected.bytes, expected.bytes);
         file = await inspect(bytes, ctx, crypto);
         if (request.signal.aborted) fail(400, 'INVALID_REQUEST');
+        // The SDK cannot abort an upload; cancellation cannot promise a rollback.
         const uploaded = await deps.store.upload(BUCKET, ctx.path, bytes, { upsert: false, contentType: file.content_type });
         bytes = undefined; // Release the upload buffer before bounded streaming readback.
         if (uploaded.error && !isOccupied(uploaded.error)) fail();
         if (request.signal.aborted) fail();
-        // Also mandatory for occupied paths: no overwrite, delete or retry.
-        // A failure from this point on may leave an object behind, even if commit
-        // reauthorization rejects cancellation/expiry. Never pretend to roll back.
+        // Readback may fail after storage wrote the object; never delete or fake rollback.
         const readback = await download(deps.store, ctx, request.signal);
         const verified = await inspect(readback, ctx, crypto);
         if (!sameFile(file, verified)) fail();
