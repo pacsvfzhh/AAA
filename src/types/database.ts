@@ -2398,6 +2398,37 @@ export interface Database {
       };
     };
     Functions: {
+      employee_export_notifications_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
+        Returns: { success: true; job_id: string; job_token: string; site_id: string;
+          catalog: import('../lib/employeeTransfer/notificationsTransfer').NotificationsCatalog;
+          scope: 'site-notifications'; full_site_complete: false };
+      };
+      get_employee_export_notifications_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: import('../lib/employeeTransfer/notificationsTransfer').NotificationsPage;
+      };
+      employee_export_notifications_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { verified: true; scope: 'site-notifications'; media_pending: true; full_site_complete: false };
+      };
+      employee_export_notifications_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { success: true; scope: 'site-notifications'; media_pending: true; full_site_complete: false };
+      };
+      employee_import_notifications_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string;
+          p_catalog: import('../lib/employeeTransfer/notificationsTransfer').NotificationsCatalog };
+        Returns: { success: true; scope: 'site-notifications'; repeated: boolean; full_site_complete: false };
+      };
+      employee_import_notifications_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: { success: true; rows: number; bytes: number; sha256: string; repeated: boolean };
+      };
+      get_employee_import_notifications_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/notificationsTransfer').NotificationsPlan;
+      };
       employee_export_verification_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string; catalog: EmployeeVerificationCatalog; scope: 'employee-verification'; full_site_complete: false }
