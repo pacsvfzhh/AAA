@@ -17,8 +17,8 @@ import tls from 'node:tls';
 import { createSites, adminLogin, rpc as baseRpc, rows, scalar } from './support/transfer-harness.mjs';
 import { NEW, OLD, PASSWORDS, buildNewSite } from './support/transfer-fixtures.mjs';
 
-// Run directly with node --test. Do not skip absent/broken 19–24 or extend the 12-failure baseline.
-const migration = '20261102000024_check_site_notification_links.sql';
+// Run directly with node --test. Do not skip absent/broken 19–25 or extend the 12-failure baseline.
+const migration = '20261102000025_prepare_notification_configuration.sql';
 const KEYS = {
   shared: ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members', 'admin_configs', 'system_configs', 'history_cleanup_config'],
   dispatch: ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders', 'dispatch_group_members', 'valid_order_data', 'used_order_data'],
@@ -197,9 +197,13 @@ async function ready(prepared) {
 // Deliberate local drift only. Restore the actual saved O/A trigger states, never use replica mode or a write permit.
 async function localChange(site, relation, sql, args = []) {
   const modes = await rows(site, 'SELECT tgname,tgenabled FROM pg_trigger WHERE tgrelid=$1::regclass AND NOT tgisinternal ORDER BY tgname', [relation]);
-  for (const t of modes) await site.exec(`ALTER TABLE ${relation} DISABLE TRIGGER "${t.tgname}"`);
-  try { await site.query(sql, args); }
-  finally { for (const t of modes) await site.exec(`ALTER TABLE ${relation} ${t.tgenabled === 'A' ? 'ENABLE ALWAYS' : t.tgenabled === 'R' ? 'ENABLE REPLICA' : t.tgenabled === 'D' ? 'DISABLE' : 'ENABLE'} TRIGGER "${t.tgname}"`); }
+  const point = `local_change_${++sequence}`; await site.exec(`SAVEPOINT ${point}`);
+  try {
+    for (const t of modes) await site.exec(`ALTER TABLE ${relation} DISABLE TRIGGER "${t.tgname}"`);
+    await site.query(sql, args);
+    for (const t of modes) await site.exec(`ALTER TABLE ${relation} ${t.tgenabled === 'A' ? 'ENABLE ALWAYS' : t.tgenabled === 'R' ? 'ENABLE REPLICA' : t.tgenabled === 'D' ? 'DISABLE' : 'ENABLE'} TRIGGER "${t.tgname}"`);
+    await site.exec(`RELEASE SAVEPOINT ${point}`);
+  } catch (error) { await site.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); throw error; }
 }
 // Mutate untrusted activity files, not server verification/mapping state or the real identity catalog.
 function changedInput(key, change) {
@@ -507,6 +511,7 @@ before(async () => {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const compiled = await build({ stdin: { contents: `export {createReplacementBackup} from './src/lib/employeeTransfer/replacementBackup.ts';
     export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';
+    export * from './src/lib/employeeTransfer/notificationsBackup.ts';
     export {createSharedSettingsReplacementSession,createDispatchImportSession} from './src/lib/employeeTransfer/api.ts';
     export * from './src/lib/employeeTransfer/activityApi.ts'; export * from './src/lib/employeeTransfer/activityTransfer.ts';
     export * from './src/lib/employeeTransfer/notificationsApi.ts'; export * from './src/lib/employeeTransfer/notificationsTransfer.ts';
@@ -538,8 +543,8 @@ after(async () => { try {
   await Promise.all([source?.close(), db?.close(), verificationDb?.close()]);
 } finally { mock.restoreAll(); } });
 
-test('551 real migrations preserve exactly the 12 historical failures and install activity 19/20, verification 21/22 and notifications 23/24', () => {
-  assert.equal(replay.files.length, 551); assert.equal(replay.failures.length, 12); assert.equal(replay.validation.freshDatabaseVerified, false); assert.equal(replay.files.at(-1), migration);
+test('552 real migrations preserve exactly the 12 historical failures and install activity 19/20, verification 21/22 and notifications 23/24/25', () => {
+  assert.equal(replay.files.length, 552); assert.equal(replay.failures.length, 12); assert.equal(replay.validation.freshDatabaseVerified, false); assert.equal(replay.files.at(-1), migration);
   for (const file of ['20261102000019_export_stage_employee_activity.sql', '20261102000020_restore_employee_activity.sql',
     '20261102000021_export_stage_employee_verification.sql', '20261102000022_restore_employee_verification_media.sql',
     '20261102000023_export_stage_site_notifications.sql']) assert.ok(replay.files.includes(file));
@@ -1516,6 +1521,425 @@ verificationTest('verification real committed transactions survive a new PGlite 
     });
   } finally { await db.close(); db = activityDb; transport(); }
 });
+
+// Notification configuration/backup tests reuse the genuine sealed dispatch -> dirty maintenance ->
+// identity/dependency/finance chain above. No private verified/map/permit is fabricated.
+const ncplan = (extra = {}) => rpc('get_employee_import_notification_configuration_plan', { ...auth(), ...extra });
+const nbprepare = (p, extra = {}) => rpc('employee_import_notification_backup_prepare', { ...auth(), p_plan_hash: p.plan_hash, ...extra });
+const nbpage = (b, key, after = null, extra = {}) => rpc('get_employee_import_notification_backup_page',
+  { ...auth(), p_backup_id: b.backup_id, p_table_key: key, p_after: after, ...extra });
+const nbverify = (b, extra = {}) => rpc('employee_import_notification_backup_verify', { ...auth(), p_backup_id: b.backup_id, ...extra });
+const nbappend = (b, no, bytes, extra = {}) => rpc('employee_import_notification_backup_append',
+  { ...auth(), p_backup_id: b.backup_id, p_chunk_no: no, p_hex: Buffer.from(bytes).toString('hex'), ...extra });
+const nbseal = (b, bytes, extra = {}) => rpc('employee_import_notification_backup_seal',
+  { ...auth(), p_backup_id: b.backup_id, p_sha256: hash(bytes), p_bytes: bytes.length, ...extra });
+const nbget = (b, no = 0, token = session) => rpc('get_employee_notification_saved_backup_chunk',
+  { p_admin_session_token: token, p_backup_id: b.backup_id, p_chunk_no: no });
+const C = { plan: id(16001), rootPlan: id(16002), task: id(16101), retire: id(16199), outside: id(16999), template: id(17301) };
+const ncflags = p => {
+  assert.equal(p.scope, 'notification-configuration');
+  for (const key of ['checked', 'backup_required', 'media_pending', 'automation_pending', 'maintenance']) assert.equal(p[key], true, key);
+  for (const key of ['can_apply_configuration', 'replacement_ready', 'full_site_complete']) assert.equal(p[key], false, key);
+  assert.equal(p.can_prepare_backup, !p.conflicts.length); assert.match(p.plan_hash, /^[0-9a-f]{64}$/); assert.match(p.target_hash, /^[0-9a-f]{64}$/);
+  for (const r of p.records) assert.deepEqual(Object.keys(r).sort(), ['action', 'source_id', 'table_key', 'target_id']);
+};
+const ncRecord = (p, sourceId) => p.records.find(r => r.source_id === sourceId);
+async function targetPlan(targetId, name, owner = NEW.root) {
+  await localChange(db, 'public.notification_automation_plans',
+    "INSERT INTO public.notification_automation_plans(id,owner_admin_id,name,status) VALUES($1,$2,$3,'paused')", [targetId, owner, name]);
+}
+async function targetTask(targetId, name, planId = C.plan, shared = false, owner) {
+  owner ??= (await state()).identity_restore.admin_map[OLD.branch];
+  await localChange(db, 'public.notification_automation_tasks', `INSERT INTO public.notification_automation_tasks(id,owner_admin_id,name,plan_id,
+    is_shared_template,trigger_type,trigger_mode,threshold_value,title_template,content_template,status,recipient_scope)
+    VALUES($1,$2,$3,$4,$5,'total_orders','reach_once',1,'target title','target content','draft','selected')`, [targetId, owner, name, planId, shared]);
+}
+async function targetMember(employee, planId = C.plan) {
+  await localChange(db, 'public.notification_automation_plan_members', 'INSERT INTO public.notification_automation_plan_members(plan_id,user_id) VALUES($1,$2)', [planId, employee]);
+}
+async function namedTarget() {
+  const map = (await state()).identity_restore.admin_map;
+  await targetPlan(C.plan, '來源方案 ALPHA', map[OLD.branch]); await targetPlan(C.rootPlan, '沒有員工也必須導出');
+  await targetTask(C.task, '循環基線'); await targetTask(C.retire, '僅目標多餘任務');
+  await targetPlan(C.outside, '范围外不同名', map[OLD.branch]); await targetTask(id(16998), '范围外任务', C.outside);
+  await targetMember(F.history); await targetMember(F.empty);
+  await localChange(db, 'public.message_templates', `INSERT INTO public.message_templates(id,admin_id,name,title,content,message_type,priority)
+    VALUES($1,$2,'無收件人的範本','target','target','realtime','normal')`, [C.template, NEW.root]);
+}
+// Populate all physical target notification rows with distinct IDs/names. The 13-table snapshot
+// remains outside the source matching scope, including actual leases and unsanitized diagnostics.
+async function allTargetNotifications() {
+  const map = { ...(await state()).identity_restore.admin_map };
+  const data = {};
+  for (const key of KEYS.notifications) {
+    data[key] = await rows(source, `SELECT to_jsonb(r)::text AS body FROM public.${key} AS r`);
+    for (const { body } of data[key]) {
+      const row = JSON.parse(body); if (row.id) map[row.id] ??= id(50000 + Object.keys(map).length);
+    }
+  }
+  const insertKeys = ['messages', ...KEYS.notifications.filter(key => key !== 'messages')];
+  for (const key of insertKeys) {
+    const selected = key === 'notification_automation_plan_members' ? data[key].filter(r => JSON.parse(r.body).user_id === F.history) : data[key];
+    const raw = selected.map(({ body }) => {
+      if (key === 'notification_automation_plan_members') body = body.replace(F.history, F.empty);
+      for (const [from, to] of Object.entries(map)) body = body.replaceAll(from, to);
+      if (['notification_automation_plans', 'notification_automation_tasks', 'message_templates'].includes(key))
+        body = body.replace(/"name": "([^"\\]*(?:\\.[^"\\]*)*)"/, '"name": "target-only $1"');
+      return body;
+    }).join(',');
+    await localChange(db, `public.${key}`, `INSERT INTO public.${key} SELECT * FROM jsonb_populate_recordset(NULL::public.${key},$1::jsonb)`, [`[${raw}]`]);
+  }
+  return map;
+}
+const fakeCipher = () => Buffer.concat([Buffer.from('EDXSTRM1'), Buffer.alloc(88, 37)]);
+const backups = () => rows(db, 'SELECT * FROM private.employee_transfer_notification_backups ORDER BY id');
+async function nbready() { await nstage(); return nbprepare(await ncplan()); }
+
+test('notification configuration exact public signatures, SD grants and private RLS permissions are isolated', () => transaction(async () => {
+  for (const [name, args] of [
+    ['get_employee_import_notification_configuration_plan', ['p_admin_session_token', 'p_job_token']],
+    ['employee_import_notification_backup_prepare', ['p_admin_session_token', 'p_job_token', 'p_plan_hash']],
+    ['get_employee_import_notification_backup_page', ['p_admin_session_token', 'p_job_token', 'p_backup_id', 'p_table_key', 'p_after', 'p_limit']],
+    ['employee_import_notification_backup_verify', ['p_admin_session_token', 'p_job_token', 'p_backup_id']],
+    ['employee_import_notification_backup_append', ['p_admin_session_token', 'p_job_token', 'p_backup_id', 'p_chunk_no', 'p_hex']],
+    ['employee_import_notification_backup_seal', ['p_admin_session_token', 'p_job_token', 'p_backup_id', 'p_sha256', 'p_bytes']],
+    ['get_employee_notification_saved_backup_chunk', ['p_admin_session_token', 'p_backup_id', 'p_chunk_no']],
+  ]) {
+    const [fn] = await rows(db, "SELECT oid,proargnames,prosecdef,proconfig,provolatile FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=$1", [name]);
+    assert.deepEqual(fn.proargnames, args); assert.equal(fn.prosecdef, true); assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+    assert.equal(await scalar(db, "SELECT EXISTS(SELECT 1 FROM pg_proc,aclexplode(proacl) WHERE oid=$1 AND grantee=0 AND privilege_type='EXECUTE')", [fn.oid]), false);
+    for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, 'SELECT has_function_privilege($1,$2::oid,\'EXECUTE\')', [role, fn.oid]), role !== 'service_role');
+    if (name.endsWith('_plan')) assert.equal(fn.provolatile, 's');
+  }
+  assert.equal(await scalar(db, "SELECT relrowsecurity FROM pg_class WHERE oid='private.employee_transfer_notification_backups'::regclass"), true);
+  const fns = await rows(db, "SELECT oid FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_notification\\_%' ESCAPE '\\'");
+  for (const role of ['anon', 'authenticated', 'service_role']) {
+    for (const fn of fns) assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), false);
+    for (const op of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) assert.equal(await scalar(db, 'SELECT has_table_privilege($1,$2,$3)', [role, 'private.employee_transfer_notification_backups', op]), false);
+  }
+  const cols = await rows(db, "SELECT attname,attnotnull FROM pg_attribute WHERE attrelid='private.employee_transfer_notification_backups'::regclass AND attnum>0 AND NOT attisdropped ORDER BY attnum");
+  assert.deepEqual(cols.filter(c => !c.attnotnull).map(c => c.attname), ['sealed_sha256', 'sealed_at']);
+}));
+
+test('notification configuration empty target preserves all source UUIDs and remains backup-only', () => transaction(async () => {
+  await nstage(); const before = await transferSnapshot(), original = await business(), p = await ncplan(); ncflags(p);
+  assert.deepEqual(p.conflicts, []); assert.equal(p.records.length, 7); assert.equal(p.members_removed, 0); assert.deepEqual(p.retire_tasks, []);
+  for (const r of p.records) { assert.equal(r.action, 'create'); assert.equal(r.source_id, r.target_id); }
+  assert.deepEqual(await ncplan(), p); assert.deepEqual(await transferSnapshot(), before); assert.deepEqual(await business(), original); await stillClosed();
+}));
+
+test('notification configuration same-name maps only server-owned administrator and parent scope', () => transaction(async () => {
+  await nstage(); await namedTarget(); const before = await business(), p = await ncplan(); ncflags(p); assert.deepEqual(p.conflicts, []);
+  for (const [from, to] of [[N.plan, C.plan], [N.rootPlan, C.rootPlan], [N.recurring, C.task], [N.template, C.template]])
+    assert.deepEqual(ncRecord(p, from), { table_key: from === N.template ? 'message_templates' : from === N.recurring ? 'notification_automation_tasks' : 'notification_automation_plans', source_id: from, target_id: to, action: 'replace' });
+  assert.equal(ncRecord(p, N.annual).action, 'create'); assert.deepEqual(await business(), before); await stillClosed();
+}));
+
+test('notification configuration task matching is exact-name, null-safe, parent-scoped and shared-template aware', () => transaction(async () => {
+  await nstage(); const owner = (await state()).identity_restore.admin_map[OLD.branch];
+  await targetPlan(C.plan, '來源方案 Alpha', owner); await targetTask(C.task, '循環基線', C.plan, true);
+  await targetTask(id(16102), '循環基線x'); await targetTask(id(16103), '循環基線', null);
+  await targetTask(id(16104), '無成員舊範本', null, true, NEW.root);
+  const p = await ncplan(); assert.equal(ncRecord(p, N.recurring).action, 'create');
+  assert.equal(ncRecord(p, N.hidden).target_id, id(16104)); assert.equal(ncRecord(p, N.hidden).action, 'replace'); assert.deepEqual(p.conflicts, []);
+}));
+
+test('notification configuration retires only target-only tasks in matched plans and previews exact members, never unions', () => transaction(async () => {
+  await nstage(); await namedTarget(); const p = await ncplan();
+  assert.deepEqual(p.retire_tasks, [C.retire]); assert.equal(p.members_removed, 1);
+  assert.ok(await scalar(db, 'SELECT EXISTS(SELECT 1 FROM public.notification_automation_tasks WHERE id=$1)', [C.retire]));
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.notification_automation_plan_members'), 2);
+}));
+
+test('notification configuration source empty member list previews removal of every old target member', () => transaction(async () => {
+  await nstage(changedNotifications({ notification_automation_plan_members: () => '' })); await namedTarget();
+  const p = await ncplan(); assert.equal(p.members_removed, 2); assert.deepEqual(p.conflicts, []); assert.equal(p.can_apply_configuration, false);
+}));
+
+test('notification configuration refuses employees assigned to a different target plan instead of silently detaching', () => transaction(async () => {
+  await nstage(); await targetPlan(C.outside, '范围外方案', (await state()).identity_restore.admin_map[OLD.branch]); await targetMember(F.history, C.outside);
+  const p = await ncplan(), before = await business(); assert.ok(p.conflicts.includes('target_member_outside_plan')); await assert.rejects(nbprepare(p), /conflict-free/); assert.deepEqual(await business(), before);
+}));
+
+for (const [label, key, row] of [
+  ['case-folded source plans', 'notification_automation_plans', { id: id(18001), owner_admin_id: OLD.branch, name: '來源方案 ALPHA' }],
+  ['source tasks', 'notification_automation_tasks', { id: id(18002), name: '循環基線' }],
+]) test(`notification configuration rejects duplicate mapped ${label}`, () => transaction(async () => {
+  const input = changedNotifications({ [key]: text => {
+    const original = JSON.parse(lines(text)[0]); return text + JSON.stringify({ ...original, ...row }) + '\n';
+  } });
+  await nstage(input); await namedTarget(); const p = await ncplan(); assert.ok(p.conflicts.includes('source_configuration_collision'));
+  assert.ok(p.conflicts.includes('notification_many_to_one'));
+  assert.ok(p.records.filter(r => r.table_key === key && r.action === 'conflict').length >= 2); await assert.rejects(nbprepare(p), /conflict-free/);
+}));
+
+for (const kind of ['plan', 'task', 'template']) test(`notification configuration explicitly blocks ambiguous target ${kind} candidates`, () => transaction(async () => {
+  await nstage(); const owner = (await state()).identity_restore.admin_map[OLD.branch];
+  if (kind === 'plan') {
+    await db.exec('DROP INDEX public.notification_automation_plans_owner_name_idx');
+    await targetPlan(C.plan, '來源方案 Alpha', owner); await targetPlan(id(18003), '來源方案 ALPHA', owner);
+  } else if (kind === 'task') {
+    await targetPlan(C.plan, '來源方案 Alpha', owner); await targetTask(C.task, '循環基線'); await targetTask(id(18004), '循環基線');
+  } else {
+    await localChange(db, 'public.message_templates', `INSERT INTO public.message_templates(id,admin_id,name,title,content,message_type,priority)
+      VALUES($1,$3,'無收件人的範本','t','c','realtime','normal'),($2,$3,'無收件人的範本','t','c','realtime','normal')`, [C.template, id(18005), NEW.root]);
+  }
+  const p = await ncplan(); assert.ok(p.conflicts.includes('ambiguous_notification_configuration'));
+  await assert.rejects(nbprepare(p), /conflict-free/);
+}));
+
+for (const kind of ['plan', 'task', 'template']) test(`notification configuration refuses a source ${kind} UUID occupied by a different object`, () => transaction(async () => {
+  await nstage();
+  if (kind === 'plan') await targetPlan(N.plan, 'other name');
+  else if (kind === 'task') await targetTask(N.recurring, 'other name', null);
+  else await localChange(db, 'public.message_templates', `INSERT INTO public.message_templates(id,admin_id,name,title,content,message_type,priority)
+    VALUES($1,$2,'other name','t','c','realtime','normal')`, [N.template, NEW.root]);
+  const p = await ncplan(); assert.ok(p.conflicts.includes('notification_configuration_id_collision'));
+  assert.equal(ncRecord(p, kind === 'plan' ? N.plan : kind === 'task' ? N.recurring : N.template).action, 'conflict');
+}));
+
+for (const key of ['messages', 'message_recipients', 'broadcast_messages', 'broadcast_recipients'])
+  test(`notification configuration blocks source ${key} UUID collisions without removing existing history`, () => transaction(async () => {
+    await nstage(); const mapping = await allTargetNotifications();
+    const sourceId = JSON.parse(lines(notifications.texts[key])[0]).id, targetId = mapping[sourceId];
+    await localChange(db, `public.${key}`, ['messages', 'broadcast_messages'].includes(key)
+      ? `INSERT INTO public.${key} SELECT (jsonb_populate_record(NULL::public.${key},to_jsonb(r)||jsonb_build_object('id',$2::text))).* FROM public.${key} AS r WHERE id=$1`
+      : `UPDATE public.${key} SET id=$2 WHERE id=$1`, [targetId, sourceId]);
+    const before = await business(), p = await ncplan(); assert.ok(p.conflicts.includes('target_notification_uuid_collision'));
+    await assert.rejects(nbprepare(p), /conflict-free/); assert.deepEqual(await business(), before);
+  }));
+
+for (const history of ['execution', 'progress', 'failure', 'date_runs', 'message', 'queue'])
+  test(`notification configuration target_notification_history blocks actual ${history} in replaced or retired scope`, () => transaction(async () => {
+    await nstage(); await namedTarget();
+    if (history === 'execution') await localChange(db, 'public.notification_automation_executions', `INSERT INTO public.notification_automation_executions(
+      id,task_id,plan_id,task_version,owner_admin_id,user_id,employee_username,period_key,stage,actual_value,trigger_snapshot,title_snapshot,content_snapshot,status)
+      VALUES($1,$2,$3,7,$4,$5,'synthetic','all_time',$6,20,'{"trigger_type":"total_orders","trigger_mode":"recurring","threshold_value":10,"minimum_daily_orders":null,"minimum_daily_work_minutes":null}','t','c','failed')`,
+      [id(18201), C.task, C.plan, (await state()).identity_restore.admin_map[OLD.branch], F.history, BIG_STAGE]);
+    if (history === 'progress') await localChange(db, 'public.notification_automation_progress', 'INSERT INTO public.notification_automation_progress(task_id,user_id) VALUES($1,$2)', [C.retire, F.history]);
+    if (history === 'failure') await localChange(db, 'public.notification_automation_failures', "INSERT INTO public.notification_automation_failures(task_id,user_id,owner_admin_id,last_error) VALUES($1,$2,$3,'raw synthetic')", [C.retire, F.history, NEW.root]);
+    if (history === 'date_runs') await localChange(db, 'public.notification_automation_date_runs', "INSERT INTO public.notification_automation_date_runs(task_id,task_version,period_key) VALUES($1,1,'year-2024')", [C.retire]);
+    if (history === 'message') {
+      await localChange(db, 'public.messages', "INSERT INTO public.messages(id,sender_id,sender_username,title,content,message_type,priority) VALUES($1,$2,'root','t','c','realtime','normal')", [id(18202), NEW.root]);
+      await localChange(db, 'public.message_recipients', 'INSERT INTO public.message_recipients(message_id,recipient_id) VALUES($1,$2)', [id(18202), F.history]);
+    }
+    if (history === 'queue') await localChange(db, 'public.notification_automation_queue', 'INSERT INTO public.notification_automation_queue(user_id) VALUES($1) ON CONFLICT(user_id) DO UPDATE SET attempts=99', [F.history]);
+    const before = await business(), original = await triggers(), p = await ncplan();
+    assert.ok(p.conflicts.includes('target_notification_history'), JSON.stringify(p.conflicts));
+    if (history === 'execution') assert.ok(p.conflicts.includes('target_execution_unique_collision'));
+    await assert.rejects(nbprepare(p), /conflict-free/); assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); await stillClosed();
+  }));
+
+test('notification backup freezes all 13 projected tables with raw precision, hashes and bounded canonical paging', () => transaction(async () => {
+  await nstage(); await allTargetNotifications(); const before = await business(), original = await triggers(), p = await ncplan(); assert.deepEqual(p.conflicts, []);
+  const b = await nbprepare(p); assert.deepEqual(modules.validateNotificationsBackupDescriptor(b), b);
+  assert.equal(b.catalog.package_id, packageId); assert.notEqual(b.backup_id, task.job_id); assert.equal(b.catalog.media_included, false);
+  for (const table of b.catalog.tables) {
+    let after = null, text = '', pages = [];
+    do {
+      const page = await nbpage(b, table.key, after); modules.validateNotificationsPage(page, table.key, after);
+      pages.push(page.count); text += page.ndjson; after = page.next_after;
+    } while (after !== null);
+    assert.equal(table.rows, await scalar(db, `SELECT count(*)::int FROM public.${table.key}`));
+    const query = await scalar(db, 'SELECT private.employee_transfer_notifications_query($1)', [table.key]);
+    const expected = (await rows(db, `SELECT body::text||E'\\n' AS line FROM (${query}) AS s ORDER BY id COLLATE "C"`)).map(r => r.line).join('');
+    assert.equal(text, expected); assert.equal(table.bytes, Buffer.byteLength(text)); assert.equal(table.row_hashes_sha256, hash(lines(text).map(hash).join('')));
+    if (['messages', 'message_recipients', 'notification_automation_date_runs'].includes(table.key)) assert.deepEqual(pages, [200, table.key.endsWith('date_runs') ? 3 : 5]);
+    if (table.key === 'notification_automation_progress') assert.ok(text.includes(PRECISE));
+    if (table.key === 'message_templates') assert.ok(text.includes(UNKNOWN_MEDIA));
+    assert.doesNotMatch(text, /delivery_claim_token|delivery_completed_claim_token|synthetic diagnostic/);
+  }
+  assert.deepEqual(await nbverify(b), { verified: true, backup_id: b.backup_id, plan_hash: b.plan_hash, target_hash: b.target_hash, media_included: false, full_site_complete: false });
+  const savedPage = await nbpage(b, 'message_templates');
+  await localChange(db, 'public.message_templates', "UPDATE public.message_templates SET title='live drift'");
+  assert.deepEqual(await nbpage(b, 'message_templates'), savedPage); await assert.rejects(nbverify(b), /changed/);
+  // All fixture changes and deliberate drift are local; backup itself did not write business.
+  await localChange(db, 'public.message_templates', "UPDATE public.message_templates SET title='原標題'");
+  assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+test('notification backup uses real independent encrypted file readback, append/seal, then survives task cancellation', () => transaction(async () => {
+  await nstage(); await allTargetNotifications(); const before = await business(), original = await triggers(), b = await nbprepare(await ncplan());
+  const shared = await rows(db, 'SELECT * FROM private.employee_transfer_shared_backups WHERE id=$1', [task.job_id]);
+  const dir = await mkdtemp(join(tmpdir(), 'notification-db-independent-')), path = join(dir, 'notifications.edx'); let opens = 0;
+  const plain = new Map();
+  try {
+    const saved = await modules.createNotificationsBackup(b, {
+      async catalog() { return (await nbprepare(await ncplan())).catalog; }, page: (key, after) => nbpage(b, key, after), verify: () => nbverify(b),
+    }, {
+      async append(name, bytes) { plain.set(name, [...(plain.get(name) ?? []), Buffer.from(bytes)]); },
+      open(name) { return (async function* () { yield* plain.get(name) ?? []; })(); }, async abort() { plain.clear(); },
+    }, {
+      async write(stream) { const f = await open(path, 'wx'); try { for await (const bytes of stream) await f.writeFile(bytes); await f.sync(); } finally { await f.close(); } },
+      open() { opens++; return disk(path); },
+    }, { append(no, hex) { assert.equal(opens, 2); return nbappend(b, no, Buffer.from(hex, 'hex')); }, seal: (sha, bytes) => nbseal(b, Buffer.alloc(0), { p_sha256: sha, p_bytes: bytes }) },
+    'local-notification-independent-backup-passphrase');
+    assert.equal(opens, 2); assert.equal(plain.size, 0); assert.equal(saved.sealReceipt.media_pending, true);
+    const file = []; for await (const part of disk(path)) file.push(Buffer.from(part)); const cipher = Buffer.concat(file);
+    assert.equal(hash(cipher), saved.cipherSha256); assert.deepEqual(await nbseal(b, cipher), { ...saved.sealReceipt, repeated: true });
+    const sealed = await backups(); assert.deepEqual(await nbprepare(await ncplan()), b); assert.deepEqual(await backups(), sealed);
+    const events = await rows(db, "SELECT details FROM private.employee_transfer_events WHERE job_id=$1 AND action LIKE 'notification_backup_%'", [task.job_id]);
+    assert.equal(events.length, 2); for (const event of events) assert.doesNotMatch(JSON.stringify(event.details), /ndjson|content|diagnostic|unmanaged/);
+    await assert.rejects(nbappend(b, 0, cipher.subarray(0, 10)), /does not accept/);
+    await rpc('employee_transfer_cancel', auth());
+    assert.equal(await scalar(db, "SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key LIKE 'notifications-backup:%'", [task.job_id]), 0);
+    const pieces = []; for (let no = 0; no < saved.chunks; no++) { const r = await nbget(b, no); assert.equal(r.sha256, saved.cipherSha256); assert.equal(r.bytes, cipher.length); pieces.push(Buffer.from(r.hex, 'hex')); }
+    assert.deepEqual(Buffer.concat(pieces), cipher);
+    const fresh = await adminLogin(db, 'root', PASSWORDS.root); assert.equal((await nbget(b, 0, fresh)).backup_id, b.backup_id);
+    for (const token of [other, branch, emergency]) await assert.rejects(nbget(b, 0, token), /unavailable|Super administrator|invalid or expired/i);
+    await assert.rejects(nbget(b, -1), /unavailable/); await assert.rejects(nbget(b, saved.chunks), /unavailable/);
+    await assert.rejects(nbverify(b), /invalid or expired/); assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original);
+    assert.deepEqual(await rows(db, 'SELECT * FROM private.employee_transfer_shared_backups WHERE id=$1', [task.job_id]), shared); await stillClosed();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}));
+
+test('notification configuration and backup verification execute inside a genuine READ ONLY transaction without heartbeat writes', async () => {
+  const original = db; let clone;
+  try {
+    clone = new PGlite({ loadDataDir: await db.dumpDataDir('none'), extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await clone.waitReady; db = clone;
+    let b, p; await transaction(async () => { await nstage(); p = await ncplan(); b = await nbprepare(p); }, db, true);
+    const before = await transferSnapshot();
+    await db.exec('BEGIN; SET TRANSACTION READ ONLY');
+    try { assert.deepEqual(await ncplan(), p); assert.equal((await nbverify(b)).verified, true); await nbpage(b, 'messages'); await db.exec('COMMIT'); }
+    catch (error) { await db.exec('ROLLBACK'); throw error; }
+    assert.deepEqual(await transferSnapshot(), before);
+  } finally { await clone?.close(); db = original; }
+});
+
+test('notification backup prepare is immutable and idempotent, refuses wrong plan and same-count target drift', () => transaction(async () => {
+  const b = await nbready(), p = await ncplan(); assert.deepEqual(await nbprepare(p), b);
+  const bytes = fakeCipher(); await nbappend(b, 0, bytes); const saved = await backups();
+  await assert.rejects(nbprepare({ plan_hash: hash('wrong plan') }), /matching conflict-free/); assert.deepEqual(await backups(), saved);
+  await targetPlan(C.outside, 'new drift'); const next = await ncplan();
+  await assert.rejects(nbprepare(p), /matching conflict-free/); await assert.rejects(nbprepare(next), /changed after/); assert.deepEqual(await backups(), saved);
+}));
+
+for (const [key, sql] of [
+  ['message_templates', "UPDATE public.message_templates SET content='<p>same count drift</p>'"],
+  ['message_recipients', "UPDATE public.message_recipients SET delivery_claim_until='2098-01-01' WHERE delivery_claim_until IS NOT NULL"],
+  ['notification_automation_executions', "UPDATE public.notification_automation_executions SET error_message='different raw diagnostic' WHERE error_message IS NOT NULL"],
+  ['notification_automation_failures', "UPDATE public.notification_automation_failures SET last_error='different raw diagnostic'"],
+]) test(`notification backup target fingerprint catches actual ${key} drift even when export projection is unchanged`, () => transaction(async () => {
+  await nstage(); await allTargetNotifications(); const p = await ncplan(), b = await nbprepare(p), bytes = fakeCipher(); await nbappend(b, 0, bytes);
+  const projected = await scalar(db, 'SELECT private.employee_transfer_notifications_query($1)', [key]);
+  const exportedBefore = await rows(db, `SELECT body::text FROM (${projected}) AS s ORDER BY id COLLATE "C"`);
+  await localChange(db, `public.${key}`, sql); const next = await ncplan(); assert.notEqual(next.target_hash, p.target_hash); assert.notEqual(next.plan_hash, p.plan_hash);
+  if (key !== 'message_templates') assert.deepEqual(await rows(db, `SELECT body::text FROM (${projected}) AS s ORDER BY id COLLATE "C"`), exportedBefore);
+  const before = await backups(); for (const action of [() => nbverify(b), () => nbseal(b, bytes), () => nbprepare(next)]) await assert.rejects(action(), /changed/);
+  assert.deepEqual(await backups(), before); await stillClosed();
+}));
+
+test('notification backup paging rejects invalid table, size, UUID and nonexistent or noncanonical cursor', () => transaction(async () => {
+  const b = await nbready();
+  for (const extra of [{ p_table_key: 'notification_automation_queue' }, { p_limit: 0 }, { p_limit: 201 }, { p_limit: null }, { p_after: 'not-a-cursor' }, { p_backup_id: randomUUID() }])
+    await assert.rejects(nbpage(b, 'messages', null, extra), /Invalid|unavailable|cursor/);
+  const page = await nbpage(b, 'messages'); assert.equal(page.count, 0); assert.equal(page.ndjson, ''); assert.equal(page.sha256, hash(''));
+  await assert.rejects(nbget(b), /unavailable/);
+}));
+
+test('notification backup full frozen snapshot is rehashed, not trusted from staging metadata or live table counts', () => transaction(async () => {
+  await nstage(); await allTargetNotifications(); const b = await nbprepare(await ncplan()), bytes = fakeCipher(); await nbappend(b, 0, bytes);
+  await db.query(`UPDATE private.employee_transfer_staging SET payload=jsonb_set(payload,'{ndjson}',to_jsonb(replace(payload->>'ndjson','target-only','target-drift')))
+    WHERE job_id=$1 AND table_key='notifications-backup:message_templates'`, [task.job_id]);
+  const before = await backups(); await assert.rejects(nbverify(b), /snapshot verification failed/); await assert.rejects(nbseal(b, bytes), /snapshot verification failed/);
+  assert.deepEqual(await backups(), before);
+}));
+
+test('notification backup append enforces strict hex, contiguous full chunks, repeat identity and sealed immutability', () => transaction(async () => {
+  const b = await nbready();
+  for (const p_hex of ['', '0', 'zz', 'AA', '00'.repeat(131073)]) await assert.rejects(nbappend(b, 0, [], { p_hex }), /Invalid encrypted/);
+  await assert.rejects(nbappend(b, 1, [0]), /contiguous/);
+  const full = Buffer.alloc(131072, 13); Buffer.from('EDXSTRM1').copy(full); const r = await nbappend(b, 0, full);
+  assert.deepEqual(r, { success: true, bytes: full.length, sha256: hash(full), repeated: false }); assert.deepEqual(await nbappend(b, 0, full), { ...r, repeated: true });
+  await assert.rejects(nbappend(b, 0, [1]), /different contents/); await nbappend(b, 1, [99]); await assert.rejects(nbappend(b, 2, [1]), /last.*short/);
+  const bytes = Buffer.concat([full, Buffer.from([99])]); await nbseal(b, bytes); await assert.rejects(nbappend(b, 1, [99]), /does not accept/);
+  const sealed = await backups(); await assert.rejects(nbseal(b, bytes, { p_sha256: hash('forged') }), /match its seal/);
+  await assert.rejects(nbseal(b, bytes, { p_bytes: bytes.length - 1 }), /match its seal/); assert.deepEqual(await backups(), sealed);
+}));
+
+test('notification backup ciphertext limit is exactly 9 MiB and an over-limit append leaves existing chunks intact', () => transaction(async () => {
+  const b = await nbready(), full = Buffer.alloc(131072, 7);
+  for (let no = 0; no < 72; no++) await nbappend(b, no, full);
+  const before = await scalar(db, 'SELECT byte_count FROM private.employee_transfer_notification_backups WHERE id=$1', [b.backup_id]); assert.equal(before, 9437184);
+  await assert.rejects(nbappend(b, 72, [7]), /exceeds the limit/);
+  assert.equal(await scalar(db, 'SELECT byte_count FROM private.employee_transfer_notification_backups WHERE id=$1', [b.backup_id]), before);
+}));
+
+test('notification backup seal rejects absent cipher, wrong magic, bytes and hash rather than accepting a client assertion', () => transaction(async () => {
+  const b = await nbready(), bytes = Buffer.alloc(96, 22);
+  await assert.rejects(nbseal(b, bytes), /match its seal/); await nbappend(b, 0, bytes);
+  for (const extra of [{}, { p_bytes: 95 }, { p_sha256: hash('client says verified') }, { p_sha256: null }]) await assert.rejects(nbseal(b, bytes, extra), /match its seal|Invalid/);
+  assert.equal((await backups())[0].sealed_at, null); await stillClosed();
+}));
+
+test('notification backup all continuation rejects unauthorized administrators and foreign task/backup identifiers', () => transaction(async () => {
+  const b = await nbready(), p = await ncplan(), bytes = fakeCipher();
+  for (const token of [branch, emergency, other, randomUUID()]) {
+    const extra = { p_admin_session_token: token };
+    for (const action of [() => ncplan(extra), () => nbprepare(p, extra), () => nbpage(b, 'messages', null, extra), () => nbverify(b, extra), () => nbappend(b, 0, bytes, extra), () => nbseal(b, bytes, extra)])
+      await assert.rejects(action(), /Super administrator|invalid or expired/);
+  }
+  await assert.rejects(ncplan({ p_job_token: randomUUID() }), /invalid or expired/);
+  for (const action of [() => nbverify({ backup_id: task.job_id }), () => nbappend({ backup_id: randomUUID() }, 0, bytes), () => nbseal({ backup_id: randomUUID() }, bytes)]) await assert.rejects(action(), /unavailable|does not accept|Invalid/);
+  await stillClosed();
+}));
+
+test('notification backup expired session, expired task or stale heartbeat cannot renew authority; sealed ciphertext remains recoverable', () => transaction(async () => {
+  const b = await nbready(), bytes = fakeCipher(); await nbappend(b, 0, bytes); await nbseal(b, bytes); const p = await ncplan();
+  for (const [sql, args] of [
+    ["UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1", [NEW.root]],
+    ["UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", [task.job_id]],
+    ["UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1", [task.job_id]],
+  ]) {
+    await db.exec('SAVEPOINT notification_expiration');
+    await db.query(sql, args); const saved = await transferSnapshot();
+    for (const action of [() => ncplan(), () => nbprepare(p), () => nbpage(b, 'messages'), () => nbverify(b), () => nbappend(b, 0, bytes), () => nbseal(b, bytes)]) await assert.rejects(action(), /invalid or expired/);
+    assert.deepEqual(await transferSnapshot(), saved);
+    if (args[0] === task.job_id) assert.equal((await nbget(b)).hex, bytes.toString('hex'));
+    assert.equal(await scalar(db, 'SELECT dirty FROM private.employee_transfer_maintenance'), true);
+    await db.exec('ROLLBACK TO SAVEPOINT notification_expiration; RELEASE SAVEPOINT notification_expiration');
+  }
+}));
+
+test('notification backup cancellation discards only unsealed independent backup and existing task cleanup removes plaintext', () => transaction(async () => {
+  const b = await nbready(); await nbappend(b, 0, fakeCipher()); const before = await business(); await rpc('employee_transfer_cancel', auth());
+  assert.deepEqual(await backups(), []); assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1', [task.job_id]), 0);
+  assert.equal(await scalar(db, 'SELECT sealed_at IS NOT NULL FROM private.employee_transfer_shared_backups WHERE id=$1', [task.job_id]), true);
+  await assert.rejects(nbget(b), /unavailable/); assert.deepEqual(await business(), before); await stillClosed();
+}));
+
+test('notification backup late prepare and seal exceptions roll back snapshot, ciphertext seal and events without business side effects', () => transaction(async () => {
+  await nstage(); const p = await ncplan(), before = await business(), original = await triggers();
+  await db.exec(`CREATE FUNCTION public.notification_backup_event_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.action IN ('notification_backup_prepared','notification_backup_sealed') THEN RAISE EXCEPTION 'late notification backup failure';END IF;RETURN NEW;END $$;
+    CREATE TRIGGER notification_backup_event_fail BEFORE INSERT ON private.employee_transfer_events FOR EACH ROW EXECUTE FUNCTION public.notification_backup_event_fail()`);
+  await assert.rejects(nbprepare(p), /late notification backup failure/); assert.deepEqual(await backups(), []);
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key LIKE 'notifications-backup:%'", [task.job_id]), 0);
+  await db.exec('ALTER TABLE private.employee_transfer_events DISABLE TRIGGER notification_backup_event_fail');
+  const b = await nbprepare(p), bytes = fakeCipher(); await nbappend(b, 0, bytes); const saved = await backups();
+  await db.exec('ALTER TABLE private.employee_transfer_events ENABLE TRIGGER notification_backup_event_fail');
+  await assert.rejects(nbseal(b, bytes), /late notification backup failure/); assert.deepEqual(await backups(), saved);
+  assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+for (const large of ['row', 'total']) test(`notification backup ${large} plaintext limit blocks atomically without truncation or partial snapshot`, () => transaction(async () => {
+  await nstage();
+  await localChange(db, 'public.messages', `INSERT INTO public.messages(id,sender_id,sender_username,title,content,message_type,priority)
+    SELECT gen_random_uuid(),$1,'root','synthetic',repeat('x',$2),'realtime','normal' FROM generate_series(1,$3)`, [NEW.root, large === 'row' ? 65536 : 60000, large === 'row' ? 1 : 141]);
+  const p = await ncplan(), before = await business(); await assert.rejects(nbprepare(p), /exceeds limits/); assert.deepEqual(await backups(), []);
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key LIKE 'notifications-backup:%'", [task.job_id]), 0);
+  assert.deepEqual(await business(), before); await stillClosed();
+}));
+
+test('notification backup missing date_runs is never created implicitly; existing maintenance inventory remains an explicit blocker', () => transaction(async () => {
+  await nstage(changedNotifications({ notification_automation_date_runs: () => '' }));
+  await db.exec('DROP TABLE public.notification_automation_date_runs');
+  await scalar(db, 'SELECT private.employee_transfer_notification_lock()');
+  assert.match(await scalar(db, 'SELECT private.employee_transfer_notification_target_hash()'), /^[0-9a-f]{64}$/);
+  await assert.rejects(ncplan(), /maintenance inventory or guards/);
+  assert.equal(await scalar(db, "SELECT to_regclass('public.notification_automation_date_runs') IS NULL"), true);
+  assert.deepEqual(await backups(), []);
+}));
 
 // Last: real COMMITs are intentional. No outer rollback can masquerade as cross-request continuation.
 test('separate committed activity transactions resume via a new activityApi, then cancellation preserves history and dirty maintenance', async () => {
