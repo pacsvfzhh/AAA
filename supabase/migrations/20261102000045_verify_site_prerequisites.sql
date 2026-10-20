@@ -183,15 +183,51 @@ BEGIN
 END;
 $$;
 
+-- Extend SQL44's admission probe without changing its reviewed 110-signature
+-- list/body or response shape. This wrapper itself must be installed before a
+-- caller can rely on the added SQL45 capability check; an untouched SQL44-only
+-- server still has the historical probe, not this wrapper.
+ALTER FUNCTION public.get_employee_import_site_preflight(uuid,uuid) SET SCHEMA private;
+ALTER FUNCTION private.get_employee_import_site_preflight(uuid,uuid)
+  RENAME TO employee_transfer_site_preflight_base;
+CREATE FUNCTION public.get_employee_import_site_preflight(
+  p_admin_session_token uuid,p_source_site_id uuid
+) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp
+SET timezone = 'UTC' SET datestyle = 'ISO, YMD' AS $$
+DECLARE v_result jsonb; v_missing jsonb; v_blockers jsonb;
+  v_rpc constant text := 'public.employee_import_site_verify_prerequisites(uuid,uuid)';
+BEGIN
+  v_result:=private.employee_transfer_site_preflight_base(p_admin_session_token,p_source_site_id);
+  IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc
+    WHERE oid=pg_catalog.to_regprocedure(v_rpc) AND prokind='f' AND prorettype='pg_catalog.jsonb'::regtype) THEN
+    v_missing:=v_result->'missing_rpcs';
+    IF NOT (v_missing ? v_rpc) THEN v_missing:=v_missing||jsonb_build_array(v_rpc); END IF;
+    v_blockers:=v_result->'blockers';
+    -- SQL44 already emits unique fixed-order blockers; missing_backend_support
+    -- is last. Append it only when absent, never sort or duplicate its results.
+    IF NOT (v_blockers ? 'missing_backend_support') THEN
+      v_blockers:=v_blockers||jsonb_build_array('missing_backend_support');
+    END IF;
+    v_result:=v_result||jsonb_build_object('missing_rpcs',v_missing,'blockers',v_blockers,
+      'can_restore_to_maintenance',false,'full_site_complete',false,'can_release',false);
+  END IF;
+  RETURN v_result;
+END;
+$$;
+
 REVOKE ALL ON FUNCTION private.employee_import_shared_replace_apply_base(uuid,uuid,text),
   private.employee_import_products_apply_base(uuid,uuid,text),
-  private.employee_transfer_site_prerequisite_checkpoint(private.employee_transfer_jobs,text)
+  private.employee_transfer_site_prerequisite_checkpoint(private.employee_transfer_jobs,text),
+  private.employee_transfer_site_preflight_base(uuid,uuid)
   FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.employee_import_shared_replace_apply(uuid,uuid,text),
-  public.employee_import_products_apply(uuid,uuid,text),public.employee_import_site_verify_prerequisites(uuid,uuid)
+  public.employee_import_products_apply(uuid,uuid,text),public.employee_import_site_verify_prerequisites(uuid,uuid),
+  public.get_employee_import_site_preflight(uuid,uuid)
   FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.employee_import_shared_replace_apply(uuid,uuid,text),
-  public.employee_import_products_apply(uuid,uuid,text),public.employee_import_site_verify_prerequisites(uuid,uuid)
+  public.employee_import_products_apply(uuid,uuid,text),public.employee_import_site_verify_prerequisites(uuid,uuid),
+  public.get_employee_import_site_preflight(uuid,uuid)
   TO anon,authenticated;
 NOTIFY pgrst,'reload schema';
 COMMIT;

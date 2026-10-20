@@ -21,6 +21,14 @@ import { buildNewSite, NEW, OLD, PASSWORDS } from './support/transfer-fixtures.m
 const PREVIOUS = '20261102000044_preflight_site_restore.sql';
 const MIGRATION = '20261102000045_verify_site_prerequisites.sql';
 const VERIFY = 'employee_import_site_verify_prerequisites';
+const PREFLIGHT = 'get_employee_import_site_preflight';
+const VERIFY_SIGNATURE = `public.${VERIFY}(uuid,uuid)`;
+const PREFLIGHT_SOURCE = '45000000-0000-4000-8000-000000000001';
+const BLOCKERS = ['same_site', 'active_maintenance', 'active_transfer_task', 'target_has_business', 'missing_backend_support'];
+const previousSql = await readFile(new URL(`../migrations/${PREVIOUS}`, import.meta.url), 'utf8');
+const signatures44 = [...previousSql.match(/FOREACH v_rpc IN ARRAY ARRAY\[([\s\S]*?)\]::text\[\] LOOP/)[1]
+  .matchAll(/'(public\.[a-z_]+\([a-z,]*\))'/g)].map(match => match[1]);
+const signatures45 = [...signatures44, VERIFY_SIGNATURE];
 const SHARED = ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members', 'admin_configs', 'system_configs', 'history_cleanup_config'];
 const DISPATCH = ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders', 'dispatch_group_members', 'valid_order_data', 'used_order_data'];
 const IDENTITY = ['accounts', 'credentials', 'orders'];
@@ -33,10 +41,10 @@ const sql = await readFile(new URL(`../migrations/${MIGRATION}`, import.meta.url
 const root = fileURLToPath(new URL('../../', import.meta.url));
 let db, source, replay, session, otherSession, branch, emergency, sourceSession, modules;
 let shared, products, dispatch, sharedPlan, productPlan, dispatchPlan, sharedReceipt, productReceipt;
-let packages, pinnedBefore, originalBodies, snapshotBefore, snapshotAfter, sharedCheckpoint, productCheckpoint, inside = false;
+let packages, pinnedBefore, originalBodies, originalPreflight, legacyDump, snapshotBefore, snapshotAfter, sharedCheckpoint, productCheckpoint, inside = false;
 
-async function transaction(fn, site = db) {
-  await site.exec('BEGIN');
+async function transaction(fn, site = db, mode = '') {
+  await site.exec(`BEGIN ${mode}`);
   const previous = inside; inside = true;
   try { return await fn(); } finally { inside = previous; await site.exec('ROLLBACK'); }
 }
@@ -66,12 +74,32 @@ const enter = (job = dispatch, plan = dispatchPlan) => rpc('employee_import_disp
   ...auth(job), p_plan_hash: plan.plan_hash, p_confirmation: '確認暫停業務並導入派單資料', p_admin_password: PASSWORDS.root,
 });
 const quote = s => '"' + s.replaceAll('"', '""') + '"';
-async function dataState() {
-  const tables = await rows(db, `SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+async function dataState(site = db) {
+  const tables = await rows(site, `SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname IN ('public','private','storage','cron') AND c.relkind IN ('r','p') ORDER BY 1,2`);
-  return rows(db, tables.map(r => `SELECT '${r.nspname}.${r.relname}' AS relation,count(*)::integer,
+  return rows(site, tables.map(r => `SELECT '${r.nspname}.${r.relname}' AS relation,count(*)::integer,
     md5(COALESCE(string_agg(to_jsonb(t)::text,E'\n' ORDER BY to_jsonb(t)::text COLLATE "C"),'')) AS hash
     FROM ${quote(r.nspname)}.${quote(r.relname)} t`).join(' UNION ALL '));
+}
+const preflight = (args = {}, role) => rpc(PREFLIGHT, { p_admin_session_token: session, p_source_site_id: PREFLIGHT_SOURCE, ...args }, role);
+async function preflightState(site = db) {
+  return { data: await dataState(site), sequences: await rows(site, `SELECT schemaname,sequencename,last_value FROM pg_sequences
+    WHERE schemaname IN ('public','private','storage','cron') ORDER BY schemaname,sequencename`) };
+}
+async function checkedPreflight(blockers = [], missing = [], args = {}, role) {
+  const state = await preflightState();
+  const result = await preflight(args, role);
+  assert.deepEqual(result, { version: 1, protocol: 'site-maintenance-restore-v1',
+    site_id: await scalar(db, 'SELECT site_id FROM private.employee_transfer_site'), source_site_id: args.p_source_site_id ?? PREFLIGHT_SOURCE,
+    can_restore_to_maintenance: blockers.length === 0, blockers, missing_rpcs: missing, full_site_complete: false, can_release: false });
+  assert.deepEqual(result.blockers, BLOCKERS.filter(code => blockers.includes(code)));
+  assert.equal(new Set(result.blockers).size, result.blockers.length); assert.equal(new Set(result.missing_rpcs).size, result.missing_rpcs.length);
+  assert.deepEqual(await preflightState(), state, 'preflight does not write business/sequence/job/audit/staging/heartbeat/permit state');
+  return result;
+}
+async function hideSignature(signature, name = 'prerequisite_hidden_capability') {
+  assert.ok(signatures45.includes(signature));
+  await db.exec(`ALTER FUNCTION ${signature} RENAME TO ${quote(name)}`);
 }
 async function rejected(args = {}, pattern = /prerequisite|invalid or expired|protocol|permission|Super administrator/) {
   const before = await dataState();
@@ -182,6 +210,9 @@ before(async () => {
   pinnedBefore = await pinned(); snapshotBefore = await schemaState();
   originalBodies = await rows(db, `SELECT proname,prosrc,proconfig FROM pg_proc WHERE oid IN (
     'public.employee_import_shared_replace_apply(uuid,uuid,text)'::regprocedure,'public.employee_import_products_apply(uuid,uuid,text)'::regprocedure) ORDER BY proname`);
+  originalPreflight = await scalar(db, `SELECT jsonb_build_object('body',prosrc,'config',proconfig,'volatility',provolatile,'args',proargnames)
+    FROM pg_proc WHERE oid='public.get_employee_import_site_preflight(uuid,uuid)'::regprocedure`);
+  legacyDump = await db.dumpDataDir('none');
   const state = await dataState();
   await db.exec(sql); snapshotAfter = await schemaState(); assert.deepEqual(await dataState(), state);
   replay.files.push(MIGRATION); replay.validation = assertExpectedReplayFailures(replay, { upTo: MIGRATION });
@@ -212,7 +243,6 @@ before(async () => {
   for (const kind of ['shared', 'products', 'dispatch', 'identity']) packages[kind] = await capture(kind);
   modules = { shared: await compiled('replacementBackup', 'createReplacementBackup'), products: await compiled('productBackup', 'createProductBackup'),
     dispatch: await compiled('dispatchBackup', 'createDispatchBackup'), verify: await compiled('container', 'verifyEncryptedVolume') };
-  ({ task: shared, plan: sharedPlan } = await prepare('shared'));
   await db.exec('CREATE ROLE prerequisite_untrusted NOLOGIN; GRANT USAGE ON SCHEMA public TO prerequisite_untrusted');
 }, { timeout: 180000 });
 after(async () => { await source?.close(); await db?.close(); mock.restoreAll(); });
@@ -224,25 +254,132 @@ test('SQL45 follows the complete SQL44 replay with precisely 12 historical failu
   const bodies = await rows(db, `SELECT replace(proname,'_base','') AS proname,prosrc,proconfig FROM pg_proc WHERE oid IN (
     'private.employee_import_shared_replace_apply_base(uuid,uuid,text)'::regprocedure,'private.employee_import_products_apply_base(uuid,uuid,text)'::regprocedure) ORDER BY proname`);
   assert.deepEqual(bodies, originalBodies);
+  assert.deepEqual(await scalar(db, `SELECT jsonb_build_object('body',prosrc,'config',proconfig,'volatility',provolatile,'args',proargnames)
+    FROM pg_proc WHERE oid='private.employee_transfer_site_preflight_base(uuid,uuid)'::regprocedure`), originalPreflight);
   assert.doesNotMatch(sql, /\bEXECUTE\s+(?:format|'|v_)|DISABLE TRIGGER|session_replication_role|INSERT INTO private.employee_transfer_write_permits|UPDATE private.employee_transfer_maintenance/i);
   t.diagnostic(`${replay.files.length} sorted migrations, exactly 12 original failures; not a clean database build`);
 });
 test('exact write RPC signatures/SECURITY DEFINER/search_path/UTC/ISO and ACL; no public, untrusted or service_role execute on bases/helpers', async () => {
-  const publicFns = ['employee_import_shared_replace_apply(uuid,uuid,text)', 'employee_import_products_apply(uuid,uuid,text)', `${VERIFY}(uuid,uuid)`];
-  const privateFns = ['employee_import_shared_replace_apply_base(uuid,uuid,text)', 'employee_import_products_apply_base(uuid,uuid,text)', 'employee_transfer_site_prerequisite_checkpoint(private.employee_transfer_jobs,text)'];
+  const publicFns = ['employee_import_shared_replace_apply(uuid,uuid,text)', 'employee_import_products_apply(uuid,uuid,text)', `${VERIFY}(uuid,uuid)`, `${PREFLIGHT}(uuid,uuid)`];
+  const privateFns = ['employee_import_shared_replace_apply_base(uuid,uuid,text)', 'employee_import_products_apply_base(uuid,uuid,text)', 'employee_transfer_site_prerequisite_checkpoint(private.employee_transfer_jobs,text)', 'employee_transfer_site_preflight_base(uuid,uuid)'];
   for (const [schema, signatures] of [['public', publicFns], ['private', privateFns]]) for (const sig of signatures) {
     const name = `${schema}.${sig}`;
     const p = (await rows(db, `SELECT prosecdef,provolatile,prorettype::regtype::text AS result,proconfig,proacl::text,proargnames FROM pg_proc WHERE oid=to_regprocedure($1)`, [name]))[0];
     assert.equal(p.prosecdef, true); assert.equal(p.result, 'jsonb'); assert.ok(p.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
-    assert.ok(p.proconfig.includes('TimeZone=UTC')); assert.ok(p.proconfig.includes('DateStyle=ISO, YMD'));
+    if (sig !== 'employee_transfer_site_preflight_base(uuid,uuid)') {
+      assert.ok(p.proconfig.includes('TimeZone=UTC')); assert.ok(p.proconfig.includes('DateStyle=ISO, YMD'));
+    }
+    if (sig === `${PREFLIGHT}(uuid,uuid)`) {
+      assert.equal(p.provolatile, 's'); assert.deepEqual(p.proargnames, ['p_admin_session_token', 'p_source_site_id']);
+    }
     assert.doesNotMatch(p.proacl, /(?:^|,)=[^,]*X/);
     if (sig.startsWith(VERIFY)) { assert.equal(p.provolatile, 'v'); assert.deepEqual(p.proargnames, ['p_admin_session_token', 'p_job_token']); }
     for (const role of ['anon', 'authenticated', 'service_role', 'prerequisite_untrusted']) assert.equal(
       await scalar(db, "SELECT has_function_privilege($1,$2,'EXECUTE')", [role, name]), schema === 'public' && ['anon', 'authenticated'].includes(role), `${role} ${name}`);
   }
-  for (const role of ['service_role', 'prerequisite_untrusted']) await assert.rejects(rpc(VERIFY, { ...auth(shared) }, role), /permission denied for function/);
+  for (const role of ['service_role', 'prerequisite_untrusted']) {
+    await assert.rejects(rpc(VERIFY, { p_admin_session_token: session, p_job_token: randomUUID() }, role), /permission denied for function/);
+    await assert.rejects(preflight({}, role), /permission denied for function/);
+    await transaction(async () => {
+      await db.exec(`SET LOCAL ROLE ${role}`);
+      await assert.rejects(db.query('SELECT private.employee_transfer_site_preflight_base($1::uuid,$2::uuid)', [session, PREFLIGHT_SOURCE]), /permission denied/);
+    });
+  }
 });
+test('actual SQL44-only server still has 110-signature admission and cannot discover an uninstalled SQL45 (client capability check remains required)', async t => {
+  const legacy = new PGlite({ loadDataDir: legacyDump, extensions: { pgcrypto, pg_trgm, uuid_ossp } });
+  try {
+    await legacy.waitReady; await buildNewSite(legacy);
+    const token = await adminLogin(legacy, 'root', PASSWORDS.root);
+    assert.equal(await scalar(legacy, 'SELECT to_regprocedure($1)::text', [VERIFY_SIGNATURE]), null);
+    assert.equal(await scalar(legacy, "SELECT to_regprocedure('private.employee_transfer_site_preflight_base(uuid,uuid)')::text"), null);
+    const state = await preflightState(legacy);
+    await transaction(async () => {
+      const result = await call(legacy, PREFLIGHT, { p_admin_session_token: token, p_source_site_id: PREFLIGHT_SOURCE });
+      assert.deepEqual(result, { version: 1, protocol: 'site-maintenance-restore-v1',
+        site_id: await scalar(legacy, 'SELECT site_id FROM private.employee_transfer_site'), source_site_id: PREFLIGHT_SOURCE,
+        can_restore_to_maintenance: true, blockers: [], missing_rpcs: [], full_site_complete: false, can_release: false });
+      assert.deepEqual(await preflightState(legacy), state);
+    }, legacy, 'READ ONLY');
+    t.diagnostic('Unmodified SQL44 has no knowledge of SQL45; no shared import/job/permit is started by this probe.');
+  } finally { await legacy.close(); legacyDump = null; }
+});
+test('SQL45 wrapper retains the original shape and represents 111 exact jsonb capabilities without exposing a count or invoking writes', async t => {
+  assert.equal(signatures44.length, 110); assert.equal(signatures45.length, 111); assert.equal(new Set(signatures45).size, 111);
+  for (const signature of signatures45) assert.equal(await scalar(db, `SELECT count(*)::int FROM pg_proc
+    WHERE oid=to_regprocedure($1) AND prokind='f' AND prorettype='jsonb'::regtype`, [signature]), 1, signature);
+  const result = await checkedPreflight();
+  const base = await scalar(db, 'SELECT private.employee_transfer_site_preflight_base($1::uuid,$2::uuid)', [session, PREFLIGHT_SOURCE]);
+  assert.deepEqual(result, base); assert.deepEqual(result.missing_rpcs, []);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_jobs'), 0);
+  t.diagnostic('111 exact backend signatures = SQL44 original 110 + SQL45 verify; healthy missing_rpcs remains [].');
+});
+for (const role of ['anon', 'authenticated']) {
+  test(`${role} SQL45 preflight runs in READ ONLY with no task/heartbeat/audit/sequence/permit writes`, async () => {
+    await transaction(() => checkedPreflight([], [], {}, role), db, 'READ ONLY');
+  });
+  test(`${role} missing SQL45 verifier blocks in READ ONLY before any shared import is started`, async () => {
+    // Trusted local DDL changes only capability existence and is undone even if
+    // the READ ONLY assertion fails. The admission RPC itself does no DDL/writes.
+    await hideSignature(VERIFY_SIGNATURE);
+    try {
+      await transaction(() => checkedPreflight(['missing_backend_support'], [VERIFY_SIGNATURE], {}, role), db, 'READ ONLY');
+      assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_jobs'), 0);
+    } finally {
+      await db.exec(`ALTER FUNCTION public.prerequisite_hidden_capability(uuid,uuid) RENAME TO ${VERIFY}`);
+    }
+  });
+}
+for (const signature of signatures45) {
+  test(`SQL45 wrapper blocks missing exact capability in fixed 111-signature baseline: ${signature}`, async () => transaction(async () => {
+    await hideSignature(signature);
+    await checkedPreflight(['missing_backend_support'], [signature]);
+  }));
+}
+for (const [label, definition] of [
+  ['wrong UUID/text overload and correct private-schema name', `CREATE FUNCTION public.${VERIFY}(uuid,text) RETURNS jsonb LANGUAGE sql STABLE AS 'SELECT ''{}''::jsonb';
+    CREATE FUNCTION private.${VERIFY}(uuid,uuid) RETURNS jsonb LANGUAGE sql STABLE AS 'SELECT ''{}''::jsonb'`],
+  ['exact parameters but wrong return type', `CREATE FUNCTION public.${VERIFY}(uuid,uuid) RETURNS text LANGUAGE sql STABLE AS 'SELECT ''not-jsonb'''`],
+  ['procedure instead of function', `CREATE PROCEDURE public.${VERIFY}(uuid,uuid) LANGUAGE plpgsql AS 'BEGIN NULL; END'`],
+]) test(`SQL45 capability ${label} cannot satisfy the required public jsonb signature`, async () => transaction(async () => {
+  await hideSignature(VERIFY_SIGNATURE); await db.exec(definition);
+  await checkedPreflight(['missing_backend_support'], [VERIFY_SIGNATURE]);
+}));
+test('missing old and SQL45 capabilities accumulate once in review order; existing missing_backend_support never duplicates', async () => transaction(async () => {
+  const missing = [signatures44[0], signatures44[12], signatures44.at(-1), VERIFY_SIGNATURE];
+  for (const [index, signature] of [...missing].reverse().entries()) await hideSignature(signature, `prerequisite_hidden_${index}`);
+  await checkedPreflight(['missing_backend_support'], missing);
+}));
+test('all five blockers keep SQL44 fixed order with missing SQL45 support and no raw data/state changes (synthetic maintenance metadata negative)', async () => transaction(async () => {
+  await db.query(`INSERT INTO public.valid_order_data(product_value,transaction_id,created_by,usage_count,last_used_at)
+    VALUES(123.456,'LOCAL-PREREQUISITE-PREFLIGHT-CANARY',$1,1,now())`, [NEW.root]);
+  const job = randomUUID();
+  await db.query(`INSERT INTO private.employee_transfer_jobs(id,kind,admin_id,admin_username,token_hash,status,options,summary)
+    VALUES($1,'import',$2,'LOCAL-PREREQUISITE-PREFLIGHT-CANARY',private.hash_financial_token($3),'running','{"private_options":"raw"}','{"private_summary":"raw"}')`, [job, NEW.root, randomUUID()]);
+  await db.query(`INSERT INTO private.employee_transfer_maintenance(job_id,admin_id,plan_hash,target_hash,entered_at,dirty)
+    VALUES($1,$2,repeat('a',64),repeat('b',64),now(),true)`, [job, NEW.root]);
+  const missing = [signatures44.at(-1), VERIFY_SIGNATURE];
+  for (const [index, signature] of [...missing].reverse().entries()) await hideSignature(signature, `prerequisite_hidden_${index}`);
+  await checkedPreflight(BLOCKERS, missing, { p_source_site_id: await scalar(db, 'SELECT site_id FROM private.employee_transfer_site') });
+}));
+test('preflight never invokes SQL45 verifier, including a valid-signature implementation that would throw if called', async () => transaction(async () => {
+  const definition = await scalar(db, 'SELECT pg_get_functiondef(to_regprocedure($1))', [VERIFY_SIGNATURE]);
+  const start = definition.indexOf('AS $function$'); assert.ok(start > 0);
+  await db.exec(definition.slice(0, start) + "AS $function$ BEGIN RAISE EXCEPTION 'Verifier must not execute during admission'; END; $function$;");
+  await checkedPreflight();
+}));
+for (const [label, args] of [
+  ['NULL session', () => ({ p_admin_session_token: null })], ['random session', () => ({ p_admin_session_token: randomUUID() })],
+  ['secondary session', () => ({ p_admin_session_token: branch })], ['emergency session', () => ({ p_admin_session_token: emergency })],
+  ['NULL source', () => ({ p_source_site_id: null })],
+]) test(`preflight ${label} preserves original validation and makes no writes`, async () => {
+  const state = await preflightState();
+  await assert.rejects(preflight(args()), /invalid or expired|Super administrator permission|source site id is required/);
+  assert.deepEqual(await preflightState(), state);
+});
+
 test('shared wrapper preserves sealed-backup gate, creates no checkpoint on failure, then captures actual post-write target and unchanged return shape', async () => {
+  ({ task: shared, plan: sharedPlan } = await prepare('shared'));
   await assert.rejects(apply('shared', shared, sharedPlan), /saved and sealed/); assert.equal(await checkpoint(shared), null);
   await sealBackup('shared', shared, sharedPlan);
   sharedReceipt = await apply('shared', shared, sharedPlan);
