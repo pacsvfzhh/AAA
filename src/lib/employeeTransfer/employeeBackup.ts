@@ -207,7 +207,7 @@ function rowIdentity(line: string, key: EmployeeBackupTableKey, catalog: Employe
       while (/[\t\r ]/.test(line[end] ?? '') && end < line.length) end++;
       if (line[end] === ':') { const keys = stack[stack.length - 1]; if (!keys || keys.has(token)) invalid(); keys.add(token); }
     }
-    if (stack.length > 64) invalid();
+    if (stack.length > 66) invalid();
   }
   for (const [field, spec] of Object.entries(catalog.projections[key])) {
     const v = row[field], type = spec.replace(/!$/, '');
