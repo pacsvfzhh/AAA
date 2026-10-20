@@ -376,6 +376,7 @@ BEGIN
     SELECT jsonb_build_array(jsonb_build_object('table','customer_employee_conversations','trigger',tgname,'mode',tgenabled::text,
       'digest',private.employee_transfer_trigger_digest(oid))) INTO STRICT v_entries FROM pg_trigger
       WHERE tgrelid='public.customer_employee_conversations'::regclass AND tgname='freeze_service_rich_card_before_insert';
+    -- Source snapshots must not be replaced by the target's current templates.
     ALTER TABLE ONLY public.customer_employee_conversations DISABLE TRIGGER freeze_service_rich_card_before_insert;
     INSERT INTO private.employee_transfer_events(kind,action,details) VALUES('import','trigger_bypass',jsonb_build_object(
       'transaction_id',pg_current_xact_id()::text,'bypass_id',v_id,'entries',v_entries,'scope','chat-restore'));
@@ -403,7 +404,9 @@ BEGIN
   v_job:=private.employee_transfer_job(p_admin_session_token,p_job_token,'dispatch-import');v_map:=private.employee_transfer_chat_restore_context(v_job);
   IF v_job.summary ? 'chat_restore' THEN
     IF p_plan_hash IS DISTINCT FROM v_job.summary#>>'{chat_restore,plan_hash}' THEN RAISE EXCEPTION 'Chat restore plan differs.';END IF;
-    PERFORM private.employee_transfer_chat_restore_progress(v_job);RETURN private.employee_transfer_chat_restore_receipt(v_job,'begin',true);
+    PERFORM private.employee_transfer_chat_restore_progress(v_job);
+    IF v_job.summary#>'{chat_restore,verified}'='true'::jsonb AND NOT COALESCE(private.employee_transfer_chat_media_ready(v_job,true),false) THEN RAISE EXCEPTION 'Final chat media readback is incomplete.';END IF;
+    RETURN private.employee_transfer_chat_restore_receipt(v_job,'begin',true);
   END IF;
   v_plan:=private.employee_transfer_chat_merge_plan(v_job,v_job.summary->'chat_decisions');
   SELECT * INTO v_backup FROM private.employee_transfer_chat_backups WHERE job_id=v_job.id AND admin_id=v_job.admin_id FOR UPDATE;
@@ -420,6 +423,8 @@ BEGIN
     'counts',v_counts,'next_chunk',0,'total_chunks',v_total,'generation','0','last_apply_at',NULL,'verified',false,'target_hash',private.employee_transfer_chat_target_hash()));
   PERFORM private.employee_transfer_chat_restore_progress(v_job);
   UPDATE private.employee_transfer_jobs SET summary=v_job.summary WHERE id=v_job.id;
+  PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','chat_restore_started',
+    jsonb_build_object('plan_hash',p_plan_hash,'backup_id',v_backup.id,'total_chunks',v_total,'full_site_complete',false));
   RETURN private.employee_transfer_chat_restore_receipt(v_job,'begin',false);
 END;
 $$;
@@ -434,7 +439,10 @@ BEGIN
   PERFORM private.employee_transfer_chat_restore_progress(v_job);
   IF p_chunk_no IS NULL OR p_chunk_no<0 OR p_chunk_no>=(v_job.summary#>>'{chat_restore,total_chunks}')::integer THEN RAISE EXCEPTION 'Invalid chat chunk number.';END IF;
   SELECT * INTO v_work FROM private.employee_transfer_chat_restore_work(v_job) WHERE chunk_no=p_chunk_no;
-  IF p_chunk_no<(v_job.summary#>>'{chat_restore,next_chunk}')::integer THEN RETURN private.employee_transfer_chat_restore_receipt(v_job,'chunk',true,p_chunk_no,jsonb_array_length(v_work.rows));END IF;
+  IF p_chunk_no<(v_job.summary#>>'{chat_restore,next_chunk}')::integer THEN
+    IF v_job.summary#>'{chat_restore,verified}'='true'::jsonb AND NOT COALESCE(private.employee_transfer_chat_media_ready(v_job,true),false) THEN RAISE EXCEPTION 'Final chat media readback is incomplete.';END IF;
+    RETURN private.employee_transfer_chat_restore_receipt(v_job,'chunk',true,p_chunk_no,jsonb_array_length(v_work.rows));
+  END IF;
   IF p_chunk_no<>(v_job.summary#>>'{chat_restore,next_chunk}')::integer THEN RAISE EXCEPTION 'Chat chunks must be applied in order.';END IF;
   v_keys:=ARRAY['public.'||v_work.table_key];
   IF v_work.table_key='customer_employee_conversations' THEN v_keys:=v_keys||ARRAY['public.rich_card_contents'];END IF;
@@ -450,6 +458,8 @@ BEGIN
   v_state:=v_state||jsonb_build_object('next_chunk',p_chunk_no+1,'generation',(p_chunk_no+1)::text,'verified',false,'last_apply_at',clock_timestamp(),'target_hash',private.employee_transfer_chat_target_hash());
   v_job.summary:=jsonb_set(v_job.summary,'{chat_restore}',v_state);PERFORM private.employee_transfer_chat_restore_progress(v_job);
   UPDATE private.employee_transfer_jobs SET summary=v_job.summary WHERE id=v_job.id;
+  PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','chat_chunk_restored',
+    jsonb_build_object('table_key',v_work.table_key,'chunk_no',p_chunk_no,'rows',jsonb_array_length(v_work.rows),'generation',v_state->>'generation','full_site_complete',false));
   RETURN private.employee_transfer_chat_restore_receipt(v_job,'chunk',false,p_chunk_no,jsonb_array_length(v_work.rows));
 EXCEPTION WHEN OTHERS THEN PERFORM private.employee_transfer_clear_write_permit();RAISE;
 END;
@@ -470,6 +480,8 @@ BEGIN
   IF NOT COALESCE(private.employee_transfer_chat_media_ready(v_job,true),false) THEN RAISE EXCEPTION 'Final chat media readback is incomplete.';END IF;
   v_repeated:=(v_job.summary#>>'{chat_restore,verified}')::boolean;v_job.summary:=jsonb_set(v_job.summary,'{chat_restore,verified}','true');
   UPDATE private.employee_transfer_jobs SET summary=v_job.summary WHERE id=v_job.id;
+  IF NOT v_repeated THEN PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','chat_restore_verified',
+    jsonb_build_object('counts',v_job.summary#>'{chat_restore,counts}','generation',v_job.summary#>>'{chat_restore,generation}','full_site_complete',false));END IF;
   RETURN private.employee_transfer_chat_restore_receipt(v_job,'verify',v_repeated);
 END;
 $$;

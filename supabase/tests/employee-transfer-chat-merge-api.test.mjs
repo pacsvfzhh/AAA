@@ -251,6 +251,35 @@ test('auth failures are private and re-login can resume with the original job an
   h.authError = Error(SECRET); await assert.rejects(s.plan(decisions()), uncertain); assert.equal(h.calls.length, 0);
   h.authError = null; h.session = OTHER; h.respond(plan()); await s.plan(decisions()); assert.equal(h.calls[0].args.p_admin_session_token, OTHER);
 });
+function targetRoleRaw(ids) {
+  return JSON.stringify({ id: id(80), admin_id: SESSION, customer_name: '目標角色', customer_avatar: null, is_active: true,
+    created_at: null, updated_at: null, customer_id: 'CUS-TARGET', is_super: false, super_customer_title: null, badge_type: null,
+    custom_avatar_url: null, is_pinned: false, vip_label: null, remarks: '原文', source_type: 'aaa_service', employee_pin_top: false,
+    employee_always_visible: true, target_employee_id: null, target_employee_ids: ids, auto_messages_enabled: false })
+    .replace('"target_employee_ids":', '"target_employee_ids" : ') + '\n';
+}
+for (const [label, ids] of [['NULL element', [null]], ['UUID plus NULL', [OTHER, null]], ['empty array', []], ['SQL NULL', null]]) {
+  test(`bound backup page preserves target visibility ${label} exactly`, async () => {
+    const h = harness(), s = await planned(h), raw = targetRoleRaw(ids), d = descriptor();
+    d.catalog.tables[0] = { key: 'simulated_customers', rows: 1, bytes: Buffer.byteLength(raw), row_hashes_sha256: sha(sha(raw)) };
+    h.respond(d); const b = await s.backup(PLAN, decisions()); h.respond(page('simulated_customers', raw));
+    const result = await b.source.page('simulated_customers', null);
+    assert.equal(result.ndjson, raw); assert.equal(result.sha256, sha(raw)); assert.deepEqual(JSON.parse(result.ndjson).target_employee_ids, ids);
+    assert.deepEqual((await b.source.catalog()).tables[0], d.catalog.tables[0]);
+    h.respond(verification()); await b.source.verify(); h.respond(appended()); await b.receiver.append(0, HEX);
+    assert.equal(h.calls.length, 5);
+  });
+}
+for (const [label, raw] of [
+  ['invalid UUID after NULL', targetRoleRaw([null, 'not-a-uuid'])], ['wrong array type', targetRoleRaw({ ids: [null] })],
+  ['nested array', targetRoleRaw([null, []])], ['nonstring UUID', targetRoleRaw([null, false])],
+  ['escaped-equivalent duplicate visibility', targetRoleRaw([null]).replace('{', '{"target_employee_id\\u0073":[],')],
+  ['escaped-equivalent duplicate ID', targetRoleRaw([null]).replace('{', `{"i\\u0064":"${id(80)}",`)],
+]) test(`backup page still rejects ${label} and revokes ciphertext permission`, async () => {
+  const h = harness(), { b } = await ready(h); h.respond(page('simulated_customers', raw));
+  await assert.rejects(b.source.page('simulated_customers', null), uncertain);
+  await assert.rejects(b.receiver.append(0, HEX)); assert.equal(h.calls.length, 4);
+});
 test('SQL30 exposes exactly seven signatures, independent 11-column RLS backup and precise inventory exclusion', async () => {
   const sql = await readFile(`${root}supabase/migrations/20261102000030_prepare_chat_merge.sql`, 'utf8');
   const declared = [...sql.matchAll(/CREATE FUNCTION public\.([a-z_]+)\(([^)]*)\)/g)];
@@ -270,4 +299,13 @@ test('SQL30 exposes exactly seven signatures, independent 11-column RLS backup a
   const helper = sql.slice(sql.indexOf('CREATE FUNCTION private.employee_transfer_chat_merge_plan'), sql.indexOf('CREATE FUNCTION public.get_employee_import_chat_merge_plan'));
   assert.match(helper, /STABLE SECURITY DEFINER/); assert.equal(/UPDATE |INSERT |DELETE |heartbeat/.test(helper), false);
   assert.match(sql, /private\.employee_transfer_chat_unique_json\(v_json\)/);
+  const backupHelper = sql.slice(sql.indexOf('CREATE FUNCTION private.employee_transfer_check_chat_backup_row'),
+    sql.indexOf('CREATE FUNCTION private.employee_transfer_chat_check_snapshot'));
+  assert.match(backupHelper, /STABLE SECURITY DEFINER/);
+  assert.match(backupHelper, /p_key='simulated_customers' AND jsonb_typeof\(p_row->'target_employee_ids'\)='array'/);
+  assert.match(backupHelper, /FILTER \(WHERE item.value<>'null'::jsonb\)/);
+  assert.match(backupHelper, /private\.employee_transfer_check_chat_row\(p_key,v_validation\)/);
+  assert.equal((sql.match(/PERFORM private\.employee_transfer_check_chat_backup_row\(v_key,/g) ?? []).length, 2);
+  assert.match(sql.slice(sql.indexOf('REVOKE ALL ON FUNCTION private.employee_transfer_chat_discard_unsealed')),
+    /private\.employee_transfer_check_chat_backup_row\(text,jsonb\)/);
 });

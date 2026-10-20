@@ -4,7 +4,7 @@ import { dispatchTransferChecks } from './dispatchTransfer';
 import { Sha256 } from './sha256';
 import {
   CHAT_TABLE_KEYS, CHAT_CONFLICT_REASONS, CHAT_TRANSFER_LIMITS, chatCursor, chatTableKey,
-  validateChatCatalog, validateChatPage, type ChatCatalog, type ChatCounts,
+  validateChatCatalog, validateChatBackupPage, type ChatCatalog, type ChatCounts,
 } from './chatTransfer';
 import type { ChatBackupDescriptor, ChatBackupReceiver, ChatBackupSource } from './chatBackup';
 
@@ -198,7 +198,7 @@ export function createChatMergeSession(jobToken: string, input: ChatCatalog): Ch
                 return response(() => {
                   const query = supabase.rpc('get_employee_import_chat_backup_page', { ...params(), p_table_key: key, p_after: after, p_limit: 200 });
                   return readSignal ? query.abortSignal(readSignal) : query;
-                }, value => validateChatPage(value, key, after), readSignal);
+                }, value => validateChatBackupPage(value, key, after), readSignal);
               }, readSignal);
             },
             verify(readSignal) {

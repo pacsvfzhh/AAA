@@ -14,7 +14,8 @@ const directories = [];
 after(async () => { mock.restoreAll(); await Promise.all(directories.map(path => rm(path, { recursive: true, force: true }))); });
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const compiled = await build({ stdin: { contents: `export * from './src/lib/employeeTransfer/chatBackup.ts';
-  export { writeEncryptedVolume, verifyEncryptedVolume } from './src/lib/employeeTransfer/container.ts';`,
+  export { writeEncryptedVolume, verifyEncryptedVolume } from './src/lib/employeeTransfer/container.ts';
+  export { validateChatRow, validateChatPage, validateChatBackupRow, validateChatBackupPage } from './src/lib/employeeTransfer/chatTransfer.ts';`,
 resolveDir: root, sourcefile: 'chat-backup-test-entry.mjs', loader: 'js' },
 bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', metafile: true });
 const api = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
@@ -556,4 +557,54 @@ test('virtual annotation id is composite and cannot be silently replaced', async
 test('records-only catalog refuses more than 2000 target roles', () => {
   const f = fixture(); f.catalog.tables[0].rows = 2001;
   assert.throws(() => api.validateChatBackupCatalog(f.catalog), sanitized);
+});
+for (const [label, ids] of [['NULL element', [null]], ['UUID and NULL', [OTHER, null]], ['empty array', []], ['SQL NULL', null]]) {
+  test(`target role ${label} survives independent encrypted backup and exact byte authentication`, async () => {
+    const r = row('simulated_customers'); r.target_employee_ids = ids;
+    // Deliberate whitespace proves the backup keeps original bytes, not parse/stringify output.
+    const raw = JSON.stringify(r).replace('"target_employee_ids":', '"target_employee_ids" : ') + '\n';
+    const f = fixture({ empty: true, texts: { simulated_customers: raw }, fragmentSize: 1 });
+    assert.equal(api.validateChatBackupRow(raw, 'simulated_customers'), r.id);
+    assert.equal(api.validateChatBackupPage(page('simulated_customers', raw), 'simulated_customers', null).ndjson, raw);
+    if (Array.isArray(ids) && ids.includes(null)) {
+      assert.throws(() => api.validateChatRow(raw, 'simulated_customers'));
+      assert.throws(() => api.validateChatPage(page('simulated_customers', raw), 'simulated_customers', null));
+    } else assert.equal(api.validateChatRow(raw, 'simulated_customers'), r.id);
+    const result = await run(f), { manifest, files } = await recover(f.saved);
+    assert.deepEqual(files.get(pathFor('simulated_customers')), Buffer.from(raw));
+    assert.deepEqual(JSON.parse(files.get(pathFor('simulated_customers')).toString()).target_employee_ids, ids);
+    assert.equal(manifest.entries[0].sha256, sha(raw));
+    assert.deepEqual(Buffer.concat(f.calls.upload.map(c => c.bytes)), f.saved);
+    assert.equal(result.sealReceipt.media_pending, true); noAutomaticWrites(f);
+  });
+}
+for (const [label, ids] of [
+  ['string instead of array', 'not-an-array'], ['object instead of array', {}], ['number instead of array', 1],
+  ['invalid UUID after NULL', [null, 'not-a-uuid']], ['number after NULL', [null, 1]], ['boolean after NULL', [null, false]],
+  ['object after NULL', [null, {}]], ['nested array after NULL', [null, []]], ['UUID with newline', [OTHER + '\n', null]],
+]) test(`backup rejects illegal visibility ${label} before saving`, async () => {
+  const r = row('simulated_customers'); r.target_employee_ids = ids; const raw = JSON.stringify(r) + '\n';
+  assert.throws(() => api.validateChatBackupRow(raw, 'simulated_customers'));
+  assert.throws(() => api.validateChatBackupPage(page('simulated_customers', raw), 'simulated_customers', null));
+  const f = fixture({ empty: true, texts: { simulated_customers: raw } });
+  await rejected(f, { phase: 'snapshot', serverChunksMayExist: false }); assert.equal(f.calls.save, 0);
+});
+for (const [label, duplicate] of [
+  ['literal duplicate visibility', '"target_employee_ids":[],'],
+  ['escaped-equivalent visibility', '"target_employee_id\\u0073":[],'],
+  ['escaped-equivalent role id', `"i\\u0064":"${OTHER}",`],
+]) test(`backup checks original JSON before accepting NULL arrays: ${label}`, async () => {
+  const r = row('simulated_customers'); r.target_employee_ids = [null];
+  const raw = JSON.stringify(r).replace('{', '{' + duplicate) + '\n';
+  assert.throws(() => api.validateChatBackupRow(raw, 'simulated_customers'));
+  assert.throws(() => api.validateChatBackupPage(page('simulated_customers', raw), 'simulated_customers', null));
+  const f = fixture({ empty: true, texts: { simulated_customers: raw } });
+  await rejected(f, { phase: 'snapshot', serverChunksMayExist: false }); assert.equal(f.calls.save, 0);
+});
+test('backup NULL-array exception never applies to the legacy scalar or additional fields', async () => {
+  for (const patch of [{ target_employee_id: [null] }, { other_employee_ids: [null] }]) {
+    const r = { ...row('simulated_customers'), target_employee_ids: [null], ...patch }, raw = JSON.stringify(r) + '\n';
+    assert.throws(() => api.validateChatBackupRow(raw, 'simulated_customers'));
+    const f = fixture({ empty: true, texts: { simulated_customers: raw } }); await rejected(f, { phase: 'snapshot' });
+  }
 });

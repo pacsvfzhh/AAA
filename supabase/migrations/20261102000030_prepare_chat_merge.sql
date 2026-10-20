@@ -149,6 +149,22 @@ BEGIN
 END;
 $$;
 
+-- A target uuid[] may legally contain SQL NULL. Strip JSON null only in this validation
+-- copy; [null], [], SQL NULL and mixed arrays remain byte-for-byte distinct in the snapshot.
+CREATE FUNCTION private.employee_transfer_check_chat_backup_row(p_key text,p_row jsonb)
+RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE v_validation jsonb:=p_row;v_ids jsonb;
+BEGIN
+  IF p_key='simulated_customers' AND jsonb_typeof(p_row->'target_employee_ids')='array' THEN
+    SELECT COALESCE(jsonb_agg(item.value ORDER BY item.ordinal) FILTER (WHERE item.value<>'null'::jsonb),'[]'::jsonb)
+      INTO v_ids FROM jsonb_array_elements(p_row->'target_employee_ids') WITH ORDINALITY AS item(value,ordinal);
+    v_validation:=jsonb_set(v_validation,'{target_employee_ids}',v_ids);
+  END IF;
+  PERFORM private.employee_transfer_check_chat_row(p_key,v_validation);
+END;
+$$;
+
 CREATE FUNCTION private.employee_transfer_chat_check_snapshot(p_backup private.employee_transfer_chat_backups)
 RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
@@ -175,7 +191,7 @@ BEGIN
     IF v_text<>'' THEN FOR v_line IN SELECT line FROM unnest(string_to_array(left(v_text,length(v_text)-1),E'\n')) AS s(line) LOOP
       v_json:=v_line::json;
       IF octet_length(v_line)+1>65536 OR NOT private.employee_transfer_chat_unique_json(v_json) THEN RAISE EXCEPTION 'Invalid chat backup row.';END IF;
-      PERFORM private.employee_transfer_check_chat_row(v_key,v_json::jsonb);
+      PERFORM private.employee_transfer_check_chat_backup_row(v_key,v_json::jsonb);
       v_cursor:=v_json->>'id';
       IF v_last IS NOT NULL AND v_last COLLATE "C">=v_cursor COLLATE "C" THEN RAISE EXCEPTION 'Invalid chat backup row order.';END IF;
       v_last:=v_cursor;v_count:=v_count+1;v_hashes:=v_hashes||encode(extensions.digest(convert_to(v_line||E'\n','UTF8'),'sha256'),'hex');
@@ -220,7 +236,7 @@ BEGIN
       IF v_rows>1000000 OR (v_key='simulated_customers' AND v_rows>2000) OR v_total>8388608 OR v_largest>65536 THEN RAISE EXCEPTION 'Chat backup exceeds limits; no data was truncated.';END IF;
       FOR v_row IN EXECUTE v_query LOOP
         IF NOT private.employee_transfer_chat_unique_json(v_row.body::text::json) THEN RAISE EXCEPTION 'Chat backup JSON exceeds depth limits.';END IF;
-        PERFORM private.employee_transfer_check_chat_row(v_key,v_row.body);
+        PERFORM private.employee_transfer_check_chat_backup_row(v_key,v_row.body);
       END LOOP;
       EXECUTE 'SELECT COALESCE(string_agg(body::text||E''\n'','''' ORDER BY id COLLATE "C"),''''),
         encode(extensions.digest(convert_to(COALESCE(string_agg(encode(extensions.digest(convert_to(body::text||E''\n'',''UTF8''),''sha256''),''hex''),'''' ORDER BY id COLLATE "C"),''''),''UTF8''),''sha256''),''hex'') FROM ('||v_query||') AS r'
@@ -366,7 +382,8 @@ $$;
 -- Do not enumerate chat helpers by prefix: SQL31's service-only media ACL must survive.
 REVOKE ALL ON FUNCTION private.employee_transfer_chat_discard_unsealed(),
   private.employee_transfer_chat_merge_plan(private.employee_transfer_jobs,jsonb),
-  private.employee_transfer_chat_lock(),private.employee_transfer_chat_check_snapshot(private.employee_transfer_chat_backups)
+  private.employee_transfer_chat_lock(),private.employee_transfer_chat_check_snapshot(private.employee_transfer_chat_backups),
+  private.employee_transfer_check_chat_backup_row(text,jsonb)
   FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.get_employee_import_chat_merge_plan(uuid,uuid,jsonb),
   public.employee_import_chat_backup_prepare(uuid,uuid,text,jsonb),

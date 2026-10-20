@@ -10,7 +10,7 @@ import type {
 import { dispatchTransferChecks } from './dispatchTransfer';
 import {
   CHAT_TABLE_KEYS, CHAT_TRANSFER_LIMITS, chatEntryPath,
-  validateChatPage, validateChatRow,
+  validateChatBackupPage, validateChatBackupRow,
   type ChatTableCatalog, type ChatTableKey,
 } from './chatTransfer';
 import { Sha256 } from './sha256';
@@ -152,7 +152,7 @@ class TableVerifier {
       if (lf !== -1) {
         if (++this.rows > this.expected.rows) invalid();
         const raw = this.line.subarray(0, this.used);
-        const id = validateChatRow(decoder.decode(raw), this.expected.key);
+        const id = validateChatBackupRow(decoder.decode(raw), this.expected.key);
         if (this.last !== null && id <= this.last) invalid();
         this.last = id;
         this.rowHashes.update(encoder.encode(new Sha256().update(raw).digestHex()));
@@ -226,7 +226,7 @@ export async function createChatBackup(
       const path = chatEntryPath(table.key), verifier = new TableVerifier(table);
       let after: string | null = null;
       do {
-        const page = validateChatPage(await withSignal(() => source.page(table.key, after, signal), signal), table.key, after);
+        const page = validateChatBackupPage(await withSignal(() => source.page(table.key, after, signal), signal), table.key, after);
         const raw = encoder.encode(page.ndjson);
         verifier.push(raw, signal);
         await withSignal(() => temporary.append(path, raw, signal), signal);

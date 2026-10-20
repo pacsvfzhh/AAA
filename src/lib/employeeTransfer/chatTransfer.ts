@@ -333,15 +333,16 @@ function checkJson(line: string): void {
     }
   }
 }
-export function validateChatRow(line: string, key: ChatTableKey): string {
+function checkChatRow(line: string, key: ChatTableKey, backup: boolean): string {
   if (typeof line !== 'string' || line.length > limits.maxLineBytes) invalid();
   unicode(line);
   const bytes = encoder.encode(line);
   if (bytes.length + (line.endsWith('\n') ? 0 : 1) > limits.maxLineBytes) invalid();
   let parsed: unknown;
-  try { parsed = JSON.parse(line); } catch { invalid(); }
+  // Validate duplicate/escaped-equivalent keys and depth on the ORIGINAL text, never a
+  // parse/stringify copy. Numeric lexemes, SQL-null markers and array NULLs stay untouched.
+  try { checkJson(line); parsed = JSON.parse(line); } catch { invalid(); }
   const spec = SPEC[chatTableKey(key)], row = object(parsed, Object.keys(spec));
-  checkJson(line);
   for (const [field, type] of Object.entries(spec)) {
     const value = row[field];
     if (value === null) { if (type.endsWith('!')) invalid(); continue; }
@@ -350,7 +351,11 @@ export function validateChatRow(line: string, key: ChatTableKey): string {
       case 'text': if (typeof value !== 'string') invalid(); break;
       case 'boolean': if (typeof value !== 'boolean') invalid(); break;
       case 'integer': integer(value); break;
-      case 'uuid[]': uuidArray(value); break;
+      case 'uuid[]':
+        if (backup && key === 'simulated_customers' && field === 'target_employee_ids') {
+          for (const item of array(value, limits.maxRows)) if (item !== null) uuid(item);
+        } else uuidArray(value);
+        break;
       case 'time': timestamp(value); break;
       // JSON.parse is only a syntax/shape check: retain the ORIGINAL numeric lexemes, including
       // integers beyond 2^53 or exponents outside JS's range. No parsed JSON is ever reserialized.
@@ -374,10 +379,13 @@ export function validateChatRow(line: string, key: ChatTableKey): string {
   // Cross-row ownership, visibility, rich-card resolution and matching are SQL preflight decisions.
   return chatCursor(key, row.id);
 }
+export function validateChatRow(line: string, key: ChatTableKey): string { return checkChatRow(line, key, false); }
+// Target-only backups must preserve [null] rather than normalizing it to unrestricted [].
+export function validateChatBackupRow(line: string, key: ChatTableKey): string { return checkChatRow(line, key, true); }
 export interface ChatPage {
   table_key: ChatTableKey; count: number; ndjson: string; next_after: string | null; sha256: string;
 }
-export function validateChatPage(value: unknown, key: ChatTableKey, after: string | null): ChatPage {
+function checkChatPage(value: unknown, key: ChatTableKey, after: string | null, backup: boolean): ChatPage {
   const record = object(value, ['table_key', 'count', 'ndjson', 'next_after', 'sha256']);
   if (record.table_key !== chatTableKey(key) || typeof record.ndjson !== 'string' || record.ndjson.length > limits.maxPageBytes) invalid();
   unicode(record.ndjson);
@@ -388,7 +396,7 @@ export function validateChatPage(value: unknown, key: ChatTableKey, after: strin
   for (let end = 0; end < bytes.length; end++) {
     if (bytes[end] !== 10) continue;
     if (end - start + 1 > limits.maxLineBytes) invalid();
-    const id = validateChatRow(decoder.decode(bytes.subarray(start, end)), key);
+    const id = checkChatRow(decoder.decode(bytes.subarray(start, end)), key, backup);
     // All cursors are ASCII: JS dictionary order equals PostgreSQL id COLLATE "C" text order.
     if (last !== null && id <= last) invalid();
     last = id; rows++; start = end + 1;
@@ -396,6 +404,12 @@ export function validateChatPage(value: unknown, key: ChatTableKey, after: strin
   const next = record.next_after === null ? null : chatCursor(key, record.next_after);
   if (rows !== size || (next !== null && (size === 0 || next !== last))) invalid();
   return { table_key: key, count: size, ndjson: record.ndjson, next_after: next, sha256: hash(record.sha256) };
+}
+export function validateChatPage(value: unknown, key: ChatTableKey, after: string | null): ChatPage {
+  return checkChatPage(value, key, after, false);
+}
+export function validateChatBackupPage(value: unknown, key: ChatTableKey, after: string | null): ChatPage {
+  return checkChatPage(value, key, after, true);
 }
 export function validateChatStage(value: unknown, rows: number, bytes: number, digest: string): {
   success: true; rows: number; bytes: number; sha256: string; repeated: boolean;
