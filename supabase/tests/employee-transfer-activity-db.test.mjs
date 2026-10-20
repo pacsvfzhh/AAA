@@ -3845,6 +3845,7 @@ test('archives: six-table raw export-stage-plan-begin-chunks-verify-read round t
   const written = await archiveChunks(begun); assert.equal(written.records_verified, false);
   await archiveReject([() => aread('deleted_employee_accounts', A.account)], /verified|available/i);
   const verified = archiveStatus(await averify()); assert.equal(verified.records_verified, true); await assertArchiveRows();
+  await chatSavepoint(() => assert.rejects(db.query('SELECT private.employee_transfer_archives_catalog($1::uuid)', [randomUUID()]), /namespace-preserving re-export|cannot omit/i));
   assert.deepEqual(await archiveOutside(), outside); assert.deepEqual(await business(source), sourceBefore); assert.deepEqual(await triggers(), original); await archiveStillClosed();
 })));
 
@@ -3855,6 +3856,8 @@ test('archives: JSON null SQL NULL precision microseconds UTF8 and media refs re
   assert.match(archives.texts.content_audit_events, new RegExp(PRECISE.replace('.', '\\.'))); assert.ok(archives.texts.content_audit_events.includes(ARCHIVE_TEXT));
   assert.equal(event(3).occurred_at, '2023-02-03T04:05:06.123456+00:00'); assert.equal(event(3).message_created_at, '2022-01-02T03:04:05.654321+00:00');
   assert.deepEqual(event(3).media_refs, { [ARCHIVE_MEDIA]: 'synthetic-operation/evidence.png' });
+  assert.equal(event(3).before_data.nested[0].session_created_at, '2023-02-03T04:05:06.123456Z');
+  assert.equal(event(3).before_data.nested[0].last_heartbeat_at, '2023-02-03T04:05:07.654321Z');
   const notes = lines(archives.texts.deleted_employee_notifications).map(JSON.parse);
   assert.equal(notes.find(r => r.id === id(31502)).message_data_sql_null, true); assert.equal(notes.find(r => r.id === id(31502)).recipient_data_sql_null, false);
   assert.equal(notes.find(r => r.id === id(31503)).message_data_sql_null, false); assert.equal(notes.find(r => r.id === id(31503)).recipient_data_sql_null, true);
@@ -3869,6 +3872,7 @@ test('archives: JSON null SQL NULL precision microseconds UTF8 and media refs re
     assert.equal(saved, archives.texts[key]);
   }
   assert.equal(await scalar(db, `SELECT body#>>'{before_data,precise}' FROM ${ARCHIVE_RELATION} WHERE table_key='content_audit_events' AND source_id=$1`, [archiveEventId(3)]), PRECISE);
+  assert.equal(await scalar(db, `SELECT body#>>'{before_data,nested,0,last_heartbeat_at}' FROM ${ARCHIVE_RELATION} WHERE table_key='content_audit_events' AND source_id=$1`, [archiveEventId(3)]), '2023-02-03T04:05:07.654321Z');
   await archiveStillClosed();
 })));
 
@@ -4065,6 +4069,47 @@ test('archives: READ ONLY plan and status preserve heartbeat and permissions rej
       await archiveStillClosed();
     });
 }, { isolated: true }));
+
+test('archives: empty six-table snapshots consume explicit zero-row chunks and verify without creating employee identities', { timeout: 300000 }, () => archiveCase(() => transaction(async () => {
+  const input = changedArchives(Object.fromEntries(KEYS.archives.map(key => [key, () => ''])));
+  const outside = await archiveOutside(); const p = await astage(input); assert.equal(p.can_restore, true);
+  const begun = archiveStatus(await abegin(p), input);
+  assert.ok(Object.values(begun.chunks).every(count => count === 1));
+  await archiveChunks(begun, input); assert.equal(archiveStatus(await averify(), input).records_verified, true);
+  assert.deepEqual(await archiveRecords(), []); assert.deepEqual(await archiveOutside(), outside);
+  for (const key of KEYS.archives) assert.equal((await archiveReadTable(key)).size, 0);
+  await archiveStillClosed();
+})));
+
+test('archives: incomplete staging can reconcile lost bind and first-chunk responses before explicitly resending', { timeout: 300000 }, () => archiveCase(() => transaction(async () => {
+  let lose = 'employee_import_archives_bind', calls = 0;
+  modules.setHarness({ token: session, rpc(name, args) {
+    calls++;
+    const query = { abortSignal() { return query; }, then(resolve, reject) {
+      return on(db, name, args).then(data => {
+        if (name === lose) { lose = null; return { data: null, error: { message: 'synthetic lost receipt' } }; }
+        return { data, error: null };
+      }).then(resolve, reject);
+    } };
+    return query;
+  } });
+  const client = modules.createArchivesImportSession(task.job_token);
+  await assert.rejects(client.target.bind(archives.catalog), /unknown|unconfirmed/i);
+  const attempted = calls;
+  await assert.rejects(client.target.bind(archives.catalog), /unknown|unconfirmed/i); assert.equal(calls, attempted);
+  const bound = archiveStatus(await client.status()); assert.equal(bound.started, false);
+  assert.equal((await client.target.bind(archives.catalog)).repeated, true);
+  lose = 'employee_import_archives_stage';
+  const first = chunks(archives.texts.content_audit_events)[0];
+  await assert.rejects(client.target.stage('content_audit_events', 0, first), /unknown|unconfirmed/i);
+  const staged = calls;
+  await assert.rejects(client.target.stage('content_audit_events', 0, first), /unknown|unconfirmed/i); assert.equal(calls, staged);
+  const incomplete = archiveStatus(await client.status()); assert.equal(incomplete.started, false);
+  assert.equal(incomplete.records_verified, false); assert.ok(Object.values(incomplete.chunks).every(n => n === 0));
+  assert.equal((await client.target.stage('content_audit_events', 0, first)).repeated, true);
+  await archiveReject([() => aplan()], /staged|verification|catalog/i);
+  transport(); const p = await astage(); assert.equal(p.can_restore, true); await archiveStillClosed();
+})));
 
 test('archives: real COMMIT lost response reopens with a new API session explicit status and verified reads survive cancellation or expiry', { timeout: 590000 }, () => archiveCase(async () => {
   const originalSession = session, calls = []; let lose = true, reopened;

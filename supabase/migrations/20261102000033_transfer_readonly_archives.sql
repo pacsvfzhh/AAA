@@ -196,6 +196,9 @@ SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET da
 DECLARE v_key text;v_query text;v_rows bigint;v_bytes bigint;v_largest bigint;v_hash text;v_total bigint:=0;v_tables jsonb:='[]';v_row record;
 BEGIN
   IF p_package_id IS NULL THEN RAISE EXCEPTION 'An archives package id is required.';END IF;
+  IF EXISTS(SELECT 1 FROM private.employee_transfer_archive_records) THEN
+    RAISE EXCEPTION 'Previously transferred archive snapshots require a namespace-preserving re-export protocol; this export cannot omit them.';
+  END IF;
   PERFORM private.employee_transfer_archives_schema();
   FOREACH v_key IN ARRAY private.employee_transfer_archives_keys() LOOP
     v_query:=private.employee_transfer_archives_query(v_key);

@@ -47,6 +47,8 @@ const criticalMigrations = [
   '20261102000030_prepare_chat_merge.sql',
   '20261102000031_transfer_chat_media.sql',
   '20261102000032_restore_site_chat.sql',
+  '20261102000033_transfer_readonly_archives.sql',
+  '20261102000034_restore_readonly_archives.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -74,10 +76,37 @@ function resource({ exec = async () => {}, dump = async () => new Blob(), ready 
   };
 }
 
+// 此清单验证迁移相关私有表的RLS/直连权限，不是可丢弃的任务metadata清单。
+// archive_records保存来源namespace的业务档案，必须纳入；分类另由scope库存审核。
 const transferTables = [
   'employee_transfer_site', 'employee_transfer_jobs', 'employee_transfer_events',
   'employee_transfer_staging', 'employee_transfer_excluded_columns', 'employee_transfer_trigger_policy',
   'employee_transfer_shared_backups', 'employee_transfer_notification_backups', 'employee_transfer_chat_backups', 'employee_transfer_maintenance', 'employee_transfer_write_permits',
+  'employee_transfer_archive_records',
+];
+const archivePublicFunctions = [
+  'employee_export_archives_begin(uuid,text,uuid)', 'get_employee_export_archives_page(uuid,uuid,text,text,integer)',
+  'employee_export_archives_verify(uuid,uuid)', 'employee_export_archives_close(uuid,uuid)',
+  'employee_import_archives_bind(uuid,uuid,jsonb)', 'employee_import_archives_stage(uuid,uuid,text,integer,text)',
+  'get_employee_import_archives_plan(uuid,uuid)', 'employee_import_archives_begin(uuid,uuid,text)',
+  'employee_import_archives_chunk(uuid,uuid,text,integer)', 'employee_import_archives_verify(uuid,uuid)',
+  'get_employee_import_archives_status(uuid,uuid)', 'get_employee_transferred_archive_page(uuid,uuid,uuid,text,text,integer)',
+];
+const archiveReadOnlyFunctions = new Set([
+  'get_employee_import_archives_plan(uuid,uuid)', 'get_employee_import_archives_status(uuid,uuid)',
+  'get_employee_transferred_archive_page(uuid,uuid,uuid,text,text,integer)',
+]);
+const archivePrivateFunctions = [
+  'employee_transfer_archives_keys()', 'employee_transfer_archives_spec()',
+  'employee_transfer_archives_relation(text)', 'employee_transfer_archives_schema()',
+  'employee_transfer_archives_redact(jsonb,integer)', 'employee_transfer_archives_cursor(text,jsonb)',
+  'employee_transfer_archives_query(text)', 'employee_transfer_check_archives_row(text,jsonb)',
+  'employee_transfer_check_archives_catalog(jsonb)', 'employee_transfer_archives_catalog(uuid)',
+  'employee_transfer_archives_owner(private.employee_transfer_jobs)', 'employee_transfer_archives_input(uuid,text)',
+  'employee_transfer_check_archives_input(private.employee_transfer_jobs)', 'employee_transfer_archives_lines(uuid,text)',
+  'employee_transfer_archives_namespace_hash(uuid,uuid)', 'employee_transfer_archives_conflicts(private.employee_transfer_jobs)',
+  'employee_transfer_archives_plan(private.employee_transfer_jobs)', 'employee_transfer_archives_status(private.employee_transfer_jobs)',
+  'employee_transfer_archives_persisted(private.employee_transfer_jobs)',
 ];
 const publicFunctions = [
   'employee_transfer_cancel(uuid,uuid)', 'get_employee_transfer_log(uuid,integer)',
@@ -162,6 +191,7 @@ const publicFunctions = [
   'get_employee_chat_saved_backup_chunk(uuid,uuid,integer)', 'get_employee_transfer_chat_media(uuid,uuid,text)',
   'employee_import_chat_media_bind(uuid,uuid,jsonb)', 'employee_import_chat_begin(uuid,uuid,text)',
   'employee_import_chat_chunk(uuid,uuid,integer)', 'employee_import_chat_verify(uuid,uuid)', 'get_employee_import_chat_restore_status(uuid,uuid)',
+  ...archivePublicFunctions,
 ];
 const serviceOnlyFunctions = [
   'employee_transfer_verification_media_authorize(uuid,uuid,text,text)',
@@ -179,9 +209,10 @@ async function checkCatalog(db) {
     assert.equal(table[0].relrowsecurity, true, `RLS private.${name}`);
   }
   for (const name of publicFunctions) {
-    const functions = await rows(db, `SELECT prosecdef, proconfig,
+    const functions = await rows(db, `SELECT prosecdef, proconfig, provolatile,
       has_function_privilege('anon', oid, 'EXECUTE') AS anon_execute,
       has_function_privilege('authenticated', oid, 'EXECUTE') AS authenticated_execute,
+      has_function_privilege('service_role', oid, 'EXECUTE') AS service_role_execute,
       EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f', proowner)))
         WHERE grantee = 0 AND privilege_type = 'EXECUTE') AS public_execute
       FROM pg_proc WHERE oid = to_regprocedure($1)`, [`public.${name}`]);
@@ -191,7 +222,34 @@ async function checkCatalog(db) {
     assert.equal(functions[0].anon_execute, true, name);
     assert.equal(functions[0].authenticated_execute, true, name);
     assert.equal(functions[0].public_execute, false, name);
+    if (archivePublicFunctions.includes(name)) {
+      assert.equal(functions[0].service_role_execute, false, name);
+    }
+    if (archiveReadOnlyFunctions.has(name)) {
+      assert.equal(functions[0].provolatile, 's', `${name} must be STABLE, not a heartbeat-writing read`);
+    }
   }
+  const archiveRpcs = await rows(db, `SELECT oid::regprocedure::text AS signature FROM pg_proc
+    WHERE pronamespace = 'public'::regnamespace
+      AND (proname LIKE '%\\_archives\\_%' ESCAPE '\\' OR proname = 'get_employee_transferred_archive_page')`);
+  assert.equal(archivePublicFunctions.length, 12);
+  assert.deepEqual(archiveRpcs.map(item => item.signature).sort(), [...archivePublicFunctions].sort(),
+    'all actual archive RPCs, including overloads, require explicit security review');
+  for (const name of archivePrivateFunctions) {
+    const helpers = await rows(db, `SELECT oid, prosecdef, proconfig, provolatile,
+      has_function_privilege('service_role', oid, 'EXECUTE') AS service_role_execute
+      FROM pg_proc WHERE oid = to_regprocedure($1)`, [`private.${name}`]);
+    assert.equal(helpers.length, 1, `missing private.${name}`);
+    assert.equal(helpers[0].prosecdef, true, name);
+    assert.ok(helpers[0].proconfig.includes('search_path=pg_catalog, public, private, pg_temp'), name);
+    assert.ok(['s', 'i'].includes(helpers[0].provolatile), `${name} must not write from read-only archive RPCs`);
+    assert.equal(helpers[0].service_role_execute, false, `service_role private.${name}`);
+  }
+  const archiveHelpers = await rows(db, `SELECT oid::regprocedure::text AS signature FROM pg_proc
+    WHERE pronamespace = 'private'::regnamespace
+      AND (proname LIKE 'employee_transfer_archives_%' OR proname LIKE 'employee_transfer_check_archives_%')`);
+  assert.deepEqual(archiveHelpers.map(item => item.signature).sort(), archivePrivateFunctions.map(name => `private.${name}`).sort(),
+    'every private archive helper must be checked, not just a helper-count increase');
   for (const name of serviceOnlyFunctions) {
     const functions = await rows(db, `SELECT prosecdef, proconfig,
       has_function_privilege('anon', oid, 'EXECUTE') AS anon_execute,
@@ -235,6 +293,39 @@ async function checkCatalog(db) {
       await db.exec('RESET ROLE');
     }
   }
+  const archiveTable = 'private.employee_transfer_archive_records';
+  for (const role of ['anon', 'authenticated', 'service_role']) {
+    for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+      assert.equal(await scalar(db, 'SELECT has_table_privilege($1, $2, $3)', [role, archiveTable, privilege]), false,
+        `${role} ${privilege} ${archiveTable}`);
+    }
+    assert.equal(await scalar(db, "SELECT has_any_column_privilege($1, $2, 'SELECT, INSERT, UPDATE, REFERENCES')", [role, archiveTable]), false,
+      `${role} must not have column-level archive grants`);
+  }
+  await db.exec('SET ROLE service_role');
+  try {
+    await assert.rejects(db.query(`SELECT * FROM ${archiveTable} LIMIT 0`), error => error.code === '42501');
+  } finally {
+    await db.exec('RESET ROLE');
+  }
+  const guardedTables = await scalar(db, 'SELECT private.employee_transfer_guarded_tables()');
+  assert.equal(guardedTables.filter(name => name === archiveTable).length, 1,
+    'namespaced business archives must be guarded, not excluded with technical backups');
+  const guards = await rows(db, `SELECT tgenabled, tgtype, tgfoid::regprocedure::text AS function
+    FROM pg_trigger WHERE tgrelid = $1::regclass AND NOT tgisinternal AND tgname = 'zz_employee_transfer_maintenance'`, [archiveTable]);
+  assert.deepEqual(guards, [{ tgenabled: 'A', tgtype: 62, function: 'private.employee_transfer_guard_write()' }],
+    'archive records require the ALWAYS statement guard for INSERT/UPDATE/DELETE/TRUNCATE');
+  await db.exec('SELECT private.employee_transfer_assert_maintenance_guards()');
+  await db.exec('BEGIN');
+  try {
+    await db.exec(`ALTER TABLE ${archiveTable} DISABLE TRIGGER zz_employee_transfer_maintenance`);
+    await assert.rejects(db.query('SELECT private.employee_transfer_assert_maintenance_guards()'),
+      /Unreviewed employee transfer maintenance inventory or guards\./,
+      'fixed maintenance manifest must notice a disabled archive guard');
+  } finally {
+    await db.exec('ROLLBACK');
+  }
+  await db.exec('SELECT private.employee_transfer_assert_maintenance_guards()');
 }
 
 // 仅验证真实 SQL 基线与权限，不等同于全站搬迁验收。
@@ -244,7 +335,7 @@ async function exerciseRealReplay() {
   try {
     const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql')).sort();
     assert.deepEqual(files, diskFiles, 'must replay every migration, including future additions');
-    assert.ok(files.length >= 530);
+    assert.equal(files.length, 561, 'migration baseline changed: review all additions, never expand known failures');
     assert.deepEqual(failures, expectedFailures);
     assert.equal(validation.freshDatabaseVerified, false);
     for (const file of criticalMigrations) {

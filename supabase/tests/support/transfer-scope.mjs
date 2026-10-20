@@ -7,7 +7,7 @@ function freezeInventory(tables) {
   })));
 }
 
-// 静态结构来自本地530份迁移严格回放（保留12项已知失败），不包含任何业务行。
+// 静态结构来自本地561份迁移严格回放（保留原12项已知失败），不包含任何业务行。
 export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
   {
     schema: 'private', name: 'content_audit_delete_jobs', mode: 'rebuild',
@@ -27,7 +27,7 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
   },
   {
     schema: 'private', name: 'content_audit_events', mode: 'transform',
-    reason: '保留只读稽核档案和留证关系；映射管理员/员工/实体身份，转换before_data/after_data内身份、会话秘密及媒体URL，不重放删改。',
+    reason: '保留来源namespace只读稽核档案、旧管理员/员工/实体身份和留证关系，不映射成目标活身份；清除快照会话秘密，保留媒体URL关系，私有附件实际搬迁待完成，不重放删改。',
     columns: [
       { name: 'id', type: 'uuid', nullable: false },
       { name: 'operation_id', type: 'uuid', nullable: false },
@@ -75,7 +75,7 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
   },
   {
     schema: 'private', name: 'content_audit_recipient_versions', mode: 'transform',
-    reason: '保留通知收件人版本档案；映射message_id/recipient_id及recipient_data内身份和URL，清除投递领取令牌，不能恢复成活通知。',
+    reason: '保留来源namespace通知收件人版本档案、旧message_id/recipient_id及recipient_data内旧身份和媒体URL关系；清除投递领取令牌，私有附件实际搬迁待完成，不能恢复成目标活通知。',
     columns: [
       { name: 'message_id', type: 'uuid', nullable: false },
       { name: 'recipient_id', type: 'uuid', nullable: false },
@@ -91,7 +91,7 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
   },
   {
     schema: 'private', name: 'deleted_employee_accounts', mode: 'transform',
-    reason: '保留已删员工只读档案及审计时间；映射归属/操作者/封存员工身份，与通知和媒体URL映射联查，不恢复在职账号或旧站登录身份。',
+    reason: '保留来源namespace已删员工只读档案、审计时间及旧归属/操作者/封存员工身份，与通知和媒体URL关系联查；私有附件实际搬迁待完成，不恢复在职账号或旧站登录身份。',
     columns: [
       { name: 'id', type: 'uuid', nullable: false },
       { name: 'operation_id', type: 'uuid', nullable: false },
@@ -136,7 +136,7 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
   },
   {
     schema: 'private', name: 'deleted_employee_notifications', mode: 'transform',
-    reason: '保留已删员工通知只读档案和留证关联；转换message_data/recipient_data中的身份、媒体URL及领取令牌，不重新发送或恢复账号。',
+    reason: '保留来源namespace已删员工通知只读档案、留证关联和message_data/recipient_data中的旧身份及媒体URL关系；清除领取令牌，私有附件实际搬迁待完成，不重新发送或恢复目标活账号。',
     columns: [
       { name: 'id', type: 'uuid', nullable: false },
       { name: 'record_id', type: 'uuid', nullable: false },
@@ -156,6 +156,20 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
       { name: 'path', type: 'text', nullable: false },
       { name: 'filename', type: 'text', nullable: true },
       { name: 'job_id', type: 'uuid', nullable: true },
+    ],
+  },
+  {
+    schema: 'private', name: 'employee_transfer_archive_records', mode: 'transform',
+    reason: '按source_site_id与package_id保留独立来源namespace的只读业务档案、旧身份、原文及媒体URL关系；不是目标活账号、任务回执或仅技术备份，不按任务记录排除，未来再次迁站不可静默遗漏；私有附件实际搬迁待完成。',
+    columns: [
+      { name: 'source_site_id', type: 'uuid', nullable: false },
+      { name: 'package_id', type: 'uuid', nullable: false },
+      { name: 'table_key', type: 'text', nullable: false },
+      { name: 'source_id', type: 'text', nullable: false },
+      { name: 'body', type: 'jsonb', nullable: false },
+      { name: 'source_line', type: 'text', nullable: false },
+      { name: 'job_id', type: 'uuid', nullable: false },
+      { name: 'imported_at', type: 'timestamp with time zone', nullable: false },
     ],
   },
   {
@@ -1623,6 +1637,8 @@ const productionAbsentTables = new Set([
   'private.employee_transfer_jobs', 'private.employee_transfer_site',
   'private.employee_transfer_staging', 'private.employee_transfer_trigger_policy',
   'private.employee_transfer_shared_backups',
+  // 仅此历史正式结构快照不存在此表；本地业务库存仍必须纳入，不能按任务表排除。
+  'private.employee_transfer_archive_records',
   'private.employee_transfer_maintenance', 'private.employee_transfer_write_permits',
   'public.notification_automation_date_runs',
 ]);

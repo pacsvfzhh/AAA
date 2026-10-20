@@ -39,10 +39,10 @@ function assertIntent(key, mode, patterns) {
 }
 
 test('stage A inventory is deeply frozen schema metadata, not export permission or implemented transforms', () => {
-  assert.equal(inventory.length, 108, 'new roots require explicit inventory review');
-  assert.equal(inventory.reduce((count, table) => count + table.columns.length, 0), 959);
-  assert.equal(new Set(inventory.map(keyOf)).size, 108);
-  assert.equal(inventory.filter(table => table.schema === 'private').length, 23);
+  assert.equal(inventory.length, 109, 'new roots require explicit inventory review');
+  assert.equal(inventory.reduce((count, table) => count + table.columns.length, 0), 967);
+  assert.equal(new Set(inventory.map(keyOf)).size, 109);
+  assert.equal(inventory.filter(table => table.schema === 'private').length, 24);
   assert.equal(inventory.filter(table => table.schema === 'public').length, 85);
   assert.match(TRANSFER_SCOPE_COVERAGE_NOTICE, /阶段A覆盖库存/);
   assert.match(TRANSFER_SCOPE_COVERAGE_NOTICE, /不是导出授权白名单/);
@@ -79,7 +79,7 @@ test('pure validator accepts the explicit snapshot irrespective of catalog row o
   const actual = snapshot().reverse();
   for (const table of actual) table.columns.reverse();
   const before = structuredClone(actual);
-  assert.deepEqual(assertTransferScopeCoverage(actual), { tableCount: 108, columnCount: 959, exportAuthorized: false });
+  assert.deepEqual(assertTransferScopeCoverage(actual), { tableCount: 109, columnCount: 967, exportAuthorized: false });
   assert.deepEqual(actual, before);
   assertTransferScopeCoverage(inventory);
 });
@@ -122,7 +122,7 @@ test('pure validator rejects added, removed and renamed columns on every root', 
   }
 });
 
-test('pure validator detects type and nullable changes for all 959 columns', () => {
+test('pure validator detects type and nullable changes for all 967 columns', () => {
   const actual = snapshot();
   for (const table of actual) {
     for (const column of table.columns) {
@@ -215,7 +215,8 @@ test('inventory includes user-confirmed continuing-business originals and anti-r
 
 test('inventory keeps read-only archives and reviews media purpose without copying source paths or purge authority', () => {
   for (const key of ['private.content_audit_events', 'private.deleted_employee_accounts', 'private.deleted_employee_notifications', 'private.content_audit_recipient_versions']) {
-    assertIntent(key, 'transform', [/档案/, /身份/, /URL/]);
+    assertIntent(key, 'transform', [/来源namespace/, /档案/, /旧.*身份/, /媒体URL关系/, /私有附件实际搬迁待完成/]);
+    assert.doesNotMatch(descriptor(key).reason, /映射管理员|映射归属|映射message_id|转换.*身份/, key);
   }
   assertIntent('private.deleted_employee_accounts', 'transform', [/不恢复在职账号/]);
   assertIntent('private.content_audit_recipient_versions', 'transform', [/清除投递领取令牌/]);
@@ -228,9 +229,32 @@ test('inventory keeps read-only archives and reviews media purpose without copyi
   assertIntent('public.work_sessions', 'transform', [/最后心跳结束/, /主动停工/, /不能伪造在线/]);
 });
 
+test('inventory treats transferred archive records as namespaced business history, not disposable job bookkeeping', () => {
+  const key = 'private.employee_transfer_archive_records';
+  assertIntent(key, 'transform', [
+    /source_site_id/, /package_id/, /独立来源namespace/, /只读业务档案/, /旧身份/, /原文/, /媒体URL关系/,
+    /不是目标活账号、任务回执或仅技术备份/, /不按任务记录排除/, /未来再次迁站不可静默遗漏/, /私有附件实际搬迁待完成/,
+  ]);
+  assert.deepEqual(descriptor(key).columns, [
+    { name: 'source_site_id', type: 'uuid', nullable: false },
+    { name: 'package_id', type: 'uuid', nullable: false },
+    { name: 'table_key', type: 'text', nullable: false },
+    { name: 'source_id', type: 'text', nullable: false },
+    { name: 'body', type: 'jsonb', nullable: false },
+    { name: 'source_line', type: 'text', nullable: false },
+    { name: 'job_id', type: 'uuid', nullable: false },
+    { name: 'imported_at', type: 'timestamp with time zone', nullable: false },
+  ]);
+  // 即使带job_id且使用employee_transfer_前缀，也不能和技术任务/独立备份一同排除。
+  for (const name of ['jobs', 'events', 'staging', 'shared_backups', 'notification_backups', 'chat_backups']) {
+    assert.equal(descriptor(`private.employee_transfer_${name}`).mode, 'exclude');
+  }
+  expectMismatch(snapshot().filter(table => keyOf(table) !== key), [{ kind: 'missing-table', table: key }]);
+});
+
 test('inventory retains business settings, content, financial state, login history and automation execution progress', () => {
   const businessRoots = [
-    'private.notification_delivery_operations',
+    'private.notification_delivery_operations', 'private.employee_transfer_archive_records',
     ...[
       'admin_group_members', 'admin_groups', 'broadcast_messages',
       'broadcast_recipients', 'ccc_conversation_annotations', 'cs_message_templates', 'customer_auto_message_logs',
@@ -294,12 +318,12 @@ test('inventory rebuilds or excludes sessions, security locks, tooling, cron que
   assertIntent('public.wallet_reconciliation_queue', 'rebuild', [/先验证已迁钱包/, /基准/, /账本/, /pending提款/]);
 });
 
-test('strict local replay attempts all migrations once and matches the fixed 108-root coverage inventory', { timeout: 180_000 }, async t => {
+test('strict local replay attempts all migrations once and matches the fixed 109-root coverage inventory', { timeout: 180_000 }, async t => {
   const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(name => name.endsWith('.sql')).sort();
   const result = await replayMigrations({ strict: true });
   try {
     assert.deepEqual(result.files, diskFiles, 'no skipped, truncated or selected migration replay');
-    assert.equal(result.files.length, 559, 'migration baseline changed: review before updating the inventory');
+    assert.equal(result.files.length, 561, 'migration baseline changed: review before updating the inventory');
     assert.equal(EXPECTED_REPLAY_FAILURES.length, 12);
     assert.deepEqual(result.failures, EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message })));
     assert.equal(result.validation.matched.length, 12);
@@ -328,6 +352,18 @@ test('strict local replay attempts all migrations once and matches the fixed 108
       '20261102000020_restore_employee_activity.sql',
       '20261102000021_export_stage_employee_verification.sql',
       '20261102000022_restore_employee_verification_media.sql',
+      '20261102000023_export_stage_site_notifications.sql',
+      '20261102000024_check_site_notification_links.sql',
+      '20261102000025_prepare_notification_configuration.sql',
+      '20261102000026_transfer_notification_media.sql',
+      '20261102000027_restore_site_notifications.sql',
+      '20261102000028_export_stage_site_chat.sql',
+      '20261102000029_plan_site_chat_merge.sql',
+      '20261102000030_prepare_chat_merge.sql',
+      '20261102000031_transfer_chat_media.sql',
+      '20261102000032_restore_site_chat.sql',
+      '20261102000033_transfer_readonly_archives.sql',
+      '20261102000034_restore_readonly_archives.sql',
     ]) {
       assert.ok(result.files.includes(file));
       assert.ok(!result.failures.some(failure => failure.file === file), `${file} must succeed`);
@@ -348,8 +384,8 @@ test('strict local replay attempts all migrations once and matches the fixed 108
       GROUP BY namespace.nspname, relation.relname
       ORDER BY namespace.nspname, relation.relname
     `);
-    assert.equal(actualTables.length, 108);
-    assert.deepEqual(assertTransferScopeCoverage(actualTables), { tableCount: 108, columnCount: 959, exportAuthorized: false });
+    assert.equal(actualTables.length, 109);
+    assert.deepEqual(assertTransferScopeCoverage(actualTables), { tableCount: 109, columnCount: 967, exportAuthorized: false });
     const { rows: partitions } = await result.db.query(`
       SELECT relation.relname FROM pg_catalog.pg_class AS relation
       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -357,7 +393,7 @@ test('strict local replay attempts all migrations once and matches the fixed 108
     `);
     assert.ok(partitions.length > 0, 'partition children exist but must not count as roots');
     assert.ok(!inventory.some(table => partitions.some(partition => partition.relname === table.name)));
-    t.diagnostic(`${result.files.length} migrations attempted; ${result.failures.length} exact known failures retained; 108 roots / 959 columns match. Coverage inventory only, NOT a clean build or implemented full-site transfer.`);
+    t.diagnostic(`${result.files.length} migrations attempted; ${result.failures.length} exact known failures retained; 109 roots / 967 columns match. Coverage inventory only, NOT a clean build or implemented full-site transfer.`);
   } finally {
     await result.db.close();
   }
