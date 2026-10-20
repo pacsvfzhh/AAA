@@ -17,6 +17,12 @@
 
 `private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；`anon` / `authenticated` 没有该 schema 的使用权限。
 
+## 资料迁移验证版新增接口（本地未部署）
+- SQL40 `20261102000040_close_shared_export.sql`：`employee_export_shared_close` 只结束已核验且关闭时源未变的共享导出，清技术暂存并释放单活任务；`get_employee_transfer_capabilities` 只检查固定RPC存在性，不代表媒体Edge已部署、数据预检或全站导入许可。
+- SQL41 `20261102000041_snapshot_site_export.sql`：`get_employee_export_site_snapshot` 为STABLE超管只读接口，在单次MVCC快照取十领域目录与JSONB文本SHA-256，返回无原文/密码/令牌的元数据。嵌套设备秘密键先拒绝；已有迁入档案时保留SQL33拒绝，不吞错、漏源或补空。开始/结束比较用于发现漂移，不冻结业务或Storage，也不是原子全站备份。
+- SQL42 `20261102000042_stop_owned_export.sql`：超管密码和「確認停止導出任務」二次确认，仅能按ID停止本人白名单协议的running导出，行锁后清其技术暂存并审计；不能停止导入、改钱包、删除业务/已保存文件或解除维护。过期/终态不重复清理，结果不明先重新查核。
+- 三份只新增迁移，不修改旧迁移、现有业务表/函数/触发器；本地完整回放569份仍精确保留原12项历史失败，109根表/967列不变，非干净建库证明。迁移/Edge/Storage/cron和前端均未部署正式环境。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：

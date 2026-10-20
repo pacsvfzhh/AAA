@@ -17,10 +17,15 @@ DECLARE
   v_excluded jsonb;
   v_shared jsonb;
   v_catalogs jsonb;
+  v_device jsonb;
 BEGIN
   PERFORM private.employee_transfer_admin(p_admin_session_token);
   IF p_package_id IS NULL THEN RAISE EXCEPTION 'A site export package id is required.'; END IF;
   SELECT site_id INTO v_site FROM private.employee_transfer_site;
+  FOR v_device IN SELECT h.device_info FROM public.employee_login_history h
+    JOIN public.users u ON u.id=h.user_id WHERE u.archived_at IS NULL LOOP
+    PERFORM private.employee_transfer_replacement_device_check(v_device);
+  END LOOP;
 
   -- Exactly SQL05's seven-table catalog, never the captured rows or credentials.
   v_capture := private.employee_transfer_shared_capture();

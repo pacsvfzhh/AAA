@@ -478,14 +478,14 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
 
   const tabs = useMemo<NavigationTab[]>(() => {
     const tabsById = new Map(defaultTabs.map(tab => [tab.id, tab]));
-    const orderedIds = navigationPreferences.order.filter(id => tabsById.has(id));
+    const orderedIds = navigationPreferences.order.filter(id => id !== 'datamigration' && tabsById.has(id));
     defaultTabs.forEach(tab => {
       if (!orderedIds.includes(tab.id)) orderedIds.push(tab.id);
     });
 
     return orderedIds.map(id => {
       const tab = tabsById.get(id)!;
-      const customLabel = navigationPreferences.labels[id]?.trim();
+      const customLabel = id === 'datamigration' ? undefined : navigationPreferences.labels[id]?.trim();
       return {
         ...tab,
         label: customLabel && !previousDefaultNavigationLabels[id]?.includes(customLabel)
@@ -497,7 +497,7 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
 
   const openNavigationSettings = () => {
     if (admin.role !== 'super_admin') return;
-    setNavigationDraft(tabs.map(tab => ({ id: tab.id, label: tab.label })));
+    setNavigationDraft(tabs.filter(tab => tab.id !== 'datamigration').map(tab => ({ id: tab.id, label: tab.label })));
     setNavigationSelectedItemId(null);
     setShowNavigationSettings(true);
   };

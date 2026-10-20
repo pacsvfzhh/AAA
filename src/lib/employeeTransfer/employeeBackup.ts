@@ -7,6 +7,7 @@ import type { ArchiveBundleWorkspace, ArchiveBundleWorkspaceFactory } from './ar
 import { validateVolumeInfo, type VolumeInfo, type VolumeManifest, type ManifestEntry } from './manifest';
 import { dispatchTransferChecks } from './dispatchTransfer';
 import { Sha256 } from './sha256';
+import { assertTransferDeviceInfo } from './deviceInfo';
 
 export const EMPLOYEE_BACKUP_PROTOCOL = 'replacement-records-v1';
 export const EMPLOYEE_BACKUP_CATALOG_PATH = 'data/employee-backup-catalog.ndjson';
@@ -177,21 +178,6 @@ export function validateEmployeeBackupCatalog(input: unknown): EmployeeBackupCat
   if (!result.username || enc.encode(JSON.stringify(result) + '\n').length > EMPLOYEE_BACKUP_LIMITS.maxCatalogBytes) invalid();
   return result;
 }
-const DEVICE_SECRET_KEYS = new Set([
-  'currentsessiontoken', 'currenttabid', 'sessionid', 'sessiontoken', 'tokenhash', 'accesstoken',
-  'refreshtoken', 'servicerolekey', 'anonkey', 'password', 'passwordhash', 'token',
-  'authorization', 'apikey', 'clientsecret', 'secret',
-]);
-function checkDeviceInfo(value: unknown, depth = 0): void {
-  if (depth > 64) invalid();
-  if (Array.isArray(value)) { for (const item of value) checkDeviceInfo(item, depth + 1); }
-  else if (value && typeof value === 'object') {
-    for (const [key, item] of Object.entries(value)) {
-      if (DEVICE_SECRET_KEYS.has(key.replace(/[A-Z]/g, char => char.toLowerCase()).replace(/[_/:-]/g, ''))) invalid();
-      checkDeviceInfo(item, depth + 1);
-    }
-  }
-}
 function rowIdentity(line: string, key: EmployeeBackupTableKey, catalog: EmployeeBackupCatalog): string {
   const value: unknown = JSON.parse(line), row = object(value, Object.keys(catalog.projections[key]));
   const stack: (Set<string> | null)[] = [];
@@ -230,7 +216,7 @@ function rowIdentity(line: string, key: EmployeeBackupTableKey, catalog: Employe
   if (key !== 'accounts' && key !== 'credentials' && row.user_id !== catalog.target_employee_id) invalid();
   if (key === 'accounts' && row.username !== catalog.username) invalid();
   if (key === 'orders' && row.status !== 'success' && row.status !== 'failure') invalid();
-  if (key === 'employee_login_history') checkDeviceInfo(row.device_info);
+  if (key === 'employee_login_history') assertTransferDeviceInfo(row.device_info);
   if (key === 'employee_login_history' && ((row.session_id !== null && !/^history-[0-9a-f]{64}$/.test(text(row.session_id)))
     || (row.device_info_is_sql_null === true && row.device_info !== null))) invalid();
   return id;

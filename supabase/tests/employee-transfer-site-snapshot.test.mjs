@@ -405,6 +405,22 @@ test('shared validation errors propagate instead of silently omitting settings',
   const before = await dataState(); await assert.rejects(snapshot(), /Unreviewed shared setting key/);
   assert.deepEqual(await dataState(), before);
 }));
+test('site snapshot rejects nested structured device secrets before any export task or plaintext file is created', async () => isolated(async () => {
+  for (const key of ['current_session_token', 'Access-Token', 'AUTHORIZATION', 'api/key', 'Client:Secret']) {
+    await change('public.employee_login_history', 'UPDATE public.employee_login_history SET device_info=$2::jsonb WHERE id=$1',
+      [I.login, JSON.stringify({ devices: [{ [key]: CANARY }] })]);
+    const before = await dataState();
+    await assert.rejects(snapshot(), /structured secret/);
+    assert.deepEqual(await dataState(), before);
+  }
+}));
+test('device metadata with historical session timestamps is preserved, not silently stripped', async () => isolated(async () => {
+  const device = { browser: 'Chromium', session_created_at: TIME, token_count: 2, notes: 'session_id is only text here' };
+  await change('public.employee_login_history', 'UPDATE public.employee_login_history SET device_info=$2::jsonb WHERE id=$1',
+    [I.login, JSON.stringify(device)]);
+  consistent(await snapshot());
+  assert.deepEqual(await scalar(db, 'SELECT device_info FROM public.employee_login_history WHERE id=$1', [I.login]), device);
+}));
 test('any existing imported archive namespace fails closed, including foreign/unverified namespace; SQL33 error is preserved', async () => isolated(async () => {
   const job = await begin('archives');
   // LOCAL fixture: use a real job FK, not a fabricated successful restore receipt.

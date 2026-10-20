@@ -32,7 +32,7 @@ mock.method(globalThis, 'fetch', async (url, init) => {
 });
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const compiled = await build({
-  stdin: { contents: `export {exportSiteBundleSet, inspectSiteBundleSet, getSiteTransferCapabilities, getSiteTransferHistory, SITE_DOMAINS} from './src/lib/employeeTransfer/siteTransfer.ts';
+  stdin: { contents: `export {exportSiteBundleSet, inspectSiteBundleSet, getSiteTransferCapabilities, getSiteTransferHistory, stopSiteExportTask, SITE_DOMAINS} from './src/lib/employeeTransfer/siteTransfer.ts';
     export {writeEncryptedVolume, verifyEncryptedVolume} from './src/lib/employeeTransfer/container.ts';
     export {readTransferMetadata} from './src/lib/employeeTransfer/crypto.ts';
     export {setHarness} from 'site-set-test:state';`, resolveDir: root },
@@ -207,6 +207,7 @@ before(async () => {
   await db.exec(await readFile(new URL(`../migrations/${MIGRATION}`, import.meta.url), 'utf8'));
   replay.files.push(MIGRATION);
   assertExpectedReplayFailures(replay, { upTo: MIGRATION });
+  await db.exec(await readFile(new URL('../migrations/20261102000042_stop_owned_export.sql', import.meta.url), 'utf8'));
   await buildNewSite(db);
   await db.query(`INSERT INTO public.users(id,username,employee_id,password_hash,created_by,remarks)
     VALUES($1,'site_employee','SITE-001',extensions.crypt($2,extensions.gen_salt('bf',4)),$3,$4)`, [I.employee, PASSWORDS.employee, NEW.root, CANARY]);
@@ -253,10 +254,30 @@ test('isolation uses real coordinator/adapter/drivers/container/crypto and no Su
   assert.equal(paths.some(path => /src\/lib\/(?:auth|supabase)\.ts$|node_modules\/@supabase\//.test(path)), false);
 });
 
+test('manual recovery uses real log plus password-gated stop RPC, never retries or stops import', async () => isolated(async () => {
+  api.setHarness({ session, rpc: bridge });
+  const job = await bridgeRead('employee_export_shared_begin', { p_admin_password: PASSWORDS.root });
+  await assert.rejects(api.stopSiteExportTask(PASSWORDS.root, 'wrong confirmation'));
+  assert.equal(callsOf('employee_export_stop_owned'), 0);
+  await assert.rejects(api.stopSiteExportTask('wrong password', '確認停止導出任務'));
+  assert.equal(await scalar(db, 'SELECT status FROM private.employee_transfer_jobs WHERE id=$1', [job.job_id]), 'running');
+  const before = callsOf('employee_export_stop_owned');
+  assert.deepEqual(await api.stopSiteExportTask(PASSWORDS.root, '確認停止導出任務'), { cancelled: true });
+  assert.equal(callsOf('employee_export_stop_owned'), before + 1);
+  assert.equal(await scalar(db, 'SELECT status FROM private.employee_transfer_jobs WHERE id=$1', [job.job_id]), 'cancelled');
+  assert.deepEqual(await api.stopSiteExportTask(PASSWORDS.root, '確認停止導出任務'), { cancelled: false });
+  assert.equal(callsOf('employee_export_stop_owned'), before + 1);
+  const next = await bridgeRead('employee_export_shared_begin', { p_admin_password: PASSWORDS.root });
+  await db.query("UPDATE private.employee_transfer_jobs SET kind='import' WHERE id=$1", [next.job_id]);
+  await assert.rejects(api.stopSiteExportTask(PASSWORDS.root, '確認停止導出任務'));
+  assert.equal(callsOf('employee_export_stop_owned'), before + 1);
+}));
 test('real round trip: SQL41 snapshot, ten real serial domain exports, ten encrypted volumes plus encrypted index', { timeout: 240000 }, async () => {
   await isolated(async () => {
     const { output, w, events, promise } = await exportSet();
     resultA = await promise;
+    for (const event of events) assert.deepEqual(Object.keys(event).sort(),
+      ['domain', 'phase', 'completedDomains', 'totalDomains', 'rows', 'files', 'bytes'].sort());
     snapshotA = (await bridgeRead('get_employee_export_site_snapshot', { p_package_id: resultA.packageId }));
     assert.deepEqual(output.created, [...FILES, INDEX]);
     assert.deepEqual((await readdir(output.dir)).sort(), [...FILES, INDEX].sort());

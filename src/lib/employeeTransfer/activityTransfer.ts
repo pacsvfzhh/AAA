@@ -3,6 +3,7 @@ import type { TransferByteSource } from './crypto';
 import type { VolumeManifest } from './manifest';
 import { dispatchTransferChecks } from './dispatchTransfer';
 import { Sha256 } from './sha256';
+import { assertTransferDeviceInfo } from './deviceInfo';
 import { validateIdentityCatalog, type IdentityCatalog } from './identityTransfer';
 
 export const ACTIVITY_PROTOCOL = 'employee-activity-v1';
@@ -299,8 +300,7 @@ export function validateActivityRow(line: string, key: ActivityTableKey): string
       case 'text': if (typeof value !== 'string') invalid(); break;
       case 'boolean': if (typeof value !== 'boolean') invalid(); break;
       case 'integer': if (typeof value !== 'number' || !Number.isInteger(value) || value < -2147483648 || value > 2147483647) invalid(); break;
-      // Any JSON value is valid here. Its original number lexemes, not parsed JS numbers, are transferred.
-      case 'jsonb': break;
+      case 'jsonb': assertTransferDeviceInfo(value); break;
       case 'time': timestamp(value); break;
       default: invalid();
     }

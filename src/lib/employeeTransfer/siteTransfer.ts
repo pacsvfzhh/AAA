@@ -1,26 +1,25 @@
 import { getAdminFinancialSessionToken } from '../auth';
 import { supabase } from '../supabase';
 import { validateActivityCatalog, validateActivityRow } from './activityTransfer';
-import { ARCHIVE_BUNDLE_CATALOG_PATH, ARCHIVE_BUNDLE_MEDIA_PATH, type ArchiveBundleResult, type ArchiveBundleWorkspace, type ArchiveBundleWorkspaceFactory } from './archiveBundle';
-import { validateArchiveMediaFile } from './archiveMedia';
+import { ARCHIVE_BUNDLE_CATALOG_PATH, inspectArchiveBundle, type ArchiveBundleResult, type ArchiveBundleWorkspace, type ArchiveBundleWorkspaceFactory } from './archiveBundle';
 import { validateArchivesCatalog, validateArchivesRow } from './archiveTransfer';
 import type { BrowserTransferDirectory } from './browserStorage';
 import { validateChatCatalog, validateChatRow } from './chatTransfer';
-import { chatMediaEntryPath, validateChatMediaCatalog } from './chatMedia';
+import { inspectChatBundle } from './chatMedia';
 import { MAX_CONTAINER_INPUT_BYTES, verifyEncryptedVolume, writeEncryptedVolume, type TransferEntry } from './container';
 import { readTransferMetadata, type TransferByteSource } from './crypto';
 import { dispatchTransferChecks, validateDispatchCatalog } from './dispatchTransfer';
 import { validateFinanceCatalog, validateFinanceRow } from './financeTransfer';
 import { validateIdentityCatalog, validateIdentityRow } from './identityTransfer';
 import { validateManifest, type ManifestEntry, type VolumeInfo, type VolumeManifest } from './manifest';
-import { notificationsMediaEntryPath } from './notificationsMedia';
+import { inspectNotificationsBundle } from './notificationsMedia';
 import { validateNotificationsCatalog, validateNotificationsRow } from './notificationsTransfer';
 import { validateProductExportCatalog } from './productTransfer';
 import type { ReplacementBackupFile } from './replacementBackup';
 import { validateSharedExportCatalog } from './sharedExport';
 import { Sha256 } from './sha256';
 import { createSiteExportDrivers } from './siteExportApi';
-import { verificationMediaEntryPath } from './verificationMedia';
+import { inspectVerificationBundle } from './verificationMedia';
 import { validateVerificationCatalog, validateVerificationRow } from './verificationTransfer';
 
 export const SITE_DOMAINS = ['shared', 'products', 'dispatch', 'identity', 'finance', 'activity', 'verification', 'notifications', 'chat', 'archives'] as const;
@@ -159,15 +158,38 @@ export async function getSiteTransferHistory(signal?: AbortSignal): Promise<Arra
     if (typeof event.action !== 'string' || !/^[a-z_]{1,100}$/.test(event.action)
       || (event.kind !== 'import' && event.kind !== 'export') || typeof event.occurred_at !== 'string'
       || !Number.isFinite(Date.parse(event.occurred_at))) invalid();
-    return { id: `${uuid(event.job_id)}:${String(event.id)}`, kind: `${event.kind}:${event.action}`,
-      status: event.action.endsWith('_finished') ? 'finished' : event.action.endsWith('_cancelled') ? 'cancelled' : 'verified',
+    return { id: `${uuid(event.job_id)}:${String(event.id)}`, kind: event.kind,
+      status: event.action.endsWith('_finished') ? 'finished' : event.action.endsWith('_cancelled') ? 'cancelled'
+        : event.action.endsWith('_begin') ? 'running' : event.action.includes('verified') ? 'verified' : 'unknown',
       startedAt: event.occurred_at, finishedAt: event.occurred_at };
   });
+}
+export async function stopSiteExportTask(adminPassword: string, confirmation: string, signal?: AbortSignal): Promise<{ cancelled: boolean }> {
+  try {
+    if (confirmation !== '確認停止導出任務') invalid();
+    const raw = await rpc('get_employee_transfer_log', { p_limit: 1 }, signal);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid();
+    const running = (raw as Record<string, unknown>).running;
+    if (running === null) return { cancelled: false };
+    if (!running || typeof running !== 'object' || Array.isArray(running)) invalid();
+    const job = running as Record<string, unknown>;
+    if (job.kind !== 'export') invalid();
+    const jobId = uuid(job.id);
+    const query = supabase.rpc('employee_export_stop_owned', { p_admin_session_token: getAdminFinancialSessionToken(),
+      p_admin_password: adminPassword, p_job_id: jobId, p_confirmation: confirmation });
+    const { data, error } = await withSignal(() => signal ? query.abortSignal(signal) : query, signal);
+    checkAbort(signal);
+    if (error || !data || data.success !== true || data.job_id !== jobId || data.scope !== 'export-task'
+      || data.full_site_complete !== false || typeof data.cancelled !== 'boolean') invalid();
+    return { cancelled: data.cancelled };
+  } catch { checkAbort(signal); throw new Error('Export stop could not be confirmed. Recheck server task status before another attempt.'); }
+  finally { adminPassword = ''; }
 }
 function progress(options: RunOptions, domain: string, phase: string, completedDomains: number,
   value = { rows: 0, files: 0, bytes: 0 }): void {
   checkAbort(options.signal);
-  options.onProgress?.({ domain, phase, completedDomains, totalDomains: SITE_DOMAINS.length, ...value });
+  options.onProgress?.({ domain, phase, completedDomains, totalDomains: SITE_DOMAINS.length,
+    rows: value.rows, files: value.files, bytes: value.bytes });
   checkAbort(options.signal);
 }
 async function* scanned(source: TransferByteSource, state: { bytes: number; digest: Sha256 }, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
@@ -261,12 +283,10 @@ async function validateTable(workspace: ArchiveBundleWorkspace, path: string, do
 async function validateDomain(workspace: ArchiveBundleWorkspace, domain: SiteDomain, manifest: VolumeManifest,
   baseline: SiteSnapshot, signal?: AbortSignal): Promise<void> {
   const catalog = baseline.catalogs[domain], expectedPaths = new Set(catalog.tables.map(t => tablePath(domain, t.key)));
-  let media: unknown;
   if (domain === 'archives') {
-    expectedPaths.add(ARCHIVE_BUNDLE_CATALOG_PATH); expectedPaths.add(ARCHIVE_BUNDLE_MEDIA_PATH);
     same(validateArchivesCatalog(JSON.parse(await readSmall(workspace, ARCHIVE_BUNDLE_CATALOG_PATH, signal))), catalog);
-    const raw = await readSmall(workspace, ARCHIVE_BUNDLE_MEDIA_PATH, signal);
-    media = raw === '' ? [] : raw.trimEnd().split('\n').map(line => validateArchiveMediaFile(JSON.parse(line)));
+    await inspectArchiveBundle(workspace, manifest, { signal });
+    return;
   } else {
     const path = metadataPath(domain);
     expectedPaths.add(path);
@@ -275,29 +295,17 @@ async function validateDomain(workspace: ArchiveBundleWorkspace, domain: SiteDom
     if (r.version !== 1 || r.protocol !== PROTOCOL || r.domain !== domain || r.package_id !== baseline.package_id
       || r.site_id !== baseline.site_id || r.snapshot_hash !== baseline.sha256 || r.full_site_complete !== false || r.import_ready !== false) invalid();
     same(validateCatalog(domain, r.catalog), catalog);
-    media = r.media;
-  }
-  if (domain === 'chat') {
-    const checked = validateChatMediaCatalog(media);
-    same(checked.chat_catalog, catalog); media = checked.files;
-  }
-  const mediaFiles = media === null ? [] : list(media, 3000);
-  if (!['verification', 'notifications', 'chat', 'archives'].includes(domain) && mediaFiles.length) invalid();
-  let last: string | null = null;
-  for (const value of mediaFiles) {
-    const f = object(value, ['key', 'source_url', 'bytes', 'sha256', 'content_type']);
-    const key = hash(f.key), bytes = count(f.bytes, 50 * 1024 * 1024);
-    if (typeof f.source_url !== 'string' || key !== sha(encoder.encode(f.source_url)) || !bytes
-      || typeof f.content_type !== 'string' || (last !== null && last >= key)) invalid();
-    last = key;
-    const ref = { source_url: f.source_url };
-    const path = domain === 'verification' ? verificationMediaEntryPath(ref)
-      : domain === 'notifications' ? notificationsMediaEntryPath(ref)
-        : domain === 'chat' ? chatMediaEntryPath(ref) : `media/content-audit-evidence/${key}`;
-    if (expectedPaths.has(path)) invalid();
-    expectedPaths.add(path);
-    const entry = manifest.entries.find(e => e.path === path);
-    if (!entry || entry.kind !== 'media' || entry.bytes !== bytes || entry.sha256 !== hash(f.sha256)) invalid();
+    if (domain === 'verification' || domain === 'notifications' || domain === 'chat') {
+      const payload = validateManifest({ ...manifest, entries: manifest.entries.filter(entry => entry.path !== path) });
+      const files = { open: (name: string) => workspace.open(name), paths: () => payload.entries.map(entry => entry.path),
+        abort: (reason: unknown) => workspace.abort(reason) };
+      const input = { catalog: r.catalog, media: r.media, manifest: payload };
+      if (domain === 'verification') await inspectVerificationBundle(input, files, { signal });
+      else if (domain === 'notifications') await inspectNotificationsBundle(input, files, { signal });
+      else await inspectChatBundle(input, files, { signal });
+      return;
+    }
+    if (r.media !== null) invalid();
   }
   if (manifest.entries.length !== expectedPaths.size || manifest.entries.some(e => !expectedPaths.has(e.path))) invalid();
   for (const table of catalog.tables) {

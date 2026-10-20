@@ -21,6 +21,7 @@
 | 交單數據 | `validdata` | `ValidOrderDataManagement` | 仅超管 |
 | 管理員 | `admins` | `AdminManagement` | 仅超管 |
 | 歷史資料 | `history` | `HistoryDataManagement`（含隐藏稽核入口） | 仅超管 |
+| 資料遷移 | `datamigration` | `EmployeeDataMigration`（本地验证版） | 仅超管，未部署 |
 
 - 超管可在「導航設定」修改文字与顺序：存于 `system_configs` 的 `admin_navigation_preferences`（RPC `admin_save_shared_system_config`）和 localStorage。代码中有旧标签映射 `previousDefaultNavigationLabels`、`legacyNavigationLabelTranslations`，改默认文字时要一起更新，否则旧的自定义值可能盖过新默认值。
 - `AdminTabId` 类型里有 `records`，但没有挂载任何页面。
@@ -33,6 +34,14 @@
 - 各列表都排除 `emergency_admin` 和已归档（已删）的员工。
 
 ## 各页面
+### 資料遷移 `EmployeeDataMigration.tsx`（本地验证版，未部署）
+- 导航和组件渲染双重超管门禁；懒加载，切换后台页保留任务，失去超管角色立即卸载。三个页签为「導出」「導入檢查」「紀錄」。
+- 后端先调用 SQL40 能力接口；未部署或无法确认则禁止导出。十领域按同包串行导出，各自正常关闭，逐卷实际写盘、独立认证回读，最终检查 SQL41 开始/结束目录和全部密文，再保存加密索引，共11个 `.edx`。默认处理已实现的全部领域，不提供任意跳过财务等关键类别。
+- 浏览器需支持目录选择和 OPFS，建议桌面 Chrome/Edge。真实行数/文件数/字节/阶段进度；仅在领域边界暂停。取消不等于服务端任务已取消或业务回滚，必须保留现有文件。浏览器离页提醒与屏幕常亮仅尽力而为。
+- 「導入檢查」仅在本机认证完整11文件及记录/附件引用，不调用数据库或上传；`importReady/fullSiteComplete=false`。缺卷、混包、篡改和有引用无附件均拒绝，不能凭检查通过认定可恢复业务。
+- 「紀錄」是阶段事件，不是整站完成。可用当前超管密码及固定确认语「確認停止導出任務」显式停止本人未结束的导出；不停止导入、不删业务或保存文件、不解除维护，未知结果先重新查核而非自动重试。
+- 已知阻断：完整员工备份/UUID映射/封存替换、全站导入与最终放行未接；迁入档案仍阻断统一导出；共享头像/图标实际文件未纳入、公告轮播键待排除、部分旧头像值不支持。当前按领域分卷、单领域1GiB/3000媒体，不是150MB自动分卷。不得正式迁移。
+
 ### 員工詳情數據 `EmployeeManagement.tsx`
 - 加载：`get_employee_management_snapshot`（排除已归档员工）、`get_notification_automation_plan_assignments`、`get_withdrawals_for_admin`。加载途中若有实时变动或页面重新初始化，这次结果会作废并排队重载；首次加载作废时继续显示载入状态，不会先闪出「找不到員工」。
 - 建立：`admin_create_employee_account_with_automation_plan`（用户名、密码 ≥6 位、员工 ID、派单组、可选自动化方案）。二级建立的员工 `created_by` 是自己，超管可选目标管理员。

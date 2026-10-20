@@ -6,6 +6,7 @@ import {
   getSiteTransferCapabilities,
   getSiteTransferHistory,
   inspectSiteBundleSet,
+  stopSiteExportTask,
 } from '../../lib/employeeTransfer/siteTransfer';
 import {
   createBrowserWorkspaceFactory,
@@ -58,11 +59,27 @@ const tabs = [
   { id: 'inspect' as const, label: '導入檢查', icon: FileCheck2 },
   { id: 'history' as const, label: '紀錄', icon: History },
 ];
-const scope = ['管理員與網站業務設定', '產品目錄', '派單設定、訂單池及成員', '交單原文與已用狀態', '員工身份、密碼校驗資料及精簡訂單', '錢包、提款與財務紀錄', '登入、工時與停工標記', '實名資料與實際證件', '通知、廣播與自動化', '聊天、角色與媒體', '原生及遷入唯讀檔案與附件'];
+const scope = ['管理員與網站業務設定紀錄', '產品目錄', '派單設定、訂單池、成員、交單原文及已用狀態', '員工身份、密碼校驗資料及精簡訂單', '錢包、提款與財務紀錄', '登入、工時與停工標記', '實名資料與實際證件', '通知、廣播與自動化', '聊天、角色與支援格式的媒體', '本站原生唯讀檔案與附件'];
+const limitations = [
+  '網站圖示及管理員頭像的實際檔案尚未納入加密包；設定紀錄不等於已備份這些檔案。',
+  '公告內容不搬遷；舊共享設定協定仍帶有公告輪播設定鍵，正式整站協定還須完成排除，不能用本驗證包覆蓋新站。',
+  '遷入檔案的整組導出編排尚未接通；來源站若已有遷入檔案，會在開始導出前阻擋，不能略過後視為成功。',
+  '部分舊式頭像值暫不支援，遇到不支援的值會阻擋，不能視為已備份。',
+  '目前按領域分卷，單一領域的紀錄與媒體合計上限為 1 GiB、最多 3,000 個媒體檔案；不是約 150 MB 自動分卷，超限會失敗。',
+  '導出期間來源站必須暫停業務寫入並保持資料穩定，否則一致性核對會失敗；本頁不會代為停站。',
+];
+const stopConfirmationText = '確認停止導出任務';
 const domainLabels: Record<string, string> = {
-  shared: '管理員與共享設定', products: '產品目錄', dispatch: '派單與交單', identity: '員工身份',
+  site: '整組協調', index: '加密索引', shared: '管理員與共享設定', products: '產品目錄', dispatch: '派單與交單', identity: '員工身份',
   finance: '財務', activity: '登入與工時', verification: '實名與證件', notifications: '通知與自動化',
   chat: '聊天', archives: '原生檔案', 'imported-archives': '遷入檔案',
+};
+const phaseLabels: Record<string, string> = {
+  preflight: '導出前檢查', begin: '建立領域快照', records: '讀取紀錄與媒體',
+  'records-export': '讀取檔案紀錄', 'media-download': '下載並核對附件',
+  'source-recheck': '複核來源資料', save: '加密並保存', authenticate: '解密與完整性驗證',
+  validate: '核對內容與關聯', close: '核對並結束領域任務', recheck: '複核來源與已保存各卷',
+  'save-index': '加密保存索引', complete: '整組檔案核驗完成（非業務恢復）',
 };
 const statusLabels: Record<string, string> = {
   pending: '待處理', queued: '已排程', running: '處理中', paused: '已暫停',
@@ -81,11 +98,11 @@ function browserSupport() {
   return { export: workspace && chromium && 'showDirectoryPicker' in window && typeof (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker === 'function', workspace };
 }
 
-function identifier(value: string): string {
-  return /^[a-z][a-z0-9_-]{0,79}$/i.test(value) ? value : '未識別（不顯示原始內容）';
+function translatedLabel(labels: Record<string, string>, value: string, fallback: string): string {
+  return Object.prototype.hasOwnProperty.call(labels, value) ? labels[value] : fallback;
 }
 function domainName(value: string): string {
-  return domainLabels[value] ? `${domainLabels[value]}（${identifier(value)}）` : identifier(value);
+  return translatedLabel(domainLabels, value, '未識別領域');
 }
 function count(value: number): string {
   return Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString('zh-TW') : '未確認';
@@ -130,6 +147,9 @@ export default function EmployeeDataMigration() {
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
   const [historyStatus, setHistoryStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
+  const [stopPassword, setStopPassword] = useState('');
+  const [stopConfirmation, setStopConfirmation] = useState('');
+  const [stopping, setStopping] = useState(false);
   const [wakeStatus, setWakeStatus] = useState<'idle' | 'requesting' | 'active' | 'unavailable'>('idle');
   const mounted = useRef(false);
   const operation = useRef<AbortController | null>(null);
@@ -140,7 +160,7 @@ export default function EmployeeDataMigration() {
   const resumeGate = useRef<(() => void) | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const support = browserSupport();
-  const busy = run !== null;
+  const busy = run !== null || stopping;
   const exportAvailable = capabilityStatus === 'ready' && capabilities?.version === 1
     && capabilities.can_export === true && capabilities.missing_rpcs.length === 0;
   const passphraseValid = Array.from(passphrase).length >= 14 && passphrase === confirmation;
@@ -281,7 +301,7 @@ export default function EmployeeDataMigration() {
   };
 
   const startRun = async (kind: RunKind) => {
-    if (operation.current || selectingRef.current) return;
+    if (busy || operation.current || selectingRef.current) return;
     if (kind === 'export' && !exportReady) return;
     if (kind === 'inspect' && (!support.workspace || !inspectFiles.length || Array.from(inspectPassphrase).length < 14)) return;
     const selectedDirectory = directory;
@@ -312,7 +332,7 @@ export default function EmployeeDataMigration() {
       setResult({ kind, data });
       setNotice({ error: false, text: kind === 'export'
         ? '導出流程已回傳各卷結果。請保留所有檔案與口令；這不是正式整站遷移完成，也不代表可導入。'
-        : '所選加密卷已完成解密與核驗，未寫入資料庫。這不代表已選齊全部領域，亦不代表整站導入完成。' });
+        : '十個領域卷及索引已配套核驗，未寫資料庫。這只代表目前協定的整組檔案核驗通過，不代表完整站點備份或業務恢復通過，仍不可真正導入。' });
     } catch {
       if (mounted.current) setNotice({ error: true, text: `${controller.signal.aborted ? '已提出取消，任務已停止回報。' : '本次操作未能確認完成，可能是驗證、口令、權限、檔案、空間或連線問題。'}${retentionWarning}` });
     } finally {
@@ -350,6 +370,36 @@ export default function EmployeeDataMigration() {
     pauseRequested.current = false;
     resumeGate.current?.();
   };
+  const submitStop = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy || operation.current || selectingRef.current || capabilityStatus !== 'ready'
+      || !stopPassword || stopConfirmation !== stopConfirmationText) return;
+    const controller = new AbortController();
+    operation.current = controller;
+    setStopping(true);
+    setNotice(null);
+    try {
+      // This write is deliberately available only from this explicit, authenticated form submission.
+      const response = await stopSiteExportTask(stopPassword, stopConfirmation, controller.signal);
+      controller.signal.throwIfAborted();
+      if (!mounted.current) return;
+      if (response.cancelled === true) {
+        setNotice({ error: false, text: '後端已確認停止本人的未結束導出任務並清除其技術暫存。已保存檔案不會刪除，業務不會回滾，維護不會解除；正在重新讀取階段紀錄，請保留檔案另行核對。' });
+        await refreshHistory();
+      } else {
+        setNotice({ error: true, text: '後端未確認有導出任務被停止。請按「刷新紀錄」重新查核本人任務狀態，不要直接重試停止。已保存檔案請繼續保留；這不代表已回滾或已解除維護。' });
+      }
+    } catch {
+      if (mounted.current) setNotice({ error: true, text: '無法確認停止結果，可能是接口未部署、驗證或連線問題；請按「刷新紀錄」重新查核，不會自動重試。請保留已保存檔案，不要假定任務已停止、業務已回滾或維護已解除。' });
+    } finally {
+      if (operation.current === controller) operation.current = null;
+      if (mounted.current) {
+        setStopping(false);
+        setStopPassword('');
+        setStopConfirmation('');
+      }
+    }
+  };
   const submitExport = (event: FormEvent) => { event.preventDefault(); void startRun('export'); };
   const submitInspect = (event: FormEvent) => { event.preventDefault(); void startRun('inspect'); };
   const navigateTab = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -371,7 +421,7 @@ export default function EmployeeDataMigration() {
           <ArchiveRestore className="mt-1 h-7 w-7 shrink-0 text-cyan-300" aria-hidden="true" />
           <div>
             <h1 className="text-xl font-bold text-white">資料遷移</h1>
-            <p className="mt-1 text-sm text-slate-400">預設全部領域 · 加密分卷保存 · 僅超級管理員</p>
+            <p className="mt-1 text-sm text-slate-400">目前十個領域 · 按領域加密分卷 · 僅超級管理員</p>
           </div>
         </header>
         <div role="note" className="rounded-xl border-2 border-amber-400/70 bg-amber-950/50 p-4 text-amber-100">
@@ -388,11 +438,11 @@ export default function EmployeeDataMigration() {
                   : exportAvailable ? '後端回報可導出；僅代表階段能力，不是整站遷移許可。'
                   : '後端尚未具備導出能力（可能未部署完整接口），導出不可操作。'}
               </p>
-              {capabilities && <p className="mt-1 text-xs text-slate-400">協定：{identifier(capabilities.export_protocol)} · 缺少接口：{count(capabilities.missing_rpcs.length)} · 導入阻斷項：{count(capabilities.import_blockers.length)} · 真正導入：已阻擋</p>}
+              {capabilities && <p className="mt-1 text-xs text-slate-400">導出協定：分領域加密卷組（第 1 版） · 缺少接口：{count(capabilities.missing_rpcs.length)} · 導入阻斷項：{count(capabilities.import_blockers.length)} · 真正導入：已阻擋</p>}
             </div>
             <button type="button" className={buttonClass} disabled={busy || selecting || capabilityStatus === 'loading'} onClick={() => void refreshCapabilities()}><RefreshCw className="h-4 w-4" aria-hidden="true" />重新檢查能力</button>
           </div>
-          {!support.export && <p className="mt-3 text-sm text-amber-200">導出僅支援安全連線下的 Chromium 瀏覽器，且必須支援 showDirectoryPicker 與 OPFS。請使用桌面版 Chrome 或 Edge；本瀏覽器不可導出。</p>}
+          {!support.export && <p className="mt-3 text-sm text-amber-200">導出僅支援安全連線下的 Chromium 瀏覽器，且必須支援本機目錄選擇與瀏覽器私有暫存。請使用桌面版 Chrome 或 Edge；本瀏覽器不可導出。</p>}
         </div>
 
         <div role="tablist" aria-label="資料遷移功能" className="flex gap-1 rounded-xl border border-slate-700 bg-slate-900/80 p-1">
@@ -404,7 +454,7 @@ export default function EmployeeDataMigration() {
 
         {notice && <div role={notice.error ? 'alert' : 'status'} className={`break-words rounded-xl border p-4 text-sm leading-relaxed ${notice.error ? 'border-rose-500/50 bg-rose-950/40 text-rose-100' : 'border-cyan-800 bg-cyan-950/40 text-cyan-100'}`}>{notice.text}</div>}
 
-        {busy && <section aria-label="執行中的任務" className="rounded-xl border border-cyan-700 bg-slate-900/90 p-4">
+        {run && <section aria-label="執行中的任務" className="rounded-xl border border-cyan-700 bg-slate-900/90 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div role="status">
               <h2 className="flex items-center gap-2 font-semibold text-cyan-100"><Loader2 className={`h-4 w-4 ${run.status !== 'paused' ? 'animate-spin' : ''}`} aria-hidden="true" />{run.kind === 'export' ? '導出任務' : '本機解密核驗'} · {run.status === 'paused' ? '已在請求邊界暫停' : run.status === 'pause-requested' ? '等待下一個請求邊界暫停' : run.status === 'cancelling' ? '取消處理中，尚待確認' : '執行中'}</h2>
@@ -415,18 +465,18 @@ export default function EmployeeDataMigration() {
               <button type="button" className={buttonClass} disabled={run.status === 'cancelling'} onClick={cancel}><Square className="h-4 w-4" aria-hidden="true" />取消</button>
             </div>
           </div>
-          <p className="mt-3 text-xs text-amber-200">{run.kind === 'export' ? '暫停只在下一個領域的服務端請求前（beforeDomain / pauseGate）生效，不會中斷正在進行的請求、加密或檔案寫入；整個最後領域可能先完成。' : '解密核驗不支援邊界暫停，可提出取消；不會呼叫資料庫寫入。'}</p>
+          <p className="mt-3 text-xs text-amber-200">{run.kind === 'export' ? '暫停只在下一個領域開始向服務端請求資料前生效，不會中斷正在進行的請求、加密或檔案寫入；整個最後領域可能先完成。' : '解密核驗不支援邊界暫停，可提出取消；不會呼叫資料庫寫入。'}</p>
           <p className="mt-2 text-xs text-slate-400">{wakeStatus === 'active' ? '已取得螢幕喚醒鎖，系統仍可能解除，不能保證背景執行。' : wakeStatus === 'requesting' ? '正在申請保持螢幕喚醒。' : '未取得或已失去喚醒鎖；請自行保持螢幕開啟，背景分頁可能被系統暫停。'}</p>
         </section>}
 
-        {(busy || progress) && <section aria-label="真實進度" className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
+        {(run || progress) && <section aria-label="真實進度" className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
           <h2 className="font-semibold text-white">實際進度回報</h2>
-          <p className="mt-1 text-xs text-slate-400">只顯示服務回報的階段計數，不推算百分比或完成時間；rows / files / bytes 可能隨領域或階段重新計數。</p>
+          <p className="mt-1 text-xs text-slate-400">只顯示服務回報的階段計數，不推算百分比或完成時間；紀錄數、檔案數與資料量可能隨領域或階段重新計數。</p>
           {progress ? <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
             {[
-              ['領域 domain', domainName(progress.domain)], ['階段 phase', identifier(progress.phase)],
-              ['已完成領域 completedDomains / totalDomains', `${count(progress.completedDomains)} / ${count(progress.totalDomains)}`],
-              ['紀錄 rows', count(progress.rows)], ['檔案 files', count(progress.files)], ['資料量 bytes', `${byteSize(progress.bytes)}（${count(progress.bytes)} B）`],
+              ['領域', domainName(progress.domain)], ['階段', translatedLabel(phaseLabels, progress.phase, '未識別階段')],
+              ['已完成領域／領域總數', `${count(progress.completedDomains)} / ${count(progress.totalDomains)}`],
+              ['紀錄數', count(progress.rows)], ['檔案數', count(progress.files)], ['資料量', `${byteSize(progress.bytes)}（${count(progress.bytes)} 位元組）`],
             ].map(([label, value]) => <div key={label} className="min-w-0 rounded-lg bg-slate-950/60 p-3"><dt className="text-xs text-slate-400">{label}</dt><dd className="mt-1 break-words font-medium text-cyan-100">{value}</dd></div>)}
           </dl> : <p className="mt-3 text-sm text-slate-400">正在準備本機工作區，尚未收到進度回報。</p>}
         </section>}
@@ -434,15 +484,19 @@ export default function EmployeeDataMigration() {
 
         <div role="tabpanel" id="migration-panel-export" aria-labelledby="migration-tab-export" hidden={tab !== 'export'} tabIndex={0} className="space-y-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
           <section className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
-            <h2 className="font-semibold text-white">預設導出全部領域</h2>
-            <p className="mt-1 text-sm text-slate-400">不需逐個選擇員工。以下是要求的完整範圍，不代表後端已完成所有能力；實際以協定核驗及回傳的各卷清單為準，不可把部分卷視為全站備份。</p>
+            <h2 className="font-semibold text-white">目前可驗證的領域</h2>
+            <p className="mt-1 text-sm text-slate-400">預設導出目前協定的十個領域，不需逐個選擇員工。這不是完整站點覆蓋清單；原生檔案已接通，遷入檔案整組編排與下列缺項仍未完成。實際以各卷及索引的配套核驗為準。</p>
             <ul className="mt-3 grid gap-2 text-sm sm:grid-cols-2">{scope.map(label => <li key={label} className="flex items-start gap-2"><Check className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" aria-hidden="true" />{label}</li>)}</ul>
+            <div className="mt-4 rounded-lg border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-100">
+              <h3 className="font-semibold">目前缺項與限制</h3>
+              <ul className="mt-2 list-disc space-y-2 pl-5">{limitations.map(text => <li key={text}>{text}</li>)}</ul>
+            </div>
             <p className="mt-3 text-xs text-slate-400">不含公告、公告分類與僅供公告使用的素材；不搬登入會話、技術密鑰及詳細歷史訂單內容。保留新站超管，舊站超管憑據不覆蓋新站。</p>
           </section>
           <form onSubmit={submitExport} className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
             <h2 className="flex items-center gap-2 font-semibold text-white"><KeyRound className="h-4 w-4 text-cyan-300" aria-hidden="true" />驗證與加密</h2>
             <div className="mt-3 rounded-lg border border-amber-800/60 bg-amber-950/30 p-3 text-sm text-amber-100">
-              <p>建議先停止舊站寫入、處理進行中訂單並審核待處理提款，再取得穩定快照；本頁不會替你停站。正式切站須另行確認，不能把待處理提款重複付款。</p>
+              <p>導出期間來源站必須暫停業務寫入，否則核對會失敗；本頁不會替你停站。開始前亦應處理進行中訂單並審核待處理提款，再取得穩定快照。正式切站須另行確認，不能把待處理提款重複付款。</p>
               <p className="mt-2">檔案可能包含舊密碼校驗資料、財務、聊天及實名證件，並非只有文字或網址。請將加密檔與口令分開保管；口令遺失無法還原，服務端校驗超管目前密碼不等於搬遷超管密碼。</p>
             </div>
             <fieldset disabled={busy || selecting || !exportAvailable || !support.export} className="mt-4 space-y-4 disabled:opacity-60">
@@ -467,7 +521,7 @@ export default function EmployeeDataMigration() {
               </div>
               <label className="flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} required className="mt-1 h-4 w-4 shrink-0 accent-cyan-400 focus-visible:outline-cyan-400" /><span>我了解這是本地驗證版，已妥善另存口令並確認敏感資料保存位置；導出不代表可恢復或完成整站遷移。</span></label>
             </fieldset>
-            <button type="submit" disabled={!exportReady} className={`${buttonClass} mt-4 border-cyan-700 bg-cyan-900/70 text-cyan-100 hover:bg-cyan-800`}><Download className="h-4 w-4" aria-hidden="true" />開始全部領域加密導出</button>
+            <button type="submit" disabled={!exportReady} className={`${buttonClass} mt-4 border-cyan-700 bg-cyan-900/70 text-cyan-100 hover:bg-cyan-800`}><Download className="h-4 w-4" aria-hidden="true" />開始目前十個領域加密導出</button>
           </form>
         </div>
 
@@ -475,7 +529,7 @@ export default function EmployeeDataMigration() {
           <div className="rounded-xl border border-amber-700/60 bg-amber-950/30 p-4 text-sm text-amber-100">
             <h2 className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-5 w-5 shrink-0" aria-hidden="true" />真正導入已阻擋</h2>
             <p className="mt-2">目前僅在本機完整解密並核驗選取的 .edx 加密卷，不上傳、不暫存到服務端、不寫入資料庫。缺少完整員工替換、獨立備份封存串聯與最終核對放行，不能開始真正導入。</p>
-            <p className="mt-2">即使所有選取檔案核驗通過，也不能證明領域齊全、目標相容或整站可恢復。請一次選擇同一包的全部 .edx 卷，由協定檢查來源與一致性。</p>
+            <p className="mt-2">請一次選擇同一包的十個領域卷與一個加密索引（共 11 個 .edx 檔案）；缺卷或不配套會阻擋。配套核驗通過僅證明目前協定的檔案組一致，不代表完整站點覆蓋、目標相容或業務恢復通過。</p>
           </div>
           <form onSubmit={submitInspect} className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
             <fieldset disabled={busy || selecting || !support.workspace} className="space-y-4 disabled:opacity-60">
@@ -490,24 +544,35 @@ export default function EmployeeDataMigration() {
               <p className="text-xs text-slate-400">已選 {count(inspectFiles.length)} 卷，合計 {byteSize(inspectFiles.reduce((sum, file) => sum + file.size, 0))}。不在頁面顯示解密原文。</p>
               <label className="block text-sm" htmlFor="migration-inspect-passphrase">原導出口令（至少 14 個字元）<input id="migration-inspect-passphrase" type="password" autoComplete="off" spellCheck={false} value={inspectPassphrase} onChange={event => setInspectPassphrase(event.target.value)} minLength={14} required className={inputClass} /></label>
             </fieldset>
-            {!support.workspace && <p className="mt-3 text-sm text-amber-200">本機核驗需要安全連線及 OPFS 臨時工作區，本瀏覽器不支援，無法開始。</p>}
+            {!support.workspace && <p className="mt-3 text-sm text-amber-200">本機核驗需要安全連線及瀏覽器私有臨時工作區，本瀏覽器不支援，無法開始。</p>}
             <button type="submit" disabled={busy || selecting || !support.workspace || !inspectFiles.length || Array.from(inspectPassphrase).length < 14} className={`${buttonClass} mt-4`}><FileCheck2 className="h-4 w-4" aria-hidden="true" />僅解密與核驗，不導入</button>
           </form>
         </div>
 
         <div role="tabpanel" id="migration-panel-history" aria-labelledby="migration-tab-history" hidden={tab !== 'history'} tabIndex={0} className="rounded-xl border border-slate-700 bg-slate-900/80 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
-          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-semibold text-white">服務端階段任務紀錄</h2><button type="button" className={buttonClass} disabled={historyStatus === 'loading'} onClick={() => void refreshHistory()}><RefreshCw className="h-4 w-4" aria-hidden="true" />刷新紀錄</button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-semibold text-white">服務端階段任務紀錄</h2><button type="button" className={buttonClass} disabled={stopping || historyStatus === 'loading'} onClick={() => void refreshHistory()}><RefreshCw className="h-4 w-4" aria-hidden="true" />刷新紀錄</button></div>
           <p className="mt-2 text-sm text-amber-200">歷史項目都是階段任務，不是整站遷移完成證明，也不是磁碟檔案清單。本機解密檢查不會新增服務端紀錄。時間統一 UTC+8。</p>
+          <form onSubmit={event => void submitStop(event)} className="mt-4 rounded-lg border border-amber-700/60 bg-amber-950/20 p-4">
+            <h3 className="font-semibold text-amber-100">停止本人未結束的導出任務</h3>
+            <p id="migration-stop-help" className="mt-2 text-sm text-slate-300">只結束目前登入管理員本人未結束的導出任務，並清除該任務的技術暫存；不取消導入任務、不清理業務資料、不刪除已保存檔案、不回滾業務，也不解除維護。只在你明確提交本表單後執行，不會自動停止。</p>
+            <fieldset disabled={busy || selecting || capabilityStatus !== 'ready'} className="mt-3 grid gap-3 disabled:opacity-60 sm:grid-cols-2">
+              <label htmlFor="migration-stop-password" className="block text-sm">目前超級管理員密碼<input id="migration-stop-password" type="password" autoComplete="current-password" required value={stopPassword} onChange={event => setStopPassword(event.target.value)} aria-describedby="migration-stop-help" className={inputClass} /></label>
+              <label htmlFor="migration-stop-confirmation" className="block text-sm">輸入「{stopConfirmationText}」<input id="migration-stop-confirmation" type="text" autoComplete="off" spellCheck={false} required value={stopConfirmation} onChange={event => setStopConfirmation(event.target.value)} aria-invalid={stopConfirmation.length > 0 && stopConfirmation !== stopConfirmationText} aria-describedby="migration-stop-help" className={inputClass} /></label>
+            </fieldset>
+            <button type="submit" className={`${buttonClass} mt-3 border-amber-700 text-amber-100`} disabled={busy || selecting || capabilityStatus !== 'ready' || !stopPassword || stopConfirmation !== stopConfirmationText}><Square className="h-4 w-4" aria-hidden="true" />{stopping ? '正在確認停止結果……' : '確認停止本人導出任務'}</button>
+            {stopping && <p role="status" className="mt-2 text-sm text-amber-200">停止請求處理中，請勿重複提交或關閉頁面；尚不能判定服務端結果。</p>}
+            {capabilityStatus !== 'ready' && <p className="mt-2 text-sm text-amber-200">後端能力尚未確認，停止入口不可操作；不能據此判定沒有未結束任務。</p>}
+          </form>
           {historyStatus === 'loading' && <p role="status" className="mt-4 text-sm text-slate-400">正在查詢紀錄……</p>}
           {historyStatus === 'unavailable' && <p role="alert" className="mt-4 rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-100">後端尚未提供紀錄接口、未部署或無法讀取，無法確認任務紀錄。這不代表沒有任務；請保留已有檔案，勿據此重試或判定已回滾。</p>}
           {historyStatus === 'ready' && history?.length === 0 && <p className="mt-4 text-sm text-slate-400">後端本次未回傳階段紀錄；不代表磁碟上沒有既有檔案。</p>}
-          {historyStatus === 'ready' && history && history.length > 0 && <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm"><caption className="sr-only">服務端階段任務，非整站完成紀錄，時間 UTC+8</caption><thead className="border-b border-slate-700 text-xs text-slate-400"><tr>{['任務編號', '類型', '階段狀態', '開始（UTC+8）', '結束（UTC+8）'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}</tr></thead><tbody>{history.map((entry, index) => <tr key={`${entry.id}-${index}`} className="border-b border-slate-800"><td className="max-w-[16rem] break-all px-3 py-3 font-mono text-xs">{entry.id}</td><td className="px-3 py-3">{entry.kind === 'export' ? '導出階段' : entry.kind === 'import' ? '導入階段' : '其他階段'}</td><td className="px-3 py-3">{statusLabels[entry.status] ?? '未識別狀態，須核對'}</td><td className="whitespace-nowrap px-3 py-3">{timestamp(entry.startedAt)}</td><td className="whitespace-nowrap px-3 py-3">{timestamp(entry.finishedAt)}</td></tr>)}</tbody></table></div>}
+          {historyStatus === 'ready' && history && history.length > 0 && <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm"><caption className="sr-only">服務端階段任務，非整站完成紀錄，時間 UTC+8</caption><thead className="border-b border-slate-700 text-xs text-slate-400"><tr>{['任務編號', '類型', '階段狀態', '開始（UTC+8）', '結束（UTC+8）'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}</tr></thead><tbody>{history.map((entry, index) => <tr key={`${entry.id}-${index}`} className="border-b border-slate-800"><td className="max-w-[16rem] break-all px-3 py-3 font-mono text-xs">{entry.id}</td><td className="px-3 py-3">{entry.kind === 'export' || entry.kind.startsWith('export:') ? '導出階段' : entry.kind === 'import' || entry.kind.startsWith('import:') ? '導入階段' : '其他階段'}</td><td className="px-3 py-3">{translatedLabel(statusLabels, entry.status, '未識別狀態，須核對')}</td><td className="whitespace-nowrap px-3 py-3">{timestamp(entry.startedAt)}</td><td className="whitespace-nowrap px-3 py-3">{timestamp(entry.finishedAt)}</td></tr>)}</tbody></table></div>}
         </div>
 
         {result && <section aria-label="各卷核驗結果" className="rounded-xl border border-cyan-800 bg-slate-900/90 p-4">
           <h2 className="font-semibold text-cyan-100">{result.kind === 'export' ? '本次導出各卷結果' : '所選各卷解密核驗結果（未導入）'}</h2>
           <p className="mt-2 break-all text-xs text-slate-400">包：{result.data.packageId} · 來源站：{result.data.sourceSiteId}</p>
-          <p className="mt-2 text-sm font-semibold text-amber-200">整站完成：否（fullSiteComplete=false） · 可真正導入：否（importReady=false）</p>
+          <p className="mt-2 text-sm font-semibold text-amber-200">完整站點與業務恢復：未通過 · 真正導入：已阻擋</p>
           <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><caption className="sr-only">實際回傳的卷清單及密文 SHA-256，不代表完整整站備份</caption><thead className="border-b border-slate-700 text-xs text-slate-400"><tr>{['領域', '檔名 / 密文 SHA-256', '紀錄', '檔案', '密文大小'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}</tr></thead><tbody>{result.data.volumes.map((volume, index) => <tr key={`${volume.filename}-${index}`} className="border-b border-slate-800"><td className="px-3 py-3">{domainName(volume.domain)}</td><td className="min-w-[15rem] max-w-xs break-all px-3 py-3"><p>{volume.filename}</p><p className="mt-1 font-mono text-xs text-slate-400">{volume.cipherSha256}</p></td><td className="px-3 py-3">{count(volume.rows)}</td><td className="px-3 py-3">{count(volume.files)}</td><td className="whitespace-nowrap px-3 py-3">{byteSize(volume.cipherBytes)}</td></tr>)}</tbody></table></div>
         </section>}
       </div>

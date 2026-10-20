@@ -3136,6 +3136,10 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: { success: true; scope: 'shared-settings'; full_site_complete: false };
       };
+      employee_export_stop_owned: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_job_id: string; p_confirmation: string };
+        Returns: Record<string, unknown>;
+      };
       get_employee_transfer_capabilities: {
         Args: { p_admin_session_token: string };
         Returns: import('../lib/employeeTransfer/siteTransfer').SiteTransferCapabilities;

@@ -455,6 +455,20 @@ async function scanMedia(files: VerificationImportFiles, file: VerificationMedia
   if (used !== file.bytes || digest.digestHex() !== file.sha256 || detect(head.subarray(0, Math.min(used, head.length))) !== file.content_type) invalid();
   return output;
 }
+/** Read-only plaintext inspection; callers own workspace cleanup. No media session, target or RPC is used. */
+export async function inspectVerificationBundle(
+  input: VerificationBundleInput, files: VerificationBundleFiles, options: VerificationMediaOptions = {},
+): Promise<{ rows: number; files: number; bytes: number; fullSiteComplete: false }> {
+  try {
+    check(options.signal);
+    const checked = bundle(input, files);
+    const recordEntry = checked.manifest.entries.find(e => e.kind === 'ndjson')!;
+    matches(await scanRecords(files, checked.catalog, recordEntry, options.signal), checked.media);
+    for (const file of checked.media) await scanMedia(files, file, options.signal);
+    check(options.signal);
+    return { rows: checked.catalog.tables[0].rows, files: checked.media.length, bytes: checked.manifest.entries.reduce((n, e) => n + e.bytes, 0), fullSiteComplete: false };
+  } catch { throw new VerificationMediaError(false, options.signal?.aborted === true); }
+}
 export async function stageVerificationBundle(
   input: VerificationBundleInput, files: VerificationBundleFiles, target: VerificationImportTarget,
   media: VerificationMediaSession, options: VerificationMediaOptions = {},

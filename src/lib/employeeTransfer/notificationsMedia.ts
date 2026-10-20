@@ -595,6 +595,25 @@ async function scanMedia(files: NotificationsImportFiles, file: NotificationsMed
   if (used !== file.bytes || digest.digestHex() !== file.sha256 || detect(head.subarray(0, Math.min(used, head.length))) !== file.content_type) invalid();
   return output;
 }
+/** Read-only plaintext inspection; callers own workspace cleanup. No media session, target or RPC is used. */
+export async function inspectNotificationsBundle(
+  input: NotificationsBundleInput, files: NotificationsBundleFiles, options: NotificationsMediaOptions = {},
+): Promise<{ rows: number; files: number; bytes: number; fullSiteComplete: false }> {
+  try {
+    check(options.signal);
+    const checked = bundle(input, files);
+    const records = new Map(checked.manifest.entries.filter(e => e.kind === 'ndjson').map(e => [e.path, e]));
+    const refs = new Map<string, NotificationsMediaReference>();
+    for (const table of checked.catalog.tables) await scanRecords(files, table, records.get(notificationsEntryPath(table.key))!, refs, options.signal);
+    matches(sortedRefs(refs), checked.media);
+    for (const file of checked.media) await scanMedia(files, file, options.signal);
+    check(options.signal);
+    return {
+      rows: checked.catalog.tables.reduce((n, table) => n + table.rows, 0), files: checked.media.length,
+      bytes: checked.manifest.entries.reduce((n, e) => n + e.bytes, 0), fullSiteComplete: false,
+    };
+  } catch { throw new NotificationsMediaError(false, options.signal?.aborted === true); }
+}
 export async function stageNotificationsBundle(
   input: NotificationsBundleInput, files: NotificationsBundleFiles, target: NotificationsImportTarget,
   media: NotificationsMediaSession, options: NotificationsMediaOptions = {},

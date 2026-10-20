@@ -432,6 +432,19 @@ export async function exportArchiveBundle(
   });
 }
 
+/** Read-only inspection of an already authenticated workspace; the caller owns workspace cleanup. */
+export async function inspectArchiveBundle(
+  workspace: ArchiveBundleWorkspace, manifest: VolumeManifest, options: ArchiveBundleOptions = {},
+): Promise<{ rows: number; files: number; bytes: number; fullSiteComplete: false }> {
+  // The factory is never used, so no external workspace is registered for cleanup.
+  const run = new Run(options, () => invalid());
+  return run.finish(async () => {
+    bounds(options);
+    const checked = await validateBundle(workspace, manifest, run);
+    return { rows: checked.rows, files: checked.files.length, bytes: checked.bytes, fullSiteComplete: false as const };
+  });
+}
+
 export async function importArchiveBundle(
   file: ReplacementBackupFile, passphrase: string, metadata: TransferMetadata, createWorkspace: ArchiveBundleWorkspaceFactory,
   target: ArchiveBundleImportTarget, options: ArchiveBundleOptions = {},
