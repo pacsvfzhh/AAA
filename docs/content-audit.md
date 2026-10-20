@@ -47,5 +47,12 @@ job 的两种状态：
 - 私有表：`private.content_audit_events`、`content_audit_recipient_versions`、`content_audit_purge_windows`、`deleted_employee_accounts`、`deleted_employee_notifications`、`content_audit_delete_jobs`、`deleted_employee_delete_jobs`、`employee_chat_image_deletion_claims`、`content_audit_storage_origins`、`content_audit_public_media_claims`。
 - 测试：`npm run test:audit-cleanup`（48 项，用 PGlite 执行真实迁移；不覆盖真实 Storage 与并发）。新增相关迁移时，要把文件加进测试的 `files` 清单与 fixture 顺序。
 
+## 全站迁移的只读来源档案（2026-10-20，本地未部署）
+
+- SQL33/34新增独立 `private.employee_transfer_archive_records`，保存原稽核、已删账号、通知及收件版本，另固化旧档案页使用的员工摘要/提款四项记录。按来源站和包隔离，保留原员工与历史操作者身份；不插入既有私有档案表，不联查目标活账号，不重放删除或清理，也不新增删除能力。
+- 原行、金额精度、微秒及SQL NULL/JSON null保留；仅剔除明确凭据/投递领取字段，非秘密历史时间保留。先完整验证、原任务维护绑定暂存、显式分块恢复及实际核对，失败不假称全量回滚。
+- 超管只读 `get_employee_transferred_archive_page` 在记录核验后可用，取消/过期后仍独立核验持久化记录，无需暂存。但**尚未接入本页两个界面，私有证据文件也未搬迁**；来源媒体路径仅留作待迁依赖，`media_pending=true`，不能当完整留证备份。带来源标识的档案视图/附件读取及命名空间再次导出仍待做；已存在迁入快照时旧六表导出明确阻断，不静默遗漏。
+- 原 `content-audit` Edge、既有封存/永久删除流程、桶权限和cron均未改。档案12项真实双站分组及客户端85项、foundation/scope78项通过，既有稽核48项通过；无UI、真实Storage或原生PG/整站验收。细节见迁移计划第36节，未部署正式数据库/Edge/前端。
+
 ## 现状（2026-10-09）
 - 超管已清空两个板块：稽核记录、已删员工档案与通知、私有证据文件、确认暂存、待重试任务均为 0。

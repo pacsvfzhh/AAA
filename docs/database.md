@@ -78,6 +78,14 @@ NOTIFY pgrst, 'reload schema';
 - 七个桶和策略已核对；私有 `content-audit-evidence` 没有浏览器读写策略。现有留证服务不是迁移上传通道，需另做任务绑定的受控服务端接口；未上传、下载或测试 CORS，也未放宽桶权限。
 - 九个 cron 仍启用，`content-audit` 仍为 v14、`verify_jwt=false`。本轮未重验本文件全部历史安全结论；完整检查范围与未通过门槛见 `docs/employee-data-transfer-plan.md` 第 16 节。
 
+## 只读来源档案迁移（2026-10-20，本地未部署）
+
+- 新增SQL33/34及私有RLS表 `employee_transfer_archive_records`（8列），PK为source_site_id/package_id/table_key/source_id。按来源命名空间持久保存四张旧档案表的审核投影和员工摘要/提款只读投影，不把来源UUID映射为目标活身份，不写现有content_audit/deleted_employee表或恢复已删账号。
+- 六表原文导出begin/page/verify/close、同原任务bind/stage/plan、显式begin/chunk/verify/status与 `get_employee_transferred_archive_page` 共12个浏览器RPC，固定SECURITY DEFINER/search_path，均内部验证超管，导出另验密码，导入同时验证原任务及dirty维护。同表/包已有异内容拒绝，事务许可只限新表，不关触发器或改钱；新表ALWAYS维护守卫纳入固定库存，不按技术表豁免。
+- plan/status/持久只读page为STABLE，部分暂存可查未恢复状态，完整恢复后独立核对原文/JSON/数量/摘要才读，取消/过期不删除核验档案。四表全部物理列及JSON空值标记固定；actor_admin_id只接受已审核的本地NOT NULL／正式可空两基线，不改真实表或历史回放基线。
+- 私有证据桶未支持搬迁、页面未接入，所有回执media_pending=true，不标全站完成或启用账号/解除维护。已有迁入档案时六表原生导出明确拒绝；多来源快照再次导出仍待实现，避免静默丢失。
+- 本地561份SQL严格保留原12项历史失败，109根表/967列（private24/public85），非干净建库；foundation59/scope19和档案12个双站用例分组通过，客户端85项通过。无正式库访问或SQL/Edge/前端部署、无Storage/权限/cron变更，真实Storage/原生PG时限/并发及整站验收未做，详见迁移计划第36节。
+
 ## pg_cron 定时任务（时间为 UTC；2026-10-09 最近一次运行均成功）
 | 正式任务名 | 频率 | 调用 | 用途 | 定义迁移 |
 |---|---|---|---|---|
