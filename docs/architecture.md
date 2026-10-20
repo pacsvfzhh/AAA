@@ -60,6 +60,8 @@
 | `employeeTransfer/notificationsConfigurationApi.ts`、`notificationsBackup.ts` | 同包通知配置对应与历史冲突计划→显式冻结13表记录备份→独立密文保存→清明文→整卷回读/行摘要核验→第三遍密文上传封存；8MiB明文/9MiB密文，动态加载容器，公开副本不改绑定，确认后才计进度。取消/结果不明无自动重试或回滚，sealed密文由原超管新会话取回。独立私有表不占原派单备份；无实际媒体、业务apply/自动化恢复或维护放行，无UI、未部署，见计划第32节 |
 | `employeeTransfer/notificationsMedia.ts`、`notificationsRestoreApi.ts` | SQL26/27通知13表与三桶实际图片/影片/附件迁移、受控Edge/哈希/代次/URL改写，以及独立封存备份后的同名配置来源覆盖和分块历史恢复。保持方案/任务暂停、员工停用与dirty维护；收件留证保留，循环外键分阶段链接，投递序列换算但不发送/发奖。完整回执与status后显式续接，不自动写重试；无UI、真实Storage或全站放行，未部署，见计划第33节 |
 | `employeeTransfer/chatTransfer.ts`、`chatApi.ts` | site-chat-v1十表固定原文导出、同包identity/finance绑定、双遍验证后不可变暂存及服务端角色合并只读预检；包含空角色/未引用模板、富卡及评分，SQL NULL/JSON null与精度保真。角色按服务器管理员映射/服务类型匹配，歧义、多旧合一、可见性差集和错链显式报告；目标漂移改变计划。每次重新取会话、真实确认后计进度，无自动写重试；无业务apply/媒体上传或URL改写，can_restore=false，账号停用/dirty维护继续，无UI、未部署，见计划第34节 |
+| `employeeTransfer/chatBackup.ts`、`chatMergeApi.ts` | SQL30全部角色显式决定与独立目标十表记录备份；同管理员/工作区映射，独立密文保存→完整认证回读→第三遍上传封存，8MiB明文/9MiB密文。目标NULL可见性数组原文保留，sealed跨取消/过期由原超管新会话取回，不占派单/通知备份；不包含旧媒体，无UI，未部署 |
+| `employeeTransfer/chatMedia.ts`、`chatRestoreApi.ts` | SQL31/32四桶受控实际图片/头像/富卡文件传输、原文URL字面改写，以及备份封存后的十表分块合并/完整核对。目标角色设置及原历史保留、工单/备注/内容复用、相同消息UUID异内容阻断；仅消息冻结触发器精确旁路/恢复，不重复打赏。每批真实generation，最后回读再verify；status后显式续接，无自动写重试/启用/dirty维护解除。头像5MiB、文件50MiB/3000个/总1GiB，无UI或真实Storage/整站验收，未部署，见计划第35节 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |

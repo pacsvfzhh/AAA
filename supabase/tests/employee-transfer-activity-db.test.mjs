@@ -3174,6 +3174,79 @@ test('chat restore: backup is an independent real encrypted file authenticated s
   assert.ok(backupId); assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); await stillClosed();
 }));
 
+test('chat restore: rating comments remain literal text through raw staging media inventory and restored SQL JSON while nested media fails closed', { timeout: 400000 }, () => transaction(async () => {
+  const key = 'customer_employee_conversations', commentUrl = 'https://comment-only.invalid/path/picture.png?value=100%&next=data';
+  const comments = ['100% satisfied', '服務:很好', 'good data', `僅文字URL ${commentUrl} 𠮷 é é`];
+  const cases = comments.map((comment, no) => ({ id: chatMessageId(no + 3), comment,
+    raw: `{"comment":${JSON.stringify(comment)},"precise":${PRECISE},"nested":{"precise":${PRECISE},"children":[{"id":"left"},{"id":"right"}]}}` }));
+  // Parse only the row envelope. Insert the rating JSON lexically, never stringify a rounded JS number.
+  const preciselexical = (line, raw) => JSON.stringify({ ...JSON.parse(line), rating_data: '__rating_comment_raw__', rating_data_sql_null: false })
+    .replace('"__rating_comment_raw__"', raw) + '\n';
+  const inputFor = (bad = null) => changedChat({ [key]: text => lines(text).slice(0, 6).map(line => {
+    const rowId = JSON.parse(line).id, item = cases.find(item => item.id === rowId);
+    return item ? preciselexical(line, bad !== null && rowId === cases[0].id ? bad : item.raw) : line;
+  }).join('') });
+  const input = inputFor(), before = await business(), sourceBefore = await business(source), original = await triggers(), outside = await crOutside();
+  const prerequisites = { identity: (await state()).identity_restore, finance: (await state()).finance_restore };
+  assert.equal(prerequisites.identity.verified, true); assert.equal(prerequisites.finance.verified, true);
+  function bundleFor(value) {
+    const mediaFiles = crFiles(value), payload = new Map(KEYS.chat.map(table => [modules.chatEntryPath(table), Buffer.from(value.texts[table])]));
+    for (const file of mediaFiles) payload.set(modules.chatMediaEntryPath(file), crBytes(file.source_url));
+    const manifest = { version: 1, exportId: packageId, volumeId: randomUUID(), sourceSiteId: value.catalog.site_id,
+      createdAt: '2026-10-20T00:00:00.000Z', scope: 'replacement-backup', volumeIndex: 1, volumeCount: 1,
+      entries: [...payload].map(([path, bytes]) => ({ path, kind: path.startsWith('data/') ? 'ndjson' : 'media', bytes: bytes.length, sha256: hash(bytes) })) };
+    let discarded = 0;
+    return { input: { catalog: value.catalog, media: { version: 1, scope: 'site-chat-media', chat_catalog: value.catalog,
+      files: mediaFiles, full_site_complete: false }, manifest }, discarded: () => discarded,
+    files: { paths: () => [...payload.keys()], open(path) { return (async function* () {
+      const raw = payload.get(path); assert.ok(raw, path); for (let at = 0; at < raw.length; at += 37) yield raw.subarray(at, at + 37);
+    })(); }, async abort() { discarded++; payload.clear(); } } };
+  }
+  for (const [label, raw] of [
+    ['unknown media_url', `{"comment":"100% satisfied","precise":${PRECISE},"media_url":${JSON.stringify(commentUrl)}}`],
+    ['comment object with nested media', `{"precise":${PRECISE},"comment":{"nested":{"media_url":${JSON.stringify(CR_URLS.html)}}}}`],
+    ['comment array with nested media', `{"precise":${PRECISE},"comment":[{"nested":{"src":${JSON.stringify(CR_URLS.html)}}}]}`],
+  ]) await chatSavepoint(async () => {
+    const bad = inputFor(raw), bundle = bundleFor(bad), saved = await transferSnapshot(); transport();
+    const target = modules.createChatImportSession(task.job_token).target;
+    await assert.rejects(modules.stageChatBundle(bundle.input, bundle.files, target, crMediaClient(bad)), error => {
+      assert.equal(error.name, 'ChatMediaError', label); assert.equal(error.serverStagingOrUploadsMayExist, false, label); return true;
+    });
+    assert.equal(bundle.discarded(), 1, label); assert.deepEqual(await transferSnapshot(), saved, `${label}: bundle staging fails before any server write`);
+    // The raw-record RPC stores untrusted JSON; independent SQL31 inventory/bind must still refuse it.
+    await cstage(bad); assert.deepEqual(await business(), before, label);
+    await crRejectUnchanged([
+      () => rpc('get_employee_transfer_chat_media', { ...auth(), p_direction: 'import' }),
+      () => rpc('employee_import_chat_media_bind', { ...auth(), p_files: crFiles(bad) }),
+    ], /Chat rating JSON contains unsupported media/i);
+  });
+  transport(); const bundle = bundleFor(input), target = modules.createChatImportSession(task.job_token).target;
+  const staged = await modules.stageChatBundle(bundle.input, bundle.files, target, crMediaClient(input));
+  assert.equal(bundle.discarded(), 1); assert.equal(staged.rows, Object.values(ccounts(input)).reduce((sum, n) => sum + n, 0));
+  assert.equal(staged.files, 3); assert.deepEqual(staged.plan.conflicts, []); assert.deepEqual(await business(), before);
+  const inventory = await rpc('get_employee_transfer_chat_media', { ...auth(), p_direction: 'import' });
+  assert.deepEqual(inventory.files.map(file => file.key), crFiles(chat).map(file => file.key), 'comment text, including URL-looking text, adds no file');
+  assert.equal(inventory.files.some(file => file.source_url === commentUrl), false);
+  assert.equal(await scalar(db, `SELECT payload->>'ndjson' FROM private.employee_transfer_staging
+    WHERE job_id=$1 AND table_key='chat-in:customer_employee_conversations' AND chunk_no=0`, [task.job_id]), input.texts[key], 'raw NDJSON is staged byte-for-byte');
+  const old = await crBefore(), p = await crPlan(crDecisions(input)), backup = await crSeal(input, p);
+  assert.deepEqual(p.conflicts, []); assert.equal((await crRestore({ input, p, backup })).verified, true);
+  await crAssertRows({ input, p }, old);
+  for (const line of lines(input.texts[key])) {
+    const row = JSON.parse(line);
+    assert.equal(await scalar(db, `SELECT rating_data IS NOT DISTINCT FROM CASE WHEN ($2::jsonb->>'rating_data_sql_null')::boolean
+      THEN NULL::jsonb ELSE $2::jsonb->'rating_data' END FROM public.customer_employee_conversations WHERE id=$1`, [row.id, line]), true, `${row.id}: exact SQL JSON value`);
+    assert.equal(await scalar(db, 'SELECT rating_data IS NULL FROM public.customer_employee_conversations WHERE id=$1', [row.id]), row.rating_data_sql_null, `${row.id}: SQL NULL marker`);
+  }
+  for (const item of cases) {
+    assert.equal(await scalar(db, `SELECT convert_to(rating_data->>'comment','UTF8')=convert_to($2,'UTF8')
+      AND rating_data->>'precise'=$3 AND rating_data#>>'{nested,precise}'=$3
+      FROM public.customer_employee_conversations WHERE id=$1`, [item.id, item.comment, PRECISE]), true, `${item.comment}: UTF8 comment and both precise numeric values preserved`);
+  }
+  assert.deepEqual(await crOutside(), outside); assert.deepEqual(await business(source), sourceBefore); assert.deepEqual(await triggers(), original);
+  assert.deepEqual({ identity: (await state()).identity_restore, finance: (await state()).finance_restore }, prerequisites); await stillClosed();
+}));
+
 test('chat restore: media inventories fixed HTML real and virtual avatars rich cards with exact service ACL and fail-closed encoded JSON references', { timeout: 300000 }, () => transaction(async () => {
   const input = crInput({}, { small: true }), before = await business(), original = await triggers();
   for (const changes of [
