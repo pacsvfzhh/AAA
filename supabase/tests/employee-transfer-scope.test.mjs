@@ -39,10 +39,10 @@ function assertIntent(key, mode, patterns) {
 }
 
 test('stage A inventory is deeply frozen schema metadata, not export permission or implemented transforms', () => {
-  assert.equal(inventory.length, 107, 'new roots require explicit inventory review');
-  assert.equal(inventory.reduce((count, table) => count + table.columns.length, 0), 948);
-  assert.equal(new Set(inventory.map(keyOf)).size, 107);
-  assert.equal(inventory.filter(table => table.schema === 'private').length, 22);
+  assert.equal(inventory.length, 108, 'new roots require explicit inventory review');
+  assert.equal(inventory.reduce((count, table) => count + table.columns.length, 0), 959);
+  assert.equal(new Set(inventory.map(keyOf)).size, 108);
+  assert.equal(inventory.filter(table => table.schema === 'private').length, 23);
   assert.equal(inventory.filter(table => table.schema === 'public').length, 85);
   assert.match(TRANSFER_SCOPE_COVERAGE_NOTICE, /阶段A覆盖库存/);
   assert.match(TRANSFER_SCOPE_COVERAGE_NOTICE, /不是导出授权白名单/);
@@ -79,7 +79,7 @@ test('pure validator accepts the explicit snapshot irrespective of catalog row o
   const actual = snapshot().reverse();
   for (const table of actual) table.columns.reverse();
   const before = structuredClone(actual);
-  assert.deepEqual(assertTransferScopeCoverage(actual), { tableCount: 107, columnCount: 948, exportAuthorized: false });
+  assert.deepEqual(assertTransferScopeCoverage(actual), { tableCount: 108, columnCount: 959, exportAuthorized: false });
   assert.deepEqual(actual, before);
   assertTransferScopeCoverage(inventory);
 });
@@ -122,7 +122,7 @@ test('pure validator rejects added, removed and renamed columns on every root', 
   }
 });
 
-test('pure validator detects type and nullable changes for all 948 columns', () => {
+test('pure validator detects type and nullable changes for all 959 columns', () => {
   const actual = snapshot();
   for (const table of actual) {
     for (const column of table.columns) {
@@ -294,12 +294,12 @@ test('inventory rebuilds or excludes sessions, security locks, tooling, cron que
   assertIntent('public.wallet_reconciliation_queue', 'rebuild', [/先验证已迁钱包/, /基准/, /账本/, /pending提款/]);
 });
 
-test('strict local replay attempts all migrations once and matches the fixed 107-root coverage inventory', { timeout: 180_000 }, async t => {
+test('strict local replay attempts all migrations once and matches the fixed 108-root coverage inventory', { timeout: 180_000 }, async t => {
   const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(name => name.endsWith('.sql')).sort();
   const result = await replayMigrations({ strict: true });
   try {
     assert.deepEqual(result.files, diskFiles, 'no skipped, truncated or selected migration replay');
-    assert.equal(result.files.length, 556, 'migration baseline changed: review before updating the inventory');
+    assert.equal(result.files.length, 559, 'migration baseline changed: review before updating the inventory');
     assert.equal(EXPECTED_REPLAY_FAILURES.length, 12);
     assert.deepEqual(result.failures, EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message })));
     assert.equal(result.validation.matched.length, 12);
@@ -348,8 +348,8 @@ test('strict local replay attempts all migrations once and matches the fixed 107
       GROUP BY namespace.nspname, relation.relname
       ORDER BY namespace.nspname, relation.relname
     `);
-    assert.equal(actualTables.length, 107);
-    assert.deepEqual(assertTransferScopeCoverage(actualTables), { tableCount: 107, columnCount: 948, exportAuthorized: false });
+    assert.equal(actualTables.length, 108);
+    assert.deepEqual(assertTransferScopeCoverage(actualTables), { tableCount: 108, columnCount: 959, exportAuthorized: false });
     const { rows: partitions } = await result.db.query(`
       SELECT relation.relname FROM pg_catalog.pg_class AS relation
       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -357,7 +357,7 @@ test('strict local replay attempts all migrations once and matches the fixed 107
     `);
     assert.ok(partitions.length > 0, 'partition children exist but must not count as roots');
     assert.ok(!inventory.some(table => partitions.some(partition => partition.relname === table.name)));
-    t.diagnostic(`${result.files.length} migrations attempted; ${result.failures.length} exact known failures retained; 107 roots / 948 columns match. Coverage inventory only, NOT a clean build or implemented full-site transfer.`);
+    t.diagnostic(`${result.files.length} migrations attempted; ${result.failures.length} exact known failures retained; 108 roots / 959 columns match. Coverage inventory only, NOT a clean build or implemented full-site transfer.`);
   } finally {
     await result.db.close();
   }

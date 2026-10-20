@@ -44,6 +44,9 @@ const criticalMigrations = [
   '20261102000027_restore_site_notifications.sql',
   '20261102000028_export_stage_site_chat.sql',
   '20261102000029_plan_site_chat_merge.sql',
+  '20261102000030_prepare_chat_merge.sql',
+  '20261102000031_transfer_chat_media.sql',
+  '20261102000032_restore_site_chat.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -74,7 +77,7 @@ function resource({ exec = async () => {}, dump = async () => new Blob(), ready 
 const transferTables = [
   'employee_transfer_site', 'employee_transfer_jobs', 'employee_transfer_events',
   'employee_transfer_staging', 'employee_transfer_excluded_columns', 'employee_transfer_trigger_policy',
-  'employee_transfer_shared_backups', 'employee_transfer_notification_backups', 'employee_transfer_maintenance', 'employee_transfer_write_permits',
+  'employee_transfer_shared_backups', 'employee_transfer_notification_backups', 'employee_transfer_chat_backups', 'employee_transfer_maintenance', 'employee_transfer_write_permits',
 ];
 const publicFunctions = [
   'employee_transfer_cancel(uuid,uuid)', 'get_employee_transfer_log(uuid,integer)',
@@ -153,12 +156,20 @@ const publicFunctions = [
   'employee_export_chat_verify(uuid,uuid)', 'employee_export_chat_close(uuid,uuid)',
   'employee_import_chat_bind(uuid,uuid,jsonb)', 'employee_import_chat_stage(uuid,uuid,text,integer,text)',
   'get_employee_import_chat_plan(uuid,uuid)',
+  'get_employee_import_chat_merge_plan(uuid,uuid,jsonb)', 'employee_import_chat_backup_prepare(uuid,uuid,text,jsonb)',
+  'get_employee_import_chat_backup_page(uuid,uuid,uuid,text,text,integer)', 'employee_import_chat_backup_verify(uuid,uuid,uuid)',
+  'employee_import_chat_backup_append(uuid,uuid,uuid,integer,text)', 'employee_import_chat_backup_seal(uuid,uuid,uuid,text,integer)',
+  'get_employee_chat_saved_backup_chunk(uuid,uuid,integer)', 'get_employee_transfer_chat_media(uuid,uuid,text)',
+  'employee_import_chat_media_bind(uuid,uuid,jsonb)', 'employee_import_chat_begin(uuid,uuid,text)',
+  'employee_import_chat_chunk(uuid,uuid,integer)', 'employee_import_chat_verify(uuid,uuid)', 'get_employee_import_chat_restore_status(uuid,uuid)',
 ];
 const serviceOnlyFunctions = [
   'employee_transfer_verification_media_authorize(uuid,uuid,text,text)',
   'employee_transfer_verification_media_commit(uuid,uuid,text,text,integer,text,text,text,text)',
   'employee_transfer_notification_media_authorize(uuid,uuid,text,text)',
   'employee_transfer_notification_media_commit(uuid,uuid,text,text,integer,text,text,text,text)',
+  'employee_transfer_chat_media_authorize(uuid,uuid,text,text)',
+  'employee_transfer_chat_media_commit(uuid,uuid,text,text,integer,text,text,text,bigint)',
 ];
 
 async function checkCatalog(db) {
