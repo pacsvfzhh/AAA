@@ -169,11 +169,11 @@ function parseNavigationPreferences(value: unknown): NavigationPreferences {
 
   const parsed = value as { order?: unknown; labels?: unknown };
   const order = Array.isArray(parsed.order)
-    ? parsed.order.filter((entry): entry is AdminTabId => typeof entry === 'string')
+    ? parsed.order.filter((entry): entry is AdminTabId => typeof entry === 'string' && entry !== 'datamigration')
     : [];
   const labels = parsed.labels && typeof parsed.labels === 'object'
     ? Object.fromEntries(
-        Object.entries(parsed.labels).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+        Object.entries(parsed.labels).filter((entry): entry is [string, string] => entry[0] !== 'datamigration' && typeof entry[1] === 'string')
       ) as Partial<Record<AdminTabId, string>>
     : {};
 
