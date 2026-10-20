@@ -2920,7 +2920,7 @@ async function crSeal(input, p, { afterSeal } = {}) {
       assert.equal(authenticated.get(modules.chatEntryPath(key)).toString(), expected, `${key}: real target backup bytes`);
     }
     assert.deepEqual(await crOtherBackups(), others);
-    if (afterSeal) await afterSeal({ client, descriptor: bundle.descriptor, saved, cipher, path });
+    if (afterSeal) await afterSeal({ client, descriptor: bundle.descriptor, saved, cipher, path, authenticated });
     return bundle.descriptor;
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
@@ -2965,10 +2965,15 @@ async function crAssertRows({ input, p }, original) {
       customer_id: proposal.number, custom_avatar_url: crRewrite(row.custom_avatar_url, input), customer_avatar: crRewrite(row.customer_avatar, input) }, 'id=$1', [proposal.target_id]);
     else {
       const old = original.simulated_customers.find(item => JSON.parse(item.body).id === proposal.target_id); assert.ok(old);
-      const before = JSON.parse(old.body), visible = [...(before.target_employee_ids ?? [])];
-      if (proposal.allow_visibility && visible.length) for (const employee of proposal.visibility_employee_ids) if (!visible.includes(employee)) visible.push(employee);
+      const before = JSON.parse(old.body), visible = before.target_employee_ids;
+      const additions = p.roles.filter(role => role.target_id === proposal.target_id && role.allow_visibility).flatMap(role => role.visibility_employee_ids);
       const actual = await scalar(db, 'SELECT to_jsonb(r)::text FROM public.simulated_customers r WHERE id=$1', [proposal.target_id]);
-      const actualRole = JSON.parse(actual); assert.deepEqual([...(actualRole.target_employee_ids ?? [])].sort(), [...visible].sort());
+      const actualRole = JSON.parse(actual);
+      if (Array.isArray(visible) && visible.length && additions.length) {
+        // UUID union is order-independent, but retain NULL members: [NULL] is NOT unrestricted [].
+        assert.ok(Array.isArray(actualRole.target_employee_ids));
+        assert.deepEqual([...actualRole.target_employee_ids].sort(), [...new Set([...visible, ...additions])].sort());
+      } else assert.deepEqual(actualRole.target_employee_ids, visible, 'without additions preserve SQL NULL, [] and nullable arrays exactly');
       // Preserve timestamps and all other business attributes on a merge, not just name/avatar.
       assert.equal(await scalar(db, 'SELECT ($1::jsonb-\'target_employee_ids\')::text', [actual]), await scalar(db, 'SELECT ($1::jsonb-\'target_employee_ids\')::text', [old.body]));
     }
@@ -3267,6 +3272,53 @@ test('chat restore: denied visibility preserves all original role attributes wit
   assert.deepEqual(await triggers(), original); await stillClosed();
 }));
 
+test('chat restore: nullable target visibility survives real encrypted backup and confirmed merges without widening unselected roles', { timeout: 590000 }, () => transaction(async () => {
+  const input = crInput({}, { small: true }), sourceBefore = await business(source);
+  const outside = await crOutside(), original = await triggers(), others = await crOtherBackups();
+  // Four genuine restores, each isolated back to the authentic identity/finance-verified fixture.
+  for (const visibility of [[null], [F.history, null]]) for (const allowVisibility of [false, true]) await chatSavepoint(async () => {
+    const label = `${JSON.stringify(visibility)} / allow_visibility=${allowVisibility}`;
+    await localChange(db, 'public.simulated_customers', `UPDATE public.simulated_customers SET target_employee_ids=$2::uuid[],target_employee_id=$3
+      WHERE id=ANY($1::uuid[])`, [[CH.targetExact, CH.targetAmbiguousA], visibility, F.empty]);
+    const old = await crBefore(), decisions = crDecisions(input, { [CH.exact]: { allow_visibility: allowVisibility } });
+    await cstage(input); const p = await crPlan(decisions); assert.deepEqual(p.conflicts, [], label);
+    const role = p.roles.find(role => role.source_id === CH.exact);
+    assert.deepEqual(role.visibility_employee_ids, visibility.includes(F.history) ? [F.noHeartbeat] : [F.history, F.noHeartbeat], label);
+    assert.equal(p.roles.some(role => role.target_id === CH.targetAmbiguousA), false, 'nullable unselected role must still be backed up');
+    let originalSnapshot;
+    const backup = await crSeal(input, p, { async afterSeal({ descriptor, authenticated }) {
+      const key = 'simulated_customers', text = authenticated.get(modules.chatEntryPath(key)).toString();
+      originalSnapshot = await scalar(db, `SELECT payload->>'ndjson' FROM private.employee_transfer_staging
+        WHERE job_id=$1 AND table_key='chat-backup:simulated_customers' AND chunk_no=0`, [task.job_id]);
+      assert.equal(text, originalSnapshot, `${label}: authenticated disk bytes equal untouched server snapshot`);
+      for (const roleId of [CH.targetExact, CH.targetAmbiguousA]) {
+        const line = lines(text).find(line => JSON.parse(line).id === roleId); assert.ok(line, label);
+        assert.deepEqual(JSON.parse(line).target_employee_ids, visibility, `${label}: original NULL array retained in ciphertext`);
+        assert.equal(modules.validateChatBackupRow(line, key), roleId);
+        assert.throws(() => modules.validateChatRow(line, key), /Invalid dispatch\/submission transfer response/i, 'source-row validator must remain strict');
+        await assert.rejects(cchunk(key, 0, line), /Invalid chat import row/i);
+      }
+      assert.equal(await scalar(db, 'SELECT sealed_at IS NOT NULL AND byte_count>0 FROM private.employee_transfer_chat_backups WHERE id=$1', [descriptor.backup_id]), true);
+    } });
+    const files = crFiles(input), media = crMediaClient(input); await media.bind(files); await crMedia(input);
+    const prepared = { input, p, backup }; assert.equal((await crRestore(prepared)).verified, true, label);
+    await crAssertRows(prepared, old);
+    const actual = await scalar(db, 'SELECT target_employee_ids FROM public.simulated_customers WHERE id=$1', [CH.targetExact]);
+    const expected = allowVisibility ? [...new Set([...visibility, F.history, F.noHeartbeat])] : visibility;
+    assert.deepEqual([...actual].sort(), [...expected].sort(), label); assert.equal(actual.filter(value => value === null).length, 1, label);
+    if (!allowVisibility) assert.deepEqual(actual, visibility, 'denied visibility does not normalize or reorder NULL arrays');
+    assert.deepEqual(await scalar(db, 'SELECT target_employee_ids FROM public.simulated_customers WHERE id=$1', [CH.targetAmbiguousA]), visibility);
+    for (const employee of EMPLOYEES) for (const [roleId, allowed] of [[CH.targetExact, expected], [CH.targetAmbiguousA, visibility]]) {
+      assert.equal(await scalar(db, `SELECT ((COALESCE(cardinality(target_employee_ids),0)=0 OR $2::uuid=ANY(target_employee_ids)) IS TRUE)
+        FROM public.simulated_customers WHERE id=$1`, [roleId, employee]), allowed.includes(employee), `${label}: actual NULL-aware visibility for ${employee}`);
+    }
+    assert.equal(await scalar(db, `SELECT payload->>'ndjson' FROM private.employee_transfer_staging WHERE job_id=$1
+      AND table_key='chat-backup:simulated_customers' AND chunk_no=0`, [task.job_id]), originalSnapshot, 'restore never rewrites the backup NULL members');
+    assert.deepEqual(await crOtherBackups(), others); assert.deepEqual(await crOutside(), outside); assert.deepEqual(await triggers(), original); await stillClosed();
+  });
+  assert.deepEqual(await business(source), sourceBefore); assert.deepEqual(await crOtherBackups(), others);
+}));
+
 test('chat restore: empty source tables consume all ten explicit zero-row SQL chunks and preserve all target rows', { timeout: 300000 }, () => transaction(async () => {
   const input = crInput({}, { empty: true }), before = await business(), original = await triggers(), prepared = await crReady(input, []);
   const begin = crReceipt(await crBegin(prepared.p), input, 'begin'); assert.equal(begin.total_chunks, 10); assert.equal(begin.next_chunk, 0);
@@ -3325,7 +3377,36 @@ test('chat restore: read-before-generation receipts cannot commit late and final
   for (const file of files.slice(0, -1)) await crCommit(file, 'recheck-import');
   await crCommit(files.at(-1), 'upload'); await crRejectUnchanged([() => crVerify()], /media|readback/i);
   transport(); await crMediaClient(prepared.input).recheckImport(files);
-  const result = crReceipt(await crVerify(), prepared.input, 'verify'); assert.equal(result.verified, true);
+  const result = crReceipt(await crVerify(), prepared.input, 'verify'); assert.equal(result.verified, true); assert.equal(result.repeated, false);
+  const audit = () => rows(db, `SELECT action,kind,admin_id,admin_username,details FROM private.employee_transfer_events
+    WHERE job_id=$1 AND action=ANY(ARRAY['chat_restore_started','chat_chunk_restored','chat_restore_verified']) ORDER BY id`, [task.job_id]);
+  const expectedAudit = [
+    ['chat_restore_started', { plan_hash: prepared.p.plan_hash, backup_id: prepared.backup.backup_id, total_chunks: completed.total_chunks, full_site_complete: false }],
+    ...crWork(input).map((work, no) => ['chat_chunk_restored', { table_key: work.key, chunk_no: no, rows: work.rows, generation: String(no + 1), full_site_complete: false }]),
+    ['chat_restore_verified', { counts: ccounts(input), generation: completed.generation, full_site_complete: false }],
+  ].map(([action, details]) => ({ action, kind: 'import', admin_id: NEW.root, admin_username: 'root', details }));
+  const firstAudit = await audit();
+  assert.deepEqual(firstAudit, expectedAudit, 'first begin, every committed chunk and first verify each have exactly one metadata-only audit');
+  assert.doesNotMatch(JSON.stringify(firstAudit), /聊天原文|原角色備註|富卡原文|原標題|評語|message_content|rating_data|html_content|source_url|ndjson|password|token|https?:\/\//i);
+  const repeated = [() => crBegin(prepared.p), () => crChunk(completed.total_chunks - 1), () => crStatus(), () => crVerify()];
+  const ready = final => scalar(db, 'SELECT private.employee_transfer_chat_media_ready(j,$2) FROM private.employee_transfer_jobs j WHERE id=$1', [task.job_id, final]);
+  const lastApply = (await state()).chat_restore.last_apply_at;
+  // Deliberately corrupt only a local technical media receipt, never identity/finance verification or a business row.
+  for (const [label, path, value] of [
+    ['old generation', 'generation', String(Number(completed.generation) - 1)],
+    ['read before last apply', 'checked_at', lastApply],
+  ]) await chatSavepoint(async () => {
+    const expression = path === 'generation' ? 'to_jsonb($3::text)' : "to_jsonb(($3::timestamptz-interval '1 microsecond')::text)";
+    const changed = await db.query(`UPDATE private.employee_transfer_staging SET payload=jsonb_set(payload,ARRAY[$2::text],${expression})
+      WHERE job_id=$1 AND employee_id='00000000-0000-0000-0000-000000000000' AND table_key='chat-media:import' AND chunk_no=$4
+      RETURNING chunk_no`, [task.job_id, path, value, files.length - 1]);
+    assert.equal(changed.rows.length, 1, label); assert.equal((await state()).chat_restore.verified, true, label);
+    assert.equal(await ready(false), true, `${label}: initial media gate still passes`); assert.equal(await ready(true), false, `${label}: final readback is stale`);
+    await crRejectUnchanged(repeated, /Final chat media readback is incomplete/i);
+    assert.deepEqual(await audit(), firstAudit, `${label}: refused repeats do not claim success or write audit events`);
+  });
+  for (const action of repeated) assert.equal((await action()).repeated, true, 'valid repeated calls remain idempotent');
+  assert.deepEqual(await audit(), firstAudit, 'successful repeats do not duplicate initial audit events');
   const saved = await transferSnapshot(), before = await business(), api = modules.createChatRestoreSession(task.job_token, prepared.input.catalog);
   await db.exec('SET TRANSACTION READ ONLY'); const status = crReceipt(await api.status(), prepared.input, 'status'); assert.equal(status.repeated, true);
   assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before);
