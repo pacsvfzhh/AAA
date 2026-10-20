@@ -131,6 +131,7 @@ const catalog = (fixture = fixtures.a, args = {}, role) => readRpc(`${PREFIX}cat
 const page = (hash, key = TABLES[0], fixture = fixtures.a, args = {}, role) => readRpc(`${PREFIX}page`,
   { ...argsFor(fixture), p_snapshot_hash: hash, p_table_key: key, ...args }, role);
 const verify = (hash, fixture = fixtures.a, args = {}, role) => readRpc(`${PREFIX}verify`, { ...argsFor(fixture), p_snapshot_hash: hash, ...args }, role);
+const media = (hash, fixture = fixtures.a, args = {}, role) => readRpc(`${PREFIX}media`, { ...argsFor(fixture), p_snapshot_hash: hash, ...args }, role);
 async function isolated(fn) {
   await db.exec('BEGIN'); inside = true;
   try { await fn(); } finally { inside = false; await db.exec('ROLLBACK'); }
@@ -139,10 +140,12 @@ async function rejectsAll(fixture, hash, pattern, args = {}) {
   await assert.rejects(catalog(fixture, args), pattern);
   await assert.rejects(page(hash, TABLES[0], fixture, args), pattern);
   await assert.rejects(verify(hash, fixture, args), pattern);
+  await assert.rejects(media(hash, fixture, args), pattern);
 }
 async function rejectsSnapshot(hash, fixture = fixtures.a) {
   await assert.rejects(page(hash, TABLES[0], fixture), /snapshot changed or is invalid/);
   await assert.rejects(verify(hash, fixture), /snapshot changed or is invalid/);
+  await assert.rejects(media(hash, fixture), /snapshot changed or is invalid/);
 }
 before(async () => {
   mock.method(globalThis, 'fetch', () => assert.fail('All network/production/Storage requests are forbidden'));
@@ -168,6 +171,7 @@ test('SQL38 installs after strict SQL37 replay, with exactly the 12 known histor
 });
 for (const [name, types, defaults] of [
   ['catalog', 'uuid,uuid,uuid', 0], ['page', 'uuid,uuid,uuid,text,text,text,integer', 2], ['verify', 'uuid,uuid,uuid,text', 0],
+  ['media', 'uuid,uuid,uuid,text', 0],
 ]) test(`${name} is STABLE SECURITY DEFINER, fixed search_path, anon/authenticated only`, async () => {
   const signature = `public.${PREFIX}${name}(${types})`;
   const p = (await db.query(`SELECT provolatile,prosecdef,proconfig,proacl::text,pronargdefaults,pg_get_expr(proargdefaults,0) AS defaults FROM pg_proc WHERE oid=$1::regprocedure`, [signature])).rows[0];
@@ -192,7 +196,7 @@ test('private snapshot helper and persisted tables cannot be called or read by b
   }
 });
 for (const name of ['missing', 'random', 'secondary', 'emergency', 'revoked', 'expired', 'inactive', 'demoted'])
-  test(`all three RPCs reject ${name} administrator session`, async () => isolated(async () => {
+  test(`all four RPCs reject ${name} administrator session`, async () => isolated(async () => {
     const token = ({ missing: null, random: id(999), secondary: branch, emergency })[name];
     if (name === 'revoked') await db.query('UPDATE public.admin_financial_sessions SET revoked_at=now() WHERE admin_id=$1', [id(1)]);
     if (name === 'expired') await db.query(`UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 day' WHERE admin_id=$1`, [id(1)]);
@@ -201,11 +205,12 @@ for (const name of ['missing', 'random', 'secondary', 'emergency', 'revoked', 'e
     await rejectsAll(fixtures.a, 'a'.repeat(64), /session|permission|administrator/i,
       { p_admin_session_token: token === undefined ? session : token });
   }));
-test('service_role cannot call any of the three public RPCs even with a valid super-admin token', async () => {
+test('service_role cannot call any of the four public RPCs even with a valid super-admin token', async () => {
   const hash = (await catalog()).snapshot_hash;
   await assert.rejects(catalog(fixtures.a, {}, 'service_role'), /permission denied/);
   await assert.rejects(page(hash, TABLES[0], fixtures.a, {}, 'service_role'), /permission denied/);
   await assert.rejects(verify(hash, fixtures.a, {}, 'service_role'), /permission denied/);
+  await assert.rejects(media(hash, fixtures.a, {}, 'service_role'), /permission denied/);
 });
 test('catalog strictly returns the original SQL34 catalog and complete SHA256 snapshot binding', async () => {
   const result = await catalog(); assert.deepEqual(Object.keys(result).sort(), ['catalog', 'snapshot_hash']);
@@ -217,6 +222,80 @@ test('catalog strictly returns the original SQL34 catalog and complete SHA256 sn
   assert.deepEqual(await catalog(), result); assert.deepEqual(await catalog(fixtures.a, {}, 'authenticated'), result);
   assert.deepEqual(await verify(result.snapshot_hash, fixtures.a, {}, 'authenticated'), RECEIPT);
 });
+test('media returns the exact export inventory with original refs and bound tuples, never target Storage paths', async () => {
+  const { snapshot_hash: hash } = await catalog(fixtures.b);
+  const state = await sidecarFor(fixtures.b.job);
+  const keys = state.refs.map(ref => ref.key);
+  const expected = { version: 1, scope: 'site-archives-media', direction: 'export', archives_catalog: fixtures.b.catalog,
+    files: state.refs.map((ref, n) => ({ ...ref, file: state.files[n] })), bound: true, verified: true,
+    transferred: keys, checked: keys, full_site_complete: false };
+  const inventory = await media(hash, fixtures.b);
+  assert.equal(inventory.files.length, 3); assert.deepEqual(inventory, expected);
+  assert.deepEqual(await media(hash, fixtures.b, {}, 'authenticated'), expected);
+  assert.deepEqual(await catalog(fixtures.b), { catalog: fixtures.b.catalog, snapshot_hash: hash });
+  for (const ref of inventory.files) {
+    assert.equal(ref.path, ref.ref_value); assert.equal(ref.bucket, 'content-audit-evidence');
+    assert.deepEqual(ref.file, state.receipts[ref.key].file);
+    assert.notEqual(ref.path, state.receipts[ref.key].path);
+    assert.equal(ref.source_line_sha256, sha(lines(fixtures.b.texts[TABLES[0]]).find(line => JSON.parse(line).id === ref.event_id)));
+  }
+  assert.doesNotMatch(JSON.stringify(inventory), /transfer-archives\/|fixture\.supabase\.co|"receipts"|"generation"|"storage_origin"/);
+});
+test('verified empty media inventories are explicit export inventories for both empty and nonempty records', async () => {
+  for (const fixture of [fixtures.a, fixtures.c]) {
+    const hash = (await catalog(fixture)).snapshot_hash;
+    assert.deepEqual(await media(hash, fixture), { version: 1, scope: 'site-archives-media', direction: 'export',
+      archives_catalog: fixture.catalog, files: [], bound: true, verified: true, transferred: [], checked: [], full_site_complete: false });
+  }
+});
+test('media never promotes an unverified nonempty sidecar even if all individual receipts are checked', async () => isolated(async () => {
+  const hash = (await catalog(fixtures.b)).snapshot_hash;
+  const state = await sidecarFor(fixtures.b.job);
+  assert.ok(Object.values(state.receipts).every(receipt => receipt.checked === true));
+  state.verified = false; await setSidecar(fixtures.b.job, state);
+  await rejectsAll(fixtures.b, hash, /Verified archive media sidecar is required/);
+}));
+test('media tuples match existing namespace/event/ref-key read authorization, with no actual Storage access', async () => {
+  const hash = (await catalog(fixtures.b)).snapshot_hash;
+  const inventory = await media(hash, fixtures.b);
+  for (const ref of inventory.files) {
+    const authorized = await readRpc('employee_transfer_archive_media_read_authorize', { ...argsFor(fixtures.b),
+      p_event_id: ref.event_id, p_ref_key: ref.ref_key }, 'service_role');
+    assert.deepEqual(authorized.file, ref.file); assert.equal(authorized.key, ref.key);
+    assert.equal(authorized.source_url, ref.source_url); assert.equal(authorized.bucket, ref.bucket);
+    assert.equal(authorized.path, `transfer-archives/${fixtures.b.job}/${ref.key}`);
+    assert.notEqual(ref.path, authorized.path);
+  }
+});
+test('media requires all four exact binding arguments and accepts no caller-supplied Storage path', async () => {
+  const signature = `public.${PREFIX}media(uuid,uuid,uuid,text)`;
+  const p = (await db.query('SELECT proargnames,pronargs,pronargdefaults FROM pg_proc WHERE oid=$1::regprocedure', [signature])).rows[0];
+  assert.deepEqual(p.proargnames, ['p_admin_session_token', 'p_source_site_id', 'p_package_id', 'p_snapshot_hash']);
+  assert.equal(p.pronargs, 4); assert.equal(p.pronargdefaults, 0);
+  await assert.rejects(readRpc(`${PREFIX}media`, argsFor(fixtures.b)), /does not exist/);
+  await assert.rejects(db.query(`SELECT public.get_employee_archive_reexport_media(p_admin_session_token=>$1::uuid,
+    p_source_site_id=>$2::uuid,p_package_id=>$3::uuid,p_snapshot_hash=>$4::text,p_path=>$5::text)`,
+  [session, fixtures.b.site, fixtures.b.pkg, (await catalog(fixtures.b)).snapshot_hash, 'untrusted/target/path']), /does not exist/);
+});
+test('media resolves the same latest job and id tie-break as its snapshot, not an older sidecar', async () => isolated(async () => {
+  const before = await catalog(fixtures.b);
+  await cloneJob(fixtures.b, id(50), '2024-01-03');
+  const state = await sidecarFor(id(50));
+  state.files[0].sha256 = sha('newer-job-tuple'); state.receipts[state.refs[0].key].file = state.files[0];
+  await setSidecar(id(50), state);
+  const newer = await catalog(fixtures.b); await rejectsSnapshot(before.snapshot_hash, fixtures.b);
+  assert.equal((await media(newer.snapshot_hash, fixtures.b)).files[0].file.sha256, sha('newer-job-tuple'));
+  await cloneJob(fixtures.b, id(51), '2024-01-03');
+  assert.deepEqual(await catalog(fixtures.b), newer);
+  assert.equal((await media(newer.snapshot_hash, fixtures.b)).files[0].file.sha256, sha('newer-job-tuple'));
+  await cloneJob(fixtures.b, id(49), '2024-01-03');
+  const smallerId = await catalog(fixtures.b); await rejectsSnapshot(newer.snapshot_hash, fixtures.b);
+  assert.equal((await media(smallerId.snapshot_hash, fixtures.b)).files[0].file.sha256, sha('synthetic-png'));
+  await cloneJob(fixtures.b, id(52), '2024-01-04');
+  await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_restore,records_verified}','false') WHERE id=$1`, [id(52)]);
+  assert.deepEqual(await catalog(fixtures.b), smallerId);
+  assert.equal((await media(smallerId.snapshot_hash, fixtures.b)).files[0].file.sha256, sha('synthetic-png'));
+}));
 test('all six original source_line tables survive byte-exact numeric/microsecond/null NDJSON export', async () => {
   const { snapshot_hash: hash } = await catalog();
   for (const key of TABLES) {
@@ -353,7 +432,7 @@ test('copied job receipt without job-bound plan revalidation is never trusted', 
   await rejectsAll(fixtures.a, hash, /Verified archive plan differs/);
 }));
 for (const hash of [null, '', 'a'.repeat(63), 'a'.repeat(65), 'A'.repeat(64), 'g'.repeat(64), 'a'.repeat(64), `${'a'.repeat(64)}\n`])
-  test(`page and verify reject invalid/stale snapshot ${JSON.stringify(hash)}`, async () => rejectsSnapshot(hash));
+  test(`page, verify and media reject invalid/stale snapshot ${JSON.stringify(hash)}`, async () => rejectsSnapshot(hash));
 for (const key of [null, '', 'users', 'content_audit_events; SELECT 1', 'Content_Audit_Events'])
   test(`page rejects unknown table ${JSON.stringify(key)}`, async () => assert.rejects(page((await catalog()).snapshot_hash, key), /Invalid archive re-export page/));
 for (const limit of [null, 0, -1, 201, 2147483647])
@@ -423,21 +502,27 @@ test('expired/cancelled/abandoned historical jobs read in READ ONLY, no staging/
   assert.equal(await scalar(db, 'SELECT count(*)::integer FROM private.employee_transfer_staging'), 0);
   const hash = (await catalog()).snapshot_hash;
   // Successful default calls commit, so a before/after comparison can see effects.
-  await page(hash); await verify(hash);
+  await page(hash); await verify(hash); await media(hash);
+  const nonemptyHash = (await catalog(fixtures.b)).snapshot_hash;
+  await media(nonemptyHash, fixtures.b);
   await db.exec('BEGIN READ ONLY'); inside = true;
   try {
     for (const fixture of [fixtures.a, fixtures.b, fixtures.c]) {
       const result = await catalog(fixture);
       for (const key of TABLES) assert.equal((await page(result.snapshot_hash, key, fixture)).ndjson, fixture.texts[key]);
       assert.deepEqual(await verify(result.snapshot_hash, fixture), RECEIPT);
+      const inventory = await media(result.snapshot_hash, fixture);
+      assert.equal(inventory.verified, true); assert.deepEqual(inventory.archives_catalog, fixture.catalog);
     }
   } finally { inside = false; await db.exec('ROLLBACK'); }
   assert.deepEqual(await databaseState(), before);
 });
 test('historical job lifecycle/owner metadata changes do not expire or mutate a stable archive snapshot', async () => isolated(async () => {
   const before = await catalog(fixtures.b);
+  const inventory = await media(before.snapshot_hash, fixtures.b);
   for (const status of ['abandoned', 'cancelled', 'finished']) {
     await db.query(`UPDATE private.employee_transfer_jobs SET status=$2,admin_id=$3,last_activity_at='2020-01-01',finished_at='2020-01-02' WHERE id=$1`, [fixtures.b.job, status, id(2)]);
     assert.deepEqual(await catalog(fixtures.b), before); assert.deepEqual(await verify(before.snapshot_hash, fixtures.b), RECEIPT);
+    assert.deepEqual(await media(before.snapshot_hash, fixtures.b), inventory);
   }
 }));

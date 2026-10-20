@@ -117,15 +117,59 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION public.get_employee_archive_reexport_media(
+  p_admin_session_token uuid, p_source_site_id uuid, p_package_id uuid, p_snapshot_hash text
+) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE
+  v_snapshot jsonb;
+  v_job private.employee_transfer_jobs%ROWTYPE;
+  v_state jsonb;
+  v_files jsonb;
+  v_keys jsonb;
+BEGIN
+  v_snapshot := private.employee_transfer_archive_reexport_snapshot(p_admin_session_token, p_source_site_id, p_package_id);
+  IF p_snapshot_hash IS NULL OR length(p_snapshot_hash) <> 64 OR p_snapshot_hash !~ '^[0-9a-f]{64}$'
+    OR p_snapshot_hash IS DISTINCT FROM v_snapshot->>'snapshot_hash' THEN
+    RAISE EXCEPTION 'Archive re-export snapshot changed or is invalid; restart the export.';
+  END IF;
+  -- STABLE functions share the calling SQL snapshot. Resolve exactly the same
+  -- SQL34/36 job as the helper, not an older job selected by media availability.
+  SELECT * INTO v_job FROM private.employee_transfer_jobs j
+    WHERE j.kind = 'import' AND j.options->>'import_protocol' = 'dispatch-submission-v1'
+      AND j.summary#>'{archives_restore,records_verified}' = 'true'::jsonb
+      AND j.summary#>'{archives_restore,catalog,site_id}' = to_jsonb(p_source_site_id)
+      AND j.summary#>'{archives_restore,catalog,package_id}' = to_jsonb(p_package_id)
+    ORDER BY j.started_at DESC, j.id LIMIT 1;
+  IF v_job.id IS NULL THEN RAISE EXCEPTION 'Verified archive namespace is required.'; END IF;
+  v_state := private.employee_transfer_archive_media_state(v_job, false);
+  IF v_state->'verified' IS DISTINCT FROM 'true'::jsonb THEN
+    RAISE EXCEPTION 'Verified archive media sidecar is required for re-export.';
+  END IF;
+  -- Only expose original refs (path = ref_value) and their bound file tuples.
+  -- Storage target paths, origins, generations and receipts stay server-side;
+  -- actual bytes must use readArchiveMedia's namespace/event/ref-key binding.
+  SELECT COALESCE(jsonb_agg(r.value || jsonb_build_object('file', v_state->'files'->((r.n - 1)::integer)) ORDER BY r.n), '[]'::jsonb),
+    COALESCE(jsonb_agg(r.value->'key' ORDER BY r.n), '[]'::jsonb)
+    INTO v_files, v_keys
+    FROM jsonb_array_elements(v_state->'refs') WITH ORDINALITY r(value, n);
+  RETURN jsonb_build_object('version', 1, 'scope', 'site-archives-media', 'direction', 'export',
+    'archives_catalog', v_snapshot->'catalog', 'files', v_files, 'bound', true, 'verified', true,
+    'transferred', v_keys, 'checked', v_keys, 'full_site_complete', false);
+END;
+$$;
+
 REVOKE ALL ON FUNCTION private.employee_transfer_archive_reexport_snapshot(uuid,uuid,uuid)
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.get_employee_archive_reexport_catalog(uuid,uuid,uuid),
   public.get_employee_archive_reexport_page(uuid,uuid,uuid,text,text,text,integer),
-  public.get_employee_archive_reexport_verify(uuid,uuid,uuid,text)
+  public.get_employee_archive_reexport_verify(uuid,uuid,uuid,text),
+  public.get_employee_archive_reexport_media(uuid,uuid,uuid,text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_employee_archive_reexport_catalog(uuid,uuid,uuid),
   public.get_employee_archive_reexport_page(uuid,uuid,uuid,text,text,text,integer),
-  public.get_employee_archive_reexport_verify(uuid,uuid,uuid,text)
+  public.get_employee_archive_reexport_verify(uuid,uuid,uuid,text),
+  public.get_employee_archive_reexport_media(uuid,uuid,uuid,text)
   TO anon, authenticated;
 
 NOTIFY pgrst, 'reload schema';
