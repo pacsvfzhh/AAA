@@ -460,7 +460,7 @@ function fromFile(file: File): ReplacementBackupFile {
 }
 export async function withAuthenticatedSiteBundleSet<T>(
   files: File[], passphrase: string, createWorkspace: ArchiveBundleWorkspaceFactory,
-  use: (bundle: AuthenticatedSiteBundleSet) => Promise<T>, options: RunOptions = {},
+  consumeBundle: (bundle: AuthenticatedSiteBundleSet) => Promise<T>, options: RunOptions = {},
 ): Promise<T> {
   const selected = files.slice(), spaces = new Set<ArchiveBundleWorkspace>();
   let active = true, busy = false;
@@ -523,7 +523,7 @@ export async function withAuthenticatedSiteBundleSet<T>(
         return result!;
       },
     };
-    outcome = await use(bundle);
+    outcome = await consumeBundle(bundle);
     checkAbort(options.signal);
   } catch (error) { failed = true; failure = error; }
   finally { active = false; passphrase = ''; }
