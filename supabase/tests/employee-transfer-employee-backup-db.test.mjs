@@ -497,6 +497,49 @@ test('device check permits scalars, SQL NULL and JSON null, checks keys even wit
   await assert.rejects(check('{"browser":{"\\u0074oken":"hidden"}}'), /structured secret/);
   assert.deepEqual(await snapshot(), before);
 }));
+for (const kind of ['object', 'array', 'mixed']) test(`real SQL39 to employeeBackup accepts 64 ${kind} device levels ending in null and rejects 65`, async t => {
+  const nestedDevice = levels => {
+    let value = null;
+    for (let i = 0; i < levels; i++) value = kind === 'object' || (kind === 'mixed' && i % 2) ? { device: value } : [value];
+    return value;
+  };
+  const accepted = nestedDevice(64), h = await clientBackupDisk(t);
+  await transaction(async () => {
+    await change('public.employee_login_history', 'UPDATE public.employee_login_history SET device_info=$2::jsonb WHERE id=$1', [id(1042), JSON.stringify(accepted)]);
+    const before = await snapshot(), modes = await triggers(); await db.exec('SET TRANSACTION READ ONLY');
+    const c = await catalog(), p = await page(c, 'employee_login_history', { p_limit: 200 });
+    const checked = modules.validateEmployeeBackupPage(p, modules.validateEmployeeBackupCatalog(c), 'employee_login_history', null);
+    assert.deepEqual(Buffer.from(checked.raw), Buffer.from(p.ndjson)); assert.equal(checked.count, 3);
+    assert.deepEqual(lines(p.ndjson).map(JSON.parse)[2].device_info, accepted);
+    const result = await h.export(c);
+    assert.equal(result.recordsVerified, true); assert.equal(result.completeEmployeeBackup, false); assert.equal(result.fullSiteComplete, false);
+    const checks = h.calls.filter(call => call.name === VERIFY);
+    assert.equal(checks.length, 2); for (const call of checks) { assert.equal(call.data.verified, true); flags(call.data); }
+    assert.ok(h.calls.every(call => call.readOnly === 'on')); assert.equal(h.fileWrites, 1);
+    const restored = await h.decrypt(), raw = restored.files.get(modules.employeeBackupEntryPath('employee_login_history'));
+    assert.deepEqual(raw, Buffer.from(p.ndjson));
+    const login = lines(raw.toString()).map(JSON.parse);
+    assert.equal(login[0].device_info, null); assert.equal(login[0].device_info_is_sql_null, true);
+    assert.equal(login[1].device_info, null); assert.equal(login[1].device_info_is_sql_null, false);
+    assert.deepEqual(login[2].device_info, accepted); assert.equal(login[2].device_info_is_sql_null, false);
+    assert.ok(restored.files.get(modules.employeeBackupEntryPath('wallet_transactions')).toString().includes(PRECISE));
+    assert.match(raw.toString(), /\.123456\+00:00/); assertClientWorkspacesClean(h);
+    assert.deepEqual(await snapshot(), before); assert.deepEqual(await triggers(), modes);
+  });
+  const rejected = nestedDevice(65), bad = await clientBackupDisk(t);
+  await transaction(async () => {
+    const c = await catalog();
+    await change('public.employee_login_history', 'UPDATE public.employee_login_history SET device_info=$2::jsonb WHERE id=$1', [id(1042), JSON.stringify(rejected)]);
+    const before = await snapshot(); await db.exec('SET TRANSACTION READ ONLY');
+    const depthError = error => { assert.equal(error.code, '22023'); assert.match(error.message, /reviewed depth/); return true; };
+    await assert.rejects(catalog(), depthError); await assert.rejects(page(c, 'employee_login_history'), depthError); await assert.rejects(verify(c), depthError);
+    await assert.rejects(bad.export(c), error => error instanceof modules.EmployeeBackupError && error.encryptedFileState === 'not-written');
+    assert.equal(bad.fileWrites, 0); assert.equal(bad.workspaces.length, 0);
+    assert.equal(bad.calls.length, 1); assert.equal(bad.calls[0].name, CATALOG); assert.match(bad.calls[0].error, /reviewed depth/);
+    assert.equal(bad.calls[0].data, undefined); await assert.rejects(readFile(bad.filePath), { code: 'ENOENT' });
+    assert.deepEqual(await snapshot(), before);
+  });
+});
 test('directory and real client reject excessive target device depth without writes, but foreign employee unsafe devices do not block', async t => {
   await transaction(async () => {
     const c = await catalog(), h = await clientBackupDisk(t); let nested = null;

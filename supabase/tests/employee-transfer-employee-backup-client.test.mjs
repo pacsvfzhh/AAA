@@ -303,6 +303,45 @@ for (const [shape, raw] of [['object', historicalDevice], ['array', `[null,[${hi
   });
 }
 
+// Match SQL39: device_info itself is depth 0, each child adds 1; the login row is not part of this depth.
+for (const shape of ['object', 'array']) for (const leaf of ['null', '{}', '[]']) for (const depth of [64, 65]) {
+  test(`device_info depth ${depth} ${shape} with ${leaf} leaf ${depth === 64 ? 'preserves raw bytes without counting the login wrapper' : 'rejects before record or encrypted file writes'}`, async t => {
+    const opening = shape === 'object' ? '{ "child" : ' : '[ ', closing = shape === 'object' ? ' }' : ' ]';
+    const raw = opening.repeat(depth) + leaf + closing.repeat(depth);
+    // Exactly `depth` edges separate the device root from the terminal null/empty container.
+    let terminal = JSON.parse(raw);
+    for (let i = 0; i < depth; i++) terminal = shape === 'object' ? terminal.child : terminal[0];
+    assert.deepEqual(terminal, JSON.parse(leaf));
+    const h = fixture(t); deviceInfo(h, raw);
+    if (depth === 64) {
+      const page = devicePageValidation(h)();
+      assert.equal(page.count, 1); assert.equal(page.next_after, null);
+      assert.deepEqual(Buffer.from(page.raw), Buffer.from(lines(h.text.employee_login_history)[2]));
+      const result = await h.export(), { files } = await unpack(h);
+      const restored = files.get(api.employeeBackupEntryPath('employee_login_history'));
+      assert.deepEqual(restored, Buffer.from(h.text.employee_login_history));
+      assert.ok(restored.includes(Buffer.from(`"device_info":${raw}`)));
+      assert.equal(result.recordsVerified, true); assert.equal(h.writes, 1); assert.equal(h.verifyCount, 2); cleaned(h);
+    } else {
+      assert.throws(devicePageValidation(h));
+      const blockedId = JSON.parse(lines(h.text.employee_login_history)[2]).id;
+      let blockedRowAppended = false, loginAppends = 0;
+      h.workspaceHook = (_workspace, path, bytes) => {
+        if (path === api.employeeBackupEntryPath('employee_login_history')) {
+          loginAppends++; blockedRowAppended ||= Buffer.from(bytes).includes(Buffer.from(blockedId));
+        }
+      };
+      await rejected(h, {}, error => {
+        assert.equal(error.phase, 'records-export'); assert.equal(error.encryptedFileState, 'not-written');
+        assert.equal(error.outcomeUnknown, false);
+      });
+      assert.ok(loginAppends > 0); assert.equal(blockedRowAppended, false);
+      assert.equal(h.writes, 0); assert.equal(h.opens, 0); assert.equal(h.verifyCount, 0);
+      await assert.rejects(readFile(h.filePath), { code: 'ENOENT' });
+    }
+  });
+}
+
 test('employee backup uses separate 1 GiB payload, 1100 MiB ZIP and 1101 MiB ciphertext limits', () => {
   const limits = api.EMPLOYEE_BACKUP_LIMITS, MiB = 1024 * 1024;
   assert.equal(limits.maxTotalBytes, 1024 * MiB);
