@@ -47,6 +47,14 @@ export interface SiteVolumeReceipt {
 export interface SiteBundleResult {
   packageId: string; sourceSiteId: string; volumes: SiteVolumeReceipt[]; fullSiteComplete: false; importReady: false;
 }
+export interface AuthenticatedSiteDomain {
+  catalog: unknown; media: unknown; manifest: VolumeManifest;
+  workspace: ArchiveBundleWorkspace; file: ReplacementBackupFile;
+}
+export interface AuthenticatedSiteBundleSet {
+  packageId: string; sourceSiteId: string; volumes: SiteVolumeReceipt[];
+  readDomain<T>(domain: SiteDomain, use: (value: AuthenticatedSiteDomain) => Promise<T>): Promise<T>;
+}
 interface SiteCatalog {
   site_id: string; tables: { key: string; rows: number; bytes: number; sha256?: string; row_hashes_sha256?: string }[];
   package_id?: string; identity_catalog?: unknown; finance_catalog?: unknown;
@@ -449,6 +457,85 @@ function fromFile(file: File): ReplacementBackupFile {
       }
     })(),
   };
+}
+export async function withAuthenticatedSiteBundleSet<T>(
+  files: File[], passphrase: string, createWorkspace: ArchiveBundleWorkspaceFactory,
+  use: (bundle: AuthenticatedSiteBundleSet) => Promise<T>, options: RunOptions = {},
+): Promise<T> {
+  const selected = files.slice(), spaces = new Set<ArchiveBundleWorkspace>();
+  let active = true, busy = false;
+  const fresh = () => {
+    checkAbort(options.signal);
+    const space = createWorkspace();
+    if (spaces.has(space)) invalid();
+    spaces.add(space);
+    return space;
+  };
+  let outcome: T | undefined, failed = false, failure: unknown;
+  try {
+    const inspected = await inspectSiteBundleSet(selected, passphrase, fresh, options);
+    const byName = new Map(selected.map(file => [file.name, file]));
+    const indexSpace = fresh(), indexFile = byName.get(INDEX_FILE)!;
+    const verified = await authenticate(fromFile(indexFile), passphrase, indexSpace, options.signal);
+    const indexReceipt = inspected.volumes.find(volume => volume.domain === 'index')!;
+    if (verified.cipherSha256 !== indexReceipt.cipherSha256 || verified.cipherBytes !== indexReceipt.cipherBytes) invalid();
+    const index = validateIndex(JSON.parse(await readSmall(indexSpace, INDEX_PATH, options.signal)));
+    await indexSpace.abort(new Error('Authenticated import index discarded.'));
+    const baseline = index.snapshot;
+    const bundle: AuthenticatedSiteBundleSet = {
+      packageId: inspected.packageId, sourceSiteId: inspected.sourceSiteId,
+      volumes: inspected.volumes.map(volume => ({ ...volume })),
+      async readDomain(domain, consume) {
+        if (!active || busy) invalid();
+        const expected = index.volumes.find(volume => volume.domain === domain);
+        if (!expected) invalid();
+        checkAbort(options.signal); busy = true;
+        let result: Awaited<ReturnType<typeof consume>> | undefined;
+        let readFailed = false, readFailure: unknown;
+        const space = fresh();
+        try {
+          const file = fromFile(byName.get(expected.filename)!);
+          const readback = await authenticate(file, passphrase, space, options.signal);
+          const manifest = validateManifest(readback.manifest);
+          if (manifest.exportId !== baseline.package_id || manifest.sourceSiteId !== baseline.site_id
+            || manifest.volumeId !== expected.volumeId || manifest.scope !== 'replacement-backup'
+            || manifest.volumeIndex !== 1 || manifest.volumeCount !== 1
+            || readback.cipherSha256 !== expected.cipherSha256 || readback.cipherBytes !== expected.cipherBytes) invalid();
+          await validateDomain(space, domain, manifest, baseline, options.signal);
+          let media: unknown = null;
+          if (domain !== 'archives') {
+            const metadata = JSON.parse(await readSmall(space, metadataPath(domain), options.signal)) as Record<string, unknown>;
+            media = metadata.media;
+          }
+          const payload = domain === 'archives' ? manifest : validateManifest({ ...manifest,
+            entries: manifest.entries.filter(entry => entry.path !== metadataPath(domain)) });
+          checkAbort(options.signal);
+          result = await consume({ catalog: structuredClone(baseline.catalogs[domain]), media,
+            manifest: payload, workspace: space, file });
+          checkAbort(options.signal);
+        } catch (error) { readFailed = true; readFailure = error; }
+        let cleanupFailed = false;
+        try { await space.abort(new Error('Authenticated import domain discarded.')); }
+        catch { cleanupFailed = true; }
+        busy = false;
+        if (cleanupFailed) throw new Error('Import input plaintext cleanup could not be confirmed.');
+        if (readFailed) throw readFailure;
+        return result!;
+      },
+    };
+    outcome = await use(bundle);
+    checkAbort(options.signal);
+  } catch (error) { failed = true; failure = error; }
+  finally { active = false; passphrase = ''; }
+  let cleanupFailed = false;
+  for (const space of spaces) {
+    try { await space.abort(new Error('Import input plaintext discarded.')); }
+    catch { cleanupFailed = true; }
+  }
+  if (cleanupFailed) throw new Error('Import input plaintext cleanup could not be confirmed.');
+  if (failed) throw failure;
+  checkAbort(options.signal);
+  return outcome!;
 }
 export async function inspectSiteBundleSet(files: File[], passphrase: string, createWorkspace: ArchiveBundleWorkspaceFactory,
   options: RunOptions = {}): Promise<SiteBundleResult> {
