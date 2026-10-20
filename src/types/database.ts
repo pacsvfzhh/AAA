@@ -3132,6 +3132,22 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: Record<string, unknown>;
       };
+      employee_export_shared_close: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: { success: true; scope: 'shared-settings'; full_site_complete: false };
+      };
+      get_employee_transfer_capabilities: {
+        Args: { p_admin_session_token: string };
+        Returns: import('../lib/employeeTransfer/siteTransfer').SiteTransferCapabilities;
+      };
+      get_employee_export_site_snapshot: {
+        Args: { p_admin_session_token: string; p_package_id: string };
+        Returns: Record<string, unknown>;
+      };
+      get_employee_transfer_log: {
+        Args: { p_admin_session_token: string; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
       cancel_audit_deletion_confirmation: {
         Args: { p_admin_session_token: string; p_job_kind: 'content' | 'employee'; p_job_id: string };
         Returns: { success: boolean; cancelled: boolean };

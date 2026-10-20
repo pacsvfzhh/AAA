@@ -54,6 +54,8 @@ const criticalMigrations = [
   '20261102000037_plan_employee_replacement.sql',
   '20261102000038_reexport_archive_namespaces.sql',
   '20261102000039_export_employee_replacement_backup.sql',
+  '20261102000040_close_shared_export.sql',
+  '20261102000041_snapshot_site_export.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -340,7 +342,7 @@ async function exerciseRealReplay() {
   try {
     const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql')).sort();
     assert.deepEqual(files, diskFiles, 'must replay every migration, including future additions');
-    assert.equal(files.length, 566, 'migration baseline changed: review all additions, never expand known failures');
+    assert.equal(files.length, 568, 'migration baseline changed: review all additions, never expand known failures');
     assert.deepEqual(failures, expectedFailures);
     assert.equal(validation.freshDatabaseVerified, false);
     for (const file of criticalMigrations) {

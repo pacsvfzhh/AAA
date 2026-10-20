@@ -211,6 +211,13 @@ async function readHeader(reader: ByteReader): Promise<ContainerHeader> {
   };
 }
 
+// Header identity is untrusted until the entire encrypted volume is authenticated.
+export async function readTransferMetadata(source: TransferByteSource, signal?: AbortSignal): Promise<TransferMetadata> {
+  const reader = new ByteReader(source, signal);
+  try { return { ...(await readHeader(reader)).metadata }; }
+  finally { await reader.close(); }
+}
+
 async function deriveKey(passphraseBytes: Uint8Array, salt: Uint8Array): Promise<CryptoKey> {
   try {
     const material = await crypto.subtle.importKey('raw', passphraseBytes, 'PBKDF2', false, ['deriveKey']);
