@@ -17,10 +17,15 @@ const CHAT_BUCKETS = new Set(['announcement-images', 'chat-images', 'template-im
 const AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const CHAT_AVATAR_IMPORT_PATH = /^avatars\/transfer-[0-9a-f]{32}\.[a-z0-9]{1,8}$/;
 export const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+const ARCHIVE_BUCKET = 'content-audit-evidence';
+const ARCHIVE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4']);
+const ARCHIVE_IDENTITY = new RegExp(`^archive-evidence-v1:(${UUID}):(${UUID}):(${UUID}):([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})$`);
+const ARCHIVE_TARGET = new RegExp(`^transfer-archives/${UUID}/[0-9a-f]{64}$`);
 const RPCS = {
   verification: { authorize: 'employee_transfer_verification_media_authorize', commit: 'employee_transfer_verification_media_commit' },
   notifications: { authorize: 'employee_transfer_notification_media_authorize', commit: 'employee_transfer_notification_media_commit' },
   chat: { authorize: 'employee_transfer_chat_media_authorize', commit: 'employee_transfer_chat_media_commit' },
+  archives: { authorize: 'employee_transfer_archive_media_authorize', commit: 'employee_transfer_archive_media_commit' },
 };
 type Scope = keyof typeof RPCS;
 const ACTIONS = new Set(['download', 'recheck-export', 'upload', 'recheck-import']);
@@ -101,7 +106,7 @@ function fileTuple(value: unknown, key: string, source: string, scope: Scope, av
     value.key !== key || value.source_url !== source || !Number.isSafeInteger(value.bytes) ||
     (value.bytes as number) < 1 || (value.bytes as number) > MAX_MEDIA_BYTES ||
     typeof value.sha256 !== 'string' || value.sha256.length !== 64 || !KEY_PATTERN.test(value.sha256) ||
-    typeof value.content_type !== 'string' || !(scope === 'verification' ? TYPES : NOTIFICATION_TYPES).has(value.content_type)) fail();
+    typeof value.content_type !== 'string' || !(scope === 'verification' ? TYPES : scope === 'archives' ? ARCHIVE_TYPES : NOTIFICATION_TYPES).has(value.content_type)) fail();
   if (scope === 'chat' && avatar &&
     ((value.bytes as number) > MAX_AVATAR_BYTES || !AVATAR_TYPES.has(value.content_type))) fail();
   return value as FileTuple;
@@ -110,7 +115,25 @@ async function digest(bytes: Uint8Array, crypto: Pick<Crypto, 'subtle'>): Promis
   const result = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
   return Array.from(new Uint8Array(result), byte => byte.toString(16).padStart(2, '0')).join('');
 }
+// Opaque identities are never interpreted as URLs. Both source and target use fixed private Storage.
+async function archiveContext(value: unknown, action: string, key: string | null, crypto: Pick<Crypto, 'subtle'>): Promise<Context> {
+  const direction = action === 'read' ? 'read' : action === 'download' || action === 'recheck-export' ? 'export' : 'import';
+  if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation']) ||
+    value.direction !== direction || value.bucket !== ARCHIVE_BUCKET || typeof value.key !== 'string' || value.key.length !== 64 ||
+    !KEY_PATTERN.test(value.key) || (key !== null && value.key !== key) || typeof value.source_url !== 'string' ||
+    typeof value.generation !== 'string' || value.generation.length !== 64 || !KEY_PATTERN.test(value.generation)) fail();
+  const identity = ARCHIVE_IDENTITY.exec(value.source_url);
+  if (!identity || identity[0] !== value.source_url || await digest(new TextEncoder().encode(value.source_url), crypto) !== value.key ||
+    typeof value.path !== 'string' || value.path.length > 512 || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/.test(value.path) ||
+    value.path !== value.path.trim() || value.path.includes('..')) fail();
+  if (direction === 'export') {
+    if (await digest(new TextEncoder().encode(value.path), crypto) !== identity[6]) fail();
+  } else if (!ARCHIVE_TARGET.test(value.path) || !value.path.endsWith('/' + value.key)) fail();
+  const file = value.file === null && action === 'download' ? null : fileTuple(value.file, value.key, value.source_url, 'archives', false);
+  return { direction, key: value.key, bucket: ARCHIVE_BUCKET, path: value.path, source_url: value.source_url, file, generation: value.generation, avatar: false };
+}
 async function context(value: unknown, action: string, key: string, origin: string, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<Context> {
+  if (scope === 'archives') return archiveContext(value, action, key, crypto);
   const direction = action === 'download' || action === 'recheck-export' ? 'export' : 'import';
   if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation', ...(scope === 'chat' ? ['avatar'] : [])]) ||
     value.direction !== direction || value.key !== key || typeof value.bucket !== 'string') fail();
@@ -206,15 +229,16 @@ function detectType(bytes: Uint8Array, scope: Scope): string {
   if (bytes.length >= 6 && (starts([0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) || starts([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))) return 'image/gif';
   if (bytes.length >= 12 && starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return 'image/webp';
   if (bytes.length >= 5 && starts([0x25, 0x50, 0x44, 0x46, 0x2d])) return 'application/pdf';
-  if (scope === 'notifications' || scope === 'chat') {
+  if (scope === 'notifications' || scope === 'chat' || scope === 'archives') {
     if (starts([0x66, 0x74, 0x79, 0x70], 4) && isMp4(bytes)) return 'video/mp4';
-    if (starts([0x1a, 0x45, 0xdf, 0xa3]) && isWebm(bytes)) return 'video/webm';
+    if (scope !== 'archives' && starts([0x1a, 0x45, 0xdf, 0xa3]) && isWebm(bytes)) return 'video/webm';
   }
   fail(422, 'INVALID_MEDIA');
 }
 async function inspect(bytes: Uint8Array, ctx: Context, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<FileTuple> {
   if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) fail(422, 'INVALID_MEDIA');
   const actual = { key: ctx.key, source_url: ctx.source_url, bytes: bytes.length, sha256: await digest(bytes, crypto), content_type: detectType(bytes, scope) };
+  if (scope === 'archives' && !ARCHIVE_TYPES.has(actual.content_type)) fail(422, 'INVALID_MEDIA');
   if (scope === 'chat' && ctx.avatar &&
     (bytes.length > MAX_AVATAR_BYTES || !AVATAR_TYPES.has(actual.content_type))) fail(422, 'INVALID_MEDIA');
   if (ctx.file && !sameFile(ctx.file, actual)) fail(422, 'INVALID_MEDIA');
@@ -355,11 +379,39 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
       if (request.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       if (!origin || !crypto?.subtle) fail(500, 'TRANSFER_FAILED');
       const rawScope = request.headers.get('x-transfer-scope') ?? 'verification';
-      if (rawScope !== 'verification' && rawScope !== 'notifications' && rawScope !== 'chat') fail(400, 'INVALID_REQUEST');
+      if (rawScope !== 'verification' && rawScope !== 'notifications' && rawScope !== 'chat' && rawScope !== 'archives') fail(400, 'INVALID_REQUEST');
       const scope: Scope = rawScope;
       const rpcs = RPCS[scope];
       const action = request.headers.get('x-transfer-action') ?? '';
       const admin = request.headers.get('x-admin-session-token') ?? '';
+      if (scope === 'archives' && action === 'read') {
+        if (!UUID_PATTERN.test(admin) || admin.length !== 36 || request.signal.aborted ||
+          request.headers.has('content-encoding') || request.headers.has('content-range') ||
+          request.headers.has('x-transfer-job-token') || request.headers.has('x-transfer-object-key')) fail(400, 'INVALID_REQUEST');
+        const raw = await readBounded(request, 8192, declaredLength(request, 8192));
+        let body: unknown;
+        try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)); } catch { fail(400, 'INVALID_REQUEST'); }
+        if (!record(body) || !exact(body, ['source_site_id', 'package_id', 'event_id', 'ref_key']) ||
+          [body.source_site_id, body.package_id, body.event_id].some(id => typeof id !== 'string' || id.length !== 36 || !UUID_PATTERN.test(id)) ||
+          typeof body.ref_key !== 'string' || !body.ref_key || new TextEncoder().encode(body.ref_key).length > 4096) fail(400, 'INVALID_REQUEST');
+        const args = { p_admin_session_token: admin, p_source_site_id: body.source_site_id, p_package_id: body.package_id,
+          p_event_id: body.event_id, p_ref_key: body.ref_key };
+        const rpc = 'employee_transfer_archive_media_read_authorize';
+        const authorized = await deps.rpc(rpc, args);
+        if (authorized.error || !authorized.data) fail(403, 'NOT_AUTHORIZED');
+        const ctx = await archiveContext(authorized.data, 'read', null, crypto);
+        const identity = ARCHIVE_IDENTITY.exec(ctx.source_url)!;
+        if (identity[1] !== body.source_site_id || identity[2] !== body.package_id || identity[3] !== body.event_id ||
+          identity[5] !== await digest(new TextEncoder().encode(body.ref_key), crypto)) fail();
+        const bytes = await download(deps.store, ctx, request.signal);
+        const file = await inspect(bytes, ctx, crypto, 'archives');
+        // Recheck persistent raw records, sidecar and the session AFTER reading. This is read-only.
+        const current = await deps.rpc(rpc, args);
+        if (current.error || !current.data || JSON.stringify(await archiveContext(current.data, 'read', null, crypto)) !== JSON.stringify(ctx) || request.signal.aborted) fail(403, 'NOT_AUTHORIZED');
+        return new Response(new Blob([bytes as BlobPart], { type: file.content_type }), { headers: { ...CORS,
+          'Content-Type': file.content_type, 'Content-Disposition': 'attachment',
+          'x-transfer-sha256': file.sha256, 'x-transfer-content-type': file.content_type } });
+      }
       const job = request.headers.get('x-transfer-job-token') ?? '';
       const key = request.headers.get('x-transfer-object-key') ?? '';
       if (!ACTIONS.has(action) || !UUID_PATTERN.test(admin) || !UUID_PATTERN.test(job) || !KEY_PATTERN.test(key) ||
