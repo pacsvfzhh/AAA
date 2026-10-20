@@ -17,8 +17,8 @@ import tls from 'node:tls';
 import { createSites, adminLogin, rpc as baseRpc, rows, scalar } from './support/transfer-harness.mjs';
 import { NEW, OLD, PASSWORDS, buildNewSite } from './support/transfer-fixtures.mjs';
 
-// Run directly with node --test. Do not skip absent/broken 19–29 or extend the 12-failure baseline.
-const migration = '20261102000029_plan_site_chat_merge.sql';
+// Run directly with node --test. Do not skip absent/broken 19–32 or extend the 12-failure baseline.
+const migration = '20261102000032_restore_site_chat.sql';
 const KEYS = {
   shared: ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members', 'admin_configs', 'system_configs', 'history_cleanup_config'],
   dispatch: ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders', 'dispatch_group_members', 'valid_order_data', 'used_order_data'],
@@ -647,6 +647,9 @@ before(async () => {
     export * from './src/lib/employeeTransfer/notificationsConfigurationApi.ts';
     export * from './src/lib/employeeTransfer/notificationsRestoreApi.ts';
     export * from './src/lib/employeeTransfer/chatTransfer.ts'; export * from './src/lib/employeeTransfer/chatApi.ts';
+    export * from './src/lib/employeeTransfer/chatMergeApi.ts'; export * from './src/lib/employeeTransfer/chatBackup.ts';
+    export * from './src/lib/employeeTransfer/chatMedia.ts'; export * from './src/lib/employeeTransfer/chatRestoreApi.ts';
+    export {verifyEncryptedVolume} from './src/lib/employeeTransfer/container.ts';
     export {setHarness} from 'activity-db:state';`, resolveDir: root }, bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2020',
     plugins: [{ name: 'local-activity-anon-sql', setup(builder) {
       builder.onResolve({ filter: /^(?:activity-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'activity-db' }));
@@ -678,13 +681,14 @@ after(async () => { try {
   await Promise.all([source?.close(), db?.close(), verificationDb?.close()]);
 } finally { mock.restoreAll(); } });
 
-test('556 real migrations preserve exactly the 12 historical failures and install notifications SQL26/27 and chat SQL28/29', () => {
-  assert.equal(replay.files.length, 556); assert.equal(replay.failures.length, 12); assert.equal(replay.validation.freshDatabaseVerified, false); assert.equal(replay.files.at(-1), migration);
+test('559 real migrations preserve exactly the 12 historical failures and install notifications SQL26/27 and chat SQL28–32', () => {
+  assert.equal(replay.files.length, 559); assert.equal(replay.failures.length, 12); assert.equal(replay.validation.freshDatabaseVerified, false); assert.equal(replay.files.at(-1), migration);
   for (const file of ['20261102000019_export_stage_employee_activity.sql', '20261102000020_restore_employee_activity.sql',
     '20261102000021_export_stage_employee_verification.sql', '20261102000022_restore_employee_verification_media.sql',
     '20261102000023_export_stage_site_notifications.sql', '20261102000024_check_site_notification_links.sql',
     '20261102000025_prepare_notification_configuration.sql', '20261102000026_transfer_notification_media.sql',
-    '20261102000027_restore_site_notifications.sql', '20261102000028_export_stage_site_chat.sql', migration]) {
+    '20261102000027_restore_site_notifications.sql', '20261102000028_export_stage_site_chat.sql',
+    '20261102000029_plan_site_chat_merge.sql', '20261102000030_prepare_chat_merge.sql', '20261102000031_transfer_chat_media.sql', migration]) {
     assert.ok(replay.files.includes(file)); assert.ok(!replay.failures.some(failure => failure.file === file));
   }
 });
@@ -2442,8 +2446,10 @@ test('chat transfer: SQL28/29 signatures grants protocol isolation and read-only
     return exp;
   }, source);
   await assert.rejects(cplan({ p_job_token: exp.job_token }), /invalid or expired/i);
-  assert.equal(await scalar(db, `SELECT count(*)::int FROM pg_proc WHERE pronamespace='public'::regnamespace
-    AND proname IN ('employee_import_chat_apply','employee_import_chat_verify','employee_import_chat_close')`), 0);
+  assert.deepEqual((await rows(db, `SELECT proname FROM pg_proc WHERE pronamespace='public'::regnamespace
+    AND proname IN ('employee_import_chat_apply','employee_import_chat_begin','employee_import_chat_chunk',
+      'employee_import_chat_verify','get_employee_import_chat_restore_status','employee_import_chat_close') ORDER BY proname`)).map(r => r.proname),
+  ['employee_import_chat_begin', 'employee_import_chat_chunk', 'employee_import_chat_verify', 'get_employee_import_chat_restore_status']);
 }));
 
 test('chat transfer: ten full-table exports retain unused roles libraries raw HTML precision NULL and frozen versus legacy cards', () => transaction(async () => {
@@ -2739,6 +2745,610 @@ test('chat transfer: visibility follows only target_employee_ids including NULL 
   assert.deepEqual(await business(), before); assert.deepEqual(await transferSnapshot(), originalTransfer);
   assert.deepEqual(await triggers(), original); await stillClosed();
 }));
+
+// SQL30–32 integration. Media receipts below are synthetic service-role attestations ONLY:
+// no actual Storage existence, bytes, magic/MIME or network transfer is claimed.
+const CR_URLS = {
+  html: `${SOURCE_ORIGIN}/storage/v1/object/public/chat-images/role/original.png`,
+  image: `${SOURCE_ORIGIN}/storage/v1/object/public/chat-images/role/message.png`,
+  avatar: `${SOURCE_ORIGIN}/storage/v1/object/public/super-customer-avatars/avatars/original.png`,
+  legacy: `${SOURCE_ORIGIN}/storage/v1/object/public/chat-images/role/legacy-avatar.png`,
+  template: `${SOURCE_ORIGIN}/storage/v1/object/public/template-images/chat/template.png`,
+  attachment: `${SOURCE_ORIGIN}/storage/v1/object/public/announcement-images/chat/attachment.pdf`,
+};
+const CR = { templateReuse: id(31001), autoReuse: id(31002), activeSlot: id(31003), ticketOccupied: id(31004),
+  existingMessage: id(31005), existingRating: id(31006), existingLog: id(31007), templateDifferent: id(31008), templateDifferentTitle: id(31009), cardReuse: id(31010) };
+const CR_AUTH = 'employee_transfer_chat_media_authorize', CR_COMMIT = 'employee_transfer_chat_media_commit';
+const CR_WORK = ['simulated_customers', 'cs_message_templates', 'customer_auto_messages', 'rich_card_contents',
+  'customer_service_sessions', 'customer_employee_conversations', 'ccc_conversation_annotations',
+  'customer_auto_message_logs', 'rating_requests', 'service_ratings'];
+function crInput(edits = {}, { small = false, empty = false } = {}) {
+  const changes = {
+    simulated_customers: changeChatRow(r => r.id === CH.fresh, { customer_avatar: CR_URLS.legacy }),
+    cs_message_templates: changeChatRow(r => r.id === CH.unusedTemplate,
+      { content: `<p>未引用模板𠮷 é é</p><img src='${CR_URLS.template}'><a href="${CR_URLS.attachment}">附件</a>` }),
+    customer_auto_messages: changeChatRow(r => r.id === CH.unusedAuto,
+      { content: `<img src="${CR_URLS.template}"><p>未發富卡原文</p>` }),
+  };
+  for (const [key, edit] of Object.entries(edits)) { const previous = changes[key] ?? (text => text); changes[key] = text => edit(previous(text)); }
+  if (small) {
+    const previous = changes.customer_employee_conversations ?? (text => text);
+    changes.customer_employee_conversations = text => lines(previous(text)).filter(line => Number.parseInt(JSON.parse(line).id.split('-').at(-1), 16) <= 26006).join('');
+  }
+  if (empty) for (const key of KEYS.chat) changes[key] = () => '';
+  return changedChat(changes);
+}
+function crDecisions(input = chat, edits = {}) {
+  const defaults = { [CH.exact]: CH.targetExact, [CH.byName]: CH.targetName, [CH.ambiguous]: CH.targetAmbiguousB,
+    [CH.multiA]: CH.targetMulti, [CH.multiB]: CH.targetMulti };
+  return lines(input.texts.simulated_customers).map(line => {
+    const { id: source_id } = JSON.parse(line);
+    return { source_id, target_id: defaults[source_id] ?? null, allow_visibility: true, confirmed: true, ...edits[source_id] };
+  });
+}
+const crPlan = (decisions, extra = {}) => rpc('get_employee_import_chat_merge_plan', { ...auth(), p_decisions: decisions, ...extra });
+const crBegin = (p, extra = {}) => rpc('employee_import_chat_begin', { ...auth(), p_plan_hash: p.plan_hash, ...extra });
+const crChunk = (no, extra = {}) => rpc('employee_import_chat_chunk', { ...auth(), p_chunk_no: no, ...extra });
+const crVerify = (extra = {}) => rpc('employee_import_chat_verify', { ...auth(), ...extra });
+const crStatus = (extra = {}) => rpc('get_employee_import_chat_restore_status', { ...auth(), ...extra });
+const crBackups = () => rows(db, 'SELECT to_jsonb(r)::text AS body FROM private.employee_transfer_chat_backups r ORDER BY id');
+const crOtherBackups = () => rows(db, `SELECT 'dispatch' AS kind,to_jsonb(r)::text AS body FROM private.employee_transfer_shared_backups r
+  UNION ALL SELECT 'notifications',to_jsonb(r)::text FROM private.employee_transfer_notification_backups r ORDER BY kind,body`);
+const crOutside = () => business().then(all => all.filter(r => !KEYS.chat.some(key => r.name === `public.${key}`)));
+const crQueues = () => rows(db, `SELECT 'financial' AS kind,to_jsonb(r)::text AS body FROM public.financial_operations r
+  UNION ALL SELECT 'notification',to_jsonb(r)::text FROM public.notification_automation_queue r
+  UNION ALL SELECT 'wallet',to_jsonb(r)::text FROM public.wallet_reconciliation_queue r ORDER BY kind,body`);
+const crWork = input => CR_WORK.flatMap(key => Array.from({ length: Math.max(1, Math.ceil(ccounts(input)[key] / 200)) },
+  (_, no) => ({ key, rows: Math.min(200, ccounts(input)[key] - no * 200) })));
+function crReceipt(value, input, operation, { no = null } = {}) {
+  assert.deepEqual(Object.keys(value).sort(), ['success', 'scope', 'operation', 'plan_hash', 'source_site_id', 'package_id', 'stage',
+    'counts', 'totals', 'next_chunk', 'total_chunks', 'generation', 'verified', 'repeated', 'chunk_no', 'rows', 'media_pending',
+    'maintenance', 'replacement_ready', 'full_site_complete'].sort());
+  const work = crWork(input), expected = Object.fromEntries(KEYS.chat.map(key => [key, 0]));
+  for (const item of work.slice(0, value.next_chunk)) expected[item.key] += item.rows;
+  assert.equal(value.success, true); assert.equal(value.scope, 'site-chat'); assert.equal(value.operation, operation);
+  assert.equal(value.source_site_id, input.catalog.site_id); assert.equal(value.package_id, input.catalog.package_id);
+  assert.deepEqual(value.counts, expected); assert.deepEqual(value.totals, ccounts(input)); assert.equal(value.total_chunks, work.length);
+  assert.equal(value.generation, String(value.next_chunk)); assert.equal(value.chunk_no, no); assert.equal(value.rows, no === null ? 0 : work[no].rows);
+  assert.equal(value.stage, value.verified ? 'done' : value.next_chunk === work.length ? 'ready_to_verify' : 'restoring');
+  assert.equal(value.media_pending, !value.verified); assert.equal(value.maintenance, true); assert.equal(value.replacement_ready, false); assert.equal(value.full_site_complete, false);
+  return value;
+}
+function crFiles(input) {
+  return Object.values(CR_URLS).filter(url => Object.values(input.texts).some(text => text.includes(url))).map(source_url => {
+    const bytes = Buffer.from(`synthetic-chat-service-attestation:${source_url}`);
+    return { key: hash(source_url), source_url, bytes: bytes.length, sha256: hash(bytes), content_type: source_url.endsWith('.pdf') ? 'application/pdf' : 'image/png' };
+  }).sort((a, b) => a.key < b.key ? -1 : 1);
+}
+const crUrl = url => `${TARGET_ORIGIN}/storage/v1/object/public/${url.split('/')[7]}/${url.split('/')[7] === 'super-customer-avatars' ? 'avatars' : NEW.root}/transfer-${hash(`${task.job_id}:${hash(url)}`).slice(0, 32)}.${url.split('.').at(-1).toLowerCase()}`;
+// Independent simultaneous replacement oracle; never call the production rewrite/restore helpers.
+function crRewrite(text, input) {
+  if (text === null) return null;
+  const urls = crFiles(input).map(f => f.source_url).sort((a, b) => b.length - a.length);
+  let out = '', at = 0;
+  while (at < text.length) {
+    const url = urls.find(url => text.startsWith(url, at));
+    if (url) { out += crUrl(url); at += url.length; } else out += text[at++];
+  }
+  return out;
+}
+const crAuthorize = (file, action = 'upload', extra = {}, role = 'service_role') => on(db, CR_AUTH,
+  { ...auth(), p_action: action, p_object_key: file.key, ...extra }, role);
+async function crCommit(file, action = 'upload', extra = {}, role = 'service_role') {
+  const generation = Object.hasOwn(extra, 'p_generation') ? extra.p_generation : (await crAuthorize(file, action)).generation;
+  return on(db, CR_COMMIT, { ...auth(), p_action: action, p_object_key: file.key, p_bytes: file.bytes, p_sha256: file.sha256,
+    p_content_type: file.content_type, p_storage_origin: TARGET_ORIGIN, p_generation: generation, ...extra }, role);
+}
+async function crMedia(input, action = 'upload') {
+  for (const file of crFiles(input)) {
+    const context = await crAuthorize(file, action);
+    assert.equal(context.path, crUrl(file.source_url).split('/public/')[1].split('/').slice(1).join('/'));
+    assert.equal(context.bucket, file.source_url.split('/')[7]); assert.deepEqual(context.file, file);
+    assert.deepEqual(await crCommit(file, action, { p_generation: context.generation }),
+      { success: true, key: file.key, bytes: file.bytes, sha256: file.sha256, content_type: file.content_type, full_site_complete: false });
+  }
+}
+async function crSeal(input, p, { afterSeal } = {}) {
+  transport(); const client = modules.createChatMergeSession(task.job_token, input.catalog);
+  assert.deepEqual(await client.plan(p.decisions), p); const bundle = await client.backup(p.plan_hash, p.decisions);
+  const others = await crOtherBackups(), dir = await mkdtemp(join(tmpdir(), 'chat-restore-independent-'));
+  const path = join(dir, 'independent-chat.edx'), plain = new Map(); let opens = 0;
+  try {
+    const saved = await modules.createChatBackup(bundle.descriptor, bundle.source, {
+      async append(name, bytes) { plain.set(name, [...(plain.get(name) ?? []), Buffer.from(bytes)]); },
+      open(name) { return (async function* () { yield* plain.get(name) ?? []; })(); }, async abort() { plain.clear(); },
+    }, {
+      async write(stream) { const file = await open(path, 'wx'); try { for await (const bytes of stream) await file.writeFile(bytes); await file.sync(); } finally { await file.close(); } },
+      open() { opens++; return disk(path); },
+    }, { append(no, hex) { assert.equal(opens, 2); return bundle.receiver.append(no, hex); }, seal: (sha, bytes) => bundle.receiver.seal(sha, bytes) },
+    'local-independent-chat-backup-passphrase');
+    assert.equal(opens, 2); assert.equal(plain.size, 0); assert.equal(saved.sealReceipt.success, true);
+    const local = []; for await (const bytes of disk(path)) local.push(Buffer.from(bytes)); const cipher = Buffer.concat(local);
+    const remote = []; for (let no = 0; no < saved.chunks; no++) remote.push(Buffer.from((await client.savedChunk(bundle.descriptor.backup_id, no)).hex, 'hex'));
+    assert.deepEqual(Buffer.concat(remote), cipher); assert.equal(hash(cipher), saved.cipherSha256);
+    // Authenticate the saved file again and compare ALL original target physical columns, not just a canned descriptor.
+    const authenticated = new Map();
+    await modules.verifyEncryptedVolume(disk(path), 'local-independent-chat-backup-passphrase', {
+      async append(name, bytes) { authenticated.set(name, Buffer.concat([authenticated.get(name) ?? Buffer.alloc(0), Buffer.from(bytes)])); },
+      async abort() { authenticated.clear(); },
+    }, { expectedMetadata: { exportId: bundle.descriptor.backup_id, volumeId: bundle.descriptor.backup_id }, limits: modules.CHAT_BACKUP_CONTAINER_LIMITS });
+    assert.equal(authenticated.size, KEYS.chat.length);
+    for (const key of KEYS.chat) {
+      const query = await scalar(db, 'SELECT private.employee_transfer_chat_query($1)', [key]);
+      const expected = (await rows(db, `SELECT body::text||E'\\n' AS line FROM (${query}) AS r ORDER BY id COLLATE "C"`)).map(r => r.line).join('');
+      assert.equal(authenticated.get(modules.chatEntryPath(key)).toString(), expected, `${key}: real target backup bytes`);
+    }
+    assert.deepEqual(await crOtherBackups(), others);
+    if (afterSeal) await afterSeal({ client, descriptor: bundle.descriptor, saved, cipher, path });
+    return bundle.descriptor;
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}
+async function crReady(input = crInput(), decisions = crDecisions(input)) {
+  await cstage(input); const p = await crPlan(decisions); assert.deepEqual(p.conflicts, []); assert.equal(p.can_prepare_backup, true);
+  modules.validateChatMergePlan(p, input.catalog); const backup = await crSeal(input, p);
+  const files = crFiles(input); await rpc('employee_import_chat_media_bind', { ...auth(), p_files: files }); await crMedia(input);
+  return { input, p, backup };
+}
+async function crChunks(prepared, receipt, stop = receipt.total_chunks) {
+  for (let no = receipt.next_chunk; no < stop; no++) {
+    receipt = crReceipt(await crChunk(no), prepared.input, 'chunk', { no }); assert.equal(receipt.next_chunk, no + 1); assert.equal(await permits(), 0);
+  }
+  return receipt;
+}
+async function crRestore(prepared) {
+  const begun = crReceipt(await crBegin(prepared.p), prepared.input, 'begin'); assert.equal(begun.next_chunk, 0);
+  await crChunks(prepared, begun); await crMedia(prepared.input, 'recheck-import');
+  return crReceipt(await crVerify(), prepared.input, 'verify');
+}
+const crRows = key => rows(db, `SELECT to_jsonb(r)::text AS body FROM public.${key} r ORDER BY to_jsonb(r)::text`);
+async function crBefore() { return Object.fromEntries(await Promise.all(KEYS.chat.map(async key => [key, await crRows(key)]))); }
+async function crAssertRows({ input, p }, original) {
+  const sourceRows = Object.fromEntries(KEYS.chat.map(key => [key, lines(input.texts[key]).map(line => ({ line, row: JSON.parse(line) }))]));
+  const adminMap = (await state()).identity_restore.admin_map;
+  const roleMap = Object.fromEntries(p.roles.map(r => [r.source_id, r.target_id])), templateMap = {}, autoMap = {}, cardMap = {}, sessionMap = {};
+  const mapped = (map, value) => value === null ? null : map[value];
+  const canonical = async (key, line, patch) => scalar(db, `SELECT to_jsonb(r)::text FROM jsonb_populate_record(NULL::public.${key},$1::jsonb||$2::jsonb) r`, [line, JSON.stringify(patch)]);
+  const expect = async (key, line, patch, where, args) => {
+    const expected = await canonical(key, line, patch);
+    assert.equal(await scalar(db, `SELECT to_jsonb(r)::text FROM public.${key} r WHERE ${where}`, args), expected, `${key}: every physical field`);
+  };
+  for (const { line, row } of sourceRows.simulated_customers) {
+    const proposal = p.roles.find(r => r.source_id === row.id);
+    if (proposal.action === 'create') await expect('simulated_customers', line, { id: proposal.target_id, admin_id: adminMap[row.admin_id],
+      customer_id: proposal.number, custom_avatar_url: crRewrite(row.custom_avatar_url, input), customer_avatar: crRewrite(row.customer_avatar, input) }, 'id=$1', [proposal.target_id]);
+    else {
+      const old = original.simulated_customers.find(item => JSON.parse(item.body).id === proposal.target_id); assert.ok(old);
+      const before = JSON.parse(old.body), visible = [...(before.target_employee_ids ?? [])];
+      if (proposal.allow_visibility && visible.length) for (const employee of proposal.visibility_employee_ids) if (!visible.includes(employee)) visible.push(employee);
+      const actual = await scalar(db, 'SELECT to_jsonb(r)::text FROM public.simulated_customers r WHERE id=$1', [proposal.target_id]);
+      const actualRole = JSON.parse(actual); assert.deepEqual([...(actualRole.target_employee_ids ?? [])].sort(), [...visible].sort());
+      // Preserve timestamps and all other business attributes on a merge, not just name/avatar.
+      assert.equal(await scalar(db, 'SELECT ($1::jsonb-\'target_employee_ids\')::text', [actual]), await scalar(db, 'SELECT ($1::jsonb-\'target_employee_ids\')::text', [old.body]));
+    }
+  }
+  const mergedRoles = new Set(p.roles.filter(r => r.action === 'merge').map(r => r.target_id));
+  for (const old of original.simulated_customers) if (!mergedRoles.has(JSON.parse(old.body).id)) {
+    assert.equal(await scalar(db, 'SELECT to_jsonb(r)::text FROM public.simulated_customers r WHERE id=$1', [JSON.parse(old.body).id]), old.body, 'unselected target role stays byte-exact');
+  }
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.simulated_customers'), original.simulated_customers.length + p.roles.filter(r => r.action === 'create').length);
+  for (const { line, row } of sourceRows.cs_message_templates) {
+    const content = crRewrite(row.content, input), candidates = await rows(db, `SELECT id FROM public.cs_message_templates
+      WHERE admin_id=$1 AND source_type=$2 AND name=$3 AND content=$4 AND content_type=$5 AND sort_order=$6 AND is_pinned=$7
+        AND title IS NOT DISTINCT FROM $8 AND subtitle IS NOT DISTINCT FROM $9 ORDER BY id`,
+    [adminMap[row.admin_id], row.source_type, row.name, content, row.content_type, row.sort_order, row.is_pinned, row.title, row.subtitle]);
+    assert.ok(candidates.length); templateMap[row.id] = candidates[0].id;
+    await expect('cs_message_templates', line, { id: candidates[0].id, admin_id: adminMap[row.admin_id], content }, 'id=$1', [candidates[0].id]);
+  }
+  for (const { line, row } of sourceRows.customer_auto_messages) {
+    const content = crRewrite(row.content, input), candidates = await rows(db, `SELECT id FROM public.customer_auto_messages
+      WHERE customer_id=$1 AND admin_id=$2 AND name=$3 AND content=$4 AND message_type=$5 AND content_type=$6 AND sort_order=$7 AND is_enabled=$8
+        AND title IS NOT DISTINCT FROM $9 AND subtitle IS NOT DISTINCT FROM $10 ORDER BY id`,
+    [roleMap[row.customer_id], adminMap[row.admin_id], row.name, content, row.message_type, row.content_type, row.sort_order, row.is_enabled, row.title, row.subtitle]);
+    assert.ok(candidates.length); autoMap[row.id] = candidates[0].id;
+    await expect('customer_auto_messages', line, { id: candidates[0].id, customer_id: roleMap[row.customer_id], admin_id: adminMap[row.admin_id], content }, 'id=$1', [candidates[0].id]);
+  }
+  for (const { line, row } of sourceRows.rich_card_contents) {
+    const html = crRewrite(row.html_content, input), target = await rows(db, 'SELECT id FROM public.rich_card_contents WHERE content_hash=md5($1) AND html_content=$1', [html]);
+    assert.equal(target.length, 1); cardMap[row.id] = target[0].id;
+    const existing = original.rich_card_contents.find(item => JSON.parse(item.body).id === target[0].id);
+    if (existing) assert.equal(await scalar(db, 'SELECT to_jsonb(r)::text FROM public.rich_card_contents r WHERE id=$1', [target[0].id]), existing.body);
+    else await expect('rich_card_contents', line, { id: target[0].id, html_content: html, content_hash: createHash('md5').update(html).digest('hex'),
+      source_template_id: null, source_auto_message_id: null }, 'id=$1', [target[0].id]);
+  }
+  for (const { line, row } of sourceRows.customer_service_sessions) {
+    const target = await rows(db, 'SELECT id,service_ticket_number FROM public.customer_service_sessions WHERE customer_id=$1 AND employee_id=$2 AND status=$3',
+      [roleMap[row.customer_id], row.employee_id, row.status]); assert.equal(target.length, 1); sessionMap[row.id] = target[0].id;
+    if (original.customer_service_sessions.some(item => JSON.parse(item.body).id === target[0].id)) {
+      assert.equal(await scalar(db, 'SELECT to_jsonb(r)::text FROM public.customer_service_sessions r WHERE id=$1', [target[0].id]), original.customer_service_sessions.find(item => JSON.parse(item.body).id === target[0].id).body);
+    } else {
+      const occupied = original.customer_service_sessions.some(item => JSON.parse(item.body).service_ticket_number === row.service_ticket_number);
+      await expect('customer_service_sessions', line, { id: target[0].id, customer_id: roleMap[row.customer_id],
+        service_ticket_number: occupied ? `TRANSFER-${row.id}` : row.service_ticket_number }, 'id=$1', [target[0].id]);
+    }
+  }
+  for (const { line, row } of sourceRows.customer_employee_conversations) {
+    const patch = { customer_id: roleMap[row.customer_id], message_content: crRewrite(row.message_content, input), image_url: crRewrite(row.image_url, input) };
+    if (row.message_type === 'rich_card') {
+      let html;
+      if (row.content_frozen) html = sourceRows.rich_card_contents.find(c => c.row.id === row.rich_card_content_id)?.row.html_content;
+      else if (row.source_template_id !== null) html = sourceRows.cs_message_templates.find(t => t.row.id === row.source_template_id)?.row.content;
+      else if (row.source_auto_message_id !== null) html = sourceRows.customer_auto_messages.find(a => a.row.id === row.source_auto_message_id)?.row.content;
+      else html = sourceRows.rich_card_contents.find(c => c.row.id === row.rich_card_content_id)?.row.html_content ?? row.message_content;
+      assert.equal(typeof html, 'string'); html = crRewrite(html, input);
+      const card = await rows(db, 'SELECT id FROM public.rich_card_contents WHERE content_hash=md5($1) AND html_content=$1', [html]); assert.equal(card.length, 1);
+      Object.assign(patch, { rich_card_content_id: card[0].id, source_template_id: null, source_auto_message_id: null, content_frozen: true });
+    } else Object.assign(patch, { rich_card_content_id: mapped(cardMap, row.rich_card_content_id),
+      source_template_id: mapped(templateMap, row.source_template_id), source_auto_message_id: mapped(autoMap, row.source_auto_message_id) });
+    // Type the raw original JSON in SQL, never JSON.stringify rating_data (precision/SQL NULL).
+    const expected = await scalar(db, `SELECT (to_jsonb(r)||jsonb_build_object('rating_data_sql_null',$3::boolean))::text
+      FROM jsonb_populate_record(NULL::public.customer_employee_conversations,($1::jsonb-'rating_data_sql_null')||$2::jsonb) r`, [line, JSON.stringify(patch), row.rating_data_sql_null]);
+    const actual = await scalar(db, `SELECT (to_jsonb(r)||jsonb_build_object('rating_data_sql_null',rating_data IS NULL))::text FROM public.customer_employee_conversations r WHERE id=$1`, [row.id]);
+    // jsonb_populate_record converts JSON null to SQL NULL. Preserve source marker independently.
+    assert.equal(actual, expected, `message ${row.id}: all physical fields and SQL-null marker`);
+    assert.equal(await scalar(db, 'SELECT rating_data IS NULL FROM public.customer_employee_conversations WHERE id=$1', [row.id]), row.rating_data_sql_null);
+    assert.equal(await scalar(db, 'SELECT rating_data IS NOT DISTINCT FROM CASE WHEN $2::boolean THEN NULL::jsonb ELSE $3::jsonb END FROM public.customer_employee_conversations WHERE id=$1',
+      [row.id, row.rating_data_sql_null, (await scalar(db, 'SELECT ($1::jsonb->\'rating_data\')::text', [line]))]), true);
+  }
+  for (const { line, row } of sourceRows.ccc_conversation_annotations) {
+    const existing = original.ccc_conversation_annotations.find(item => { const r = JSON.parse(item.body); return r.customer_id === roleMap[row.customer_id] && r.employee_id === row.employee_id; });
+    const where = 'customer_id=$1 AND employee_id=$2', args = [roleMap[row.customer_id], row.employee_id];
+    if (existing) assert.equal(await scalar(db, `SELECT to_jsonb(r)::text FROM public.ccc_conversation_annotations r WHERE ${where}`, args), existing.body);
+    else await expect('ccc_conversation_annotations', line, { customer_id: roleMap[row.customer_id], owner_admin_id: adminMap[row.owner_admin_id], updated_by: mapped(adminMap, row.updated_by) }, where, args);
+  }
+  for (const { line, row } of sourceRows.customer_auto_message_logs) {
+    const target = await rows(db, 'SELECT id FROM public.customer_auto_message_logs WHERE customer_id=$1 AND employee_id=$2 AND auto_message_id=$3', [roleMap[row.customer_id], row.employee_id, autoMap[row.auto_message_id]]); assert.equal(target.length, 1);
+    const existing = original.customer_auto_message_logs.find(item => JSON.parse(item.body).id === target[0].id);
+    if (existing) assert.equal(await scalar(db, 'SELECT to_jsonb(r)::text FROM public.customer_auto_message_logs r WHERE id=$1', [target[0].id]), existing.body);
+    else await expect('customer_auto_message_logs', line, { id: target[0].id, customer_id: roleMap[row.customer_id], auto_message_id: autoMap[row.auto_message_id] }, 'id=$1', [target[0].id]);
+  }
+  for (const key of ['rating_requests', 'service_ratings']) for (const { line, row } of sourceRows[key]) {
+    await expect(key, line, { customer_id: roleMap[row.customer_id], session_id: mapped(sessionMap, row.session_id) }, 'id=$1', [row.id]);
+  }
+  // Every target original history/configuration row survives, including records unrelated to this package.
+  for (const key of KEYS.chat.filter(key => key !== 'simulated_customers')) {
+    const actual = new Set((await crRows(key)).map(r => r.body));
+    for (const row of original[key]) assert.ok(actual.has(row.body), `${key}: original target row preserved`);
+  }
+}
+async function crSeedTarget(input) {
+  const roleMap = Object.fromEntries(crDecisions(input).map(d => [d.source_id, d.target_id ?? d.source_id]));
+  const adminMap = (await state()).identity_restore.admin_map;
+  const templateLine = lines(input.texts.cs_message_templates).find(line => JSON.parse(line).id === CH.unusedTemplate);
+  const template = JSON.parse(templateLine);
+  await localChange(db, 'public.cs_message_templates', `INSERT INTO public.cs_message_templates
+    SELECT (jsonb_populate_record(NULL::public.cs_message_templates,$1::jsonb||$2::jsonb)).*`, [templateLine,
+  JSON.stringify({ id: CR.templateReuse, admin_id: adminMap[template.admin_id], content: crRewrite(template.content, input) })]);
+  const differentLine = lines(input.texts.cs_message_templates).find(line => JSON.parse(line).id === CH.template);
+  const different = JSON.parse(differentLine);
+  await localChange(db, 'public.cs_message_templates', `INSERT INTO public.cs_message_templates
+    SELECT (jsonb_populate_record(NULL::public.cs_message_templates,$1::jsonb||$2::jsonb)).*`, [differentLine,
+  JSON.stringify({ id: CR.templateDifferent, admin_id: adminMap[different.admin_id], content: '<p>新站同名不同內容必須保留</p>' })]);
+  await localChange(db, 'public.cs_message_templates', `INSERT INTO public.cs_message_templates
+    SELECT (jsonb_populate_record(NULL::public.cs_message_templates,$1::jsonb||$2::jsonb)).*`, [differentLine,
+  JSON.stringify({ id: CR.templateDifferentTitle, admin_id: adminMap[different.admin_id], content: crRewrite(different.content, input), title: '新站不同標題不得當同模板' })]);
+  const frozenLine = lines(input.texts.rich_card_contents).find(line => JSON.parse(line).html_content === CHAT_HTML);
+  const frozen = JSON.parse(frozenLine), frozenHtml = crRewrite(frozen.html_content, input);
+  await localChange(db, 'public.rich_card_contents', `INSERT INTO public.rich_card_contents
+    SELECT (jsonb_populate_record(NULL::public.rich_card_contents,$1::jsonb||$2::jsonb)).*`, [frozenLine,
+  JSON.stringify({ id: CR.cardReuse, html_content: frozenHtml, content_hash: createHash('md5').update(frozenHtml).digest('hex'),
+    source_template_id: null, source_auto_message_id: null, created_at: '2019-01-02T03:04:05.123456Z' })]);
+  const autoLine = lines(input.texts.customer_auto_messages).find(line => JSON.parse(line).id === CH.auto), auto = JSON.parse(autoLine);
+  await localChange(db, 'public.customer_auto_messages', `INSERT INTO public.customer_auto_messages
+    SELECT (jsonb_populate_record(NULL::public.customer_auto_messages,$1::jsonb||$2::jsonb)).*`, [autoLine,
+  JSON.stringify({ id: CR.autoReuse, admin_id: adminMap[auto.admin_id], customer_id: roleMap[auto.customer_id], content: crRewrite(auto.content, input) })]);
+  await localChange(db, 'public.customer_service_sessions', `INSERT INTO public.customer_service_sessions(id,customer_id,employee_id,service_ticket_number,status,created_at,closed_at)
+    VALUES($1,$3,$5,'TARGET-SLOT','active','2020-01-02',NULL),($2,$4,$5,'CHAT-TICKET-C','closed','2019-01-02','2020-01-02')`,
+  [CR.activeSlot, CR.ticketOccupied, CH.targetExact, CH.targetName, F.history]);
+  await localChange(db, 'public.customer_employee_conversations', `INSERT INTO public.customer_employee_conversations(id,customer_id,employee_id,sender_type,message_content,message_type,source_type,created_at)
+    VALUES($1,$2,$3,'customer','新站既有訊息不可變','text','ccc_service','2019-01-02')`, [CR.existingMessage, CH.targetExact, F.history]);
+  await localChange(db, 'public.ccc_conversation_annotations', `INSERT INTO public.ccc_conversation_annotations(customer_id,employee_id,owner_admin_id,note,is_special,updated_by,updated_at)
+    VALUES($1,$2,$3,'保留新站備註',false,$3,'2019-01-02')`, [CH.targetExact, F.history, NEW.branch]);
+  await localChange(db, 'public.customer_auto_message_logs', `INSERT INTO public.customer_auto_message_logs(id,customer_id,employee_id,auto_message_id,sent_at)
+    VALUES($1,$2,$3,$4,'2019-01-02')`, [CR.existingLog, CH.targetExact, F.history, CR.autoReuse]);
+  await localChange(db, 'public.service_ratings', `INSERT INTO public.service_ratings(id,customer_id,employee_id,session_id,rating,comment,created_at)
+    VALUES($1,$2,$3,$4,3,'新站原評分', '2019-01-02')`, [CR.existingRating, CH.targetExact, F.history, CR.activeSlot]);
+}
+async function crRejectUnchanged(actions, pattern) {
+  const before = await business(), saved = await transferSnapshot(), original = await triggers(), backups = await crBackups();
+  for (const action of actions) await assert.rejects(action(), pattern);
+  assert.deepEqual(await business(), before); assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await triggers(), original);
+  assert.deepEqual(await crBackups(), backups); assert.equal(await permits(), 0);
+}
+
+test('chat restore: decisions cover all roles and explicitly handle name manual choice scope numbering visibility and many-to-one', { timeout: 300000 }, () => transaction(async () => {
+  const input = crInput({}, { small: true }); await cstage(input);
+  const before = await business(), saved = await transferSnapshot(), original = await triggers(), decisions = crDecisions(input);
+  for (const invalid of [decisions.slice(1), [...decisions.slice(1), decisions[1]], decisions.map((d, i) => i ? d : { ...d, confirmed: false })])
+    await assert.rejects(crPlan(invalid), /every source role|explicit confirmed decision/i);
+  const p = await crPlan(decisions), byId = Object.fromEntries(p.roles.map(r => [r.source_id, r]));
+  assert.deepEqual(modules.validateChatMergePlan(p, input.catalog), p); assert.deepEqual(p.conflicts, []);
+  assert.equal(byId[CH.exact].target_id, CH.targetExact); assert.equal(byId[CH.byName].target_id, CH.targetName);
+  assert.equal(byId[CH.ambiguous].target_id, CH.targetAmbiguousB, 'manual ambiguous choice is honored');
+  assert.equal(byId[CH.numberConflict].action, 'create');
+  assert.equal(byId[CH.numberConflict].number, `CUS-${hash(`${task.job_id}:${CH.numberConflict}`).slice(0, 12).toUpperCase()}`);
+  for (const key of [CH.multiA, CH.multiB]) { assert.equal(byId[key].target_id, CH.targetMulti); assert.equal(byId[key].multi_source_target, true); }
+  assert.deepEqual([...byId[CH.exact].visibility_employee_ids].sort(), [F.history, F.noHeartbeat].sort());
+  const deniedVisibility = await crPlan(crDecisions(input, { [CH.exact]: { allow_visibility: false } }));
+  assert.deepEqual(deniedVisibility.conflicts, []); assert.equal(deniedVisibility.roles.find(r => r.source_id === CH.exact).allow_visibility, false);
+  for (const [sourceId, target] of [[CH.crossAdmin, CH.targetCrossAdmin], [CH.crossSource, CH.targetCrossSource], [CH.fresh, F.outsider]]) {
+    const invalid = await crPlan(crDecisions(input, { [sourceId]: { target_id: target } }));
+    assert.ok(invalid.conflicts.includes('chat_target_role_invalid')); assert.equal(invalid.can_prepare_backup, false);
+  }
+  // A genuine READ ONLY request cannot update heartbeat, decisions, permits or business state.
+  await db.exec('SET TRANSACTION READ ONLY'); assert.deepEqual(await crPlan(decisions), p);
+  assert.deepEqual(await business(), before); assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await triggers(), original);
+}));
+
+test('chat restore: backup is an independent real encrypted file authenticated sealed and retrievable after cancellation without occupying either older backup', { timeout: 400000 }, () => transaction(async () => {
+  await nstage(nrInput()); const notificationPlan = await ncplan(); const notificationBackup = await nrSeal(nrInput(), notificationPlan);
+  const input = crInput({}, { small: true }); await cstage(input); const p = await crPlan(crDecisions(input));
+  const before = await business(), original = await triggers(), others = await crOtherBackups();
+  assert.deepEqual([...new Set(others.map(row => row.kind))].sort(), ['dispatch', 'notifications']);
+  const client = modules.createChatMergeSession(task.job_token, input.catalog); let backupId;
+  await crSeal(input, p, { async afterSeal({ descriptor, cipher, saved }) {
+    backupId = descriptor.backup_id; const frozen = await crBackups(); assert.equal(frozen.length, 1);
+    const row = JSON.parse(frozen[0].body); assert.ok(row.sealed_at); assert.equal(row.sealed_sha256, saved.cipherSha256);
+    assert.equal(row.catalog.media_included, false); assert.equal(row.catalog.scope, 'chat-backup');
+    await rpc('employee_transfer_cancel', auth());
+    assert.deepEqual(await crBackups(), frozen); assert.deepEqual(await crOtherBackups(), others);
+    const fresh = await adminLogin(db, 'root', PASSWORDS.root); transport(db, fresh);
+    const reopened = modules.createChatMergeSession(task.job_token, input.catalog), remote = [];
+    for (let n = 0; n < saved.chunks; n++) remote.push(Buffer.from((await reopened.savedChunk(backupId, n)).hex, 'hex'));
+    assert.deepEqual(Buffer.concat(remote), cipher); assert.equal((await nbget(notificationBackup, 0, fresh)).backup_id, notificationBackup.backup_id);
+    await assert.rejects(on(db, 'get_employee_chat_saved_backup_chunk', { p_admin_session_token: other, p_backup_id: backupId, p_chunk_no: 0 }), /unavailable/);
+    await assert.rejects(client.plan(p.decisions), /unknown or unconfirmed/); transport();
+  } });
+  assert.ok(backupId); assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+test('chat restore: media inventories fixed HTML real and virtual avatars rich cards with exact service ACL and fail-closed encoded JSON references', { timeout: 300000 }, () => transaction(async () => {
+  const input = crInput({}, { small: true }), before = await business(), original = await triggers();
+  for (const changes of [
+    { simulated_customers: changeChatRow(r => r.id === CH.fresh, { customer_avatar: 'https://unknown.invalid/avatar.png' }) },
+    { cs_message_templates: changeChatRow(r => r.id === CH.template, { content: `<a href="${CR_URLS.html.replace('https:', 'https&colon;')}">encoded</a>` }) },
+    { customer_employee_conversations: changeChatRow(r => r.id === chatMessageId(1), { rating_data: { nested: [{ media_url: CR_URLS.html }] }, rating_data_sql_null: false }) },
+  ]) await chatSavepoint(async () => {
+    await cstage(crInput(changes, { small: true })); const saved = await transferSnapshot();
+    await assert.rejects(rpc('get_employee_transfer_chat_media', { ...auth(), p_direction: 'import' }), /media|Encoded|Unmanaged|rating JSON/i);
+    assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before);
+  });
+  await cstage(input);
+  const inventory = await rpc('get_employee_transfer_chat_media', { ...auth(), p_direction: 'import' });
+  assert.equal(inventory.version, 1); assert.equal(inventory.scope, 'site-chat-media'); assert.deepEqual(inventory.chat_catalog, input.catalog);
+  assert.deepEqual(inventory.files.map(r => r.source_url), crFiles(input).map(r => r.source_url)); assert.equal(inventory.files.length, 6);
+  assert.equal(inventory.files.some(r => r.source_url.startsWith('customer-avatar:')), false);
+  assert.equal(inventory.files.find(r => r.source_url === CR_URLS.legacy).avatar, true);
+  const avatar = crFiles(input).find(f => f.source_url === CR_URLS.avatar), files = crFiles(input);
+  for (const patch of [{ bytes: 5242881 }, { content_type: 'application/pdf' }]) {
+    await assert.rejects(rpc('employee_import_chat_media_bind', { ...auth(), p_files: files.map(f => f.key === avatar.key ? { ...f, ...patch } : f) }), /avatar.*5 MiB/i);
+  }
+  await rpc('employee_import_chat_media_bind', { ...auth(), p_files: files });
+  for (const role of ['anon', 'authenticated']) {
+    await assert.rejects(crAuthorize(files[0], 'upload', {}, role), /permission denied/i);
+    await assert.rejects(crCommit(files[0], 'upload', { p_generation: '0' }, role), /permission denied/i);
+  }
+  for (const name of [CR_AUTH, CR_COMMIT]) {
+    const fn = (await rows(db, `SELECT oid,prosecdef,proconfig,proargnames,format_type(proargtypes[array_length(proargnames,1)-1],NULL) AS last_type
+      FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=$1`, [name]))[0]; assert.ok(fn); assert.equal(fn.prosecdef, true);
+    assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+    for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), role === 'service_role');
+    if (name === CR_COMMIT) assert.equal(fn.last_type, 'bigint');
+  }
+  await crMedia(input);
+  const html = `<p class='keep'>𠮷 é é &amp; &#65;</p><img src="${CR_URLS.html}"><img src='${CR_URLS.html}'>`;
+  const rewritten = await scalar(db, 'SELECT private.employee_transfer_chat_rewrite_media(j,$2) FROM private.employee_transfer_jobs j WHERE id=$1', [task.job_id, html]);
+  assert.equal(rewritten, crRewrite(html, input)); assert.notEqual(createHash('md5').update(html).digest('hex'), createHash('md5').update(rewritten).digest('hex'));
+  assert.deepEqual((await state()).chat_catalog, input.catalog, 'original row hashes/catalog are never rewritten');
+  assert.deepEqual(await business(), before); assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+test('chat restore: source media export binds same-site real references and rejects drift while close keeps media pending', { timeout: 300000 }, () => transaction(async () => {
+  const exp = await on(source, 'employee_export_chat_begin', { p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root, p_package_id: packageId });
+  const files = crFiles(chat), inventory = await on(source, 'get_employee_transfer_chat_media', { ...auth(exp, sourceSession), p_direction: 'export' });
+  assert.deepEqual(inventory.chat_catalog, chat.catalog); assert.equal(inventory.files.length, 3);
+  assert.deepEqual(inventory.files.map(f => f.key), files.map(f => f.key));
+  for (const file of files) for (const action of ['download', 'recheck-export']) {
+    const ctx = await on(source, CR_AUTH, { ...auth(exp, sourceSession), p_action: action, p_object_key: file.key }, 'service_role');
+    assert.equal(ctx.generation, '0'); assert.equal(ctx.path, file.source_url.split('/public/')[1].split('/').slice(1).join('/'));
+    assert.deepEqual(await on(source, CR_COMMIT, { ...auth(exp, sourceSession), p_action: action, p_object_key: file.key,
+      p_bytes: file.bytes, p_sha256: file.sha256, p_content_type: file.content_type, p_storage_origin: SOURCE_ORIGIN, p_generation: ctx.generation }, 'service_role'),
+    { success: true, key: file.key, bytes: file.bytes, sha256: file.sha256, content_type: file.content_type, full_site_complete: false });
+  }
+  await source.query('SELECT private.employee_transfer_check_chat_media_export(j) FROM private.employee_transfer_jobs j WHERE id=$1', [exp.job_id]);
+  const point = `chat_source_drift_${++sequence}`; await source.exec(`SAVEPOINT ${point}`);
+  try {
+    await source.query("UPDATE public.simulated_customers SET remarks='changed after media reads' WHERE id=$1", [CH.exact]);
+    await assert.rejects(on(source, 'get_employee_transfer_chat_media', { ...auth(exp, sourceSession), p_direction: 'export' }), /source changed/i);
+  } finally { await source.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); }
+  const before = await business(source); assert.equal((await on(source, 'employee_export_chat_verify', auth(exp, sourceSession))).media_pending, true);
+  const closed = await on(source, 'employee_export_chat_close', auth(exp, sourceSession));
+  assert.equal(closed.media_pending, true); assert.equal(closed.full_site_complete, false); assert.deepEqual(await business(source), before);
+}, source));
+
+test('chat restore: ten-table pipeline preserves every physical field old and new history frozen hashes slot remaps precision and no money or queue effects', { timeout: 590000 }, () => transaction(async () => {
+  const input = crInput(); await crSeedTarget(input); const old = await crBefore(), outside = await crOutside(), queues = await crQueues(), original = await triggers(), sourceBefore = await business(source);
+  const prepared = await crReady(input), before = await business(), begin = crReceipt(await crBegin(prepared.p), input, 'begin');
+  assert.equal(begin.next_chunk, 0); assert.deepEqual(begin.counts, Object.fromEntries(KEYS.chat.map(key => [key, 0])));
+  assert.deepEqual(await business(), before, 'begin is planning only'); assert.equal((await crBegin(prepared.p)).repeated, true);
+  await crChunks(prepared, begin); await crMedia(input, 'recheck-import'); const result = crReceipt(await crVerify(), input, 'verify');
+  assert.equal(result.verified, true); assert.equal(result.stage, 'done'); assert.deepEqual(result.counts, ccounts(input));
+  await crAssertRows(prepared, old);
+  assert.equal(await scalar(db, 'SELECT rich_card_content_id FROM public.customer_employee_conversations WHERE id=$1', [chatMessageId(2)]),
+    await scalar(db, 'SELECT rich_card_content_id FROM public.customer_employee_conversations WHERE id=$1', [chatMessageId(3)]));
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM public.customer_employee_conversations WHERE message_type='rich_card' AND (NOT content_frozen OR source_template_id IS NOT NULL OR source_auto_message_id IS NOT NULL)"), 0);
+  assert.equal(await scalar(db, 'SELECT id FROM public.customer_service_sessions WHERE customer_id=$1 AND employee_id=$2 AND status=\'active\'', [CH.targetExact, F.history]), CR.activeSlot);
+  assert.equal(await scalar(db, 'SELECT service_ticket_number FROM public.customer_service_sessions WHERE id=$1', [CH.closedSession]), `TRANSFER-${CH.closedSession}`);
+  assert.equal(await scalar(db, 'SELECT id FROM public.cs_message_templates WHERE name=\'Chat unused library\''), CR.templateReuse);
+  assert.equal(await scalar(db, 'SELECT id FROM public.customer_auto_messages WHERE customer_id=$1 AND name=\'Chat linked auto\'', [CH.targetExact]), CR.autoReuse);
+  assert.equal(await scalar(db, 'SELECT rich_card_content_id FROM public.customer_employee_conversations WHERE id=$1', [chatMessageId(2)]), CR.cardReuse);
+  const written = await business(); assert.equal((await crVerify()).repeated, true); assert.equal((await crStatus()).verified, true);
+  assert.deepEqual(await business(), written); assert.deepEqual(await crOutside(), outside); assert.deepEqual(await crQueues(), queues);
+  assert.deepEqual(await business(source), sourceBefore); assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+test('chat restore: denied visibility preserves all original role attributes without adding employees', { timeout: 400000 }, () => transaction(async () => {
+  const input = crInput({}, { small: true }), decisions = crDecisions(input, { [CH.exact]: { allow_visibility: false } });
+  const old = await crBefore(), original = await triggers(), prepared = await crReady(input, decisions); await crRestore(prepared);
+  await crAssertRows(prepared, old); assert.deepEqual(await scalar(db, 'SELECT target_employee_ids FROM public.simulated_customers WHERE id=$1', [CH.targetExact]), [F.empty]);
+  assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+test('chat restore: empty source tables consume all ten explicit zero-row SQL chunks and preserve all target rows', { timeout: 300000 }, () => transaction(async () => {
+  const input = crInput({}, { empty: true }), before = await business(), original = await triggers(), prepared = await crReady(input, []);
+  const begin = crReceipt(await crBegin(prepared.p), input, 'begin'); assert.equal(begin.total_chunks, 10); assert.equal(begin.next_chunk, 0);
+  await crChunks(prepared, begin); const result = crReceipt(await crVerify(), input, 'verify'); assert.equal(result.verified, true);
+  assert.deepEqual(result.counts, Object.fromEntries(KEYS.chat.map(key => [key, 0]))); assert.deepEqual(await business(), before);
+  assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+test('chat restore: missing sealed backup or missing media receipts blocks begin before all business writes', { timeout: 350000 }, () => transaction(async () => {
+  const input = crInput({}, { small: true }); await cstage(input); const p = await crPlan(crDecisions(input));
+  await crRejectUnchanged([() => crBegin(p)], /backup|sealed/i);
+  await crSeal(input, p); await crRejectUnchanged([() => crBegin(p)], /media/i);
+  const files = crFiles(input); await rpc('employee_import_chat_media_bind', { ...auth(), p_files: files });
+  for (const file of files.slice(0, -1)) await crCommit(file);
+  await crRejectUnchanged([() => crBegin(p)], /media/i); assert.equal((await state()).chat_restore, undefined);
+  await crCommit(files.at(-1)); const before = await business(), result = crReceipt(await crBegin(p), input, 'begin');
+  assert.equal(result.next_chunk, 0); assert.deepEqual(await business(), before); await stillClosed();
+}));
+
+test('chat restore: post-begin target prerequisite authority expiry and trigger drift reject every operation without effects', { timeout: 400000 }, () => transaction(async () => {
+  const prepared = await crReady(crInput({}, { small: true })); await crBegin(prepared.p);
+  const actions = extra => [() => crBegin(prepared.p, extra), () => crChunk(0, extra), () => crVerify(extra), () => crStatus(extra)];
+  for (const [relation, sql, args, pattern] of [
+    ['public.simulated_customers', "UPDATE public.simulated_customers SET remarks='post-plan target drift' WHERE id=$1", [CH.targetExact], /target|fingerprint|changed/i],
+    ['public.wallets', 'UPDATE public.wallets SET available_balance=available_balance+1 WHERE user_id=$1', [F.history], /finance|wallet|changed|differ/i],
+    [null, 'ALTER TABLE public.customer_employee_conversations DISABLE TRIGGER freeze_service_rich_card_before_insert', [], /trigger|unreviewed|guard/i],
+  ]) await chatSavepoint(async () => {
+    if (relation) await localChange(db, relation, sql, args); else await db.exec(sql);
+    await crRejectUnchanged(actions({}), pattern);
+  });
+  for (const token of [branch, emergency, other, randomUUID()]) await crRejectUnchanged(actions({ p_admin_session_token: token }), /Super administrator|invalid or expired/i);
+  await crRejectUnchanged(actions({ p_job_token: randomUUID() }), /invalid or expired/i);
+  for (const [sql, args] of [
+    ["UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1", [NEW.root]],
+    ["UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", [task.job_id]],
+    ["UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1", [task.job_id]],
+  ]) await chatSavepoint(async () => { await db.query(sql, args); await crRejectUnchanged(actions({}), /invalid or expired/i); });
+  assert.equal((await crStatus()).next_chunk, 0); await stillClosed();
+}));
+
+test('chat restore: read-before-generation receipts cannot commit late and final verification requires every post-apply recheck', { timeout: 400000 }, () => transaction(async () => {
+  const prepared = await crReady(crInput({}, { small: true })), begun = await crBegin(prepared.p), files = crFiles(prepared.input);
+  await crRejectUnchanged([() => crVerify()], /incomplete|not complete|chunk/i);
+  await crMedia(prepared.input, 'recheck-import'); const delayed = await crAuthorize(files[0], 'recheck-import'); assert.equal(delayed.generation, '0');
+  const completed = await crChunks(prepared, begun); assert.notEqual(completed.generation, delayed.generation);
+  await crRejectUnchanged([() => crCommit(files[0], 'recheck-import', { p_generation: delayed.generation })], /generation.*changed/i);
+  await crRejectUnchanged([() => crVerify()], /media|readback/i);
+  for (const file of files.slice(0, -1)) await crCommit(file, 'recheck-import');
+  await crCommit(files.at(-1), 'upload'); await crRejectUnchanged([() => crVerify()], /media|readback/i);
+  await crCommit(files.at(-1), 'recheck-import'); const result = crReceipt(await crVerify(), prepared.input, 'verify'); assert.equal(result.verified, true);
+  const saved = await transferSnapshot(), before = await business();
+  await db.exec('SET TRANSACTION READ ONLY'); const status = crReceipt(await crStatus(), prepared.input, 'status'); assert.equal(status.repeated, true);
+  assert.deepEqual(await transferSnapshot(), saved); assert.deepEqual(await business(), before);
+}));
+
+test('chat restore: a late 200-message failure rolls back the current block maps progress permit and exact trigger modes', { timeout: 590000 }, () => transaction(async () => {
+  await db.exec('ALTER TABLE public.customer_employee_conversations ENABLE ALWAYS TRIGGER freeze_service_rich_card_before_insert');
+  const prepared = await crReady(), begun = await crBegin(prepared.p), messageChunk = crWork(prepared.input).findIndex(item => item.key === 'customer_employee_conversations');
+  await crChunks(prepared, begun, messageChunk); const status = await crStatus(), original = await triggers(), outside = await crOutside();
+  await db.exec(`CREATE FUNCTION public.chat_restore_late_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.action='trigger_restore' THEN
+      IF (SELECT count(*) FROM public.customer_employee_conversations)<>200 OR (SELECT count(*) FROM private.employee_transfer_write_permits)<>1
+        THEN RAISE EXCEPTION 'chat late-failure precondition not reached';END IF;
+      RAISE EXCEPTION 'late SQL32 message failure';
+    END IF;RETURN NEW;END $$;
+    CREATE TRIGGER chat_restore_late_fail BEFORE INSERT ON private.employee_transfer_events FOR EACH ROW EXECUTE FUNCTION public.chat_restore_late_fail()`);
+  await crRejectUnchanged([() => crChunk(messageChunk)], /late SQL32 message failure/);
+  assert.deepEqual(await crStatus(), status); assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.customer_employee_conversations'), 0);
+  assert.equal(await scalar(db, 'SELECT private.employee_transfer_pending_trigger_bypass() IS NULL'), true);
+  await db.exec('DROP TRIGGER chat_restore_late_fail ON private.employee_transfer_events; DROP FUNCTION public.chat_restore_late_fail()');
+  const written = crReceipt(await crChunk(messageChunk), prepared.input, 'chunk', { no: messageChunk }); assert.equal(written.next_chunk, messageChunk + 1);
+  const before = await business(), saved = await transferSnapshot(); assert.equal((await crChunk(messageChunk)).repeated, true);
+  assert.deepEqual(await business(), before);
+  // A repeated request must neither duplicate rows nor silently advance the cursor a second time.
+  assert.equal((await crStatus()).next_chunk, messageChunk + 1); assert.equal((await state()).chat_restore.generation, String(messageChunk + 1));
+  assert.equal((await transferSnapshot()).find(r => r.name === 'private.employee_transfer_staging').body, saved.find(r => r.name === 'private.employee_transfer_staging').body);
+  await crChunks(prepared, written); await crMedia(prepared.input, 'recheck-import'); assert.equal((await crVerify()).verified, true);
+  assert.deepEqual(await crOutside(), outside); assert.deepEqual(await triggers(), original); await stillClosed();
+}));
+
+test('chat restore: same message UUID with different mapped content blocks instead of silently skipping history', { timeout: 400000 }, () => transaction(async () => {
+  const input = crInput({}, { small: true });
+  await localChange(db, 'public.customer_employee_conversations', `INSERT INTO public.customer_employee_conversations(id,customer_id,employee_id,sender_type,message_content,message_type,source_type)
+    VALUES($1,$2,$3,'employee','同UUID不同既有內容','text','ccc_service')`, [chatMessageId(1), CH.targetExact, F.history]);
+  const prepared = await crReady(input), begun = await crBegin(prepared.p), messageChunk = crWork(input).findIndex(item => item.key === 'customer_employee_conversations');
+  await crChunks(prepared, begun, messageChunk); await crRejectUnchanged([() => crChunk(messageChunk)], /collision|different|conflict|mismatch|differs/i);
+  assert.equal(await scalar(db, 'SELECT message_content FROM public.customer_employee_conversations WHERE id=$1', [chatMessageId(1)]), '同UUID不同既有內容');
+  assert.equal((await crStatus()).next_chunk, messageChunk); await stillClosed();
+}));
+
+test('chat restore: identical mapped message UUID is safely reused and still counted as consumed source history', { timeout: 400000 }, () => transaction(async () => {
+  const input = crInput({}, { small: true }), line = lines(input.texts.customer_employee_conversations).find(line => JSON.parse(line).id === chatMessageId(1));
+  await localChange(db, 'public.customer_employee_conversations', `INSERT INTO public.customer_employee_conversations
+    SELECT (jsonb_populate_record(NULL::public.customer_employee_conversations,($1::jsonb-'rating_data_sql_null')||jsonb_build_object('customer_id',$2::uuid))).*`, [line, CH.targetExact]);
+  const old = await crBefore(), before = await scalar(db, 'SELECT to_jsonb(r)::text FROM public.customer_employee_conversations r WHERE id=$1', [chatMessageId(1)]);
+  const prepared = await crReady(input), result = await crRestore(prepared); assert.equal(result.counts.customer_employee_conversations, 6);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.customer_employee_conversations'), 6);
+  assert.equal(await scalar(db, 'SELECT to_jsonb(r)::text FROM public.customer_employee_conversations r WHERE id=$1', [chatMessageId(1)]), before);
+  await crAssertRows(prepared, old); await stillClosed();
+}));
+
+test('chat restore: four restore RPCs expose exact arguments grants and keep generic apply and close absent', () => transaction(async () => {
+  for (const [name, args] of [
+    ['employee_import_chat_begin', ['p_admin_session_token', 'p_job_token', 'p_plan_hash']],
+    ['employee_import_chat_chunk', ['p_admin_session_token', 'p_job_token', 'p_chunk_no']],
+    ['employee_import_chat_verify', ['p_admin_session_token', 'p_job_token']],
+    ['get_employee_import_chat_restore_status', ['p_admin_session_token', 'p_job_token']],
+  ]) {
+    const found = await rows(db, `SELECT oid,proargnames,prosecdef,provolatile,proconfig,
+      EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS everyone
+      FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=$1`, [name]); assert.equal(found.length, 1);
+    const fn = found[0]; assert.deepEqual(fn.proargnames, args); assert.equal(fn.prosecdef, true); assert.equal(fn.everyone, false);
+    assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+    if (name.startsWith('get_')) assert.equal(fn.provolatile, 's');
+    for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), role !== 'service_role');
+  }
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN ('employee_import_chat_apply','employee_import_chat_close')"), 0);
+}));
+
+test('chat restore: committed lost response survives reopening and new restore API status before explicit continuation and cancellation', { timeout: 590000 }, async () => {
+  const originalDb = db, originalSession = session, before = await business(), saved = await transferSnapshot(); let clone;
+  try {
+    clone = new PGlite({ loadDataDir: await db.dumpDataDir('none'), extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await clone.waitReady; db = clone;
+    let prepared, old; const outside = await crOutside(), queues = await crQueues(), original = await triggers();
+    await transaction(async () => { const input = crInput({}, { small: true }); old = await crBefore(); prepared = await crReady(input); }, db, true);
+    const calls = []; let lose = true;
+    const committedTransport = token => modules.setHarness({ token, rpc(name, args) {
+      const query = { abortSignal() { return query; }, then(resolve, reject) {
+        calls.push(name); return transaction(() => on(db, name, args), db, true).then(data => {
+          if (name === 'employee_import_chat_chunk' && lose) { lose = false; throw Error('synthetic loss after actual SQL COMMIT'); }
+          return { data, error: null };
+        }).then(resolve, reject);
+      } }; return query;
+    } });
+    committedTransport(session); const first = modules.createChatRestoreSession(task.job_token, prepared.input.catalog);
+    assert.equal((await first.begin(prepared.p.plan_hash)).next_chunk, 0);
+    await assert.rejects(first.chunk(0), /unknown or unconfirmed/); const count = calls.length;
+    await assert.rejects(first.chunk(0), /unknown or unconfirmed/); assert.equal(calls.length, count, 'no unreconciled write retry');
+    const dump = await db.dumpDataDir('none'); await db.close(); clone = new PGlite({ loadDataDir: dump, extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await clone.waitReady; db = clone;
+    session = await adminLogin(db, 'root', PASSWORDS.root); assert.notEqual(session, originalSession); committedTransport(session);
+    const resumed = modules.createChatRestoreSession(task.job_token, prepared.input.catalog), transferBefore = await transferSnapshot();
+    const status = crReceipt(await resumed.status(), prepared.input, 'status'); assert.equal(status.next_chunk, 1); assert.deepEqual(await transferSnapshot(), transferBefore);
+    const written = await business(); assert.equal((await resumed.chunk(0)).repeated, true); assert.deepEqual(await business(), written);
+    let receipt = status; for (let no = status.next_chunk; no < status.total_chunks; no++) receipt = await resumed.chunk(no);
+    assert.equal(receipt.stage, 'ready_to_verify'); await transaction(() => crMedia(prepared.input, 'recheck-import'), db, true);
+    const final = modules.createChatRestoreSession(task.job_token, prepared.input.catalog); await final.status(); assert.equal((await final.verify()).verified, true);
+    await transaction(async () => { await crAssertRows(prepared, old); assert.deepEqual(await crOutside(), outside); assert.deepEqual(await crQueues(), queues);
+      assert.deepEqual(await triggers(), original); await stillClosed(); }, db, true);
+    const restored = await business(); await transaction(() => rpc('employee_transfer_cancel', auth()), db, true); await assert.rejects(final.status(), /unknown or unconfirmed/);
+    await transaction(async () => { transport(); const merge = modules.createChatMergeSession(task.job_token, prepared.input.catalog);
+      assert.equal((await merge.savedChunk(prepared.backup.backup_id, 0)).backup_id, prepared.backup.backup_id);
+      assert.deepEqual(await business(), restored); await stillClosed(); }, db, true);
+    assert.equal(calls.filter(name => name === 'employee_import_chat_chunk').length, receipt.total_chunks + 1);
+  } finally { db = originalDb; session = originalSession; await clone?.close(); transport(); }
+  assert.deepEqual(await business(), before); assert.deepEqual(await transferSnapshot(), saved);
+});
 
 // Last: real COMMITs are intentional. No outer rollback can masquerade as cross-request continuation.
 test('separate committed activity transactions resume via a new activityApi, then cancellation preserves history and dirty maintenance', async () => {
