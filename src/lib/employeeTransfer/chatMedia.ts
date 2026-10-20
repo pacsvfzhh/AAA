@@ -472,6 +472,8 @@ function ratingMediaGuard(value: unknown): void {
     value.forEach(ratingMediaGuard);
   } else if (value !== null && typeof value === 'object') {
     for (const [key, entry] of Object.entries(value)) {
+      // Known React text field, never a media-loading container. Non-string comments recurse.
+      if (key === 'comment' && typeof entry === 'string') continue;
       if (/(url|uri|src|href|poster|image|avatar|file|attachment|media|path|bucket|storage|base64)/i.test(key)) invalid();
       ratingMediaGuard(entry);
     }

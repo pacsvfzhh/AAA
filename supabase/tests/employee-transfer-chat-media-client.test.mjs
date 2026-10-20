@@ -236,10 +236,32 @@ for (const value of ['https://evil.invalid/avatar.jpg', 'customer-avatar:regular
     await assert.rejects(h.stage(), failed(false)); assert.equal(h.calls.length, 0);
   });
 }
+for (const comment of ['100% satisfied', '服務:很好', 'good data',
+  'https://docs.invalid/guide?note=100%25 https://unreferenced-fixture.supabase.co/storage/v1/object/public/chat-images/comment-only.png']) {
+  test(`rating comment is plain text and retains original bytes/digests: ${JSON.stringify(comment)}`, async () => {
+    const f = fixture((r, key) => { if (key === TABLES[4]) r.rating_data = { ...r.rating_data, comment }; });
+    const raw = f.texts[TABLES[4]], out = harness(f, 'export'), exported = await out.export();
+    assert.deepEqual(out.stored.get(recordPath(TABLES[4])), enc(raw));
+    assert.equal(exported.entries.find(e => e.path === recordPath(TABLES[4])).sha256, sha(raw));
+    assert.deepEqual(exported.catalog, f.catalog); assert.deepEqual(exported.media.files, f.media.files);
+    assert.equal(exported.media.files.length, 5, 'URLs inside a comment are not additional media objects');
+    const into = harness(f), result = await into.stage();
+    assert.equal(into.staged.get(TABLES[4]), raw, 'no comment normalization or rating JSON reserialization');
+    assert.equal(JSON.parse(into.staged.get(TABLES[4])).rating_data.comment, comment);
+    assert.ok(into.staged.get(TABLES[4]).includes(PRECISE), 'neighboring numeric lexemes remain exact');
+    assert.equal(result.files, 5); assert.equal(into.cleanup, 1); await out.sink.abort();
+  });
+}
 for (const value of [{ nested: [{ url: URLS[0] }] }, { note: URLS[0] }, { note: 'folder/photo.png' }, { note: 'https%3A%2F%2Fx' },
-  { image: null }, { note: '<img src=x>' }, { note: 'photo.jpg' }]) test('rating JSON suspected file reference is rejected, never omitted or reserialized', async () => {
-  const h = harness(fixture((r, key) => { if (key === TABLES[4]) r.rating_data = value; }));
+  { image: null }, { note: '<img src=x>' }, { note: 'photo.jpg' },
+  { comment: '100% satisfied', media_url: URLS[0] }, { comment: '服務:很好', unknown: URLS[0] },
+  { comment: { nested: [{ media_url: URLS[0] }] } }, { comment: [URLS[0]] },
+  { comment: [{ comment: 'good data', unknown: URLS[0] }] }, { Comment: URLS[0] },
+]) test('rating JSON suspected file reference is rejected, never omitted or reserialized', async () => {
+  const f = fixture((r, key) => { if (key === TABLES[4]) r.rating_data = value; }), h = harness(f);
   await assert.rejects(h.stage(), failed(false)); assert.equal(h.recordBound, undefined); assert.equal(h.fetches.length, 0);
+  const out = harness(f, 'export'); await assert.rejects(out.export(), failed(false));
+  assert.equal(out.fetches.length, 0); assert.equal(out.stored.size, 0); assert.equal(out.cleanup, 1);
 });
 const mutations = [
   ['missing file', (f, h) => h.contents.delete(mediaPath(f.media.files[0]))],

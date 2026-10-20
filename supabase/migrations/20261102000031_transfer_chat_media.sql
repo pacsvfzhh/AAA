@@ -30,6 +30,8 @@ DECLARE v_entry record;v_item jsonb;v_text text;
 BEGIN
   IF jsonb_typeof(p_value)='object' THEN
     FOR v_entry IN SELECT key,value FROM jsonb_each(p_value) LOOP
+      -- Known React text field, never a media-loading container. Non-string comments recurse.
+      IF v_entry.key='comment' AND jsonb_typeof(v_entry.value)='string' THEN CONTINUE;END IF;
       IF v_entry.key ~* '(url|uri|src|href|poster|image|avatar|file|attachment|media|path|bucket|storage|base64)' THEN
         RAISE EXCEPTION 'Chat rating JSON contains unsupported media fields.';
       END IF;
