@@ -49,6 +49,7 @@ export interface ArchiveBundleOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ArchiveBundleProgress) => void;
   approvePlan?: (plan: ArchivesPlan) => Promise<boolean>;
+  expectedSource?: { catalog: ArchivesCatalog; cipherSha256: string; cipherBytes: number };
   // Optional tighter bounds only. Payload bytes include both metadata NDJSON entries.
   limits?: { maxTotalBytes?: number; maxFiles?: number };
 }
@@ -453,10 +454,20 @@ export async function importArchiveBundle(
   const run = new Run(options, createWorkspace);
   return run.finish(async () => {
     bounds(options);
+    const expected = options.expectedSource && {
+      catalog: validateArchivesCatalog(options.expectedSource.catalog),
+      cipherSha256: dispatchTransferChecks.hash(options.expectedSource.cipherSha256),
+      cipherBytes: count(options.expectedSource.cipherBytes),
+    };
     if (target.media.direction !== 'import') invalid();
     const workspace = run.workspace();
     const authenticated = await authenticate(file, passphrase, metadata, workspace, run);
     const checked = await validateBundle(workspace, authenticated.manifest, run);
+    if (expected) {
+      same(checked.catalog, expected.catalog);
+      same(authenticated.cipherSha256, expected.cipherSha256);
+      same(authenticated.cipherBytes, expected.cipherBytes);
+    }
     run.fileState = 'verified';
     const chunks = new Map<ArchivesTableKey, { rows: number; bytes: number }[]>(ARCHIVES_TABLE_KEYS.map(key => [key, []]));
     run.phase = 'stage';

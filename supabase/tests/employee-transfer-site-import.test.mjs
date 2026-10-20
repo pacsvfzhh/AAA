@@ -18,7 +18,7 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // are real disk files; temporary plaintext workspaces and Edge Storage are in memory.
 // Source fixture trigger changes finish BEFORE import; no importer error is bypassed.
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const LAST = '20261102000044_preflight_site_restore.sql';
+const LAST = '20261102000045_verify_site_prerequisites.sql';
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';
@@ -280,8 +280,9 @@ after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   const foreign = edge.foreign.slice(); mock.restoreAll(); assert.deepEqual(foreign, []);
 });
-test('strict latest 43/44 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
-  assert.deepEqual(replay.files.slice(-2), ['20261102000043_preserve_transfer_announcements.sql', LAST]);
+test('strict latest 43/44/45 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
+  assert.deepEqual(replay.files.slice(-3), ['20261102000043_preserve_transfer_announcements.sql',
+    '20261102000044_preflight_site_restore.sql', LAST]);
   assert.equal(replay.failures.length, 12);
   const paths = Object.keys(compiled.metafile.inputs);
   for (const module of ['siteTransfer', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
@@ -379,6 +380,8 @@ test('real SQL ten-domain export -> 11 disk .edx -> empty distinct target import
   assert.deepEqual(result.verifiedDomains, DOMAINS); assert.equal(result.maintenance, true);
   assert.equal(result.fullSiteComplete, false); assert.equal(result.importReady, false);
   await assertMaintenance(result); await assertBackups(context); await assertBusiness();
+  assert.equal(callsOf('employee_import_site_verify_prerequisites').length, 2);
+  assert.ok(callsOf('employee_import_site_verify_prerequisites').every(call => !call.error && call.result.verified));
   assert.deepEqual(await targetExcluded(), before); assert.deepEqual(await triggers(target), modes);
   assertProgress(context); allDead(context.w); assert.equal(context.progress.at(-1).phase, 'maintenance');
   assert.equal(names().includes('employee_import_finish'), false); assert.equal(names().includes('employee_transfer_leave_maintenance'), false);

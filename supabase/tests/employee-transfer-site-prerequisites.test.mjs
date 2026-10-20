@@ -22,6 +22,7 @@ const PREVIOUS = '20261102000044_preflight_site_restore.sql';
 const MIGRATION = '20261102000045_verify_site_prerequisites.sql';
 const VERIFY = 'employee_import_site_verify_prerequisites';
 const PREFLIGHT = 'get_employee_import_site_preflight';
+const PREFLIGHT_PROTOCOL = 'site-maintenance-restore-v2';
 const VERIFY_SIGNATURE = `public.${VERIFY}(uuid,uuid)`;
 const PREFLIGHT_SOURCE = '45000000-0000-4000-8000-000000000001';
 const BLOCKERS = ['same_site', 'active_maintenance', 'active_transfer_task', 'target_has_business', 'missing_backend_support'];
@@ -89,7 +90,7 @@ async function preflightState(site = db) {
 async function checkedPreflight(blockers = [], missing = [], args = {}, role) {
   const state = await preflightState();
   const result = await preflight(args, role);
-  assert.deepEqual(result, { version: 1, protocol: 'site-maintenance-restore-v1',
+  assert.deepEqual(result, { version: 1, protocol: PREFLIGHT_PROTOCOL,
     site_id: await scalar(db, 'SELECT site_id FROM private.employee_transfer_site'), source_site_id: args.p_source_site_id ?? PREFLIGHT_SOURCE,
     can_restore_to_maintenance: blockers.length === 0, blockers, missing_rpcs: missing, full_site_complete: false, can_release: false });
   assert.deepEqual(result.blockers, BLOCKERS.filter(code => blockers.includes(code)));
@@ -286,7 +287,7 @@ test('exact write RPC signatures/SECURITY DEFINER/search_path/UTC/ISO and ACL; n
     });
   }
 });
-test('actual SQL44-only server still has 110-signature admission and cannot discover an uninstalled SQL45 (client capability check remains required)', async t => {
+test('actual SQL44-only returns v1, not required v2, even when its 110-signature admission allows restore', async t => {
   const legacy = new PGlite({ loadDataDir: legacyDump, extensions: { pgcrypto, pg_trgm, uuid_ossp } });
   try {
     await legacy.waitReady; await buildNewSite(legacy);
@@ -299,18 +300,21 @@ test('actual SQL44-only server still has 110-signature admission and cannot disc
       assert.deepEqual(result, { version: 1, protocol: 'site-maintenance-restore-v1',
         site_id: await scalar(legacy, 'SELECT site_id FROM private.employee_transfer_site'), source_site_id: PREFLIGHT_SOURCE,
         can_restore_to_maintenance: true, blockers: [], missing_rpcs: [], full_site_complete: false, can_release: false });
+      assert.notEqual(result.protocol, PREFLIGHT_PROTOCOL, 'v2-only admission must reject SQL44 before any shared writes');
+      assert.equal(result.protocol === PREFLIGHT_PROTOCOL && result.can_restore_to_maintenance, false);
       assert.deepEqual(await preflightState(legacy), state);
     }, legacy, 'READ ONLY');
-    t.diagnostic('Unmodified SQL44 has no knowledge of SQL45; no shared import/job/permit is started by this probe.');
+    t.diagnostic('SQL44-only remains v1 despite can_restore=true; the required v2 discriminator rejects it before shared import.');
   } finally { await legacy.close(); legacyDump = null; }
 });
-test('SQL45 wrapper retains the original shape and represents 111 exact jsonb capabilities without exposing a count or invoking writes', async t => {
+test('SQL45 returns v2 with unchanged other fields and 111 exact jsonb capabilities, without exposing a count or invoking writes', async t => {
   assert.equal(signatures44.length, 110); assert.equal(signatures45.length, 111); assert.equal(new Set(signatures45).size, 111);
   for (const signature of signatures45) assert.equal(await scalar(db, `SELECT count(*)::int FROM pg_proc
     WHERE oid=to_regprocedure($1) AND prokind='f' AND prorettype='jsonb'::regtype`, [signature]), 1, signature);
   const result = await checkedPreflight();
   const base = await scalar(db, 'SELECT private.employee_transfer_site_preflight_base($1::uuid,$2::uuid)', [session, PREFLIGHT_SOURCE]);
-  assert.deepEqual(result, base); assert.deepEqual(result.missing_rpcs, []);
+  assert.equal(base.protocol, 'site-maintenance-restore-v1');
+  assert.deepEqual(result, { ...base, protocol: PREFLIGHT_PROTOCOL }); assert.deepEqual(result.missing_rpcs, []);
   assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_jobs'), 0);
   t.diagnostic('111 exact backend signatures = SQL44 original 110 + SQL45 verify; healthy missing_rpcs remains [].');
 });
@@ -318,7 +322,7 @@ for (const role of ['anon', 'authenticated']) {
   test(`${role} SQL45 preflight runs in READ ONLY with no task/heartbeat/audit/sequence/permit writes`, async () => {
     await transaction(() => checkedPreflight([], [], {}, role), db, 'READ ONLY');
   });
-  test(`${role} missing SQL45 verifier blocks in READ ONLY before any shared import is started`, async () => {
+  test(`${role} missing SQL45 verifier still returns v2 blocked in READ ONLY before any shared import is started`, async () => {
     // Trusted local DDL changes only capability existence and is undone even if
     // the READ ONLY assertion fails. The admission RPC itself does no DDL/writes.
     await hideSignature(VERIFY_SIGNATURE);

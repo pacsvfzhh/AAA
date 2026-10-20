@@ -49,7 +49,7 @@ export interface SiteBundleResult {
 }
 export interface AuthenticatedSiteDomain {
   catalog: unknown; media: unknown; manifest: VolumeManifest;
-  workspace: ArchiveBundleWorkspace; file: ReplacementBackupFile;
+  workspace: ArchiveBundleWorkspace; file: ReplacementBackupFile; cipherSha256: string; cipherBytes: number;
 }
 export interface AuthenticatedSiteBundleSet {
   packageId: string; sourceSiteId: string; volumes: SiteVolumeReceipt[];
@@ -511,7 +511,7 @@ export async function withAuthenticatedSiteBundleSet<T>(
             entries: manifest.entries.filter(entry => entry.path !== metadataPath(domain)) });
           checkAbort(options.signal);
           result = await consume({ catalog: structuredClone(baseline.catalogs[domain]), media,
-            manifest: payload, workspace: space, file });
+            manifest: payload, workspace: space, file, cipherSha256: readback.cipherSha256, cipherBytes: readback.cipherBytes });
           checkAbort(options.signal);
         } catch (error) { readFailed = true; readFailure = error; }
         let cleanupFailed = false;

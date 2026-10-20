@@ -140,6 +140,19 @@ export async function runSiteRestore(
     checkAbort(signal);
     return workspace;
   };
+  const verifyPrerequisites = async (token: string) => {
+    report('verify-prerequisites');
+    const receipt = await step(async () => {
+      const query = supabase.rpc('employee_import_site_verify_prerequisites', {
+        p_admin_session_token: getAdminFinancialSessionToken(), p_job_token: token,
+      });
+      const result = await (signal ? query.abortSignal(signal) : query);
+      if (result.error) blocked();
+      return object(result.data, ['success', 'scope', 'verified', 'maintenance', 'full_site_complete']);
+    });
+    if (receipt.success !== true || receipt.scope !== 'site-prerequisites' || receipt.verified !== true
+      || receipt.maintenance !== true || receipt.full_site_complete !== false) blocked();
+  };
   const backupFile = (name: keyof typeof backupNames): ReplacementBackupFile => {
     checkAbort(signal);
     const filename = backupNames[name];
@@ -265,6 +278,7 @@ export async function runSiteRestore(
         backup.receiver, passphrase, { signal, onProgress: backupProgress }));
       report('enter-maintenance');
       await step(() => session.enterMaintenance(staged.dryRun.plan_hash, '確認暫停業務並導入派單資料', password, signal));
+      await verifyPrerequisites(identity.jobToken);
       report('configuration-plan');
       const plan = await step(() => session.configurationPlan(signal));
       if (plan.can_apply_configuration !== true || plan.conflicts.length || plan.preparation_plan_hash !== staged.dryRun.plan_hash) blocked();
@@ -466,12 +480,15 @@ export async function runSiteRestore(
         { exportId: input.manifest.exportId, volumeId: input.manifest.volumeId }, freshWorkspace, {
           records: createArchivesImportSession(token), restore: createArchivesRestoreSession(token, catalog),
           media: createArchiveMediaSession(token, 'import'),
-        }, { signal, onProgress: progress, approvePlan: async plan => { await approve('archives', plan); return true; } }));
+        }, { signal, onProgress: progress, approvePlan: async plan => { await approve('archives', plan); return true; },
+          expectedSource: { catalog, cipherSha256: input.cipherSha256, cipherBytes: input.cipherBytes } }));
       if (result.recordsVerified !== true || result.mediaVerified !== true || result.fullSiteComplete !== false) blocked();
       markVerified('archives', result);
     });
 
-    domain = 'site'; report('verify-maintenance');
+    domain = 'site';
+    await verifyPrerequisites(token);
+    report('verify-maintenance');
     const maintenance = await step(() => getTransferMaintenance(signal));
     if (verified.size !== SITE_DOMAINS.length || !maintenance.active || !maintenance.dirty || maintenance.job_id !== jobId) blocked();
   } catch (error) { failed = true; errors.push(error); }

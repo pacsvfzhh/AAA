@@ -199,6 +199,9 @@ DECLARE v_result jsonb; v_missing jsonb; v_blockers jsonb;
   v_rpc constant text := 'public.employee_import_site_verify_prerequisites(uuid,uuid)';
 BEGIN
   v_result:=private.employee_transfer_site_preflight_base(p_admin_session_token,p_source_site_id);
+  -- v2 attests that this SQL45 capability check is installed, even when blocked.
+  -- Clients must reject SQL44's original v1 before starting shared replacement.
+  v_result:=v_result||jsonb_build_object('protocol','site-maintenance-restore-v2');
   IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc
     WHERE oid=pg_catalog.to_regprocedure(v_rpc) AND prokind='f' AND prorettype='pg_catalog.jsonb'::regtype) THEN
     v_missing:=v_result->'missing_rpcs';
