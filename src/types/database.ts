@@ -3144,6 +3144,10 @@ export interface Database {
         Args: { p_admin_session_token: string };
         Returns: import('../lib/employeeTransfer/siteTransfer').SiteTransferCapabilities;
       };
+      get_employee_import_site_preflight: {
+        Args: { p_admin_session_token: string; p_source_site_id: string };
+        Returns: import('../lib/employeeTransfer/siteImport').SiteImportPreflight;
+      };
       get_employee_export_site_snapshot: {
         Args: { p_admin_session_token: string; p_package_id: string };
         Returns: Record<string, unknown>;

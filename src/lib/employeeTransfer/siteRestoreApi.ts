@@ -88,9 +88,7 @@ class SiteRestoreError extends Error {
   }
 }
 
-/** Caller must authenticate all eleven files and approve target/site/unopened-business prerequisites first.
- * Only a new sequential run is supported here, never automatic recovery after an unknown write outcome.
- */
+// Admission and complete input authentication belong to siteImport; this is not a resume path.
 export async function runSiteRestore(
   bundle: AuthenticatedSiteBundleSet, options: SiteRestoreOptions,
 ): Promise<{ jobId: string; verifiedDomains: SiteDomain[]; maintenance: true; fullSiteComplete: false; importReady: false }> {
@@ -468,7 +466,7 @@ export async function runSiteRestore(
         { exportId: input.manifest.exportId, volumeId: input.manifest.volumeId }, freshWorkspace, {
           records: createArchivesImportSession(token), restore: createArchivesRestoreSession(token, catalog),
           media: createArchiveMediaSession(token, 'import'),
-        }, { signal, onProgress: progress }));
+        }, { signal, onProgress: progress, approvePlan: async plan => { await approve('archives', plan); return true; } }));
       if (result.recordsVerified !== true || result.mediaVerified !== true || result.fullSiteComplete !== false) blocked();
       markVerified('archives', result);
     });

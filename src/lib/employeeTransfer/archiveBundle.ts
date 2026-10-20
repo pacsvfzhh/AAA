@@ -9,7 +9,7 @@ import type { ArchivesImportSession, ArchivesRestoreSession } from './archiveApi
 import {
   ARCHIVES_TABLE_KEYS, ARCHIVES_TRANSFER_LIMITS, archivesEntryPath, exportArchivesData, stageArchivesImport,
   validateArchivesBind, validateArchivesCatalog, validateArchivesRow, validateArchivesStage, validateArchivesStatus, validateArchivesVerification,
-  type ArchivesCatalog, type ArchivesExportSource, type ArchivesStatus, type ArchivesTableKey,
+  type ArchivesCatalog, type ArchivesExportSource, type ArchivesPlan, type ArchivesStatus, type ArchivesTableKey,
 } from './archiveTransfer';
 import {
   validateArchiveMediaFile, validateArchiveMediaInventory,
@@ -48,6 +48,7 @@ export interface ArchiveBundleProgress {
 export interface ArchiveBundleOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ArchiveBundleProgress) => void;
+  approvePlan?: (plan: ArchivesPlan) => Promise<boolean>;
   // Optional tighter bounds only. Payload bytes include both metadata NDJSON entries.
   limits?: { maxTotalBytes?: number; maxFiles?: number };
 }
@@ -477,6 +478,8 @@ export async function importArchiveBundle(
       if (progress.phase === 'stage') run.progress(progress.rows, 0, progress.bytes);
     } });
     if (!staged.plan.can_restore || staged.plan.conflicts.length) invalid();
+    if (options.approvePlan && await withSignal(() => options.approvePlan!(structuredClone(staged.plan)), run.signal) !== true) invalid();
+    checkAbort(run.signal);
     run.phase = 'restore';
     const status = (value: ArchivesStatus, previous?: ArchivesStatus, key?: ArchivesTableKey): ArchivesStatus => {
       const next = validateArchivesStatus(value);

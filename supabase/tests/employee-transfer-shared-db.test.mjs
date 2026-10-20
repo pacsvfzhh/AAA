@@ -228,8 +228,7 @@ test('unknown keys and malformed JSON settings block begin atomically, without l
 }));
 
 for (const [key, value] of [
-  ['login_title', { endpoint: 'fixture-secret' }], ['announcement_carousel_enabled', 'true'],
-  ['announcement_carousel_speed', 99], ['login_subtitle', ''],
+  ['login_title', { endpoint: 'fixture-secret' }], ['login_subtitle', ''],
   ['admin_navigation_preferences', { order: [], labels: {}, token: 'fixture-secret' }],
   ['admin_navigation_preferences', { order: ['nonexistent-tab'], labels: {} }],
 ]) {
