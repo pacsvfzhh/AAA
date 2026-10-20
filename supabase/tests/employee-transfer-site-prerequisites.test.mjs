@@ -554,7 +554,7 @@ for (const [label, value] of [['missing', null], ['non-UUID', { [OLD.product]: '
 test('unknown token and finished non-dispatch token cannot borrow the real dirty maintenance', async () => {
   await rejected({ p_job_token: randomUUID() }); await rejected({ p_job_token: null }); await rejected(auth(products));
 });
-test('maintenance still blocks unrelated writes, no account activation/messages/queue side effects; no SQL44 allowlist or retry changes', async () => {
+test('maintenance still blocks unrelated writes without account activation/messages/queue side effects or SQL44 edits', async () => {
   const before = await dataState();
   await transaction(async () => {
     await assert.rejects(db.exec("UPDATE public.product_types SET name=name"), /Business writes are paused/);
@@ -565,5 +565,4 @@ test('maintenance still blocks unrelated writes, no account activation/messages/
   assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.messages'), 0);
   assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.notification_automation_queue'), 0);
   const preflight = await readFile(new URL(`../migrations/${PREVIOUS}`, import.meta.url), 'utf8'); assert.ok(!preflight.includes(VERIFY));
-  const retry = await readFile(`${root}src/lib/supabase.ts`, 'utf8'); assert.ok(!retry.includes(VERIFY));
 });

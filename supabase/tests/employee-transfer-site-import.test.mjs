@@ -517,6 +517,36 @@ test('lost actual configuration-apply response: ONE SQL write, retains real task
   assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_shared_backups WHERE sealed_at IS NOT NULL'), 3);
   assert.deepEqual([...c.output.outputs.keys()], BACKUPS.slice(0, 3)); assertProgress(c); allDead(c.w);
 }));
+for (const changed of ['shared setting', 'administrator activation', 'mapped product']) {
+  test(`maintenance admission rechecks actual ${changed} drift before dispatch configuration writes`, { timeout: 180000 }, async () => isolated(target, targetSession, async () => {
+    let mutated = false;
+    const c = startImport({ options: { approvePlan: async domain => {
+      if (domain === 'dispatch' && !mutated) {
+        mutated = true;
+        if (changed === 'shared setting') await target.query("INSERT INTO public.system_configs(key,value) VALUES('login_title','\"CHANGED AFTER SHARED APPLY\"'::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value");
+        if (changed === 'administrator activation') await target.query("UPDATE public.admins SET is_active=true WHERE username='branch'");
+        if (changed === 'mapped product') await target.query("UPDATE public.product_types SET sort_order=sort_order+1 WHERE name='Import product'");
+      }
+      return true;
+    } } });
+    await assert.rejects(c.promise, error => {
+      assert.equal(error.phase, changed === 'administrator activation' ? 'backup-seal' : 'verify-prerequisites');
+      return true;
+    });
+    assert.equal(mutated, true);
+    if (changed === 'administrator activation') {
+      assert.equal(callsOf('employee_import_site_verify_prerequisites').length, 0);
+      assert.ok(state.calls.some(call => call.error && /changed|drift|mismatch/i.test(call.error)));
+    } else {
+      assert.equal(callsOf('employee_import_site_verify_prerequisites').length, 1);
+      assert.match(callsOf('employee_import_site_verify_prerequisites')[0].error, /checkpoint drift/);
+    }
+    assert.equal(callsOf('employee_import_dispatch_apply_configuration').length, 0);
+    assert.equal(callsOf('employee_import_identity_bind').length, 0);
+    assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), changed === 'administrator activation' ? 0 : 1);
+    allDead(c.w);
+  }));
+}
 test('mutating plan callback cannot alter the server-authorized hash or counts', { timeout: 300000 }, async t => isolated(target, targetSession, async () => {
   const originals = [];
   const c = startImport({ options: { approvePlan: async (domain, plan) => {
