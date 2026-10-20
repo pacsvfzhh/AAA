@@ -474,7 +474,10 @@ export async function importArchiveBundle(
       }
       return next;
     };
-    let current = await run.write(async () => status(await target.restore.begin(staged.plan.plan_hash, run.signal)));
+    const observed = validateArchivesStatus(await withSignal(() => target.restore.status(run.signal), run.signal));
+    if (checked.catalog.tables.some(table => observed.counts[table.key] !== table.rows)) invalid();
+    let current = observed.started ? status(observed)
+      : await run.write(async () => status(await target.restore.begin(staged.plan.plan_hash, run.signal)));
     const progress = () => {
       let rows = 0, bytes = 0;
       for (const key of ARCHIVES_TABLE_KEYS) for (const chunk of chunks.get(key)!.slice(0, current.completed_chunks[key])) {

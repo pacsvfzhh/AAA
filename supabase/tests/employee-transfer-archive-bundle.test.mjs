@@ -107,7 +107,7 @@ function fixture(t, options = {}) {
   Object.assign(h, mediaFor(h.text, h.cat));
   h.recordCounts = () => Object.fromEntries(h.cat.tables.map(table => [table.key, table.rows]));
   h.plan = () => ({ scope: 'site-archives', checked: true, can_restore: true, counts: h.recordCounts(), conflicts: [],
-    plan_hash: 'a'.repeat(64), media_pending: true, ...flags });
+    plan_hash: (h.started ? 'b' : 'a').repeat(64), media_pending: true, ...flags });
   h.status = () => ({ scope: 'site-archives', started: h.started, records_verified: h.recordsVerified, counts: h.recordCounts(),
     chunks: Object.fromEntries(TABLES.map(key => [key, h.started ? h.staged.get(key)?.length ?? 0 : 0])),
     completed_chunks: { ...h.completed }, media_pending: true, ...flags });
@@ -145,6 +145,7 @@ function fixture(t, options = {}) {
           return { success: true, rows: lineList(args.p_ndjson).length, bytes: Buffer.byteLength(args.p_ndjson), sha256: sha(args.p_ndjson), repeated: false };
         }
         if (name === 'get_employee_import_archives_plan') return h.plan();
+        if (name === 'get_employee_import_archives_status') return h.status();
         if (name === 'employee_import_archives_begin') {
           assert.equal(args.p_plan_hash, 'a'.repeat(64)); h.started = true; return h.status();
         }
