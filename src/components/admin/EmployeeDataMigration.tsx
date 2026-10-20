@@ -14,6 +14,8 @@ import {
   type BrowserTransferDirectory,
 } from '../../lib/employeeTransfer/browserStorage';
 
+import EmployeeSiteImport from './EmployeeSiteImport';
+
 interface SiteTransferProgress {
   domain: string;
   phase: string;
@@ -56,7 +58,7 @@ type RunStatus = 'running' | 'pause-requested' | 'paused' | 'cancelling';
 
 const tabs = [
   { id: 'export' as const, label: '導出', icon: Download },
-  { id: 'inspect' as const, label: '導入檢查', icon: FileCheck2 },
+  { id: 'inspect' as const, label: '導入', icon: FileCheck2 },
   { id: 'history' as const, label: '紀錄', icon: History },
 ];
 const scope = ['管理員與網站業務設定紀錄', '產品目錄', '派單設定、訂單池、成員、交單原文及已用狀態', '員工身份、密碼校驗資料及精簡訂單', '錢包、提款與財務紀錄', '登入、工時與停工標記', '實名資料與實際證件', '通知、廣播與自動化', '聊天、角色與支援格式的媒體', '本站原生唯讀檔案與附件'];
@@ -80,6 +82,16 @@ const phaseLabels: Record<string, string> = {
   'source-recheck': '複核來源資料', save: '加密並保存', authenticate: '解密與完整性驗證',
   validate: '核對內容與關聯', close: '核對並結束領域任務', recheck: '複核來源與已保存各卷',
   'save-index': '加密保存索引', complete: '整組檔案核驗完成（非業務恢復）',
+  prepare: '準備領域恢復', stage: '暫存已認證資料', 'dry-run': '服務端計畫預檢', plan: '核對服務端計畫',
+  'backup-prepare': '準備獨立配置／紀錄備份', 'backup-export': '讀取備份紀錄', 'backup-save': '加密保存獨立備份',
+  'backup-authenticate': '重新認證備份', 'backup-upload': '上傳已認證備份', 'backup-seal': '服務端封存備份',
+  'enter-maintenance': '建立持續維護保護', 'verify-prerequisites': '複核前置配置未漂移',
+  'configuration-plan': '確認配置對應', 'configuration-apply': '恢復來源配置', apply: '恢復已批准的資料',
+  'valid-begin': '開始交單資料恢復', 'valid-chunk': '分塊恢復交單', 'valid-verify': '核驗交單資料',
+  'dependencies-plan': '核對派單關聯', 'dependencies-begin': '開始恢復派單關聯', 'dependencies-chunk': '恢復成員與已用交單',
+  'dependencies-verify': '核驗派單關聯', chunk: '分塊恢復紀錄', verify: '核驗實際恢復內容', verified: '本領域已核驗',
+  'media-upload': '上傳並核對附件', 'media-recheck': '最後回讀附件', 'choose-roles': '等待角色對應', 'merge-plan': '確認聊天合併計畫',
+  'close-applied-shared': '結束已套用的共享階段', 'verify-maintenance': '確認持續維護保護', maintenance: '維護態核驗通過（不可營業）',
 };
 const statusLabels: Record<string, string> = {
   pending: '待處理', queued: '已排程', running: '處理中', paused: '已暫停',
@@ -100,6 +112,10 @@ function browserSupport() {
 
 function translatedLabel(labels: Record<string, string>, value: string, fallback: string): string {
   return Object.prototype.hasOwnProperty.call(labels, value) ? labels[value] : fallback;
+}
+function phaseName(value: string): string {
+  if (value.startsWith('input-')) return `輸入檔案：${translatedLabel(phaseLabels, value.slice(6), '核驗中')}`;
+  return translatedLabel(phaseLabels, value, '尚未識別的服務階段');
 }
 function domainName(value: string): string {
   return translatedLabel(domainLabels, value, '未識別領域');
@@ -150,6 +166,7 @@ export default function EmployeeDataMigration() {
   const [stopPassword, setStopPassword] = useState('');
   const [stopConfirmation, setStopConfirmation] = useState('');
   const [stopping, setStopping] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
   const [wakeStatus, setWakeStatus] = useState<'idle' | 'requesting' | 'active' | 'unavailable'>('idle');
   const mounted = useRef(false);
   const operation = useRef<AbortController | null>(null);
@@ -160,7 +177,7 @@ export default function EmployeeDataMigration() {
   const resumeGate = useRef<(() => void) | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const support = browserSupport();
-  const busy = run !== null || stopping;
+  const busy = run !== null || stopping || importBusy;
   const exportAvailable = capabilityStatus === 'ready' && capabilities?.version === 1
     && capabilities.can_export === true && capabilities.missing_rpcs.length === 0;
   const passphraseValid = Array.from(passphrase).length >= 14 && passphrase === confirmation;
@@ -332,7 +349,7 @@ export default function EmployeeDataMigration() {
       setResult({ kind, data });
       setNotice({ error: false, text: kind === 'export'
         ? '導出流程已回傳各卷結果。請保留所有檔案與口令；這不是正式整站遷移完成，也不代表可導入。'
-        : '十個領域卷及索引已配套核驗，未寫資料庫。這只代表目前協定的整組檔案核驗通過，不代表完整站點備份或業務恢復通過，仍不可真正導入。' });
+        : '十個領域卷及索引已在本機配套核驗，本次檢查未寫資料庫。這不是完整站點備份或業務恢復通過；若要在隔離空站演練，請繼續下方目標准入檢查。' });
     } catch {
       if (mounted.current) setNotice({ error: true, text: `${controller.signal.aborted ? '已提出取消，任務已停止回報。' : '本次操作未能確認完成，可能是驗證、口令、權限、檔案、空間或連線問題。'}${retentionWarning}` });
     } finally {
@@ -426,7 +443,7 @@ export default function EmployeeDataMigration() {
         </header>
         <div role="note" className="rounded-xl border-2 border-amber-400/70 bg-amber-950/50 p-4 text-amber-100">
           <p className="flex items-start gap-2 text-base font-bold"><ShieldAlert className="h-5 w-5 shrink-0" aria-hidden="true" />本地驗證版，尚不可用於正式整站遷移</p>
-          <p className="mt-2 text-sm">員工替換、完整備份串聯及最終核對放行尚未完成。不要在正式營業資料上演練；本頁不啟用帳號、不解除維護，也不執行真正導入。</p>
+          <p className="mt-2 text-sm">員工替換、完整員工備份及最終核對放行尚未完成。不要在正式營業資料上演練；本頁可在相容的隔離空站實際導入至維護狀態，但不啟用帳號、不恢復自動化，也不解除維護。</p>
         </div>
         <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -438,7 +455,7 @@ export default function EmployeeDataMigration() {
                   : exportAvailable ? '後端回報可導出；僅代表階段能力，不是整站遷移許可。'
                   : '後端尚未具備導出能力（可能未部署完整接口），導出不可操作。'}
               </p>
-              {capabilities && <p className="mt-1 text-xs text-slate-400">導出協定：分領域加密卷組（第 1 版） · 缺少接口：{count(capabilities.missing_rpcs.length)} · 導入阻斷項：{count(capabilities.import_blockers.length)} · 真正導入：已阻擋</p>}
+              {capabilities && <p className="mt-1 text-xs text-slate-400">導出協定：分領域加密卷組（第 1 版） · 缺少接口：{count(capabilities.missing_rpcs.length)} · 導入阻斷項：{count(capabilities.import_blockers.length)} · 完整營業放行：已阻擋（維護態導入另作目標檢查）</p>}
             </div>
             <button type="button" className={buttonClass} disabled={busy || selecting || capabilityStatus === 'loading'} onClick={() => void refreshCapabilities()}><RefreshCw className="h-4 w-4" aria-hidden="true" />重新檢查能力</button>
           </div>
@@ -474,7 +491,7 @@ export default function EmployeeDataMigration() {
           <p className="mt-1 text-xs text-slate-400">只顯示服務回報的階段計數，不推算百分比或完成時間；紀錄數、檔案數與資料量可能隨領域或階段重新計數。</p>
           {progress ? <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
             {[
-              ['領域', domainName(progress.domain)], ['階段', translatedLabel(phaseLabels, progress.phase, '未識別階段')],
+              ['領域', domainName(progress.domain)], ['階段', phaseName(progress.phase)],
               ['已完成領域／領域總數', `${count(progress.completedDomains)} / ${count(progress.totalDomains)}`],
               ['紀錄數', count(progress.rows)], ['檔案數', count(progress.files)], ['資料量', `${byteSize(progress.bytes)}（${count(progress.bytes)} 位元組）`],
             ].map(([label, value]) => <div key={label} className="min-w-0 rounded-lg bg-slate-950/60 p-3"><dt className="text-xs text-slate-400">{label}</dt><dd className="mt-1 break-words font-medium text-cyan-100">{value}</dd></div>)}
@@ -527,8 +544,8 @@ export default function EmployeeDataMigration() {
 
         <div role="tabpanel" id="migration-panel-inspect" aria-labelledby="migration-tab-inspect" hidden={tab !== 'inspect'} tabIndex={0} className="space-y-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
           <div className="rounded-xl border border-amber-700/60 bg-amber-950/30 p-4 text-sm text-amber-100">
-            <h2 className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-5 w-5 shrink-0" aria-hidden="true" />真正導入已阻擋</h2>
-            <p className="mt-2">目前僅在本機完整解密並核驗選取的 .edx 加密卷，不上傳、不暫存到服務端、不寫入資料庫。缺少完整員工替換、獨立備份封存串聯與最終核對放行，不能開始真正導入。</p>
+            <h2 className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-5 w-5 shrink-0" aria-hidden="true" />先檢查檔案，再確認是否進行空站演練</h2>
+            <p className="mt-2">上方本機核驗不會上傳、不暫存到服務端、不寫資料庫。下方維護態導入是獨立的實際寫入操作，需要目標准入、超管密碼、備份目錄及逐階段確認；目前不能用於正式切站或恢復營業。</p>
             <p className="mt-2">請一次選擇同一包的十個領域卷與一個加密索引（共 11 個 .edx 檔案）；缺卷或不配套會阻擋。配套核驗通過僅證明目前協定的檔案組一致，不代表完整站點覆蓋、目標相容或業務恢復通過。</p>
           </div>
           <form onSubmit={submitInspect} className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
@@ -547,6 +564,8 @@ export default function EmployeeDataMigration() {
             {!support.workspace && <p className="mt-3 text-sm text-amber-200">本機核驗需要安全連線及瀏覽器私有臨時工作區，本瀏覽器不支援，無法開始。</p>}
             <button type="submit" disabled={busy || selecting || !support.workspace || !inspectFiles.length || Array.from(inspectPassphrase).length < 14} className={`${buttonClass} mt-4`}><FileCheck2 className="h-4 w-4" aria-hidden="true" />僅解密與核驗，不導入</button>
           </form>
+          <EmployeeSiteImport files={inspectFiles} inspection={result?.kind === 'inspect' ? result.data : null}
+            disabled={run !== null || stopping || selecting} supported={support.export} onBusyChange={setImportBusy} onProgress={setProgress} />
         </div>
 
         <div role="tabpanel" id="migration-panel-history" aria-labelledby="migration-tab-history" hidden={tab !== 'history'} tabIndex={0} className="rounded-xl border border-slate-700 bg-slate-900/80 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
@@ -570,9 +589,9 @@ export default function EmployeeDataMigration() {
         </div>
 
         {result && <section aria-label="各卷核驗結果" className="rounded-xl border border-cyan-800 bg-slate-900/90 p-4">
-          <h2 className="font-semibold text-cyan-100">{result.kind === 'export' ? '本次導出各卷結果' : '所選各卷解密核驗結果（未導入）'}</h2>
+          <h2 className="font-semibold text-cyan-100">{result.kind === 'export' ? '本次導出各卷結果' : '輸入檔案各卷解密核驗結果'}</h2>
           <p className="mt-2 break-all text-xs text-slate-400">包：{result.data.packageId} · 來源站：{result.data.sourceSiteId}</p>
-          <p className="mt-2 text-sm font-semibold text-amber-200">完整站點與業務恢復：未通過 · 真正導入：已阻擋</p>
+          <p className="mt-2 text-sm font-semibold text-amber-200">此為檔案層核驗，不代表資料庫已完成導入；完整站點與業務恢復仍未放行。</p>
           <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><caption className="sr-only">實際回傳的卷清單及密文 SHA-256，不代表完整整站備份</caption><thead className="border-b border-slate-700 text-xs text-slate-400"><tr>{['領域', '檔名 / 密文 SHA-256', '紀錄', '檔案', '密文大小'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}</tr></thead><tbody>{result.data.volumes.map((volume, index) => <tr key={`${volume.filename}-${index}`} className="border-b border-slate-800"><td className="px-3 py-3">{domainName(volume.domain)}</td><td className="min-w-[15rem] max-w-xs break-all px-3 py-3"><p>{volume.filename}</p><p className="mt-1 font-mono text-xs text-slate-400">{volume.cipherSha256}</p></td><td className="px-3 py-3">{count(volume.rows)}</td><td className="px-3 py-3">{count(volume.files)}</td><td className="whitespace-nowrap px-3 py-3">{byteSize(volume.cipherBytes)}</td></tr>)}</tbody></table></div>
         </section>}
       </div>
