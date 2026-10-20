@@ -62,7 +62,9 @@
 | `employeeTransfer/chatTransfer.ts`、`chatApi.ts` | site-chat-v1十表固定原文导出、同包identity/finance绑定、双遍验证后不可变暂存及服务端角色合并只读预检；包含空角色/未引用模板、富卡及评分，SQL NULL/JSON null与精度保真。角色按服务器管理员映射/服务类型匹配，歧义、多旧合一、可见性差集和错链显式报告；目标漂移改变计划。每次重新取会话、真实确认后计进度，无自动写重试；无业务apply/媒体上传或URL改写，can_restore=false，账号停用/dirty维护继续，无UI、未部署，见计划第34节 |
 | `employeeTransfer/chatBackup.ts`、`chatMergeApi.ts` | SQL30全部角色显式决定与独立目标十表记录备份；同管理员/工作区映射，独立密文保存→完整认证回读→第三遍上传封存，8MiB明文/9MiB密文。目标NULL可见性数组原文保留，sealed跨取消/过期由原超管新会话取回，不占派单/通知备份；不包含旧媒体，无UI，未部署 |
 | `employeeTransfer/chatMedia.ts`、`chatRestoreApi.ts` | SQL31/32四桶受控实际图片/头像/富卡文件传输、原文URL字面改写，以及备份封存后的十表分块合并/完整核对。目标角色设置及原历史保留、工单/备注/内容复用、相同消息UUID异内容阻断；仅消息冻结触发器精确旁路/恢复，不重复打赏。每批真实generation，最后回读再verify；status后显式续接，无自动写重试/启用/dirty维护解除。头像5MiB、文件50MiB/3000个/总1GiB，无UI或真实Storage/整站验收，未部署，见计划第35节 |
-| `employeeTransfer/archiveTransfer.ts`、`archiveApi.ts` | SQL33/34只读档案六表原文导出、全量验证后同包暂存、计划与显式分块恢复/核对；独立来源站/包命名空间保留旧员工/操作者，摘要不联查目标活账号。部分暂存响应丢失可status后显式续接；核验后超管只读分页不依赖暂存，取消/过期仍可读。没有旧档案写入、账号恢复或媒体已搬迁保证，media_pending恒true；私有证据、档案视图、再次导出和全站协调待接，无UI、未部署，见计划第36节 |
+| `employeeTransfer/archiveTransfer.ts`、`archiveApi.ts` | SQL33/34六表原文、同包不可变暂存与来源站/包隔离恢复；旧身份不关联目标活账号。记录核验后取消/过期仍可只读；记录接口media_pending恒true，不冒充全站完成，见计划第36节 |
+| `employeeTransfer/archiveMedia.ts`、`archiveBundle.ts`、`archiveReader.ts` | SQL35/36私有留证的独立archives scope、按来源站/包/事件/ref/原行hash绑定、真实回读及Blob查看；单卷记录+媒体加密独立保存/回读、整卷认证后才导入，按服务端已提交状态续传、不重启begin。来源命名空间只读索引接「遷入檔案」页，原文保持精度。未实现多来源再次导出、真实Storage/原生PG/整站验收，未部署，见第37节 |
+| `employeeTransfer/employeeReplacement.ts` | SQL37同任务员工替换前置只读计划/状态；同名目标资金风险以十进制字符串呈现，内容指纹检测同数量变更、原封存记录和账号释放独立核对。can_archive/can_replace恒false，现有共享设置备份不算员工完整备份；UUID映射/完整独立员工备份及封存导入串联仍待做，见第37节 |
 | `sanitizeHTML.ts` | DOMPurify 净化：`sanitizeHTML`、`sanitizeAnnouncementContent`、`sanitizeUserInput`、`sanitizeChatMessage` |
 | `fileValidation.ts` | 上传前校验文件名、MIME、扩展名、大小、文件头 |
 | `imageOptimizer.ts` | 压缩 HTML 中的 base64 图片并上传 `template-images` |

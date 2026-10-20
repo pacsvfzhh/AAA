@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { before, after, test, mock } from 'node:test';
 import { createHash, webcrypto } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { appendFile, mkdir, mkdtemp, open, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { PGlite } from '@electric-sql/pglite';
+import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 import { build } from 'esbuild';
 import { createSites, adminLogin, rpc as call, scalar, rows } from './support/transfer-harness.mjs';
 import { NEW, PASSWORDS, buildNewSite } from './support/transfer-fixtures.mjs';
@@ -13,7 +21,7 @@ const REF = 'https://original.invalid/storage/v1/object/public/chat-images/origi
 const PATH = `${OP}/shared/0`, JPEG = Uint8Array.of(255, 216, 255, 0, 1, 2, 3);
 const sha = input => createHash('sha256').update(input).digest('hex');
 let source, target, sourceToken, targetToken, sourceJob, dispatchJob, sourceClient, targetClient, catalog, edge, modules;
-let currentSite, currentToken, seq = 0;
+let currentSite, currentToken, bundleTargetDump, seq = 0;
 const stores = new Map(), calls = [], rpcCalls = [];
 let lose = false;
 async function rpc(site, name, args, role = 'anon') {
@@ -87,7 +95,7 @@ async function inCase(fn) {
 }
 before(async () => {
   mock.method(globalThis, 'fetch', () => assert.fail('Real network forbidden'));
-  const output = await build({ stdin: { contents: `export * from './src/lib/employeeTransfer/archiveMedia.ts';export * from './src/lib/employeeTransfer/api.ts';export * from './src/lib/employeeTransfer/replacementBackup.ts';export * from './src/lib/employeeTransfer/dispatchBackup.ts';export * from './supabase/functions/employee-transfer-media/handler.ts';
+  const output = await build({ stdin: { contents: `export * from './src/lib/employeeTransfer/archiveBundle.ts';export * from './src/lib/employeeTransfer/archiveApi.ts';export * from './src/lib/employeeTransfer/archiveMedia.ts';export * from './src/lib/employeeTransfer/api.ts';export * from './src/lib/employeeTransfer/replacementBackup.ts';export * from './src/lib/employeeTransfer/dispatchBackup.ts';export * from './supabase/functions/employee-transfer-media/handler.ts';
     import { setHarness } from 'archive-harness';export { setHarness };`, resolveDir: new URL('../..', import.meta.url).pathname }, bundle: true, write: false, format: 'esm', platform: 'browser',
     define: { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify('https://fixture.supabase.co'), 'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('synthetic-anon') },
     plugins: [{ name: 'offline', setup(b) {
@@ -120,6 +128,11 @@ before(async () => {
     await rpc(target, 'employee_import_archives_stage', { ...auth(dispatchJob, targetToken), p_table_key: t.key, p_chunk_no: 0, p_ndjson: page.ndjson });
   }
   const plan = await rpc(target, 'get_employee_import_archives_plan', auth(dispatchJob, targetToken));assert.equal(plan.can_restore, true);
+  // Clone a genuinely prepared/staged target BEFORE restore begins. Bundle regressions
+  // must execute their own real begin/chunks, not inherit fabricated completion flags.
+  await target.exec('COMMIT');
+  bundleTargetDump = await target.dumpDataDir('none');
+  await target.exec('BEGIN');
   const begun = await rpc(target, 'employee_import_archives_begin', { ...auth(dispatchJob, targetToken), p_plan_hash: plan.plan_hash });
   for (const t of catalog.tables) for (let i = 0; i < begun.chunks[t.key]; i++) await rpc(target, 'employee_import_archives_chunk', { ...auth(dispatchJob, targetToken), p_table_key: t.key, p_chunk_no: i });
   await rpc(target, 'employee_import_archives_verify', auth(dispatchJob, targetToken));
@@ -138,6 +151,241 @@ async function restored() {
   await targetClient.recheckImport([data.file]);assert.equal((await targetClient.verify()).verified, true);return data;
 }
 const readArgs = () => ({ p_admin_session_token: targetToken, p_source_site_id: catalog.site_id, p_package_id: PACKAGE, p_event_id: EVENT, p_ref_key: REF });
+
+async function archiveBundleDisk(t) {
+  const directory = await mkdtemp(join(tmpdir(), 'archive-evidence-sql-bundle-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'archive.edx'), spaces = [];
+  const disk = { writes: 0, opens: 0, eofs: 0 };
+  const stream = name => ({ async *[Symbol.asyncIterator]() {
+    yield* createReadStream(name, { highWaterMark: 113 });
+  } });
+  disk.file = {
+    async write(source, signal) {
+      disk.writes++;
+      const handle = await open(path, 'wx');
+      try {
+        for await (const bytes of source) {
+          assert.equal(signal?.aborted, false);
+          await handle.writeFile(bytes);
+        }
+        await handle.sync();
+      } finally { await handle.close(); }
+    },
+    open() {
+      disk.opens++;
+      return { async *[Symbol.asyncIterator]() {
+        yield* stream(path);
+        disk.eofs++;
+      } };
+    },
+  };
+  disk.workspace = () => {
+    const base = join(directory, `plain-${spaces.length}`);
+    const state = { aborted: false, cleanups: 0 };
+    spaces.push(state);
+    return {
+      async append(name, bytes, signal) {
+        assert.equal(state.aborted, false);assert.equal(signal?.aborted, false);
+        assert.ok(bytes.length <= 1024 * 1024);
+        await mkdir(dirname(join(base, name)), { recursive: true });
+        assert.equal(state.aborted, false);assert.equal(signal?.aborted, false);
+        await appendFile(join(base, name), bytes);
+      },
+      open: name => ({ async *[Symbol.asyncIterator]() {
+        assert.equal(state.aborted, false);
+        for await (const bytes of stream(join(base, name))) {
+          assert.equal(state.aborted, false);yield bytes;
+        }
+      } }),
+      async abort() {
+        state.aborted = true;state.cleanups++;
+        await rm(base, { recursive: true, force: true });
+      },
+    };
+  };
+  disk.read = () => readFile(path);
+  disk.assertClean = async () => {
+    assert.ok(spaces.length > 0);
+    for (const state of spaces) { assert.equal(state.aborted, true);assert.equal(state.cleanups, 1); }
+    assert.deepEqual(await readdir(directory), ['archive.edx']);
+  };
+  return disk;
+}
+
+for (const loss of ['upload response', 'Storage readback', 'archive begin response', 'archive chunk response']) {
+  test(`encrypted archive bundle resumes after lost ${loss}: real SQL plan hash, disk file and fresh sessions`, async t => inCase(async () => {
+    const disk = await archiveBundleDisk(t);
+    const db = new PGlite({ loadDataDir: bundleTargetDump, extensions: { pgcrypto, pg_trgm, uuid_ossp } });
+    const normal = { token: () => currentToken, rpc: (name, args) => query(currentSite, name, args) };
+    try {
+      await db.waitReady;await db.exec('BEGIN');
+      assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_archive_records'), 0);
+      assert.equal(await scalar(db, "SELECT summary ? 'archives_restore' FROM private.employee_transfer_jobs WHERE id=$1", [dispatchJob.job_id]), false);
+      stores.set(db, new Map());
+      activate(source, sourceToken);
+      // The catalog came from real SQL33 begin; pages/verification remain real RPCs.
+      const recordSource = {
+        catalog: async () => catalog,
+        page: (key, after) => rpc(source, 'get_employee_export_archives_page', { ...auth(sourceJob, sourceToken), p_table_key: key, p_after: after }),
+        verify: () => rpc(source, 'employee_export_archives_verify', auth(sourceJob, sourceToken)),
+      };
+      const passphrase = 'isolated real SQL archive bundle regression passphrase';
+      const metadata = { exportId: PACKAGE, volumeId: id(70) };
+      const exported = await modules.exportArchiveBundle(recordSource, sourceClient, disk.file, disk.workspace, passphrase, {
+        ...metadata, scope: 'replacement-backup', sourceSiteId: catalog.site_id,
+        createdAt: '2026-10-20T00:00:00.000Z', volumeIndex: 1, volumeCount: 1,
+      });
+      assert.equal(exported.recordsVerified, true);assert.equal(exported.mediaVerified, true);
+      const encrypted = await disk.read();
+      assert.equal(encrypted.subarray(0, 8).toString(), 'EDXSTRM1');
+      assert.equal(encrypted.includes(Buffer.from('12345678901234567890.123456789')), false);
+      assert.equal(exported.cipherBytes, encrypted.length);assert.equal(exported.cipherSha256, sha(encrypted));
+      assert.equal(disk.writes, 1);assert.equal(disk.opens, 1);assert.equal(disk.eofs, 1);
+      await disk.assertClean(); // Actual independent saved-file readback, not the export workspace.
+      const recordEntries = exported.manifest.entries.filter(entry => entry.path.startsWith('data/archives-'));
+      assert.equal(recordEntries.length, catalog.tables.length);
+      const expectedRows = [];
+      for (const table of catalog.tables) {
+        let after = null;
+        const lines = [];
+        do {
+          const page = await recordSource.page(table.key, after);
+          lines.push(...(page.ndjson.match(/[^\n]*\n/g) ?? []));after = page.next_after;
+        } while (after !== null);
+        for (const line of lines) expectedRows.push({ table_key: table.key, source_id: JSON.parse(line).id, source_line: line });
+      }
+      expectedRows.sort((a, b) => a.table_key < b.table_key ? -1 : a.table_key > b.table_key ? 1 : a.source_id < b.source_id ? -1 : 1);
+      assert.ok(expectedRows.length > 0);
+      const persisted = () => rows(db, 'SELECT table_key,source_id,source_line FROM private.employee_transfer_archive_records ORDER BY table_key COLLATE "C",source_id COLLATE "C"');
+      const plans = [];
+      let dropped = false;
+      modules.setHarness({ token: normal.token, rpc(name, args) {
+        const site = currentSite;
+        const q = { abortSignal() { return q; }, then(resolve, reject) {
+          return Promise.resolve(query(site, name, args)).then(async result => {
+            if (site === db && !result.error) {
+              if (name === 'employee_import_archives_bind') assert.equal(disk.eofs, disk.opens, 'encrypted EOF must precede every bind');
+              if (name === 'get_employee_import_archives_plan') plans.push(result.data.plan_hash);
+              if (!dropped && name === (loss === 'archive begin response' ? 'employee_import_archives_begin'
+                : loss === 'archive chunk response' ? 'employee_import_archives_chunk' : null)) {
+                dropped = true;await db.exec('COMMIT;BEGIN');
+                throw Error('Synthetic lost RPC response after actual SQL COMMIT');
+              }
+            }
+            return result;
+          }).then(resolve, reject);
+        } };return q;
+      } });
+      const bundleTransport = async (url, init) => {
+        assert.equal(url, 'https://fixture.supabase.co/functions/v1/employee-transfer-media');
+        const dependencies = { supabaseUrl: 'https://fixture.supabase.co', crypto: webcrypto,
+          rpc: (name, args) => query(db, name, args, 'service_role'), store: store(db) };
+        const uploading = init.headers['x-transfer-action'] === 'upload';
+        if (uploading && loss === 'Storage readback' && !dropped) {
+          const storage = dependencies.store;
+          dependencies.store = { ...storage, async download(...args) {
+            const response = await storage.download(...args);
+            await response.data?.body?.cancel();
+            dropped = true;await db.exec('COMMIT;BEGIN');
+            throw Error('Synthetic readback response lost after private object upload');
+          } };
+        }
+        const response = await edge.createEmployeeTransferMediaHandler(dependencies)(new Request(url, init));
+        if (uploading && loss === 'upload response' && !dropped) {
+          assert.equal(response.status, 200);
+          dropped = true;await db.exec('COMMIT;BEGIN');await response.body?.cancel();
+          throw Error('Synthetic upload response lost after actual media receipt COMMIT');
+        }
+        return response;
+      };
+      const sessions = () => ({ records: modules.createArchivesImportSession(dispatchJob.job_token),
+        restore: modules.createArchivesRestoreSession(dispatchJob.job_token, catalog),
+        media: modules.createArchiveMediaSession(dispatchJob.job_token, 'import', bundleTransport) });
+      activate(db, targetToken);
+      const first = sessions(), callStart = rpcCalls.length;
+      await assert.rejects(modules.importArchiveBundle(disk.file, passphrase, metadata, disk.workspace, first), error => {
+        assert.ok(error instanceof modules.ArchiveBundleError);assert.equal(error.outcomeUnknown, true);
+        assert.equal(error.serverWritesMayExist, true);assert.equal(error.encryptedFileState, 'verified');
+        assert.equal(error.phase, loss.startsWith('archive ') ? 'restore' : 'media-upload');return true;
+      });
+      assert.equal(dropped, true);assert.equal(plans.length, 1);
+      await disk.assertClean();
+      const attempts = () => rpcCalls.slice(callStart);
+      assert.equal(attempts().filter(c => c.name === 'employee_import_archives_begin').length, 1);
+      assert.equal(attempts().filter(c => c.name === 'get_employee_import_archives_status').length, 1, 'only the normal pre-begin status read; no automatic reconciliation after loss');
+      assert.equal(attempts().some(c => c.name === PREFIX + 'status'), false);
+      const callsBeforeStatus = attempts().length;
+      const recordStatus = await first.records.status();
+      const restoreStatus = await first.restore.status();
+      assert.deepEqual(recordStatus, restoreStatus);assert.equal(restoreStatus.started, true);
+      assert.deepEqual(attempts().slice(callsBeforeStatus).map(c => c.name),
+        ['get_employee_import_archives_status', 'get_employee_import_archives_status']);
+      const storedPlan = await scalar(db, "SELECT summary#>>'{archives_restore,plan_hash}' FROM private.employee_transfer_jobs WHERE id=$1", [dispatchJob.job_id]);
+      assert.equal(storedPlan, plans[0]);
+      const refreshed = await rpc(db, 'get_employee_import_archives_plan', auth(dispatchJob, targetToken));
+      const beforeResume = await persisted();
+      if (loss === 'archive begin response') {
+        assert.deepEqual(beforeResume, []);assert.equal(refreshed.plan_hash, storedPlan);
+        assert.ok(Object.values(restoreStatus.completed_chunks).every(value => value === 0));
+      } else {
+        assert.deepEqual(beforeResume, expectedRows);
+        // Both hashes come from actual SQL: the stored original plan versus a new
+        // plan over committed namespace records, never a constant harness receipt.
+        assert.notEqual(refreshed.plan_hash, storedPlan, 'real namespace writes MUST change the SQL plan hash');
+      }
+      const mediaLoss = !loss.startsWith('archive ');
+      assert.equal(restoreStatus.records_verified, mediaLoss);
+      if (mediaLoss) {
+        const mediaStatus = await first.media.status();
+        assert.equal(mediaStatus.bound, true);assert.equal(mediaStatus.verified, false);
+        assert.deepEqual(mediaStatus.checked, []);
+        assert.equal(mediaStatus.transferred.length, loss === 'upload response' ? 1 : 0);
+        assert.deepEqual([...stores.get(db).values()], [JPEG]);
+      } else {
+        // SQL35 media status correctly refuses until records are verified. Observe
+        // that real failure explicitly rather than fabricating an empty sidecar.
+        await assert.rejects(first.media.status());
+        assert.equal(stores.get(db).size, 0);
+      }
+      const newSessionToken = await adminLogin(db, 'root', PASSWORDS.root);
+      assert.notEqual(newSessionToken, targetToken);activate(db, newSessionToken);
+      const resumed = sessions();
+      assert.notEqual(resumed.records, first.records);assert.notEqual(resumed.restore, first.restore);assert.notEqual(resumed.media, first.media);
+      const resumeAt = attempts().length;
+      const imported = await modules.importArchiveBundle(disk.file, passphrase, metadata, disk.workspace, resumed);
+      const resumedCalls = attempts().slice(resumeAt);
+      assert.ok(resumedCalls.every(c => c.args.p_admin_session_token === newSessionToken), 'every resumed RPC must use the new login session');
+      assert.equal(resumedCalls.some(c => c.name === 'employee_import_archives_begin'), false, 'new sessions must NOT call begin twice');
+      assert.equal(attempts().filter(c => c.name === 'employee_import_archives_begin').length, 1);
+      assert.equal(plans.length, 2);assert.equal(plans[1], refreshed.plan_hash);
+      const chunks = attempts().filter(c => c.name === 'employee_import_archives_chunk');
+      assert.equal(chunks.length, catalog.tables.length);
+      assert.equal(new Set(chunks.map(c => `${c.args.p_table_key}:${c.args.p_chunk_no}`)).size, chunks.length, 'do not replay committed chunks');
+      assert.deepEqual(await persisted(), expectedRows);
+      if (loss !== 'archive begin response') assert.deepEqual(await persisted(), beforeResume, 'resume must not duplicate or rewrite original records');
+      for (const entry of recordEntries) {
+        const key = entry.path.slice('data/archives-'.length, -'.ndjson'.length);
+        const text = expectedRows.filter(row => row.table_key === key).map(row => row.source_line).join('');
+        assert.equal(entry.bytes, Buffer.byteLength(text));assert.equal(entry.sha256, sha(text));
+      }
+      assert.equal(imported.recordsVerified, true);assert.equal(imported.mediaVerified, true);assert.equal(imported.fullSiteComplete, false);
+      assert.deepEqual(imported.catalog, exported.catalog);assert.equal(imported.cipherSha256, exported.cipherSha256);
+      assert.equal(imported.rows, expectedRows.length);assert.equal(imported.files, 1);
+      assert.deepEqual((await resumed.restore.status()).completed_chunks, restoreStatus.chunks);
+      assert.equal((await resumed.media.status()).verified, true);
+      await db.exec('COMMIT;BEGIN READ ONLY');
+      const blob = await modules.readArchiveMedia({ source_site_id: catalog.site_id, package_id: PACKAGE, event_id: EVENT, ref_key: REF }, undefined, bundleTransport);
+      assert.equal(blob.type, 'image/jpeg');assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), JPEG);
+      assert.equal(stores.get(db).size, 1);assert.equal(await scalar(db, 'SELECT dirty FROM private.employee_transfer_maintenance WHERE singleton'), true);
+      assert.equal(disk.writes, 1);assert.equal(disk.opens, 3);assert.equal(disk.eofs, 3);
+      assert.equal(sha(await disk.read()), exported.cipherSha256);await disk.assertClean();
+    } finally {
+      modules.setHarness(normal);activate(target, targetToken);
+      stores.delete(db);await db.close();
+    }
+  }));
+}
 
 test('real SQL → client → Edge → private fakeStorage → recheck → verify → bound Blob read; raw archives untouched', () => inCase(async () => {
   const before = await rows(target, 'SELECT source_line,body::text FROM private.employee_transfer_archive_records ORDER BY table_key,source_id');

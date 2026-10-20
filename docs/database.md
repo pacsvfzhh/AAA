@@ -83,8 +83,10 @@ NOTIFY pgrst, 'reload schema';
 - 新增SQL33/34及私有RLS表 `employee_transfer_archive_records`（8列），PK为source_site_id/package_id/table_key/source_id。按来源命名空间持久保存四张旧档案表的审核投影和员工摘要/提款只读投影，不把来源UUID映射为目标活身份，不写现有content_audit/deleted_employee表或恢复已删账号。
 - 六表原文导出begin/page/verify/close、同原任务bind/stage/plan、显式begin/chunk/verify/status与 `get_employee_transferred_archive_page` 共12个浏览器RPC，固定SECURITY DEFINER/search_path，均内部验证超管，导出另验密码，导入同时验证原任务及dirty维护。同表/包已有异内容拒绝，事务许可只限新表，不关触发器或改钱；新表ALWAYS维护守卫纳入固定库存，不按技术表豁免。
 - plan/status/持久只读page为STABLE，部分暂存可查未恢复状态，完整恢复后独立核对原文/JSON/数量/摘要才读，取消/过期不删除核验档案。四表全部物理列及JSON空值标记固定；actor_admin_id只接受已审核的本地NOT NULL／正式可空两基线，不改真实表或历史回放基线。
-- 私有证据桶未支持搬迁、页面未接入，所有回执media_pending=true，不标全站完成或启用账号/解除维护。已有迁入档案时六表原生导出明确拒绝；多来源快照再次导出仍待实现，避免静默丢失。
-- 本地561份SQL严格保留原12项历史失败，109根表/967列（private24/public85），非干净建库；foundation59/scope19和档案12个双站用例分组通过，客户端85项通过。无正式库访问或SQL/Edge/前端部署、无Storage/权限/cron变更，真实Storage/原生PG时限/并发及整站验收未做，详见迁移计划第36节。
+- SQL35增加私有证据inventory/bind/status/verify与仅service_role的authorize/commit/read_authorize；sidecar只存原任务summary.archives_media，不新增表或改原文/media_refs。固定私有桶，目标服务端路径，来源站/包/事件/ref/原行摘要与文件字节摘要绑定，真实回读后核验；取消/过期后已核验附件可按超管来源绑定只读。原记录回执media_pending仍true，不启用账号/解除维护或宣称整站成功。
+- SQL36新增STABLE来源命名空间索引，记录及媒体sidecar独立复核，接入只读「遷入檔案」页。已有迁入档案时原六表导出仍明确拒绝；多来源再次导出未实现。
+- SQL37提供STABLE同任务员工替换计划/状态，不写数据或续heartbeat；绑定完整来源目录和原始暂存，列同名资金风险、同UUID/员工号/管理员名冲突、内容指纹与既有封存/账号释放。共享设置备份不当员工完整备份，维护不旁路，can_archive/can_replace恒false，完整员工备份/统一身份映射及串联仍待做。
+- 本轮564份SQL严格保留原12项历史失败，109根表/967列（private24/public85）不变，非干净建库；详见计划第37节验证清单。未访问正式服务、未部署SQL/Edge/前端、无Storage策略/权限/cron变更；真实Storage/原生PG时限并发/整站验收未做。
 
 ## pg_cron 定时任务（时间为 UTC；2026-10-09 最近一次运行均成功）
 | 正式任务名 | 频率 | 调用 | 用途 | 定义迁移 |

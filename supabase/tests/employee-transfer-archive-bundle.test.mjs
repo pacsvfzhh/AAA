@@ -412,7 +412,9 @@ for (const name of ['employee_import_archives_bind', 'employee_import_archives_s
   const h = fixture(t); await h.export(); h.calls.length = 0; h.lose = name;
   await assert.rejects(h.import(), error => { redacted(error); assert.equal(error.outcomeUnknown, true); assert.equal(error.serverWritesMayExist, true); return true; });
   assert.equal(h.calls.filter(call => call.name === name).length, 1);
-  assert.equal(h.calls.filter(call => /status|close|cancel|rollback/.test(call.name)).length, 0);
+  assert.equal(h.calls.filter(call => call.name === 'get_employee_import_archives_status').length,
+    ['employee_import_archives_bind', 'employee_import_archives_stage'].includes(name) ? 0 : 1);
+  assert.equal(h.calls.filter(call => /close|cancel|rollback/.test(call.name)).length, 0);
   const index = h.calls.findIndex(call => call.name === name);
   assert.ok(h.calls.slice(index + 1).every(call => call.name === 'cleanup'));
   assert.ok((await readFile(h.filePath)).length); cleaned(h);

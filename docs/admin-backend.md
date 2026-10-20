@@ -87,6 +87,7 @@
 - 「工作會話記錄」（`work_sessions`）的保留天数决定通知自动化「工作天数」类条件能往回算多少天，必须大于最大的工作天数目标；2026-10-09 起为 400 天（见 `docs/notifications.md`）。
 - 内容稽核与已删员工的资料**不在**这 16 类中，不会被自动清理。
 - 隐藏入口：标题「歷史資料管理」左侧的数据库图示，1.1 秒内连点三次 → 内容稽核面板（见 `docs/content-audit.md`）。
+- 本地新增第三页签「遷入檔案」（未部署）：按来源站/包查看已核验的六类只读快照，历史身份不关联新站活账号；已核验附件按需授权加载，不打开旧URL。分页错误保留确认页并提供重试，时间UTC+8；原「內容稽核／刪除員工」工作流保留。这不是完整「資料遷移」向导。
 
 ## 未接入的旧组件（改了不会生效）
 - `DispatchRecords.tsx`（员工派单统计）、`SubmitTimeManagement.tsx`（提交时间设置，直接写表）、`AutoCleanupSettings.tsx` + `src/services/autoCleanupService.ts`（旧的自动清理，使用 `system_configs.auto_cleanup_*`）。要重新启用前先和用户确认用途。
