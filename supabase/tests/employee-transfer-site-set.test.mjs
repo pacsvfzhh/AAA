@@ -18,7 +18,18 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // The fixture has no media references: the media domains still run real inventory/verify RPCs, and any
 // network transport is forbidden. No Storage, browser disk, PostgREST, native PG concurrency or
 // full-site/import acceptance is claimed (results are always fullSiteComplete=false/importReady=false).
-mock.method(globalThis, 'fetch', () => assert.fail('Network/production/Storage access forbidden'));
+// Only the in-process REAL employee-transfer-media handler (fake Storage store, service_role SQL bridge) may be
+// reached through fetch; any other URL is a forbidden network access. Media tests use SYNTHETIC tiny files and are
+// NOT Storage acceptance. The default no-media fixture (first round trip) never touches fetch at all.
+const ORIGIN = 'https://offline.supabase.co';
+const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
+const edge = { handler: null, calls: [], foreign: [], reads: [] };
+mock.method(globalThis, 'fetch', async (url, init) => {
+  if (String(url) !== ENDPOINT || !edge.handler) { edge.foreign.push(String(url)); assert.fail('Network/production/Storage access forbidden'); }
+  assert.equal(init.method, 'POST'); assert.equal(init.redirect, 'error'); assert.equal(init.credentials, 'omit'); assert.equal(init.cache, 'no-store');
+  edge.calls.push({ action: init.headers['x-transfer-action'], scope: init.headers['x-transfer-scope'] ?? 'verification' });
+  return edge.handler(new Request(url, init));
+});
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const compiled = await build({
   stdin: { contents: `export {exportSiteBundleSet, inspectSiteBundleSet, getSiteTransferCapabilities, getSiteTransferHistory, SITE_DOMAINS} from './src/lib/employeeTransfer/siteTransfer.ts';
@@ -37,6 +48,9 @@ const compiled = await build({
     });
   } }],
 });
+const edgeBuild = await build({ entryPoints: [root + 'supabase/functions/employee-transfer-media/handler.ts'], bundle: true, write: false,
+  platform: 'browser', format: 'esm' });
+const edgeModule = await import(`data:text/javascript;base64,${Buffer.from(edgeBuild.outputFiles[0].text).toString('base64')}`);
 const api = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 
 const PREVIOUS = '20261102000040_close_shared_export.sql';
@@ -73,9 +87,12 @@ async function change(relation, sql, params = []) {
 async function run(call) {
   const forced = await state.intercept?.(call.name, call.n, call.args);
   if (forced?.error) return { data: null, error: { message: forced.error } };
+  return execAs('anon', call);
+}
+async function execAs(role, call) {
   await db.exec('SAVEPOINT site_rpc');
   try {
-    await db.exec('SET LOCAL ROLE anon');
+    await db.exec(`SET LOCAL ROLE ${role}`);
     const data = await baseRpc(db, call.name, call.args, { role: null });
     await db.exec('RESET ROLE; RELEASE SAVEPOINT site_rpc');
     return { data, error: null };
@@ -222,10 +239,11 @@ before(async () => {
 }, { timeout: 240000 });
 after(async () => {
   await db?.close();
-  const fetches = globalThis.fetch.mock.callCount();
+  const fetches = globalThis.fetch.mock.callCount() - edge.calls.length;
   mock.restoreAll();
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
-  assert.equal(fetches, 0, 'no network/Storage access at all');
+  assert.equal(fetches, 0, 'only the in-process Edge handler was ever called');
+  assert.deepEqual(edge.foreign, []);
 });
 
 test('isolation uses real coordinator/adapter/drivers/container/crypto and no Supabase client or network', () => {
@@ -352,24 +370,52 @@ test('inspect rejects wrong passphrase, truncation, tampering, missing, duplicat
   }
 });
 
-async function resign(mutate) {
-  const index = setA.find(f => f.name === INDEX).raw;
-  const source = { [Symbol.asyncIterator]: async function* () { yield new Uint8Array(index); } };
-  const metadata = await api.readTransferMetadata(source);
-  const sink = workspaces().create();
-  const manifest = await api.verifyEncryptedVolume(source, PASS, sink, { expectedMetadata: metadata, limits: { maxLineBytes: 2 * 1024 * 1024 } });
-  const parts = []; for await (const chunk of sink.open(INDEX_PATH)) parts.push(Buffer.from(chunk));
-  const document = JSON.parse(Buffer.concat(parts).toString('utf8'));
-  mutate(document);
-  const raw = Buffer.from(JSON.stringify(document) + '\n');
-  const info = { exportId: manifest.exportId, sourceSiteId: manifest.sourceSiteId, volumeId: manifest.volumeId,
-    createdAt: manifest.createdAt, scope: manifest.scope, volumeIndex: 1, volumeCount: 1 };
+const LIMITS = { maxLineBytes: 2 * 1024 * 1024 };
+const chunked = raw => ({ [Symbol.asyncIterator]: async function* () { for (let i = 0; i < raw.length; i += 65536) yield new Uint8Array(raw.subarray(i, i + 65536)); } });
+const infoOf = m => ({ exportId: m.exportId, sourceSiteId: m.sourceSiteId, volumeId: m.volumeId, createdAt: m.createdAt,
+  scope: m.scope, volumeIndex: m.volumeIndex, volumeCount: m.volumeCount });
+async function unpack(raw) {
+  const metadata = await api.readTransferMetadata(chunked(raw)), sink = workspaces().create();
+  const manifest = await api.verifyEncryptedVolume(chunked(raw), PASS, sink, { expectedMetadata: metadata, limits: LIMITS });
+  const entries = [];
+  for (const entry of manifest.entries) {
+    const parts = []; for await (const chunk of sink.open(entry.path)) parts.push(Buffer.from(chunk));
+    entries.push({ path: entry.path, kind: entry.kind, bytes: Buffer.concat(parts) });
+  }
+  return { manifest, entries };
+}
+async function pack(info, entries, passphrase = PASS) {
   const out = [];
   for await (const chunk of api.writeEncryptedVolume((async function* () {
-    yield { path: INDEX_PATH, bytes: raw.length, open: () => (async function* () { yield raw; })() };
-  })(), info, PASS, { limits: { maxLineBytes: 2 * 1024 * 1024 } })) out.push(Buffer.from(chunk));
-  return { name: INDEX, raw: Buffer.concat(out) };
+    for (const entry of entries) yield { path: entry.path, bytes: entry.bytes.length, open: () => chunked(entry.bytes) };
+  })(), info, passphrase, { limits: LIMITS })) out.push(Buffer.from(chunk));
+  return Buffer.concat(out);
 }
+async function resign(mutate, base = setA) {
+  const { manifest, entries } = await unpack(base.find(f => f.name === INDEX).raw);
+  const document = JSON.parse(entries[0].bytes.toString('utf8'));
+  mutate(document);
+  return { name: INDEX, raw: await pack(infoOf(manifest), [{ path: INDEX_PATH, bytes: Buffer.from(JSON.stringify(document) + '\n') }]) };
+}
+// Re-encrypts ONE real domain volume with a mutation, then re-signs the index so it matches that new ciphertext
+// (digest/size, optional media count). Rejection therefore must come from validating the volume content itself.
+async function variant(base, name, { entries: edit, info: editInfo, index: editIndex, files } = {}) {
+  const { manifest, entries } = await unpack(base.find(f => f.name === name).raw);
+  const next = (await edit?.(entries.map(e => ({ ...e })))) ?? entries, info = editInfo ? editInfo(infoOf(manifest)) : infoOf(manifest);
+  const raw = await pack(info, next);
+  const index = await resign(document => {
+    const volume = document.volumes.find(v => v.filename === name);
+    volume.cipherBytes = raw.length; volume.cipherSha256 = sha(raw);
+    if (files !== undefined) volume.files = files;
+    editIndex?.(document);
+  }, base);
+  return base.map(f => f.name === name ? { name, raw } : f.name === INDEX ? index : f);
+}
+const editMetadata = (entries, domain, change) => {
+  const entry = entries.find(e => e.path === `data/site-${domain}.ndjson`);
+  const document = JSON.parse(entry.bytes.toString('utf8')); change(document);
+  entry.bytes = Buffer.from(JSON.stringify(document) + '\n'); return entries;
+};
 test('inspect rejects a validly encrypted but semantically changed index (digest, rows, order, snapshot, completion flags)', async () => {
   assert.deepEqual(await inspect(toFiles(setA.map(f => f.name === INDEX ? { name: INDEX, raw: f.raw } : f))), resultA, 'control');
   // Control with an unchanged re-signed index must be accepted: it proves the helper itself is valid.
@@ -562,4 +608,170 @@ test('export result and metadata state records only, never full-site completion,
     assert.equal(capabilities.can_import, false); assert.ok(capabilities.import_blockers.length > 0);
     assert.deepEqual(await api.getSiteTransferHistory().then(list => list.every(item => !/import_finished/.test(item.kind))), true);
   });
+});
+
+// ================= media: REAL SQL authorize/inventory/commit + REAL Edge handler + fake Storage store =================
+// Synthetic tiny files only (valid signatures, never decoded). The store is an in-memory map: this is NOT Storage,
+// browser-disk or deployed-Edge acceptance. Chat keeps the documented 'customer-avatar:regular:1' fixture avatar.
+const PNG0 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+const png = marker => Buffer.concat([PNG0, Buffer.from(marker)]);
+const jpeg = marker => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 3, 9, 0xff, 0xd9]), Buffer.from(marker)]);
+const OBJECT = {
+  front: { bucket: 'verification-documents', path: `id-front/${I.employee}-front.png`, bytes: png('SITE-SET-FRONT-UNIQUE-1') },
+  back: { bucket: 'verification-documents', path: `id-back/${I.employee}-back.jpg`, bytes: jpeg('SITE-SET-BACK-UNIQUE-2') },
+  notice: { bucket: 'announcement-images', path: 'site-set/notice.png', bytes: png('SITE-SET-NOTICE-UNIQUE-3') },
+  avatar: { bucket: 'super-customer-avatars', path: 'avatars/site-avatar.png', bytes: png('SITE-SET-AVATAR-UNIQUE-4') },
+  photo: { bucket: 'chat-images', path: 'site-set/photo.jpg', bytes: jpeg('SITE-SET-PHOTO-UNIQUE-5') },
+};
+const urlOf = o => `${ORIGIN}/storage/v1/object/public/${o.bucket}/${o.path}`;
+const MEDIA_COUNTS = { verification: 2, notifications: 1, chat: 2 };
+const store = {
+  async download(bucket, path) {
+    edge.reads.push(`${bucket}/${path}`);
+    const found = Object.values(OBJECT).find(o => o.bucket === bucket && o.path === path);
+    return found ? { data: new Response(found.bytes, { status: 200, headers: { 'content-length': String(found.bytes.length) } }), error: null } : { data: null, error: 'missing' };
+  },
+  async upload() { assert.fail('export must never upload to Storage'); },
+};
+function startEdge() {
+  edge.rpc = [];
+  edge.handler = edgeModule.createEmployeeTransferMediaHandler({ supabaseUrl: ORIGIN, store, rpc: (name, args) => {
+    edge.rpc.push(name);
+    const result = queue.then(() => execAs('service_role', { name, args }));
+    queue = result.catch(() => undefined);
+    return result;
+  } });
+}
+async function seedMedia() {
+  await change('public.verification_requests', 'UPDATE public.verification_requests SET id_front_url=$2,id_back_url=$3 WHERE id=$1',
+    [I.verification, urlOf(OBJECT.front), urlOf(OBJECT.back)]);
+  await change('public.messages', 'UPDATE public.messages SET content=$2 WHERE id=$1',
+    [I.message, `<p>${CANARY}</p><img src="${urlOf(OBJECT.notice)}" alt="notice">`]);
+  await change('public.simulated_customers', 'UPDATE public.simulated_customers SET custom_avatar_url=$2 WHERE id=$1', [I.customer, urlOf(OBJECT.avatar)]);
+  await change('public.customer_employee_conversations', 'UPDATE public.customer_employee_conversations SET image_url=$2 WHERE id=$1', [I.chat, urlOf(OBJECT.photo)]);
+}
+let setM, resultM;
+const mediaOf = entries => entries.filter(e => e.kind === 'media');
+const expectedByDomain = { verification: [OBJECT.front, OBJECT.back], notifications: [OBJECT.notice], chat: [OBJECT.avatar, OBJECT.photo] };
+
+test('real SQL media inventory/authorize/commit + real Edge handler: ten-domain export carries verification, notification and chat files, and inspect accepts it', { timeout: 240000 }, async () => {
+  await isolated(async () => {
+    await seedMedia(); startEdge();
+    const base = edge.calls.length; edge.reads = [];
+    try {
+      const { output, w, promise } = await exportSet();
+      resultM = await promise;
+      const disk = await filesOf(output); setM = disk;
+      assert.deepEqual(output.created, [...FILES, INDEX]);
+      assert.equal(resultM.fullSiteComplete, false); assert.equal(resultM.importReady, false);
+      for (const volume of resultM.volumes) assert.equal(volume.files, MEDIA_COUNTS[volume.domain] ?? 0, volume.domain);
+      const calls = edge.calls.slice(base), tally = scope => calls.filter(c => c.scope === scope).map(c => c.action).sort();
+      assert.deepEqual(tally('verification'), ['download', 'download', 'recheck-export', 'recheck-export']);
+      assert.deepEqual(tally('notifications'), ['download', 'recheck-export']);
+      assert.deepEqual(tally('chat'), ['download', 'download', 'recheck-export', 'recheck-export']);
+      assert.equal(calls.every(c => ['download', 'recheck-export'].includes(c.action)), true, 'export never uploads/imports');
+      assert.deepEqual([...new Set(edge.reads)].sort(), Object.values(OBJECT).map(o => `${o.bucket}/${o.path}`).sort());
+      assert.ok(edge.rpc.length > 0); assert.ok(edge.rpc.every(name => /^employee_transfer_(verification|notification|chat)_media_(authorize|commit)$/.test(name)));
+      const stats = await jobStats(); assert.equal(statusCount(stats, 'finished'), 10); assert.equal(statusCount(stats, 'running'), 0);
+      allDead(w);
+      for (const file of disk) for (const object of Object.values(OBJECT))
+        assert.equal(file.raw.includes(object.bytes.subarray(-20)), false, `${file.name} must not contain plaintext media`);
+      // Exact original bytes survive encryption/ZIP, per domain, and no other domain carries media.
+      for (const [domain, objects] of Object.entries(expectedByDomain)) {
+        const { entries } = await unpack(disk.find(f => f.name === FILES[DOMAINS.indexOf(domain)]).raw);
+        assert.deepEqual(mediaOf(entries).map(e => sha(e.bytes)).sort(), objects.map(o => sha(o.bytes)).sort(), domain);
+      }
+      for (const domain of DOMAINS.filter(d => !MEDIA_COUNTS[d])) {
+        const { entries } = await unpack(disk.find(f => f.name === FILES[DOMAINS.indexOf(domain)]).raw);
+        assert.equal(mediaOf(entries).length, 0, domain);
+      }
+    } finally { edge.handler = null; }
+    const callsBefore = edge.calls.length, rpcBefore = state.rpcCalls.length;
+    assert.deepEqual(await inspect(toFiles([...setM].reverse())), resultM);
+    assert.equal(edge.calls.length, callsBefore, 'inspect never contacts Edge/Storage'); assert.equal(state.rpcCalls.length, rpcBefore);
+  });
+});
+
+test('fail-closed is unchanged: the DB-default emoji customer avatar blocks the chat domain; nothing is relaxed or skipped', { timeout: 120000 }, async () => {
+  await failed('emoji avatar', async () => {
+    await change('public.simulated_customers', "UPDATE public.simulated_customers SET customer_avatar='👤' WHERE id=$1", [I.customer]);
+    return exportSet();
+  }, ({ error, output, stats }) => {
+    assert.match(error.message, /stopped during records/); assert.deepEqual(output.created, FILES.slice(0, 9));
+    assert.equal(statusCount(stats, 'running'), 1); assert.equal(callsOf('employee_export_chat_close'), 0);
+    assert.equal(callsOf('employee_export_archives_begin'), 0);
+  });
+});
+
+test('inspect rejects media bundles whose catalog, files, paths, counts or key order disagree (real exported volumes, re-encrypted and re-signed)', { timeout: 280000 }, async () => {
+  assert.ok(setM, 'requires the media round trip');
+  const run = async (label, files) => inspect(toFiles(files)).then(() => assert.fail(`${label} was accepted`), error => assert.match(error.message, GENERIC, label));
+  const cases = (domain, n) => ({
+    'file removed, index count updated': { entries: es => { const m = mediaOf(es)[0]; return es.filter(e => e !== m); }, files: n - 1 },
+    'file removed, index count stale': { entries: es => { const m = mediaOf(es)[0]; return es.filter(e => e !== m); } },
+    'file bytes changed (same size, different SHA)': { entries: es => { const m = mediaOf(es)[0]; m.bytes = Buffer.from(m.bytes); m.bytes[m.bytes.length - 1] ^= 1; return es; } },
+    'extra uncataloged media file': { entries: es => [...es, { path: 'media/chat-images/uncataloged/extra.png', kind: 'media', bytes: png('EXTRA') }], files: n + 1 },
+    'media count stale in index only': { index: d => { d.volumes[DOMAINS.indexOf(domain)].files = n + 1; } },
+    'media path renamed away from catalog': { entries: es => { mediaOf(es)[0].path = 'media/chat-images/renamed/not-in-catalog.png'; return es; } },
+    'catalog lists first file twice': { entries: es => editMetadata(es, domain, d => {
+      if (Array.isArray(d.media)) d.media = [d.media[0], ...d.media]; else d.media.files = [d.media.files[0], ...d.media.files];
+    }) },
+    'catalog emptied while files remain': { entries: es => editMetadata(es, domain, d => { if (Array.isArray(d.media)) d.media = []; else d.media.files = []; }) },
+  });
+  for (const [domain, n] of Object.entries(MEDIA_COUNTS)) {
+    const name = FILES[DOMAINS.indexOf(domain)];
+    const control = await variant(setM, name);
+    assert.deepEqual((await inspect(toFiles(control))).volumes.map(v => v.files), resultM.volumes.map(v => v.files), `${domain} control (re-encrypted unchanged) is accepted`);
+    for (const [label, options] of Object.entries(cases(domain, n))) await run(`${domain}: ${label}`, await variant(setM, name, options));
+  }
+  const swapped = await variant(setM, FILES[DOMAINS.indexOf('verification')], { entries: es => {
+    const [a, b] = mediaOf(es); [a.bytes, b.bytes] = [b.bytes, a.bytes]; return es;
+  } });
+  await run('verification: two media payloads swapped between their paths', swapped);
+  // Path reuse: two manifest entries claiming one path cannot even be produced by the real container writer
+  // (claimEntryPath), so a forged bundle of that shape has no valid encrypted form to present to inspect.
+  for (const domain of ['verification', 'chat']) {
+    await assert.rejects(variant(setM, FILES[DOMAINS.indexOf(domain)], { entries: es => { const [a, b] = mediaOf(es); b.path = a.path; return es; } }), /Invalid transfer manifest/, domain);
+  }
+});
+
+// ================= crypto boundary: header identity is unauthenticated =================
+test('readTransferMetadata only identifies: an altered or spliced header is reported but can never authenticate', async () => {
+  const good = setA.find(f => f.name === FILES[3]).raw, other = setA.find(f => f.name === FILES[2]).raw;
+  const original = await api.readTransferMetadata(chunked(good)), foreign = await api.readTransferMetadata(chunked(other));
+  assert.notEqual(original.volumeId, foreign.volumeId);
+  const verify = (raw, expectedMetadata) => api.verifyEncryptedVolume(chunked(raw), PASS, workspaces().create(), { expectedMetadata, limits: LIMITS });
+  assert.ok((await verify(good, original)).entries.length > 0, 'control');
+  // 1. one hex digit of the unauthenticated header exportId altered (offset 50)
+  const edited = Buffer.from(good), digit = String.fromCharCode(edited[50]);
+  edited[50] = (digit === 'a' ? 'b' : 'a').charCodeAt(0);
+  const reported = await api.readTransferMetadata(chunked(edited));
+  assert.notEqual(reported.exportId, original.exportId, 'header is only parsed, never trusted');
+  await assert.rejects(verify(edited, reported)); await assert.rejects(verify(edited, original));
+  // 2. header of another volume spliced onto this ciphertext body
+  const headerLength = 12 + new DataView(other.buffer, other.byteOffset).getUint32(8), spliced = Buffer.concat([other.subarray(0, headerLength), good.subarray(headerLength)]);
+  assert.deepEqual(await api.readTransferMetadata(chunked(spliced)), foreign);
+  await assert.rejects(verify(spliced, foreign)); await assert.rejects(verify(spliced, original));
+  // 3. an authentic file presented with another volume's expected identity
+  await assert.rejects(verify(good, foreign));
+  // 4. inspect of a full set containing such files is rejected (even though each header parses)
+  for (const bad of [edited, spliced]) await assert.rejects(inspect(toFiles(setA.map(f => f.name === FILES[3] ? { name: f.name, raw: bad } : f))), GENERIC);
+});
+test('authenticated volumes whose manifest identity disagrees with the signed index are rejected', { timeout: 120000 }, async () => {
+  const name = FILES[4];
+  const cases = {
+    'volumeCount 2': { info: i => ({ ...i, volumeCount: 2 }) },
+    'volumeIndex 2 of 2': { info: i => ({ ...i, volumeIndex: 2, volumeCount: 2 }) },
+    'other package (header and manifest agree)': { info: i => ({ ...i, exportId: randomUUID() }) },
+    'other source site (header and manifest agree)': { info: i => ({ ...i, sourceSiteId: randomUUID() }) },
+    'volume id differs from index': { info: i => ({ ...i, volumeId: randomUUID() }) },
+  };
+  assert.deepEqual((await inspect(toFiles(await variant(setA, name)))).volumes.length, 11, 'control');
+  for (const [label, options] of Object.entries(cases)) {
+    await assert.rejects(inspect(toFiles(await variant(setA, name, options))), GENERIC, label);
+  }
+  // the whole index re-signed for the wrong passphrase is also unusable
+  const wrong = await pack(infoOf((await unpack(setA.find(f => f.name === INDEX).raw)).manifest),
+    [{ path: INDEX_PATH, bytes: Buffer.from('{}\n') }], PASS + '!');
+  await assert.rejects(inspect(toFiles(setA.map(f => f.name === INDEX ? { name: INDEX, raw: wrong } : f))), GENERIC);
 });
