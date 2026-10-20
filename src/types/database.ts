@@ -2491,6 +2491,48 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: import('../lib/employeeTransfer/chatRestoreApi').ChatRestoreReceipt;
       };
+      get_employee_transferred_archive_namespaces: {
+        Args: { p_admin_session_token: string; p_after?: string | null; p_limit?: number };
+        Returns: import('../lib/employeeTransfer/archiveReader').TransferredArchiveNamespacesPage;
+      };
+      employee_transfer_archive_media_inventory: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_direction: string };
+        Returns: import('../lib/employeeTransfer/archiveMedia').ArchiveMediaInventory;
+      };
+      employee_transfer_archive_media_status: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_direction: string };
+        Returns: import('../lib/employeeTransfer/archiveMedia').ArchiveMediaInventory;
+      };
+      employee_transfer_archive_media_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_files: import('../lib/employeeTransfer/archiveMedia').ArchiveMediaFile[] };
+        Returns: { success: true; files: number; bytes: number; repeated: boolean; full_site_complete: false };
+      };
+      employee_transfer_archive_media_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_direction: string };
+        Returns: import('../lib/employeeTransfer/archiveMedia').ArchiveMediaInventory;
+      };
+      employee_transfer_archive_media_authorize: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: string; p_object_key: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_transfer_archive_media_commit: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: string; p_object_key: string; p_bytes: number;
+          p_sha256: string; p_content_type: string; p_storage_origin: string; p_generation: string };
+        Returns: { success: true; key: string; bytes: number; sha256: string; content_type: string; full_site_complete: false };
+      };
+      employee_transfer_archive_media_read_authorize: {
+        Args: { p_admin_session_token: string; p_source_site_id: string; p_package_id: string; p_event_id: string; p_ref_key: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_replacement_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_after?: string | null; p_limit?: number };
+        Returns: import('../lib/employeeTransfer/employeeReplacement').EmployeeReplacementPlan;
+      };
+      employee_import_replacement_status: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_fingerprint: string; p_target_fingerprint: string;
+          p_after?: string | null; p_limit?: number };
+        Returns: import('../lib/employeeTransfer/employeeReplacement').EmployeeReplacementStatus;
+      };
       employee_export_archives_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string;

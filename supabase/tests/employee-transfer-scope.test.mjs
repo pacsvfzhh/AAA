@@ -323,7 +323,7 @@ test('strict local replay attempts all migrations once and matches the fixed 109
   const result = await replayMigrations({ strict: true });
   try {
     assert.deepEqual(result.files, diskFiles, 'no skipped, truncated or selected migration replay');
-    assert.equal(result.files.length, 561, 'migration baseline changed: review before updating the inventory');
+    assert.equal(result.files.length, 564, 'migration baseline changed: review before updating the inventory');
     assert.equal(EXPECTED_REPLAY_FAILURES.length, 12);
     assert.deepEqual(result.failures, EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message })));
     assert.equal(result.validation.matched.length, 12);
@@ -364,6 +364,9 @@ test('strict local replay attempts all migrations once and matches the fixed 109
       '20261102000032_restore_site_chat.sql',
       '20261102000033_transfer_readonly_archives.sql',
       '20261102000034_restore_readonly_archives.sql',
+      '20261102000035_transfer_archive_evidence.sql',
+      '20261102000036_list_transferred_archives.sql',
+      '20261102000037_plan_employee_replacement.sql',
     ]) {
       assert.ok(result.files.includes(file));
       assert.ok(!result.failures.some(failure => failure.file === file), `${file} must succeed`);

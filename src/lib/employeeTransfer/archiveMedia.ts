@@ -140,9 +140,7 @@ function config() {
     typeof apiKey !== 'string' || !apiKey || apiKey !== apiKey.trim() || /[\r\n]/.test(apiKey)) invalid();
   return { endpoint: host + '/functions/v1/employee-transfer-media', apiKey };
 }
-// Local RPC bridge until the integrator updates database.ts; never extend supabase.ts retries.
 type Query = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): Query };
-const db = supabase as unknown as { rpc(name: string, args: Record<string, unknown>): Query };
 const admin = () => uuid(getAdminFinancialSessionToken());
 export interface ArchiveMediaSession {
   readonly direction: ArchiveMediaDirection;
@@ -169,8 +167,8 @@ export function createArchiveMediaSession(jobToken: string, direction: ArchiveMe
     catch { if (dispatched) requiresStatus = true;throw new ArchiveMediaError(dispatched || requiresStatus); }
     finally { busy = false; }
   };
-  const rpc = async (name: string, args: Record<string, unknown>, signal?: AbortSignal) => {
-    check(signal);const query = db.rpc(name, args), result = await (signal ? query.abortSignal(signal) : query);
+  const rpc = async (operation: () => Query, signal?: AbortSignal) => {
+    check(signal);const query = operation(), result = await (signal ? query.abortSignal(signal) : query);
     check(signal);if (result.error) invalid();return result.data;
   };
   const validate = (value: unknown) => {
@@ -192,7 +190,9 @@ export function createArchiveMediaSession(jobToken: string, direction: ArchiveMe
     for (const ref of checked.files) if (ref.file) observed.set(ref.key, { ...ref.file });
     return checked;
   };
-  const inventory = async (status: boolean, signal?: AbortSignal) => validate(await rpc(`employee_transfer_archive_media_${status ? 'status' : 'inventory'}`, { ...params(), p_direction: direction }, signal));
+  const inventory = async (status: boolean, signal?: AbortSignal) => validate(await rpc(() => status
+    ? supabase.rpc('employee_transfer_archive_media_status', { ...params(), p_direction: direction })
+    : supabase.rpc('employee_transfer_archive_media_inventory', { ...params(), p_direction: direction }), signal));
   const post = async (action: string, key: string, mark: () => void, signal?: AbortSignal, body?: Uint8Array) => {
     const headers = { apikey: apiKey, 'Content-Type': 'application/octet-stream', 'x-transfer-scope': 'archives',
       'x-transfer-action': action, 'x-admin-session-token': admin(), 'x-transfer-job-token': jobToken, 'x-transfer-object-key': key };
@@ -222,7 +222,7 @@ export function createArchiveMediaSession(jobToken: string, direction: ArchiveMe
       if (requested && (requested.length !== checked.length || requested.some((file, i) => !same(file, checked[i])))) invalid();
       matches(await inventory(false, signal), checked);
       const args = { ...params(), p_files: checked };requested = checked;mark();
-      const r = object(await rpc('employee_transfer_archive_media_bind', args, signal), ['success', 'files', 'bytes', 'repeated', 'full_site_complete']);
+      const r = object(await rpc(() => supabase.rpc('employee_transfer_archive_media_bind', args), signal), ['success', 'files', 'bytes', 'repeated', 'full_site_complete']);
       if (r.success !== true || r.files !== checked.length || r.bytes !== checked.reduce((n, f) => n + f.bytes, 0) || typeof r.repeated !== 'boolean' || r.full_site_complete !== false) invalid();
       validate({ ...confirmed!, bound: true, files: confirmed!.files.map((ref, i) => ({ ...ref, file: checked[i] })) });
     }, false, signal),
@@ -242,7 +242,7 @@ export function createArchiveMediaSession(jobToken: string, direction: ArchiveMe
     recheckExport: (input: readonly ArchiveMediaFile[], signal?: AbortSignal) => recheck('export', input, signal),
     recheckImport: (input: readonly ArchiveMediaFile[], signal?: AbortSignal) => recheck('import', input, signal),
     verify: (signal?: AbortSignal) => run(async mark => {
-      const args = { ...params(), p_direction: direction };mark();const result = validate(await rpc('employee_transfer_archive_media_verify', args, signal));
+      const args = { ...params(), p_direction: direction };mark();const result = validate(await rpc(() => supabase.rpc('employee_transfer_archive_media_verify', args), signal));
       if (!result.verified) invalid();return result;
     }, false, signal),
   });

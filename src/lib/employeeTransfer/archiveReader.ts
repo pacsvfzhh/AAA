@@ -91,16 +91,12 @@ export function validateTransferredArchivePage(
   return Object.freeze({ ...page, rows: Object.freeze(rows) });
 }
 
-// Local, narrow port until the integrator adds SQL36 to the shared generated RPC types.
-// No change to database.ts/supabase.ts and no generic table/write access through this port.
-type ReadRpc = 'get_employee_transferred_archive_namespaces' | 'get_employee_transferred_archive_page';
 type Query = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): Query };
-const transport = supabase as unknown as { rpc(name: ReadRpc, args: Record<string, unknown>): Query };
-async function request<T>(name: ReadRpc, args: Record<string, unknown>, validate: (data: unknown) => T, signal?: AbortSignal): Promise<T> {
+async function request<T>(operation: () => Query, validate: (data: unknown) => T, signal?: AbortSignal): Promise<T> {
   try {
     checkAbort(signal);
     const { data, error } = await withSignal(() => {
-      const query = transport.rpc(name, { ...args, p_admin_session_token: uuid(getAdminFinancialSessionToken()) });
+      const query = operation();
       return signal ? query.abortSignal(signal) : query;
     }, signal);
     checkAbort(signal);
@@ -119,15 +115,18 @@ export function createTransferredArchivesReader(): TransferredArchivesReader {
     async namespaces(after = null, limit = 30, signal) {
       if (after !== null) cursor(after);
       pageLimit(limit, 100);
-      return request('get_employee_transferred_archive_namespaces', { p_after: after, p_limit: limit },
+      return request(() => supabase.rpc('get_employee_transferred_archive_namespaces', {
+        p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_after: after, p_limit: limit,
+      }),
         data => validateTransferredArchiveNamespaces(data, after, limit), signal);
     },
     async page(sourceSiteId, packageId, key, after = null, limit = 100, signal) {
       uuid(sourceSiteId); uuid(packageId); archivesTableKey(key); pageLimit(limit, 200);
       if (after !== null) archivesCursor(key, after);
-      return request('get_employee_transferred_archive_page', {
+      return request(() => supabase.rpc('get_employee_transferred_archive_page', {
+        p_admin_session_token: uuid(getAdminFinancialSessionToken()),
         p_source_site_id: sourceSiteId, p_package_id: packageId, p_table_key: key, p_after: after, p_limit: limit,
-      }, data => validateTransferredArchivePage(data, key, after, limit), signal);
+      }), data => validateTransferredArchivePage(data, key, after, limit), signal);
     },
   };
 }

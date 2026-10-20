@@ -187,11 +187,7 @@ export function validateEmployeeReplacementStatus(input: unknown, expected: Empl
     return { ...checked, expected_target_fingerprint: fingerprint, target_unchanged: bool(r.target_unchanged) };
   } catch { invalid(); }
 }
-type RpcName = 'employee_import_replacement_plan' | 'employee_import_replacement_status';
 type Query = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): Query };
-// Local, two-RPC structural adapter only: the shared Database type is deliberately unchanged.
-// Names deliberately do not start with get_/count_: supabase.ts retries those POSTs implicitly.
-const transport = supabase as unknown as { rpc(name: RpcName, args: Record<string, unknown>): Query };
 export interface EmployeeReplacementSession {
   plan(after?: string | null, limit?: number, signal?: AbortSignal): Promise<EmployeeReplacementPlan>;
   status(checkpoint: EmployeeReplacementCheckpoint, signal?: AbortSignal): Promise<EmployeeReplacementStatus>;
@@ -199,12 +195,13 @@ export interface EmployeeReplacementSession {
 export function createEmployeeReplacementSession(dispatchJobToken: string): EmployeeReplacementSession {
   try { uuid(dispatchJobToken); } catch { invalid(); }
   let busy = false;
-  const request = async <T>(name: RpcName, args: () => Record<string, unknown>, validate: (value: unknown) => T, signal?: AbortSignal): Promise<T> => {
+  const params = () => ({ p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_job_token: dispatchJobToken });
+  const request = async <T>(operation: () => Query, validate: (value: unknown) => T, signal?: AbortSignal): Promise<T> => {
     if (busy) invalid();
     busy = true;
     try {
       const { data, error } = await withSignal(() => {
-        const query = transport.rpc(name, { ...args(), p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_job_token: dispatchJobToken });
+        const query = operation();
         return signal ? query.abortSignal(signal) : query;
       }, signal);
       if (signal?.aborted || error) invalid();
@@ -218,10 +215,10 @@ export function createEmployeeReplacementSession(dispatchJobToken: string): Empl
   };
   return {
     plan(after = null, limit = 100, signal) {
-      return request('employee_import_replacement_plan', () => {
+      return request(() => {
         if (after !== null) uuid(after);
         if (count(limit, 200) < 1) invalid();
-        return { p_after: after, p_limit: limit };
+        return supabase.rpc('employee_import_replacement_plan', { ...params(), p_after: after, p_limit: limit });
       }, value => {
         const result = validateEmployeeReplacementPlan(value);
         if (result.after !== after || result.limit !== limit) invalid();
@@ -230,10 +227,10 @@ export function createEmployeeReplacementSession(dispatchJobToken: string): Empl
     },
     status(input, signal) {
       let baseline: EmployeeReplacementCheckpoint;
-      return request('employee_import_replacement_status', () => {
-        baseline = checkpoint(input); // A detached read checkpoint, never client target IDs or backup claims.
-        return { p_after: baseline.after, p_limit: baseline.limit,
-          p_source_fingerprint: baseline.source_fingerprint, p_target_fingerprint: baseline.target_fingerprint };
+      return request(() => {
+        baseline = checkpoint(input);
+        return supabase.rpc('employee_import_replacement_status', { ...params(), p_after: baseline.after, p_limit: baseline.limit,
+          p_source_fingerprint: baseline.source_fingerprint, p_target_fingerprint: baseline.target_fingerprint });
       }, value => validateEmployeeReplacementStatus(value, baseline), signal);
     },
   };
