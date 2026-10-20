@@ -678,6 +678,14 @@ before(async () => {
   await transaction(async () => { const r = await prepare('shared', shared); assert.equal((await r.client.apply(r.plan.plan_hash)).success, true); await rpc('employee_transfer_cancel', auth(r.job)); }, db, true);
   dispatch = await transaction(() => capture('dispatch'), source, true); identity = await transaction(() => capture('identity'), source, true);
   finance = await transaction(() => capture('finance'), source, true); activity = await transaction(() => capture('activity'), source, true);
+  // The archived account has real wallet/withdrawal history but must never join active exports.
+  assert.deepEqual(lines(identity.texts.accounts).map(line => JSON.parse(line).id).sort(), [...EMPLOYEES].sort());
+  for (const key of KEYS.identity) for (const line of lines(identity.texts[key])) {
+    const row = JSON.parse(line); assert.notEqual(key === 'orders' ? row.user_id : row.id, A.employee, `archive fixture leaked into identity ${key}`);
+  }
+  for (const key of KEYS.finance) for (const line of lines(finance.texts[key])) {
+    assert.ok(EMPLOYEES.includes(JSON.parse(line).user_id), `archive fixture leaked into finance ${key}`);
+  }
   verification = await transaction(() => capture('verification'), source, true);
   notifications = await transaction(() => capture('notifications'), source, true);
   chat = await transaction(() => capture('chat'), source, true);
@@ -3652,7 +3660,7 @@ test('separate committed activity transactions resume via a new activityApi, the
 // Archives run on a separate, genuinely committed dispatch checkpoint. The preceding activity
 // COMMIT/cancel test cannot supply authority, fake summaries or verified identity/finance state.
 const A = { employee: id(31001), absentEmployee: id(31002), account: id(31101), absentAccount: id(31102),
-  wallet: id(31201), operation: id(31301), message: id(31401), notification: id(31501),
+  operation: id(31301), message: id(31401), notification: id(31501),
   withdrawal: id(31601), employeeToken: id(31701) };
 const archiveEventId = n => id(33000 + n);
 const ARCHIVE_RELATION = 'private.employee_transfer_archive_records';
@@ -3667,7 +3675,7 @@ async function seedArchives(site) {
   await site.query(`INSERT INTO public.users(id,username,password_hash,employee_id,created_by,is_active,archived_at,is_verified,total_income)
     VALUES($1::uuid,'archived-'||$1::text,extensions.crypt($2,extensions.gen_salt('bf',4)),'archived-'||$1::text,$3,false,
       '2023-02-03T04:05:06.123456Z',true,4321.25)`, [A.employee, PASSWORDS.employee, OLD.branch]);
-  await site.query(`UPDATE public.wallets SET id=$2,available_balance=1234.56,frozen_balance=17.25 WHERE user_id=$1`, [A.employee, A.wallet]);
+  await site.query(`UPDATE public.wallets SET available_balance=1234.56,frozen_balance=17.25 WHERE user_id=$1`, [A.employee]);
   await site.query(`INSERT INTO public.withdrawals(id,user_id,amount,status,created_at)
     VALUES($1,$2,17.25,'pending','2022-02-03T04:05:06.123456Z'),($3,$2,23.50,'approved',NULL),
       ($4,$2,0.01,'rejected','2022-02-03T04:05:06.654321Z')`, [A.withdrawal, A.employee, id(31602), id(31603)]);
@@ -3682,7 +3690,7 @@ async function seedArchives(site) {
   await site.query(`INSERT INTO private.content_audit_events(id,operation_id,entity_type,entity_id,action,owner_admin_id,owner_username,
       actor_admin_id,actor_username,actor_role,employee_id,occurred_at,before_data,after_data,media_refs,employee_account,message_created_at)
     SELECT ('72000000-0000-4000-8000-'||lpad(to_hex(33000+n),12,'0'))::uuid,$1,'notification',$2,
-      'employee_delete',$3,'source-branch',CASE WHEN n=3 THEN NULL ELSE $4::uuid END,'source-root','super_admin',$5,
+      'employee_delete',$3,'source-branch',$4::uuid,'source-root','super_admin',$5,
       '2023-02-03T04:05:06.123456Z',CASE WHEN n=1 THEN NULL WHEN n=2 THEN 'null'::jsonb ELSE $6::jsonb END,
       CASE WHEN n=1 THEN 'null'::jsonb WHEN n=2 THEN NULL ELSE $6::jsonb END,
       jsonb_build_object($7::text,'synthetic-operation/evidence.png'),$8,'2022-01-02T03:04:05.654321Z'
@@ -3701,7 +3709,7 @@ async function seedArchiveTarget() {
   // not relax that gate or teach production RPCs to accept a live target as an unopened site.
   await localChange(db, 'public.users', `INSERT INTO public.users(id,username,password_hash,employee_id,created_by,is_active,is_verified,total_income)
     VALUES($1,'synthetic-target-live',extensions.crypt($2,extensions.gen_salt('bf',4)),'SYNTHETIC-TARGET-001',$3,true,false,99)`, [A.employee, PASSWORDS.employee, NEW.branch]);
-  await localChange(db, 'public.wallets', `INSERT INTO public.wallets(id,user_id,available_balance,frozen_balance) VALUES($1,$2,88,0)`, [A.wallet, A.employee]);
+  await localChange(db, 'public.wallets', `INSERT INTO public.wallets(user_id,available_balance,frozen_balance) VALUES($1,88,0)`, [A.employee]);
   await localChange(db, 'public.withdrawals', `INSERT INTO public.withdrawals(id,user_id,amount,status,created_at) VALUES($1,$2,77,'rejected','2024-01-01')`, [A.withdrawal, A.employee]);
   await localChange(db, 'private.deleted_employee_accounts', `INSERT INTO private.deleted_employee_accounts(id,operation_id,employee_id,
       account_username,owner_admin_id,actor_admin_id,actor_username,actor_role,deletion_source)
@@ -3842,7 +3850,7 @@ test('archives: six-table raw export-stage-plan-begin-chunks-verify-read round t
 test('archives: JSON null SQL NULL precision microseconds UTF8 and media refs retain the original source lines', { timeout: 300000 }, () => archiveCase(() => transaction(async () => {
   const event = n => JSON.parse(lines(archives.texts.content_audit_events).find(line => JSON.parse(line).id === archiveEventId(n)));
   assert.equal(event(1).before_data, null); assert.equal(event(1).before_data_sql_null, true); assert.equal(event(1).after_data, null); assert.equal(event(1).after_data_sql_null, false);
-  assert.equal(event(2).before_data_sql_null, false); assert.equal(event(2).after_data_sql_null, true); assert.equal(event(3).actor_admin_id, null);
+  assert.equal(event(2).before_data_sql_null, false); assert.equal(event(2).after_data_sql_null, true); assert.equal(event(3).actor_admin_id, OLD.root);
   assert.match(archives.texts.content_audit_events, new RegExp(PRECISE.replace('.', '\\.'))); assert.ok(archives.texts.content_audit_events.includes(ARCHIVE_TEXT));
   assert.equal(event(3).occurred_at, '2023-02-03T04:05:06.123456+00:00'); assert.equal(event(3).message_created_at, '2022-01-02T03:04:05.654321+00:00');
   assert.deepEqual(event(3).media_refs, { [ARCHIVE_MEDIA]: 'synthetic-operation/evidence.png' });
@@ -4022,14 +4030,14 @@ test('archives: READ ONLY plan and status preserve heartbeat and permissions rej
         ['employee_import_archives_begin', ['p_admin_session_token', 'p_job_token', 'p_plan_hash']],
         ['employee_import_archives_chunk', ['p_admin_session_token', 'p_job_token', 'p_table_key', 'p_chunk_no']],
         ['employee_import_archives_verify', ['p_admin_session_token', 'p_job_token']], ['get_employee_import_archives_status', ['p_admin_session_token', 'p_job_token']],
-        [await archiveReadName(), ['p_admin_session_token', 'p_source_site_id', 'p_package_id', 'p_table_key', 'p_source_id']],
+        ['get_employee_transferred_archive_page', ['p_admin_session_token', 'p_source_site_id', 'p_package_id', 'p_table_key', 'p_after', 'p_limit']],
       ]) {
         const found = await rows(db, `SELECT oid,proargnames,prosecdef,proconfig,provolatile,
           EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS everyone
           FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=$1`, [name]); assert.equal(found.length, 1); const fn = found[0];
         assert.deepEqual(fn.proargnames, args); assert.equal(fn.prosecdef, true); assert.equal(fn.everyone, false);
         assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
-        if (name === 'get_employee_import_archives_plan' || name === 'get_employee_import_archives_status' || name === await archiveReadName()) assert.equal(fn.provolatile, 's');
+        if (name === 'get_employee_import_archives_plan' || name === 'get_employee_import_archives_status' || name === 'get_employee_transferred_archive_page') assert.equal(fn.provolatile, 's');
         for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), role !== 'service_role');
       }
       assert.equal(await scalar(db, `SELECT relrowsecurity FROM pg_class WHERE oid='${ARCHIVE_RELATION}'::regclass`), true);

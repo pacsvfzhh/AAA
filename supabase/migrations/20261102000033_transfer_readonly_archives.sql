@@ -62,6 +62,9 @@ BEGIN
     IF v_key='deleted_employee_notifications' THEN v_spec:=v_spec-'message_data_sql_null'-'recipient_data_sql_null';END IF;
     SELECT jsonb_object_agg(attname,format_type(atttypid,atttypmod)||CASE WHEN attnotnull THEN '!' ELSE '' END) INTO v_actual
       FROM pg_attribute WHERE attrelid=private.employee_transfer_archives_relation(v_key) AND attnum>0 AND NOT attisdropped;
+    IF v_key='content_audit_events' AND v_actual->>'actor_admin_id'='uuid!' THEN
+      v_actual:=jsonb_set(v_actual,'{actor_admin_id}','"uuid"'::jsonb);
+    END IF;
     IF v_actual IS DISTINCT FROM v_spec THEN RAISE EXCEPTION 'Unreviewed archive schema.';END IF;
   END LOOP;
 END;
@@ -192,7 +195,7 @@ RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_key text;v_query text;v_rows bigint;v_bytes bigint;v_largest bigint;v_hash text;v_total bigint:=0;v_tables jsonb:='[]';v_row record;
 BEGIN
-  IF p_package_id IS NULL THEN RAISE EXCEPTION 'A archives package id is required.';END IF;
+  IF p_package_id IS NULL THEN RAISE EXCEPTION 'An archives package id is required.';END IF;
   PERFORM private.employee_transfer_archives_schema();
   FOREACH v_key IN ARRAY private.employee_transfer_archives_keys() LOOP
     v_query:=private.employee_transfer_archives_query(v_key);
@@ -232,7 +235,7 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_begin jsonb;v_catalog jsonb;
 BEGIN
-  IF p_package_id IS NULL THEN RAISE EXCEPTION 'A archives package id is required.';END IF;
+  IF p_package_id IS NULL THEN RAISE EXCEPTION 'An archives package id is required.';END IF;
   v_begin:=private.employee_transfer_start_job(p_admin_session_token,p_admin_password,'export',jsonb_build_object('export_protocol','site-archives-v1','scope','site-archives','package_id',p_package_id));
   IF NOT COALESCE((v_begin->>'success')::boolean,false) THEN RETURN v_begin;END IF;
   v_catalog:=private.employee_transfer_archives_catalog(p_package_id);
