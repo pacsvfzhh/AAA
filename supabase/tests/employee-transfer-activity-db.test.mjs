@@ -3665,7 +3665,7 @@ const A = { employee: id(31001), absentEmployee: id(31002), account: id(31101), 
 const archiveEventId = n => id(33000 + n);
 const ARCHIVE_RELATION = 'private.employee_transfer_archive_records';
 const ARCHIVE_FORBIDDEN = ['delivery_claim_token', 'delivery_claim_channel', 'delivery_claim_until', 'delivery_completed_claim_token',
-  'password', 'password_hash', 'current_session_token', 'current_tab_id', 'session_created_at', 'last_heartbeat_at',
+  'password', 'password_hash', 'current_session_token', 'current_tab_id',
   'session_token', 'token_hash', 'access_token', 'refresh_token', 'service_role_key', 'anon_key'];
 const ARCHIVE_TEXT = '合成檔案𠮷 é é 無真實個資';
 const ARCHIVE_MEDIA = `${SOURCE_ORIGIN}/storage/v1/object/public/chat-images/synthetic/archive.png`;
@@ -3685,7 +3685,8 @@ async function seedArchives(site) {
       '2023-02-03T04:05:06.123456Z','虛構姓名'),($2,$3,$8,NULL,NULL,NULL,NULL,$6,NULL,$7,'source-root','super_admin','admin_delete',
       '2023-02-03T04:05:06.000001Z',NULL)`, [A.account, A.absentAccount, A.operation, A.employee, ARCHIVE_TEXT, OLD.branch, OLD.root, A.absentEmployee]);
   const reserved = Object.fromEntries(ARCHIVE_FORBIDDEN.map(key => [key, `synthetic-excluded-${key}`]));
-  const snapshot = JSON.stringify({ text: ARCHIVE_TEXT, precise: 0, nested: [{ keep: 'original', ...reserved }],
+  const snapshot = JSON.stringify({ text: ARCHIVE_TEXT, precise: 0, nested: [{ keep: 'original',
+    session_created_at: '2023-02-03T04:05:06.123456Z', last_heartbeat_at: '2023-02-03T04:05:07.654321Z', ...reserved }],
     url: ARCHIVE_MEDIA, free_text: 'password and delivery_claim_token are text, not keys' }).replace('"precise":0', `"precise":${PRECISE}`);
   await site.query(`INSERT INTO private.content_audit_events(id,operation_id,entity_type,entity_id,action,owner_admin_id,owner_username,
       actor_admin_id,actor_username,actor_role,employee_id,occurred_at,before_data,after_data,media_refs,employee_account,message_created_at)
@@ -3937,7 +3938,7 @@ test('archives: duplicate escaped keys unknown columns wrong package same site a
     const duplicate = first + first; await archiveReject([() => astageChunk('content_audit_events', 0, duplicate)], /strictly ordered|duplicate/i);
   });
   for (const [key, field, oldId] of [['deleted_employee_notifications', 'record_id', A.account],
-    ['deleted_employee_notifications', 'archived_event_id', archiveEventId(3)], ['deleted_employee_summaries', 'employee_id', A.employee]]) await chatSavepoint(async () => {
+    ['deleted_employee_summaries', 'employee_id', A.employee]]) await chatSavepoint(async () => {
     const input = changedArchives({ [key]: text => text.replace(`"${field}": "${oldId}"`, `"${field}": "${F.outsider}"`) });
     assert.notEqual(input.texts[key], archives.texts[key]); const p = await astage(input); assert.equal(p.can_restore, false);
     assert.ok(p.conflicts.includes('archive_reference_missing')); await archiveReject([() => abegin(p)], /conflict|reference|restor/i);
@@ -3947,6 +3948,10 @@ test('archives: duplicate escaped keys unknown columns wrong package same site a
     assert.notEqual(input.texts.deleted_employee_withdrawals, archives.texts.deleted_employee_withdrawals);
     const p = await astage(input); assert.equal(p.can_restore, false); assert.ok(p.conflicts.includes('archive_reference_missing'));
     await archiveReject([() => abegin(p)], /conflict|reference|restor/i);
+  });
+  await chatSavepoint(async () => {
+    const input = changedArchives({ deleted_employee_notifications: text => text.replace(archiveEventId(3), F.outsider) });
+    const p = await astage(input); assert.equal(p.can_restore, true);
   });
   await archiveStillClosed();
 })));

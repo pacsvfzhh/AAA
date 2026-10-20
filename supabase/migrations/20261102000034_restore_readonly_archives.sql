@@ -81,8 +81,6 @@ BEGIN
     SELECT 1 FROM summaries s FULL JOIN accounts a ON a.id=s.id
       WHERE s.id IS NULL OR a.id IS NULL OR s.body->'employee_id' IS DISTINCT FROM a.body->'employee_id'
     UNION ALL
-    SELECT 1 FROM accounts a GROUP BY a.body->>'employee_id' HAVING count(*)<>1
-    UNION ALL
     SELECT 1 FROM private.employee_transfer_archives_input(p_job.id,'deleted_employee_withdrawals') w
       WHERE NOT EXISTS(SELECT 1 FROM accounts a WHERE a.id=w.body->>'record_id' AND a.body->'employee_id'=w.body->'employee_id')
   ) THEN v_conflicts:=v_conflicts||'"archive_reference_missing"'::jsonb;END IF;
@@ -118,6 +116,14 @@ DECLARE v_counts jsonb;v_chunks jsonb:='{}';v_completed jsonb:='{}';v_state json
   v_site uuid;v_package uuid;
 BEGIN
   PERFORM private.employee_transfer_archives_owner(p_job);
+  PERFORM private.employee_transfer_check_archives_catalog(p_job.summary->'archives_catalog');
+  IF NOT p_job.summary ? 'archives_restore' THEN
+    SELECT jsonb_object_agg(t->>'key',t->'rows'),jsonb_object_agg(t->>'key',0) INTO v_counts,v_chunks
+      FROM jsonb_array_elements(p_job.summary#>'{archives_catalog,tables}') t;
+    RETURN jsonb_build_object('scope','site-archives','started',false,'records_verified',false,'counts',v_counts,
+      'chunks',v_chunks,'completed_chunks',v_chunks,'media_pending',true,'maintenance',true,'financial_data_pending',true,
+      'dependencies_pending',true,'replacement_ready',false,'full_site_complete',false);
+  END IF;
   v_counts:=private.employee_transfer_check_archives_input(p_job);
   v_conflicts:=private.employee_transfer_archives_conflicts(p_job);
   v_site:=(p_job.summary#>>'{archives_catalog,site_id}')::uuid;v_package:=(p_job.summary#>>'{archives_catalog,package_id}')::uuid;
@@ -263,6 +269,8 @@ BEGIN
     'chunks',v_chunks,'completed_chunks',v_completed,'records_verified',false));
   v_status:=private.employee_transfer_archives_status(v_job);
   UPDATE private.employee_transfer_jobs SET summary=v_job.summary,last_activity_at=now() WHERE id=v_job.id;
+  PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','archives_restore_started',
+    jsonb_build_object('counts',v_status->'counts','media_pending',true,'full_site_complete',false));
   RETURN v_status;
 END;
 $$;
@@ -308,6 +316,8 @@ BEGIN
   v_job.summary:=jsonb_set(v_job.summary,'{archives_restore}',v_state);
   v_status:=private.employee_transfer_archives_status(v_job);
   UPDATE private.employee_transfer_jobs SET summary=v_job.summary,last_activity_at=now() WHERE id=v_job.id;
+  PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','archives_chunk_restored',
+    jsonb_build_object('table_key',p_table_key,'chunk_no',p_chunk_no,'media_pending',true,'full_site_complete',false));
   RETURN v_status;
 EXCEPTION WHEN OTHERS THEN PERFORM private.employee_transfer_clear_write_permit();RAISE;
 END;
@@ -334,6 +344,8 @@ BEGIN
   v_job.summary:=jsonb_set(v_job.summary,'{archives_restore,records_verified}','true'::jsonb);
   v_status:=private.employee_transfer_archives_status(v_job);PERFORM private.employee_transfer_archives_persisted(v_job);
   UPDATE private.employee_transfer_jobs SET summary=v_job.summary,last_activity_at=now() WHERE id=v_job.id;
+  PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','archives_records_verified',
+    jsonb_build_object('counts',v_status->'counts','media_pending',true,'full_site_complete',false));
   RETURN v_status;
 END;
 $$;

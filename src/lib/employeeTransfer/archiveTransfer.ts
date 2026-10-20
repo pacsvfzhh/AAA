@@ -252,7 +252,7 @@ const SPEC: Record<ArchivesTableKey, Record<string, string>> = {
 };
 const FORBIDDEN_KEYS = new Set([
   'delivery_claim_token', 'delivery_claim_channel', 'delivery_claim_until', 'delivery_completed_claim_token',
-  'password', 'password_hash', 'current_session_token', 'current_tab_id', 'session_created_at', 'last_heartbeat_at',
+  'password', 'password_hash', 'current_session_token', 'current_tab_id',
   'session_token', 'token_hash', 'access_token', 'refresh_token', 'service_role_key', 'anon_key',
 ]);
 export function archivesCursor(key: ArchivesTableKey, value: unknown): string {

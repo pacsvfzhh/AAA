@@ -17,7 +17,7 @@ const TIME = '2024-02-29T12:34:56.123456+00:00', HASH = 'a'.repeat(64);
 const SECRET = 'never-echo-archives-password-token-backend-or-plaintext';
 const PRECISE = '12345678901234567890.12345678901234567890';
 const FORBIDDEN = ['delivery_claim_token', 'delivery_claim_channel', 'delivery_claim_until', 'delivery_completed_claim_token',
-  'password', 'password_hash', 'current_session_token', 'current_tab_id', 'session_created_at', 'last_heartbeat_at',
+  'password', 'password_hash', 'current_session_token', 'current_tab_id',
   'session_token', 'token_hash', 'access_token', 'refresh_token', 'service_role_key', 'anon_key'];
 const RPC = {
   exportBegin: 'employee_export_archives_begin', page: 'get_employee_export_archives_page', exportVerify: 'employee_export_archives_verify',
@@ -184,7 +184,7 @@ for (const [key, field] of [[TABLES[0], 'before_data'], [TABLES[0], 'after_data'
 }
 for (const [key, field] of [[TABLES[0], 'before_data'], [TABLES[0], 'after_data'], [TABLES[0], 'media_refs'],
   [TABLES[2], 'message_data'], [TABLES[2], 'recipient_data'], [TABLES[3], 'recipient_data']]) {
-  test(`${key}.${field}: recursively rejects all 16 reserved keys, including escaped names`, () => {
+  test(`${key}.${field}: recursively rejects all 14 reserved keys, including escaped names`, () => {
     for (const forbidden of FORBIDDEN) for (const escaped of [false, true]) {
       const name = escaped ? `\\u${forbidden.charCodeAt(0).toString(16).padStart(4, '0')}${forbidden.slice(1)}` : forbidden;
       const r = JSON.stringify({ ...row(key), [field]: null }).replace(`"${field}":null`, `"${field}":{"outer":[{"${name}":"${SECRET}"}]}`);
@@ -192,6 +192,30 @@ for (const [key, field] of [[TABLES[0], 'before_data'], [TABLES[0], 'after_data'
     }
     const r = { ...row(key), [field]: { free_text: FORBIDDEN.join(' ') } };
     api.validateArchivesRow(JSON.stringify(r), key); // No speculative string redaction.
+  });
+  test(`${key}.${field}: historical session/heartbeat times survive nested snapshots byte-for-byte`, async () => {
+    const heartbeat = '2024-03-01T01:02:03.000001Z', f = fixture();
+    const snapshot = { session_created_at: TIME, last_heartbeat_at: heartbeat,
+      nested: [{ session_created_at: heartbeat, last_heartbeat_at: TIME, precise: 0 },
+        { history: { session_created_at: null, last_heartbeat_at: '2024-02-29T12:34:56.654321+00:00' } }] };
+    // Preserve even escaped-equivalent property spellings and raw numeric lexemes; do not stringify after validation.
+    const raw = JSON.stringify({ ...row(key), [field]: snapshot })
+      .replace('"session_created_at":', '"\\u0073ession_created_at":').replace('"precise":0', `"precise":${PRECISE}`) + '\n';
+    assert.equal(api.validateArchivesRow(raw, key), row(key).id);
+    f.texts[key] = raw; f.cat = catalog(f.texts);
+    const exported = await exp(f), path = api.archivesEntryPath(key);
+    assert.equal(f.stored.get(path).toString('utf8'), raw);
+    assert.equal(exported.entries.find(entry => entry.path === path).sha256, sha(raw));
+    await run(f);
+    const staged = f.calls.stages.find(chunk => chunk.key === key).raw;
+    assert.equal(staged, raw);
+    const restored = JSON.parse(staged)[field];
+    assert.equal(restored.session_created_at, TIME); assert.equal(restored.last_heartbeat_at, heartbeat);
+    assert.equal(restored.nested[0].session_created_at, heartbeat); assert.equal(restored.nested[0].last_heartbeat_at, TIME);
+    assert.deepEqual(restored.nested[1], snapshot.nested[1]);
+    assert.ok(staged.includes(TIME)); assert.ok(staged.includes(heartbeat)); assert.ok(staged.includes(PRECISE));
+    assert.ok(staged.includes('"\\u0073ession_created_at":'));
+    assert.equal(f.calls.cleanup, 1);
   });
 }
 test('snapshot duplicates, escaped duplicates, invalid Unicode and depth >32 are rejected on ORIGINAL JSON', () => {
@@ -453,6 +477,50 @@ test('unknown import bind/stage receipt requires explicit status then explicit r
     assert.ok(h.calls.slice(before + 1).every(c => c.args.p_admin_session_token === OTHER && c.args.p_job_token === TOKEN));
   }
 });
+test('lost bind acknowledgment accepts catalog-only unstarted status, then requires explicit identical rebind', async () => {
+  const h = harness(), cat = fixture().cat, s = api.createArchivesImportSession(TOKEN);
+  // The server may have committed ONLY the catalog; none of the six tables has been staged yet.
+  h.replies.push({ reject: Error(SECRET) }); await assert.rejects(s.target.bind(cat), uncertain);
+  await assert.rejects(s.target.bind(cat), uncertain); await assert.rejects(s.target.stage(TABLES[0], 0, line(TABLES[0])), uncertain);
+  assert.deepEqual(h.calls.map(call => call.name), [RPC.bind]);
+  h.session = OTHER; h.respond(status(cat, { started: false })); const checked = await s.status(); await tick();
+  assert.deepEqual(checked.counts, Object.fromEntries(cat.tables.map(table => [table.key, table.rows])));
+  assert.deepEqual(checked.chunks, counts()); assert.deepEqual(checked.completed_chunks, counts());
+  assert.equal(checked.started, false); assert.equal(checked.records_verified, false);
+  assert.deepEqual(h.calls.map(call => call.name), [RPC.bind, RPC.status]);
+  // A successful read removes uncertainty but does not invent a confirmed bind or replay writes.
+  await assert.rejects(s.target.stage(TABLES[0], 0, line(TABLES[0])), uncertain);
+  const changed = structuredClone(cat); changed.package_id = OTHER; await assert.rejects(s.target.bind(changed), uncertain);
+  assert.equal(h.calls.length, 2);
+  h.respond({ ...bound(), repeated: true }); assert.equal((await s.target.bind(cat)).repeated, true);
+  h.respond(ack(line(TABLES[0]))); await s.target.stage(TABLES[0], 0, line(TABLES[0]));
+  assert.deepEqual(h.calls.map(call => call.name), [RPC.bind, RPC.status, RPC.bind, RPC.stage]);
+  assert.deepEqual(h.calls[2].args, { p_admin_session_token: OTHER, p_job_token: TOKEN, p_catalog: cat });
+  assert.equal(h.calls.filter(call => call.name === RPC.stage).length, 1);
+});
+test('lost partial-stage acknowledgment permits status then explicit SAME chunk without rebind or automatic retry', async () => {
+  const h = harness(), f = fixture(0), key = TABLES[0];
+  f.texts[key] = Array.from({ length: 203 }, (_, n) => line(key, n + 1)).join('');
+  f.texts[TABLES[2]] = line(TABLES[2]); f.cat = catalog(f.texts);
+  const s = await importing(h, f.cat), first = lines(f.texts[key]).slice(0, 100).join(''), last = lines(f.texts[key]).slice(100).join('');
+  h.respond(ack(first)); await s.target.stage(key, 0, first);
+  // The first table is only partially staged and the other five have NO stage calls.
+  h.replies.push({ reject: Error(SECRET) }); await assert.rejects(s.target.stage(key, 1, last), uncertain);
+  await assert.rejects(s.target.stage(key, 1, last), uncertain); await assert.rejects(s.target.bind(f.cat), uncertain); await assert.rejects(s.plan(), uncertain);
+  assert.deepEqual(h.calls.map(call => call.name), [RPC.bind, RPC.stage, RPC.stage]);
+  // Counts must describe the bound SOURCE catalog, not whatever staging has been acknowledged.
+  const wrong = status(f.cat, { started: false }); wrong.counts[key] = 100; h.respond(wrong);
+  await assert.rejects(s.status(), uncertain); await assert.rejects(s.target.stage(key, 1, last), uncertain); assert.equal(h.calls.length, 4);
+  h.session = OTHER; h.respond(status(f.cat, { started: false })); const checked = await s.status(); await tick();
+  assert.equal(checked.counts[key], 203); assert.equal(checked.counts[TABLES[2]], 1);
+  assert.deepEqual(checked.chunks, counts()); assert.deepEqual(checked.completed_chunks, counts());
+  assert.equal(h.calls.length, 5); assert.equal(h.calls.filter(call => call.name === RPC.bind).length, 1);
+  h.respond({ ...ack(last), repeated: true }); assert.equal((await s.target.stage(key, 1, last)).repeated, true);
+  assert.deepEqual(h.calls.map(call => call.name), [RPC.bind, RPC.stage, RPC.stage, RPC.status, RPC.status, RPC.stage]);
+  assert.deepEqual(h.calls.at(-1).args, { ...h.calls[2].args, p_admin_session_token: OTHER });
+  assert.equal(h.calls.at(-1).args.p_ndjson, last);
+  assert.equal(h.calls.filter(call => call.name === RPC.stage).length, 3);
+});
 test('fresh import instance supports same-job rebind and reads newly authenticated tokens, never factory tokens', async () => {
   const h = harness(), cat = fixture().cat; await importing(h, cat); h.session = OTHER;
   const s = api.createArchivesImportSession(TOKEN); h.respond({ ...bound(), repeated: true }); await s.target.bind(cat);
@@ -585,6 +653,6 @@ test('real export/import API composition validates all six tables before bind an
 });
 test('API references only the eleven fixed public RPCs, no table insertion/media/delete transport', async () => {
   const text = await readFile(`${root}src/lib/employeeTransfer/archiveApi.ts`, 'utf8');
-  for (const name of Object.values(RPC)) assert.ok(text.includes(`'${name}'`), name);
-  assert.equal(/\.from\(|functions\.invoke|service_role|\.delete\(|\.insert\(|as\s+any\b/.test(text), false);
+  for (const name of Object.values(RPC)) assert.ok(text.includes(`supabase.rpc('${name}'`), name);
+  assert.equal(/ArchivesRpcArgs|as\s+unknown\s+as|rpc\.bind\(|\.from\(|functions\.invoke|service_role|\.delete\(|\.insert\(|as\s+any\b/.test(text), false);
 });

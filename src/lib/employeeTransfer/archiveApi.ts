@@ -29,25 +29,8 @@ function hash(value: unknown): string {
   if (result.length !== 64) invalid();
   return result;
 }
-// These RPCs are being coordinated separately from database.ts. This single local transport
-// boundary enumerates ONLY this protocol's names and exact arguments; no generic RPC/table API.
-type JobArgs = { p_admin_session_token: string; p_job_token: string };
-type ArchivesRpcArgs = {
-  employee_export_archives_begin: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
-  get_employee_export_archives_page: JobArgs & { p_table_key: ArchivesTableKey; p_after: string | null; p_limit: number };
-  employee_export_archives_verify: JobArgs;
-  employee_export_archives_close: JobArgs;
-  employee_import_archives_bind: JobArgs & { p_catalog: ArchivesCatalog };
-  employee_import_archives_stage: JobArgs & { p_table_key: ArchivesTableKey; p_chunk_no: number; p_ndjson: string };
-  get_employee_import_archives_plan: JobArgs;
-  employee_import_archives_begin: JobArgs & { p_plan_hash: string };
-  employee_import_archives_chunk: JobArgs & { p_table_key: ArchivesTableKey; p_chunk_no: number };
-  employee_import_archives_verify: JobArgs;
-  get_employee_import_archives_status: JobArgs;
-};
 type ArchivesQuery = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): ArchivesQuery };
-const rpc = supabase.rpc.bind(supabase) as unknown as <Name extends keyof ArchivesRpcArgs>(name: Name, args: ArchivesRpcArgs[Name]) => ArchivesQuery;
-function jobArgs(jobToken: string): JobArgs {
+function jobArgs(jobToken: string) {
   // Read anew for every request: a reauthenticated original owner can resume the same job.
   return { p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_job_token: jobToken };
 }
@@ -103,7 +86,7 @@ export function createArchivesExportSession(packageId: string, adminPassword: st
         return await exclusive(async () => {
           const result = await response(() => {
             const password = adminPassword; adminPassword = '';
-            return rpc('employee_export_archives_begin', {
+            return supabase.rpc('employee_export_archives_begin', {
               p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_admin_password: password, p_package_id: packageId,
             });
           }, value => {
@@ -131,7 +114,7 @@ export function createArchivesExportSession(packageId: string, adminPassword: st
           archivesTableKey(key);
           if (after !== null) archivesCursor(key, after);
           verified = false;
-          return response(() => rpc('get_employee_export_archives_page', {
+          return response(() => supabase.rpc('get_employee_export_archives_page', {
             ...args(), p_table_key: key, p_after: after, p_limit: ARCHIVES_TRANSFER_LIMITS.maxPageRows,
           }), value => validateArchivesPage(value, key, after), signal);
         }, signal);
@@ -139,7 +122,7 @@ export function createArchivesExportSession(packageId: string, adminPassword: st
       verify(signal) {
         return exclusive(async () => {
           verified = false;
-          const result = await response(() => rpc('employee_export_archives_verify', args()), validateArchivesVerification, signal);
+          const result = await response(() => supabase.rpc('employee_export_archives_verify', args()), validateArchivesVerification, signal);
           checkAbort(signal); verified = true;
           return result;
         }, signal);
@@ -150,7 +133,7 @@ export function createArchivesExportSession(packageId: string, adminPassword: st
         if (!verified) invalid();
         // An unconfirmed close must not retain a stale verified permission.
         verified = false;
-        const result = await response(() => rpc('employee_export_archives_close', args()), validateArchivesClose, signal);
+        const result = await response(() => supabase.rpc('employee_export_archives_close', args()), validateArchivesClose, signal);
         checkAbort(signal); closed = true;
         return result;
       }, signal);
@@ -178,7 +161,7 @@ export function createArchivesImportSession(dispatchJobToken: string): ArchivesI
   const bound = () => { if (!catalog || requiresStatus) invalid(); return catalog; };
   const plan = (signal?: AbortSignal) => exclusive(async () => {
     const expected = bound();
-    return response(() => rpc('get_employee_import_archives_plan', jobArgs(dispatchJobToken)), value => {
+    return response(() => supabase.rpc('get_employee_import_archives_plan', jobArgs(dispatchJobToken)), value => {
       const checked = validateArchivesPlan(value);
       if (expected.tables.some(table => checked.counts[table.key] !== table.rows)) invalid();
       return checked;
@@ -195,7 +178,7 @@ export function createArchivesImportSession(dispatchJobToken: string): ArchivesI
             const args = jobArgs(dispatchJobToken);
             // Set BEFORE dispatch: lost/malformed receipts must pass explicit status first.
             requested = snapshot; requiresStatus = true;
-            return rpc('employee_import_archives_bind', { ...args, p_catalog: validateArchivesCatalog(snapshot) });
+            return supabase.rpc('employee_import_archives_bind', { ...args, p_catalog: validateArchivesCatalog(snapshot) });
           }, validateArchivesBind, signal);
           checkAbort(signal); catalog = snapshot; requiresStatus = false;
           return result;
@@ -213,7 +196,7 @@ export function createArchivesImportSession(dispatchJobToken: string): ArchivesI
           if (rows > table.rows || raw.length > table.bytes) invalid();
           const result = await response(() => {
             const args = jobArgs(dispatchJobToken); requiresStatus = true;
-            return rpc('employee_import_archives_stage', { ...args, p_table_key: key, p_chunk_no: chunkNo, p_ndjson: ndjson });
+            return supabase.rpc('employee_import_archives_stage', { ...args, p_table_key: key, p_chunk_no: chunkNo, p_ndjson: ndjson });
           }, value => validateArchivesStage(value, rows, raw.length, digest), signal);
           checkAbort(signal); requiresStatus = false;
           return result;
@@ -223,7 +206,7 @@ export function createArchivesImportSession(dispatchJobToken: string): ArchivesI
     },
     plan,
     status: signal => exclusive(async () => {
-      const result = await response(() => rpc('get_employee_import_archives_status', jobArgs(dispatchJobToken)), value => {
+      const result = await response(() => supabase.rpc('get_employee_import_archives_status', jobArgs(dispatchJobToken)), value => {
         const status = validateArchivesStatus(value);
         if (requested) sameCounts(status, requested);
         return status;
@@ -293,11 +276,11 @@ export function createArchivesRestoreSession(dispatchJobToken: string, input: Ar
         dispatched = true;
         if (operation === 'begin') {
           beginAttempted = true; boundPlanHash = planHash!;
-          return rpc('employee_import_archives_begin', { ...args, p_plan_hash: planHash! });
+          return supabase.rpc('employee_import_archives_begin', { ...args, p_plan_hash: planHash! });
         }
-        if (operation === 'chunk') return rpc('employee_import_archives_chunk', { ...args, p_table_key: key!, p_chunk_no: chunkNo! });
-        if (operation === 'verify') return rpc('employee_import_archives_verify', args);
-        return rpc('get_employee_import_archives_status', args);
+        if (operation === 'chunk') return supabase.rpc('employee_import_archives_chunk', { ...args, p_table_key: key!, p_chunk_no: chunkNo! });
+        if (operation === 'verify') return supabase.rpc('employee_import_archives_verify', args);
+        return supabase.rpc('get_employee_import_archives_status', args);
       }, value => validate(value, operation, key, chunkNo), signal);
       checkAbort(signal); confirmed = status; requiresStatus = false;
       return status;
