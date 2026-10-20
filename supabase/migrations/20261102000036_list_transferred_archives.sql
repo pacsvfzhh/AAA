@@ -9,7 +9,7 @@ DECLARE
   v_job private.employee_transfer_jobs%ROWTYPE;
   v_site uuid; v_package uuid; v_cursor text; v_last text;
   v_items jsonb := '[]'; v_counts jsonb; v_imported_at timestamptz;
-  v_more boolean := false;
+  v_more boolean := false; v_media_pending boolean;
 BEGIN
   PERFORM private.employee_transfer_admin(p_admin_session_token);
   IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100
@@ -39,6 +39,12 @@ BEGIN
   LOOP
     -- Fail closed on drift: never present a stale verified flag as a verified archive.
     PERFORM private.employee_transfer_archives_persisted(v_job);
+    v_media_pending := true;
+    IF v_job.summary#>'{archives_media,verified}' = 'true'::jsonb THEN
+      -- A flag is not evidence: SQL35 reconstructs refs, tuples, receipts and generation.
+      PERFORM private.employee_transfer_archive_media_state(v_job, false);
+      v_media_pending := false;
+    END IF;
     IF jsonb_array_length(v_items) = p_limit THEN v_more := true; EXIT; END IF;
     v_site := (v_job.summary#>>'{archives_restore,catalog,site_id}')::uuid;
     v_package := (v_job.summary#>>'{archives_restore,catalog,package_id}')::uuid;
@@ -51,7 +57,7 @@ BEGIN
       'source_site_id', v_site, 'package_id', v_package,
       'imported_at', COALESCE(v_imported_at, v_job.finished_at, v_job.started_at),
       'counts', v_counts,
-      'media_pending', v_job.summary#>'{archives_media,verified}' IS DISTINCT FROM 'true'::jsonb));
+      'media_pending', v_media_pending));
     v_last := v_cursor;
   END LOOP;
   RETURN jsonb_build_object('items', v_items, 'next_after', CASE WHEN v_more THEN v_last ELSE NULL END);

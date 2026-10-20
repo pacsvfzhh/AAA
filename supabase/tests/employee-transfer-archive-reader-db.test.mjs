@@ -6,7 +6,7 @@ import { replayMigrations } from './support/replay-migrations.mjs';
 import { adminLogin, rpc, scalar } from './support/transfer-harness.mjs';
 
 // Independent local SQL36 reader layer. Synthetic persisted job/catalog fixtures,
-// real SQL33/34 validator and auth, no stubbed verifier and no claim of an end-to-end import.
+// real SQL33/34/35 validators and auth, no stubbed verifier and no claim of an end-to-end import or real Storage verification.
 const TABLES = ['content_audit_events', 'deleted_employee_accounts', 'deleted_employee_notifications',
   'content_audit_recipient_versions', 'deleted_employee_summaries', 'deleted_employee_withdrawals'];
 const id = n => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -15,20 +15,20 @@ const PRECISE = '12345678901234567890.12345678901234567890';
 const MIGRATION = '20261102000036_list_transferred_archives.sql';
 let db, session, branch, emergency, replay;
 const tokens = {};
-function rawRows() {
+function rawRows(eventRefs = {}) {
   return {
     content_audit_events: [1, 2, 3].map(n => JSON.stringify({ id: id(100 + n), operation_id: id(10), entity_type: 'notification', entity_id: id(11),
       action: 'edit', owner_admin_id: id(12), owner_username: 'source-owner', actor_admin_id: null, actor_username: 'source-actor', actor_role: 'super_admin',
       customer_id: null, employee_id: id(13), occurred_at: '2024-02-29T23:34:56.123456Z', before_data: null, after_data: { old: '<script>not executable</script>' },
-      media_refs: {}, clear_reason: null, clear_started_at: null, cleared_at: null, cleared_by: null, cleared_username: null, employee_account: 'source-only',
+      media_refs: eventRefs, clear_reason: null, clear_started_at: null, cleared_at: null, cleared_by: null, cleared_username: null, employee_account: 'source-only',
       message_created_at: null, before_data_sql_null: true, after_data_sql_null: false }) + '\n').join(''),
     deleted_employee_accounts: '', deleted_employee_notifications: '', content_audit_recipient_versions: '',
     deleted_employee_summaries: `{"id":"${id(110)}","employee_id":"${id(13)}","source_present":false,"is_verified":null,"total_income":${PRECISE},"available_balance":null,"frozen_balance":0.00000000000000000001,"total_orders":"9223372036854775807"}\n`,
     deleted_employee_withdrawals: `{"id":"${id(110)}:${id(111)}","record_id":"${id(110)}","withdrawal_id":"${id(111)}","employee_id":"${id(13)}","amount":${PRECISE},"status":"approved","created_at":"2024-02-29T23:34:56.123456Z"}\n`,
   };
 }
-async function seedNamespace({ site = id(20), pkg = id(30), job = id(40), media, verified = true, started = '2024-01-01T00:00:00Z', empty = false } = {}) {
-  const texts = empty ? Object.fromEntries(TABLES.map(key => [key, ''])) : rawRows();
+async function seedNamespace({ site = id(20), pkg = id(30), job = id(40), media, verified = true, started = '2024-01-01T00:00:00Z', empty = false, eventRefs } = {}) {
+  const texts = empty ? Object.fromEntries(TABLES.map(key => [key, ''])) : rawRows(eventRefs);
   const catalog = { version: 1, scope: 'site-archives', site_id: site, package_id: pkg, full_site_complete: false,
     tables: TABLES.map(key => ({ key, rows: texts[key] ? texts[key].split('\n').length - 1 : 0,
       bytes: Buffer.byteLength(texts[key]), row_hashes_sha256: sha((texts[key].match(/[^\n]*\n/g) ?? []).map(sha).join('')) })) };
@@ -48,10 +48,24 @@ async function seedNamespace({ site = id(20), pkg = id(30), job = id(40), media,
     chunks, completed_chunks: chunks, records_verified: verified };
   state.plan_hash = await scalar(db, `SELECT encode(extensions.digest(convert_to(jsonb_build_object('job_id',$1::uuid,'catalog',$2::jsonb,
     'namespace_hash',$3::text,'plan',$4::jsonb)::text,'UTF8'),'sha256'),'hex')`, [job, JSON.stringify(catalog), sha(''), JSON.stringify(plan)]);
-  const summary = { archives_catalog: catalog, archives_restore: state, ...(media === undefined ? {} : { archives_media: { verified: media } }) };
+  const summary = { archives_catalog: catalog, archives_restore: state };
   await db.query('UPDATE private.employee_transfer_jobs SET summary=$2::jsonb WHERE id=$1', [job, JSON.stringify(summary)]);
   if (verified) await db.query('SELECT private.employee_transfer_archives_persisted(j) FROM private.employee_transfer_jobs j WHERE j.id=$1', [job]);
+  if (media !== undefined) await bindSyntheticMediaSidecar(job, media);
   return { site, pkg, job, texts, counts };
+}
+async function bindSyntheticMediaSidecar(job, verified) {
+  const refs = await scalar(db, 'SELECT private.employee_transfer_archive_media_refs(j,false) FROM private.employee_transfer_jobs j WHERE id=$1', [job]);
+  const generation = await scalar(db, 'SELECT private.employee_transfer_archive_media_generation(j,$2::jsonb) FROM private.employee_transfer_jobs j WHERE id=$1', [job, JSON.stringify(refs)]);
+  // Exact sidecar shape even for empty refs. Nonempty tuples/receipts below are local
+  // synthetic DB-layer evidence only; they do NOT assert actual Storage byte verification.
+  const files = refs.map(ref => ({ key: ref.key, source_url: ref.source_url, bytes: 8, sha256: sha('synthetic-png'), content_type: 'image/png' }));
+  const receipts = Object.fromEntries(refs.map((ref, index) => [ref.key, { file: files[index], path: `transfer-archives/${job}/${ref.key}`,
+    generation, checked: true, storage_origin: 'https://fixture.supabase.co' }]));
+  const sidecar = { version: 1, refs, files, receipts, verified };
+  await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_media}',$2::jsonb) WHERE id=$1`, [job, JSON.stringify(sidecar)]);
+  await db.query('SELECT private.employee_transfer_archive_media_state(j,false) FROM private.employee_transfer_jobs j WHERE id=$1', [job]);
+  return sidecar;
 }
 let inside = false;
 async function readRpc(name, args, role = 'anon') {
@@ -78,7 +92,7 @@ async function isolated(fn) {
 }
 before(async () => {
   mock.method(globalThis, 'fetch', () => assert.fail('All production/network/Storage requests forbidden'));
-  replay = await replayMigrations({ upTo: '20261102000034_restore_readonly_archives.sql', strict: true }); db = replay.db;
+  replay = await replayMigrations({ upTo: '20261102000035_transfer_archive_evidence.sql', strict: true }); db = replay.db;
   await db.exec(await readFile(new URL(`../migrations/${MIGRATION}`, import.meta.url), 'utf8'));
   for (const [n, name, role] of [[1, 'archive-reader-root', 'super_admin'], [2, 'archive-reader-branch', 'secondary_admin'], [3, 'archive-reader-emergency', 'emergency_admin']]) {
     await db.query(`INSERT INTO public.admins(id,username,password_hash,role,is_active) VALUES($1,$2,extensions.crypt('Synthetic-123',extensions.gen_salt('bf',4)),$3,true)`, [id(n), name, role]);
@@ -95,7 +109,7 @@ before(async () => {
 after(async () => { await db?.close(); mock.restoreAll(); });
 
 test('SQL36 installs over strict historical replay with the known 12 old failures unchanged', () => {
-  assert.equal(replay.failures.length, 12); assert.equal(replay.files.at(-1), '20261102000034_restore_readonly_archives.sql');
+  assert.equal(replay.failures.length, 12); assert.equal(replay.files.at(-1), '20261102000035_transfer_archive_evidence.sql');
 });
 test('RPC is STABLE SECURITY DEFINER with fixed search_path, explicit anon/authenticated-only privileges', async () => {
   const { rows: [p] } = await db.query(`SELECT provolatile,prosecdef,proconfig,proacl::text FROM pg_proc WHERE oid='public.get_employee_transferred_archive_namespaces(uuid,text,integer)'::regprocedure`);
@@ -150,6 +164,49 @@ test('unverified namespaces are excluded, latest verified matching job is dedupl
   await isolated(async () => {
     await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_media}','{"verified":"true"}'::jsonb) WHERE id=$1`, [id(41)]);
     const items = (await list()).items; assert.equal(items.length, 3); assert.equal(items[1].media_pending, true);
+  });
+});
+test('a bare verified=true flag cannot mark namespace attachments verified', async () => {
+  await isolated(async () => {
+    await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_media}','{"verified":true}'::jsonb) WHERE id=$1`, [id(41)]);
+    await assert.rejects(list(), /Archive sidecar binding changed/);
+  });
+});
+for (const [name, change, pattern] of [
+  ['version', sidecar => { sidecar.version = 2; }, /sidecar binding changed/],
+  ['reference inventory', sidecar => { sidecar.refs.push({ key: 'unbound' }); }, /sidecar binding changed/],
+  ['file inventory', sidecar => { sidecar.files.push({ key: 'unbound' }); }, /Incomplete archive file binding/],
+  ['unbound receipt', sidecar => { sidecar.receipts.unbound = {}; }, /Unbound archive receipt/],
+]) test(`verified empty-ref sidecar drift rejects namespace list: ${name}`, async () => {
+  await isolated(async () => {
+    const sidecar = { version: 1, refs: [], files: [], receipts: {}, verified: true }; change(sidecar);
+    await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_media}',$2::jsonb) WHERE id=$1`, [id(41), JSON.stringify(sidecar)]);
+    await assert.rejects(list(), pattern);
+  });
+});
+for (const [name, change, pattern] of [
+  ['receipt generation', sidecar => { Object.values(sidecar.receipts)[0].generation = 'a'.repeat(64); }, /Archive receipt changed/],
+  ['unchecked receipt', sidecar => { Object.values(sidecar.receipts)[0].checked = false; }, /Verified archive media is incomplete/],
+  ['cross-namespace path', sidecar => { Object.values(sidecar.receipts)[0].path = `transfer-archives/${id(999)}/outside`; }, /Archive receipt changed/],
+  ['file receipt tuple', sidecar => { sidecar.files[0].sha256 = 'b'.repeat(64); }, /Archive receipt changed/],
+  ['reference event', sidecar => { sidecar.refs[0].event_id = id(999); }, /sidecar binding changed/],
+]) test(`verified nonempty sidecar is revalidated, not trusted on a summary flag: ${name}`, async () => {
+  await isolated(async () => {
+    const fixture = await seedNamespace({ site: id(22), pkg: id(32), job: id(44), media: true,
+      eventRefs: { 'https://old.invalid/original.png': 'synthetic-operation/private-evidence.png' } });
+    assert.equal((await list()).items.at(-1).media_pending, false);
+    const before = await scalar(db, 'SELECT jsonb_agg(source_line ORDER BY source_id) FROM private.employee_transfer_archive_records WHERE job_id=$1', [fixture.job]);
+    const sidecar = await scalar(db, `SELECT summary->'archives_media' FROM private.employee_transfer_jobs WHERE id=$1`, [fixture.job]);
+    assert.equal(sidecar.refs.length, 3); change(sidecar);
+    await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_media}',$2::jsonb) WHERE id=$1`, [fixture.job, JSON.stringify(sidecar)]);
+    await assert.rejects(list(), pattern);
+    assert.deepEqual(await scalar(db, 'SELECT jsonb_agg(source_line ORDER BY source_id) FROM private.employee_transfer_archive_records WHERE job_id=$1', [fixture.job]), before);
+  });
+});
+test('missing, false, null and string media flags remain pending rather than declaring verification', async () => {
+  for (const flag of [false, null, 'true', 'false']) await isolated(async () => {
+    await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_media}',$2::jsonb) WHERE id=$1`, [id(41), JSON.stringify({ verified: flag })]);
+    assert.equal((await list()).items[1].media_pending, true);
   });
 });
 test('namespace and page fail closed when raw records drift despite a stale verified flag', async () => {

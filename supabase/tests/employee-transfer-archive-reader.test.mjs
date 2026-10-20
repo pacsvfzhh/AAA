@@ -40,23 +40,25 @@ const page = (key, raw = line(key), next_after = null) => ({ table_key: key, cou
 mock.method(globalThis, 'fetch', () => assert.fail('All network/production/Storage access is prohibited'));
 after(() => mock.restoreAll());
 const compiled = await build({ stdin: { contents: `export * from './src/lib/employeeTransfer/archiveReader.ts';
-  export {default as Panel, TestRowSummary, TestSourceIdentity, TestPager, TestArchiveRow} from './src/components/admin/TransferredArchivesPanel.tsx';
+  export {default as Panel, TestRowSummary, TestSourceIdentity, TestPager, TestArchiveRow, TestArchiveAttachment} from './src/components/admin/TransferredArchivesPanel.tsx';
   export {setHarness} from 'reader-test:state';`, resolveDir: root, loader: 'js' },
   bundle: true, write: false, platform: 'node', format: 'esm', target: 'es2020', jsx: 'automatic', metafile: true,
   plugins: [{ name: 'isolated-reader', setup(builder) {
     builder.onResolve({ filter: /^(?:react(?:\/.*)?|lucide-react)$/ }, args => ({ path: pathToFileURL(require.resolve(args.path)).href, external: true }));
+    builder.onResolve({ filter: /\/archiveMedia$/ }, () => ({ path: 'reader-test:media', namespace: 'reader-test' }));
     builder.onResolve({ filter: /^(reader-test:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'reader-test' }));
     builder.onLoad({ filter: /TransferredArchivesPanel\.tsx$/ }, async args => ({ loader: 'tsx', contents:
-      await readFile(args.path, 'utf8') + '\nexport {RowSummary as TestRowSummary, SourceIdentity as TestSourceIdentity, Pager as TestPager, ArchiveRow as TestArchiveRow};' }));
+      await readFile(args.path, 'utf8') + '\nexport {RowSummary as TestRowSummary, SourceIdentity as TestSourceIdentity, Pager as TestPager, ArchiveRow as TestArchiveRow, ArchiveAttachment as TestArchiveAttachment};' }));
     builder.onLoad({ filter: /.*/, namespace: 'reader-test' }, ({ path }) => {
       if (path === 'reader-test:state') return { contents: 'let h;export const setHarness=v=>{h=v};export const current=()=>h;' };
+      if (path === 'reader-test:media') return { contents: `import{current}from'reader-test:state';export function readArchiveMedia(...args){return current().mediaLoader(...args);}` };
       if (path === '../auth') return { contents: `import{current}from'reader-test:state';export function getAdminFinancialSessionToken(){const h=current();h.reads++;return h.session;}` };
       return { contents: `import{current}from'reader-test:state';export const supabase={rpc:(...args)=>current().rpc(...args)};` };
     });
   } }] });
 const api = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 function harness() {
-  const h = { session: SESSION, reads: 0, calls: [], reply: namespaces(), error: null, wait: null, rpc(name, args) {
+  const h = { session: SESSION, reads: 0, calls: [], mediaLoader: () => assert.fail('No implicit media read'), reply: namespaces(), error: null, wait: null, rpc(name, args) {
     assert.ok(['get_employee_transferred_archive_namespaces', 'get_employee_transferred_archive_page'].includes(name));
     const call = { name, args, signal: null }; h.calls.push(call);
     const q = { abortSignal(s) { call.signal = s; return q; }, then(resolve, reject) {
@@ -66,7 +68,7 @@ function harness() {
 }
 const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
 
-test('reader bundles no real authentication, Supabase client or write/media APIs', () => {
+test('reader bundles no real authentication, Supabase client or media transport', () => {
   assert.equal(Object.keys(compiled.metafile.inputs).some(p => /src\/lib\/(?:auth|supabase)\.ts/.test(p)), false);
   assert.deepEqual(Object.keys(api.createTransferredArchivesReader()).sort(), ['namespaces', 'page']);
 });
@@ -178,6 +180,245 @@ test('UI pager preserves confirmed page on error, exposes explicit retry, and wi
   tree.props.children[0].props.onClick(); tree.props.children[2].props.onClick();
   api.TestPager({ page: state, label: '檔案記錄' }).props.children[4].props.children[1].props.onClick();
   assert.deepEqual([previous, next, retry], [1, 1, 1]);
+});
+// Deterministic Hook lifecycle harness using the installed React dispatcher. This
+// exercises component closures/effects and native toggle handlers without a browser,
+// DOM library, package changes or real network. It is not a browser layout/media test.
+function hookDriver(Component, initialProps) {
+  const dispatcher = React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher;
+  const slots = []; let props = initialProps, index = 0, effects = [], dirty = true, disposed = false, tree, lateWrites = 0;
+  const hooks = {
+    useState(initial) {
+      const n = index++;
+      if (!(n in slots)) {
+        const slot = { value: typeof initial === 'function' ? initial() : initial };
+        slot.set = update => {
+          if (disposed) { lateWrites++; return; }
+          const next = typeof update === 'function' ? update(slot.value) : update;
+          if (!Object.is(next, slot.value)) { slot.value = next; dirty = true; }
+        }; slots[n] = slot;
+      }
+      return [slots[n].value, slots[n].set];
+    },
+    useEffect(effect, deps) {
+      const n = index++, old = slots[n];
+      if (!old || !deps || deps.some((value, i) => !Object.is(value, old.deps?.[i]))) {
+        const slot = { deps, effect, cleanup: old?.cleanup }; slots[n] = slot; effects.push(slot);
+      }
+    },
+    useCallback(callback, deps) {
+      const n = index++, old = slots[n];
+      if (!old || deps.some((value, i) => !Object.is(value, old.deps[i]))) slots[n] = { value: callback, deps };
+      return slots[n].value;
+    },
+  };
+  const driver = {
+    render(nextProps) {
+      if (nextProps) { props = nextProps; dirty = true; }
+      for (let pass = 0; dirty; pass++) {
+        assert.ok(pass < 30, 'Hook render must settle'); dirty = false; index = 0; effects = [];
+        const previous = dispatcher.current; dispatcher.current = hooks;
+        try { tree = Component(props); } finally { dispatcher.current = previous; }
+        for (const slot of effects) { slot.cleanup?.(); slot.cleanup = slot.effect(); }
+      }
+      return tree;
+    },
+    replayEffects() { for (const slot of slots) if (slot.effect) { slot.cleanup?.(); slot.cleanup = slot.effect(); } return driver.render(); },
+    unmount() { disposed = true; for (const slot of slots) slot.cleanup?.(); },
+    get lateWrites() { return lateWrites; },
+  };
+  driver.render(); return driver;
+}
+function elements(node, matches) {
+  if (Array.isArray(node)) return node.flatMap(child => elements(child, matches));
+  if (!React.isValidElement(node)) return [];
+  return [...(matches(node) ? [node] : []), ...elements(node.props.children, matches)];
+}
+const find = (driver, type) => elements(driver.render(), node => node.type === type);
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
+function objectUrls(onCreate) {
+  const created = [], revoked = [], active = new Set();
+  const make = mock.method(URL, 'createObjectURL', blob => { const url = `blob:archive-test-${created.length}`;
+    created.push({ url, blob }); active.add(url); onCreate?.(); return url; });
+  const remove = mock.method(URL, 'revokeObjectURL', url => { revoked.push(url); active.delete(url); });
+  return { created, revoked, active, restore() { make.mock.restore(); remove.mock.restore(); } };
+}
+const attachmentProps = mediaLoader => ({ sourceSiteId: SITE, packageId: PACKAGE, eventId: id(10),
+  refKey: 'https://old.invalid/original.png?opaque-key-only', number: 1, mediaLoader });
+function startAttachment(driver) { find(driver, 'button')[0].props.onClick(); driver.render(); }
+function eventRow(refs = { 'https://old.invalid/source.png': 'private/evidence.png' }) {
+  const body = row(TABLES[0]); body.media_refs = refs;
+  return { sourceId: body.id, sourceLine: JSON.stringify(body) + '\n' };
+}
+
+test('event attachments appear only for expanded, verified namespaces with nonempty media_refs; keys are never links', () => {
+  const mediaLoader = () => assert.fail('No read before an explicit attachment click');
+  for (const [name, props, expected] of [
+    ['verified event', { source: { ...source(), media_pending: false }, tableKey: TABLES[0], row: eventRow() }, 1],
+    ['pending namespace', { source: source(), tableKey: TABLES[0], row: eventRow() }, 0],
+    ['empty refs', { source: { ...source(), media_pending: false }, tableKey: TABLES[0], row: eventRow({}) }, 0],
+    ['different table', { source: { ...source(), media_pending: false }, tableKey: TABLES[1], row: eventRow() }, 0],
+    ['page switching', { source: { ...source(), media_pending: false }, tableKey: TABLES[0], row: eventRow(), mediaActive: false }, 0],
+  ]) {
+    const driver = hookDriver(api.TestArchiveRow, { ...props, mediaLoader });
+    assert.equal(find(driver, api.TestArchiveAttachment).length, 0, `${name}: closed rows have no attachment resources`);
+    find(driver, 'details')[0].props.onToggle({ currentTarget: { open: true } });
+    const attachments = find(driver, api.TestArchiveAttachment); assert.equal(attachments.length, expected, name);
+    if (expected) {
+      assert.equal(attachments[0].props.refKey, 'https://old.invalid/source.png');
+      const html = render(api.TestArchiveAttachment, attachments[0].props);
+      assert.ok(html.includes('載入附件')); assert.doesNotMatch(html, /href=|src=|https:\/\/old/);
+    }
+    find(driver, 'details')[0].props.onToggle({ currentTarget: { open: false } });
+    assert.equal(find(driver, api.TestArchiveAttachment).length, 0); driver.unmount();
+  }
+});
+test('explicit image preview uses exact namespace/event/ref binding, signal and a Blob URL; unmount aborts and revokes', async () => {
+  const urls = objectUrls(), calls = [], response = deferred();
+  const props = attachmentProps((binding, signal) => { calls.push({ binding, signal }); return response.promise; });
+  const driver = hookDriver(api.TestArchiveAttachment, props);
+  try {
+    assert.equal(calls.length, 0); startAttachment(driver); assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].binding, { source_site_id: SITE, package_id: PACKAGE, event_id: id(10), ref_key: props.refKey });
+    assert.equal(calls[0].signal.aborted, false);
+    response.resolve(new Blob(['synthetic image'], { type: 'image/png' })); await tick();
+    const image = find(driver, 'img')[0]; assert.equal(image.props.src, urls.created[0].url);
+    assert.equal(find(driver, 'a').length, 0); assert.equal(urls.active.size, 1);
+    driver.unmount(); assert.equal(calls[0].signal.aborted, true); assert.deepEqual(urls.revoked, [image.props.src]);
+    assert.equal(urls.active.size, 0); assert.equal(driver.lateWrites, 0);
+  } finally { driver.unmount(); urls.restore(); }
+});
+test('video Blob preview has controls and no autoPlay or original URL', async () => {
+  const urls = objectUrls(), driver = hookDriver(api.TestArchiveAttachment, attachmentProps(async () => new Blob(['synthetic video'], { type: 'video/mp4' })));
+  try {
+    startAttachment(driver); await tick(); const video = find(driver, 'video')[0];
+    assert.equal(video.props.controls, true); assert.equal(video.props.autoPlay, undefined);
+    assert.match(video.props.src, /^blob:/); assert.equal(find(driver, 'img').length, 0);
+  } finally { driver.unmount(); assert.equal(urls.active.size, 0); urls.restore(); }
+});
+test('network or byte-validation failure is redacted and can be retried only by an explicit click', async () => {
+  const urls = objectUrls(); let attempts = 0;
+  const driver = hookDriver(api.TestArchiveAttachment, attachmentProps(async () => {
+    if (++attempts === 1) throw Error('do-not-display-secret-url'); return new Blob(['verified image'], { type: 'image/jpeg' });
+  }));
+  try {
+    startAttachment(driver); await tick(); const html = renderToStaticMarkup(driver.render());
+    assert.ok(html.includes('重試附件')); assert.equal(html.includes('do-not-display-secret-url'), false);
+    assert.equal(attempts, 1); assert.equal(urls.created.length, 0);
+    startAttachment(driver); await tick(); assert.equal(attempts, 2); assert.equal(find(driver, 'img').length, 1);
+  } finally { driver.unmount(); urls.restore(); }
+});
+for (const type of ['text/html', 'image/svg+xml', 'application/octet-stream', '']) test(`unsupported Blob type is not rendered or given an object URL: ${type}`, async () => {
+  const urls = objectUrls(), driver = hookDriver(api.TestArchiveAttachment, attachmentProps(async () => new Blob(['untrusted'], { type })));
+  try {
+    startAttachment(driver); await tick(); assert.equal(find(driver, 'img').length + find(driver, 'video').length, 0);
+    assert.equal(urls.created.length, 0); assert.ok(renderToStaticMarkup(driver.render()).includes('重試附件'));
+  } finally { driver.unmount(); urls.restore(); }
+});
+function rowAttachmentDriver(props) {
+  const row = hookDriver(api.TestArchiveRow, props), children = new Map();
+  const driver = {
+    row, children,
+    sync(nextProps) {
+      row.render(nextProps);
+      const descriptors = find(row, api.TestArchiveAttachment), keys = new Set(descriptors.map(element => element.key));
+      for (const [key, child] of children) if (!keys.has(key)) { child.unmount(); children.delete(key); }
+      for (const element of descriptors) {
+        const child = children.get(element.key);
+        if (child) child.render(element.props); else children.set(element.key, hookDriver(api.TestArchiveAttachment, element.props));
+      }
+    },
+    toggle(open) { find(row, 'details')[0].props.onToggle({ currentTarget: { open } }); driver.sync(); },
+    unmount() { row.unmount(); for (const child of children.values()) child.unmount(); children.clear(); },
+  };
+  driver.sync(); return driver;
+}
+for (const reason of ['row collapse', 'namespace change', 'category change', 'page change', 'tab/unmount']) test(`actual row child removal after ${reason} aborts late media without object URL allocation`, async () => {
+  const urls = objectUrls(), response = deferred(); let signal;
+  const props = { row: eventRow(), source: { ...source(), media_pending: false }, tableKey: TABLES[0],
+    mediaLoader: (_binding, input) => { signal = input; return response.promise; } };
+  const parent = rowAttachmentDriver(props); parent.toggle(true);
+  const child = [...parent.children.values()][0];
+  try {
+    startAttachment(child);
+    if (reason === 'row collapse') parent.toggle(false);
+    else if (reason === 'namespace change') parent.sync({ ...props, source: { ...props.source, source_site_id: id(99), package_id: id(98) } });
+    else if (reason === 'category change') parent.sync({ ...props, tableKey: TABLES[1] });
+    else if (reason === 'page change') parent.sync({ ...props, mediaActive: false });
+    else parent.unmount();
+    assert.equal(signal.aborted, true);
+    response.resolve(new Blob(['late image'], { type: 'image/png' })); await tick();
+    assert.equal(urls.created.length, 0); assert.equal(urls.active.size, 0); assert.equal(child.lateWrites, 0);
+  } finally { parent.unmount(); urls.restore(); }
+});
+test('row collapse releases a loaded image, reopening is idle, and a now-pending namespace removes previews', async () => {
+  const urls = objectUrls(); let calls = 0;
+  const props = { row: eventRow(), source: { ...source(), media_pending: false }, tableKey: TABLES[0],
+    mediaLoader: async () => { calls++; return new Blob(['image'], { type: 'image/png' }); } };
+  const parent = rowAttachmentDriver(props);
+  try {
+    parent.toggle(true); startAttachment([...parent.children.values()][0]); await tick(); assert.equal(urls.active.size, 1);
+    parent.toggle(false); assert.equal(urls.active.size, 0); assert.equal(urls.revoked.length, 1);
+    parent.toggle(true); assert.equal(calls, 1, 'reopen does not automatically fetch');
+    const next = [...parent.children.values()][0]; assert.equal(find(next, 'img').length, 0);
+    startAttachment(next); await tick(); assert.equal(urls.active.size, 1);
+    parent.sync({ ...props, source: { ...props.source, media_pending: true } });
+    assert.equal(parent.children.size, 0); assert.equal(urls.active.size, 0);
+  } finally { parent.unmount(); urls.restore(); }
+});
+test('row default loader delegates to readArchiveMedia with the exact binding, without a production request', async () => {
+  const h = harness(), calls = [], urls = objectUrls();
+  h.mediaLoader = async (binding, signal) => { calls.push({ binding, signal }); return new Blob(['image'], { type: 'image/png' }); };
+  const parent = rowAttachmentDriver({ row: eventRow(), source: { ...source(), media_pending: false }, tableKey: TABLES[0] });
+  try {
+    parent.toggle(true); assert.equal(calls.length, 0); startAttachment([...parent.children.values()][0]); await tick();
+    assert.deepEqual(calls[0].binding, { source_site_id: SITE, package_id: PACKAGE, event_id: id(10), ref_key: 'https://old.invalid/source.png' });
+    assert.equal(urls.active.size, 1);
+  } finally { parent.unmount(); assert.equal(urls.active.size, 0); urls.restore(); }
+});
+test('changing namespace/event/ref on the same preview aborts and releases old generation, ignoring its late response', async () => {
+  const urls = objectUrls(), first = deferred(), second = deferred(), calls = [];
+  const props = attachmentProps((binding, signal) => { calls.push({ binding, signal }); return calls.length === 1 ? first.promise : second.promise; });
+  const driver = hookDriver(api.TestArchiveAttachment, props);
+  try {
+    startAttachment(driver);
+    driver.render({ ...props, sourceSiteId: id(99), packageId: id(98), eventId: id(97), refKey: 'new-ref' });
+    assert.equal(calls[0].signal.aborted, true); assert.equal(calls.length, 2);
+    first.resolve(new Blob(['late first'], { type: 'image/png' })); await tick(); assert.equal(urls.created.length, 0);
+    second.resolve(new Blob(['second'], { type: 'image/jpeg' })); await tick(); assert.equal(urls.created.length, 1);
+    assert.equal(find(driver, 'img')[0].props.src, urls.created[0].url);
+  } finally { driver.unmount(); assert.equal(urls.active.size, 0); urls.restore(); }
+});
+test('loaded object URL is revoked before replacement and rendering failure is retryable', async () => {
+  const urls = objectUrls(), props = attachmentProps(async () => new Blob(['verified image'], { type: 'image/png' }));
+  const driver = hookDriver(api.TestArchiveAttachment, props);
+  try {
+    startAttachment(driver); await tick(); const first = find(driver, 'img')[0];
+    driver.render({ ...props, refKey: 'another-ref' }); assert.ok(urls.revoked.includes(first.props.src));
+    await tick(); const second = find(driver, 'img')[0]; assert.notEqual(first.props.src, second.props.src);
+    second.props.onError(); assert.equal(urls.active.size, 0); assert.ok(renderToStaticMarkup(driver.render()).includes('重試附件'));
+    startAttachment(driver); await tick(); assert.equal(find(driver, 'img').length, 1);
+  } finally { driver.unmount(); assert.equal(urls.active.size, 0); urls.restore(); }
+});
+test('abort during URL allocation still revokes the new URL exactly once', async () => {
+  let driver; const urls = objectUrls(() => driver.unmount());
+  driver = hookDriver(api.TestArchiveAttachment, attachmentProps(async () => new Blob(['image'], { type: 'image/png' })));
+  try {
+    startAttachment(driver); await tick(); assert.equal(urls.created.length, 1);
+    assert.deepEqual(urls.revoked, [urls.created[0].url]); assert.equal(urls.active.size, 0); assert.equal(driver.lateWrites, 0);
+  } finally { driver.unmount(); urls.restore(); }
+});
+test('StrictMode-style effect cleanup/replay cancels the superseded request without leaks', async () => {
+  const urls = objectUrls(), requests = [];
+  const driver = hookDriver(api.TestArchiveAttachment, attachmentProps((_binding, signal) => {
+    const response = deferred(); requests.push({ response, signal }); return response.promise;
+  }));
+  try {
+    startAttachment(driver); driver.replayEffects(); assert.equal(requests.length, 2); assert.equal(requests[0].signal.aborted, true);
+    for (const request of requests) request.response.resolve(new Blob(['verified image'], { type: 'image/png' }));
+    await tick(); assert.equal(urls.created.length, 1); assert.equal(find(driver, 'img').length, 1);
+  } finally { driver.unmount(); assert.equal(urls.active.size, 0); urls.restore(); }
 });
 test('third tab is lazy-only; original two workflows remain separate and raw pre never executes HTML', async () => {
   const audit = await readFile(`${root}src/components/admin/ContentAuditPanel.tsx`, 'utf8');
