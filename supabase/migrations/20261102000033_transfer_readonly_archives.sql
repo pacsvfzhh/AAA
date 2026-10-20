@@ -55,7 +55,7 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_key text;v_spec jsonb;v_actual jsonb;
 BEGIN
   PERFORM private.employee_transfer_assert_maintenance_guards();
-  FOREACH v_key IN ARRAY private.employee_transfer_archives_keys()[1:4] LOOP
+  FOREACH v_key IN ARRAY (private.employee_transfer_archives_keys())[1:4] LOOP
     v_spec:=private.employee_transfer_archives_spec()->v_key;
     IF v_key='content_audit_recipient_versions' THEN v_spec:=v_spec-'id';END IF;
     IF v_key='content_audit_events' THEN v_spec:=v_spec-'before_data_sql_null'-'after_data_sql_null';END IF;
@@ -165,7 +165,7 @@ $$;
 CREATE FUNCTION private.employee_transfer_check_archives_catalog(p_catalog jsonb)
 RETURNS void LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
-DECLARE v_key text;v_table jsonb;v_index integer:=0;v_bytes bigint:=0;
+DECLARE v_key text;v_table jsonb;v_index integer:=0;v_bytes bigint:=0;v_empty text:=encode(extensions.digest(''::bytea,'sha256'),'hex');
 BEGIN
   IF NOT private.employee_transfer_exact_object(p_catalog,ARRAY['version','scope','site_id','package_id','tables','full_site_complete'])
     OR p_catalog->'version' IS DISTINCT FROM '1'::jsonb OR p_catalog->>'scope' IS DISTINCT FROM 'site-archives'
@@ -179,7 +179,8 @@ BEGIN
       OR jsonb_typeof(v_table->'rows') IS DISTINCT FROM 'number' OR (v_table->>'rows') !~ '^(0|[1-9][0-9]{0,6})$' OR (v_table->>'rows')::bigint>500000
       OR jsonb_typeof(v_table->'bytes') IS DISTINCT FROM 'number' OR (v_table->>'bytes') !~ '^(0|[1-9][0-9]{0,8})$' OR (v_table->>'bytes')::bigint>268435456
       OR ((v_table->>'rows')::bigint=0)<>((v_table->>'bytes')::bigint=0)
-      OR jsonb_typeof(v_table->'row_hashes_sha256') IS DISTINCT FROM 'string' OR (v_table->>'row_hashes_sha256') !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'Invalid archives table catalog.';END IF;
+      OR jsonb_typeof(v_table->'row_hashes_sha256') IS DISTINCT FROM 'string' OR length(v_table->>'row_hashes_sha256')<>64 OR (v_table->>'row_hashes_sha256') !~ '^[0-9a-f]{64}$'
+      OR ((v_table->>'rows')::bigint=0 AND v_table->>'row_hashes_sha256' IS DISTINCT FROM v_empty) THEN RAISE EXCEPTION 'Invalid archives table catalog.';END IF;
     v_bytes:=v_bytes+(v_table->>'bytes')::bigint;
   END LOOP;
   IF v_bytes>1073741824 THEN RAISE EXCEPTION 'Archives catalog exceeds limits.';END IF;
@@ -414,7 +415,7 @@ BEGIN
       'private.employee_transfer_guard_write()'::regprocedure,'private.employee_transfer_lock_maintenance_tables()'::regprocedure,
       'private.employee_transfer_allow_config_write(uuid)'::regprocedure,'private.employee_transfer_clear_write_permit()'::regprocedure]::oid[]);
   EXECUTE format($definition$
-CREATE FUNCTION private.employee_transfer_assert_maintenance_guards()
+CREATE OR REPLACE FUNCTION private.employee_transfer_assert_maintenance_guards()
 RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $body$
 DECLARE v_tables constant jsonb := %L::jsonb; v_functions constant jsonb := %L::jsonb;
@@ -462,3 +463,22 @@ $install_assert$;
 REVOKE ALL ON FUNCTION private.employee_transfer_assert_maintenance_guards() FROM PUBLIC, anon, authenticated, service_role;
 SELECT private.employee_transfer_assert_maintenance_guards();
 
+DO $archive_permissions$
+DECLARE v_function regprocedure;
+BEGIN
+  FOR v_function IN SELECT oid::regprocedure FROM pg_proc WHERE pronamespace='private'::regnamespace
+    AND (proname LIKE 'employee_transfer_archives_%' OR proname LIKE 'employee_transfer_check_archives_%') LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC,anon,authenticated,service_role',v_function);
+  END LOOP;
+END;
+$archive_permissions$;
+REVOKE ALL ON FUNCTION public.employee_export_archives_begin(uuid,text,uuid),public.get_employee_export_archives_page(uuid,uuid,text,text,integer),
+  public.employee_export_archives_verify(uuid,uuid),public.employee_export_archives_close(uuid,uuid),
+  public.employee_import_archives_bind(uuid,uuid,jsonb),public.employee_import_archives_stage(uuid,uuid,text,integer,text)
+  FROM PUBLIC,anon,authenticated,service_role;
+GRANT EXECUTE ON FUNCTION public.employee_export_archives_begin(uuid,text,uuid),public.get_employee_export_archives_page(uuid,uuid,text,text,integer),
+  public.employee_export_archives_verify(uuid,uuid),public.employee_export_archives_close(uuid,uuid),
+  public.employee_import_archives_bind(uuid,uuid,jsonb),public.employee_import_archives_stage(uuid,uuid,text,integer,text)
+  TO anon,authenticated;
+NOTIFY pgrst,'reload schema';
+COMMIT;

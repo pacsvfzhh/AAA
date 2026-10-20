@@ -17,8 +17,8 @@ import tls from 'node:tls';
 import { createSites, adminLogin, rpc as baseRpc, rows, scalar } from './support/transfer-harness.mjs';
 import { NEW, OLD, PASSWORDS, buildNewSite } from './support/transfer-fixtures.mjs';
 
-// Run directly with node --test. Do not skip absent/broken 19–32 or extend the 12-failure baseline.
-const migration = '20261102000032_restore_site_chat.sql';
+// Run directly with node --test. Do not skip absent/broken 19–34 or extend the 12-failure baseline.
+const migration = '20261102000034_restore_readonly_archives.sql';
 const KEYS = {
   shared: ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members', 'admin_configs', 'system_configs', 'history_cleanup_config'],
   dispatch: ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders', 'dispatch_group_members', 'valid_order_data', 'used_order_data'],
@@ -33,6 +33,8 @@ const KEYS = {
   chat: ['simulated_customers', 'cs_message_templates', 'customer_auto_messages', 'rich_card_contents',
     'customer_employee_conversations', 'customer_service_sessions', 'ccc_conversation_annotations',
     'customer_auto_message_logs', 'rating_requests', 'service_ratings'],
+  archives: ['content_audit_events', 'deleted_employee_accounts', 'deleted_employee_notifications',
+    'content_audit_recipient_versions', 'deleted_employee_summaries', 'deleted_employee_withdrawals'],
 };
 const ACTIVITY = ['public.employee_login_history', 'public.work_sessions', 'private.employee_work_stop_markers'];
 const FLAGS = { maintenance: true, financial_data_pending: true, dependencies_pending: true, replacement_ready: false, full_site_complete: false };
@@ -58,8 +60,8 @@ function chunks(text) {
   return result;
 }
 let replay, source, db, session, sourceSession, branch, emergency, other, modules;
-let packageId, dispatch, identity, finance, activity, verification, notifications, chat, task, guarded;
-let verificationDb;
+let packageId, dispatch, identity, finance, activity, verification, notifications, chat, archives, task, guarded;
+let verificationDb, archivesDb, archivesBaseline;
 let sequence = 0;
 async function transaction(fn, site = db, commit = false) {
   await site.exec('BEGIN');
@@ -117,10 +119,14 @@ function transport(site = db, token = session) {
   } });
 }
 async function capture(kind) {
-  const sourceBefore = ['activity', 'verification', 'notifications', 'chat'].includes(kind) ? await business(source) : null;
+  const sourceBefore = ['activity', 'verification', 'notifications', 'chat', 'archives'].includes(kind) ? await business(source) : null;
   const job = await on(source, `employee_export_${kind}_begin`, { p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root,
-    ...(['identity', 'finance', 'activity', 'verification', 'notifications', 'chat'].includes(kind) ? { p_package_id: packageId } : {}) });
+    ...(['identity', 'finance', 'activity', 'verification', 'notifications', 'chat', 'archives'].includes(kind) ? { p_package_id: packageId } : {}) });
   assert.equal(job.success, true);
+  if (kind === 'archives') {
+    assert.deepEqual(modules.validateArchivesCatalog(job.catalog), job.catalog);
+    assert.equal(job.media_pending, true); assert.equal(job.full_site_complete, false);
+  }
   const texts = {}, pages = {};
   for (const key of KEYS[kind]) {
     let text = '', after = null; pages[key] = [];
@@ -131,6 +137,7 @@ async function capture(kind) {
       if (kind === 'activity') modules.validateActivityPage(page, key, after);
       if (kind === 'notifications') modules.validateNotificationsPage(page, key, after);
       if (kind === 'chat') modules.validateChatPage(page, key, after);
+      if (kind === 'archives') modules.validateArchivesPage(page, key, after);
       pages[key].push(page.count); text += page.ndjson; after = page.next_after;
     } while (after !== null);
     texts[key] = text;
@@ -140,8 +147,11 @@ async function capture(kind) {
     await commitMedia(source, job, sourceSession, files, 'download');
     await commitMedia(source, job, sourceSession, files, 'recheck-export');
   }
-  assert.equal((await on(source, `employee_export_${kind}_verify`, auth(job, sourceSession))).verified, true);
-  await on(source, kind === 'shared' ? 'employee_transfer_cancel' : `employee_export_${kind}_close`, auth(job, sourceSession));
+  const verified = await on(source, `employee_export_${kind}_verify`, auth(job, sourceSession)); assert.equal(verified.verified, true);
+  const closed = await on(source, kind === 'shared' ? 'employee_transfer_cancel' : `employee_export_${kind}_close`, auth(job, sourceSession));
+  if (kind === 'archives') {
+    assert.deepEqual(modules.validateArchivesVerification(verified), verified); assert.deepEqual(modules.validateArchivesClose(closed), closed);
+  }
   if (sourceBefore) assert.deepEqual(await business(source), sourceBefore);
   return { catalog: job.catalog, texts, pages, ...(files ? { files } : {}) };
 }
@@ -175,13 +185,15 @@ async function prepare(kind, input) {
     return { client, job: { job_id: key.jobId, job_token: key.jobToken }, plan: p };
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
-async function ready(prepared) {
+async function readyDispatch(prepared) {
   await rpc('employee_import_dispatch_enter_maintenance', { ...auth(), p_plan_hash: prepared.plan_hash, p_confirmation: '確認暫停業務並導入派單資料', p_admin_password: PASSWORDS.root });
   const config = await rpc('get_employee_import_dispatch_configuration_plan', auth());
   assert.equal((await rpc('employee_import_dispatch_apply_configuration', { ...auth(), p_plan_hash: config.plan_hash })).configuration_applied, true);
   const valid = await rpc('employee_import_dispatch_valid_begin', { ...auth(), p_plan_hash: config.plan_hash });
   for (let no = 0; no < valid.chunks; no++) await rpc('employee_import_dispatch_valid_chunk', { ...auth(), p_chunk_no: no });
   assert.equal((await rpc('employee_import_dispatch_valid_verify', auth())).verified, true);
+}
+async function readyEmployees() {
   await rpc('employee_import_identity_bind', { ...auth(), p_catalog: identity.catalog });
   for (const key of KEYS.identity) for (const [no, text] of chunks(identity.texts[key]).entries()) await rpc('employee_import_identity_stage', { ...auth(), p_table_key: key, p_chunk_no: no, p_ndjson: text });
   const ip = await rpc('get_employee_import_identity_plan', auth()); assert.equal(ip.can_restore, true, JSON.stringify(ip.conflicts));
@@ -570,7 +582,7 @@ const transferSnapshot = (site = db) => rows(site, ['private.employee_transfer_j
   `SELECT '${name}' AS name,COALESCE(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb)::text AS body FROM ${name} AS r`).join(' UNION ALL '));
 
 before(async () => {
-  const noNetwork = () => assert.fail('activity/verification/notifications/chat DB tests prohibit all network and real Storage access');
+  const noNetwork = () => assert.fail('activity/verification/notifications/chat/archives DB tests prohibit all network and real Storage access');
   mock.method(globalThis, 'fetch', noNetwork);
   for (const [object, methods] of [[http, ['request', 'get']], [https, ['request', 'get']], [net, ['connect', 'createConnection']], [tls, ['connect']]])
     for (const method of methods) mock.method(object, method, noNetwork);
@@ -631,6 +643,7 @@ before(async () => {
   }, source, true);
   await transaction(() => seedNotifications(source), source, true);
   await transaction(() => seedChat(source), source, true);
+  await transaction(() => seedArchives(source), source, true);
   await transaction(() => seedChatTarget(db), db, true);
   await db.query("INSERT INTO public.admins(id,username,password_hash,role,is_active) VALUES($1,'activity-other-root',extensions.crypt($2,extensions.gen_salt('bf',4)),'super_admin',true)", [id(900), PASSWORDS.root]);
   await db.query('INSERT INTO public.financial_admin_credentials(admin_id,password_hash) SELECT id,password_hash FROM public.admins WHERE id=$1', [id(900)]);
@@ -649,6 +662,7 @@ before(async () => {
     export * from './src/lib/employeeTransfer/chatTransfer.ts'; export * from './src/lib/employeeTransfer/chatApi.ts';
     export * from './src/lib/employeeTransfer/chatMergeApi.ts'; export * from './src/lib/employeeTransfer/chatBackup.ts';
     export * from './src/lib/employeeTransfer/chatMedia.ts'; export * from './src/lib/employeeTransfer/chatRestoreApi.ts';
+    export * from './src/lib/employeeTransfer/archiveTransfer.ts'; export * from './src/lib/employeeTransfer/archiveApi.ts';
     export {verifyEncryptedVolume} from './src/lib/employeeTransfer/container.ts';
     export {setHarness} from 'activity-db:state';`, resolveDir: root }, bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2020',
     define: { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(TARGET_ORIGIN), 'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('local-fixture-anon-not-a-real-key') },
@@ -667,29 +681,35 @@ before(async () => {
   verification = await transaction(() => capture('verification'), source, true);
   notifications = await transaction(() => capture('notifications'), source, true);
   chat = await transaction(() => capture('chat'), source, true);
+  archives = await transaction(() => capture('archives'), source, true);
+  assert.deepEqual(modules.validateArchivesCatalog(archives.catalog), archives.catalog);
   assert.deepEqual(modules.validateChatCatalog(chat.catalog), chat.catalog);
   assert.deepEqual(chat.catalog.identity_catalog, identity.catalog); assert.deepEqual(chat.catalog.finance_catalog, finance.catalog);
   assert.deepEqual(modules.validateNotificationsCatalog(notifications.catalog), notifications.catalog);
   assert.deepEqual(notifications.catalog.identity_catalog, identity.catalog); assert.deepEqual(notifications.catalog.finance_catalog, finance.catalog);
   assert.deepEqual(activity.catalog.identity_catalog, identity.catalog); assert.deepEqual(finance.catalog.identity_catalog, identity.catalog);
-  // Commit this expensive authentic prerequisite chain once; individual activity tests roll back to it.
-  await transaction(async () => { const r = await prepare('dispatch', dispatch); task = r.job; await ready(r.plan); await stillClosed(); }, db, true);
+  // Both checkpoints come from the SAME real independent shared/dispatch backup chain. Archives
+  // deliberately stop before identity/finance binding: those directories are not archive prerequisites.
+  await transaction(async () => { const r = await prepare('dispatch', dispatch); task = r.job; await readyDispatch(r.plan); await stillClosed(); }, db, true);
+  archivesBaseline = await db.dumpDataDir('none');
+  await transaction(async () => { await readyEmployees(); await stillClosed(); }, db, true);
 }, { timeout: 240000 });
 after(async () => { try {
   assert.equal(globalThis.fetch.mock.callCount(), 0, 'no fetch, including fake Storage URLs');
   for (const [object, methods] of [[http, ['request', 'get']], [https, ['request', 'get']], [net, ['connect', 'createConnection']], [tls, ['connect']]])
     for (const method of methods) assert.equal(object[method].mock.callCount(), 0, `no network ${method}`);
-  await Promise.all([source?.close(), db?.close(), verificationDb?.close()]);
+  await Promise.all([source?.close(), db?.close(), verificationDb?.close(), archivesDb?.close()]);
 } finally { mock.restoreAll(); } });
 
-test('559 real migrations preserve exactly the 12 historical failures and install notifications SQL26/27 and chat SQL28–32', () => {
-  assert.equal(replay.files.length, 559); assert.equal(replay.failures.length, 12); assert.equal(replay.validation.freshDatabaseVerified, false); assert.equal(replay.files.at(-1), migration);
+test('561 real migrations preserve exactly the 12 historical failures and install notifications SQL26/27 chat SQL28–32 and archives SQL33/34', () => {
+  assert.equal(replay.files.length, 561); assert.equal(replay.failures.length, 12); assert.equal(replay.validation.freshDatabaseVerified, false); assert.equal(replay.files.at(-1), migration);
   for (const file of ['20261102000019_export_stage_employee_activity.sql', '20261102000020_restore_employee_activity.sql',
     '20261102000021_export_stage_employee_verification.sql', '20261102000022_restore_employee_verification_media.sql',
     '20261102000023_export_stage_site_notifications.sql', '20261102000024_check_site_notification_links.sql',
     '20261102000025_prepare_notification_configuration.sql', '20261102000026_transfer_notification_media.sql',
     '20261102000027_restore_site_notifications.sql', '20261102000028_export_stage_site_chat.sql',
-    '20261102000029_plan_site_chat_merge.sql', '20261102000030_prepare_chat_merge.sql', '20261102000031_transfer_chat_media.sql', migration]) {
+    '20261102000029_plan_site_chat_merge.sql', '20261102000030_prepare_chat_merge.sql', '20261102000031_transfer_chat_media.sql',
+    '20261102000032_restore_site_chat.sql', '20261102000033_transfer_readonly_archives.sql', migration]) {
     assert.ok(replay.files.includes(file)); assert.ok(!replay.failures.some(failure => failure.file === file));
   }
 });
@@ -3608,7 +3628,7 @@ test('chat restore: explicitly creating every role restores nonempty history wit
   assert.deepEqual(await crOutside(), outside); assert.deepEqual(await crQueues(), queues); assert.deepEqual(await triggers(), original); await stillClosed();
 }));
 
-// Last: real COMMITs are intentional. No outer rollback can masquerade as cross-request continuation.
+// Real activity COMMITs are intentional. Archives below use their own earlier authentic checkpoint.
 test('separate committed activity transactions resume via a new activityApi, then cancellation preserves history and dirty maintenance', async () => {
   let p; const outside = await business(db, true), original = await triggers();
   await transaction(async () => { p = await stage(); }, db, true);
@@ -3628,3 +3648,442 @@ test('separate committed activity transactions resume via a new activityApi, the
     assert.ok(await scalar(db, 'SELECT sealed_at IS NOT NULL FROM private.employee_transfer_shared_backups WHERE id=$1', [task.job_id]));
   });
 });
+
+// Archives run on a separate, genuinely committed dispatch checkpoint. The preceding activity
+// COMMIT/cancel test cannot supply authority, fake summaries or verified identity/finance state.
+const A = { employee: id(31001), absentEmployee: id(31002), account: id(31101), absentAccount: id(31102),
+  wallet: id(31201), operation: id(31301), message: id(31401), notification: id(31501),
+  withdrawal: id(31601), employeeToken: id(31701) };
+const archiveEventId = n => id(33000 + n);
+const ARCHIVE_RELATION = 'private.employee_transfer_archive_records';
+const ARCHIVE_FORBIDDEN = ['delivery_claim_token', 'delivery_claim_channel', 'delivery_claim_until', 'delivery_completed_claim_token',
+  'password', 'password_hash', 'current_session_token', 'current_tab_id', 'session_created_at', 'last_heartbeat_at',
+  'session_token', 'token_hash', 'access_token', 'refresh_token', 'service_role_key', 'anon_key'];
+const ARCHIVE_TEXT = '合成檔案𠮷 é é 無真實個資';
+const ARCHIVE_MEDIA = `${SOURCE_ORIGIN}/storage/v1/object/public/chat-images/synthetic/archive.png`;
+async function seedArchives(site) {
+  // Direct source fixtures only, not fabricated import jobs, summaries, progress or media receipts.
+  // INSERT can represent an already-archived legacy user without replaying a deletion/cleanup job.
+  await site.query(`INSERT INTO public.users(id,username,password_hash,employee_id,created_by,is_active,archived_at,is_verified,total_income)
+    VALUES($1::uuid,'archived-'||$1::text,extensions.crypt($2,extensions.gen_salt('bf',4)),'archived-'||$1::text,$3,false,
+      '2023-02-03T04:05:06.123456Z',true,4321.25)`, [A.employee, PASSWORDS.employee, OLD.branch]);
+  await site.query(`UPDATE public.wallets SET id=$2,available_balance=1234.56,frozen_balance=17.25 WHERE user_id=$1`, [A.employee, A.wallet]);
+  await site.query(`INSERT INTO public.withdrawals(id,user_id,amount,status,created_at)
+    VALUES($1,$2,17.25,'pending','2022-02-03T04:05:06.123456Z'),($3,$2,23.50,'approved',NULL),
+      ($4,$2,0.01,'rejected','2022-02-03T04:05:06.654321Z')`, [A.withdrawal, A.employee, id(31602), id(31603)]);
+  await site.query(`INSERT INTO private.deleted_employee_accounts(id,operation_id,employee_id,account_username,employee_number,
+      account_created_at,account_remarks,owner_admin_id,owner_username,actor_admin_id,actor_username,actor_role,deletion_source,deleted_at,account_real_name)
+    VALUES($1,$3,$4,'synthetic-deleted-account','SYNTHETIC-ARCHIVE-001','2020-01-02T03:04:05.654321Z',$5,$6,'source-branch',$7,'source-root','super_admin','employee_delete',
+      '2023-02-03T04:05:06.123456Z','虛構姓名'),($2,$3,$8,NULL,NULL,NULL,NULL,$6,NULL,$7,'source-root','super_admin','admin_delete',
+      '2023-02-03T04:05:06.000001Z',NULL)`, [A.account, A.absentAccount, A.operation, A.employee, ARCHIVE_TEXT, OLD.branch, OLD.root, A.absentEmployee]);
+  const reserved = Object.fromEntries(ARCHIVE_FORBIDDEN.map(key => [key, `synthetic-excluded-${key}`]));
+  const snapshot = JSON.stringify({ text: ARCHIVE_TEXT, precise: 0, nested: [{ keep: 'original', ...reserved }],
+    url: ARCHIVE_MEDIA, free_text: 'password and delivery_claim_token are text, not keys' }).replace('"precise":0', `"precise":${PRECISE}`);
+  await site.query(`INSERT INTO private.content_audit_events(id,operation_id,entity_type,entity_id,action,owner_admin_id,owner_username,
+      actor_admin_id,actor_username,actor_role,employee_id,occurred_at,before_data,after_data,media_refs,employee_account,message_created_at)
+    SELECT ('72000000-0000-4000-8000-'||lpad(to_hex(33000+n),12,'0'))::uuid,$1,'notification',$2,
+      'employee_delete',$3,'source-branch',CASE WHEN n=3 THEN NULL ELSE $4::uuid END,'source-root','super_admin',$5,
+      '2023-02-03T04:05:06.123456Z',CASE WHEN n=1 THEN NULL WHEN n=2 THEN 'null'::jsonb ELSE $6::jsonb END,
+      CASE WHEN n=1 THEN 'null'::jsonb WHEN n=2 THEN NULL ELSE $6::jsonb END,
+      jsonb_build_object($7::text,'synthetic-operation/evidence.png'),$8,'2022-01-02T03:04:05.654321Z'
+    FROM generate_series(1,203) AS s(n)`, [A.operation, A.message, OLD.branch, OLD.root, A.employee, snapshot, ARCHIVE_MEDIA, ARCHIVE_TEXT]);
+  await site.query(`INSERT INTO private.deleted_employee_notifications(id,record_id,message_id,message_data,recipient_data,archived_event_id)
+    VALUES($1,$4,$5,$7::jsonb,$7::jsonb,$8),($2,$4,$6,NULL,'null'::jsonb,NULL),
+      ($3,$4,$9,'null'::jsonb,NULL,NULL)`, [A.notification, id(31502), id(31503), A.account, A.message, id(31402), snapshot, archiveEventId(3), id(31403)]);
+  // Four actual persisted claim fields, including nested credentials; export must remove them,
+  // not start from a pre-sanitized fixture. Existing notification seeds also create real versions.
+  await site.query(`INSERT INTO private.content_audit_recipient_versions(message_id,recipient_id,recipient_data)
+    VALUES($1,$2,$3::jsonb)`, [A.message, A.employee, JSON.stringify({ ...reserved, id: id(31801), recipient_id: A.employee,
+    is_read: true, delivery_sequence: BIG_STAGE, read_at: '2023-02-03T04:05:06.654321Z', nested: [{ ...reserved, keep: ARCHIVE_TEXT }] })]);
+}
+async function seedArchiveTarget() {
+  // Deliberate namespace-collision fixtures AFTER the authentic unopened-site preparation. Do
+  // not relax that gate or teach production RPCs to accept a live target as an unopened site.
+  await localChange(db, 'public.users', `INSERT INTO public.users(id,username,password_hash,employee_id,created_by,is_active,is_verified,total_income)
+    VALUES($1,'synthetic-target-live',extensions.crypt($2,extensions.gen_salt('bf',4)),'SYNTHETIC-TARGET-001',$3,true,false,99)`, [A.employee, PASSWORDS.employee, NEW.branch]);
+  await localChange(db, 'public.wallets', `INSERT INTO public.wallets(id,user_id,available_balance,frozen_balance) VALUES($1,$2,88,0)`, [A.wallet, A.employee]);
+  await localChange(db, 'public.withdrawals', `INSERT INTO public.withdrawals(id,user_id,amount,status,created_at) VALUES($1,$2,77,'rejected','2024-01-01')`, [A.withdrawal, A.employee]);
+  await localChange(db, 'private.deleted_employee_accounts', `INSERT INTO private.deleted_employee_accounts(id,operation_id,employee_id,
+      account_username,owner_admin_id,actor_admin_id,actor_username,actor_role,deletion_source)
+    VALUES($1,$2,$3,'synthetic-target-archive',$4,$4,'target-root','super_admin','employee_delete')`, [A.account, id(31901), A.employee, NEW.root]);
+  await localChange(db, 'private.content_audit_events', `INSERT INTO private.content_audit_events(id,operation_id,entity_type,entity_id,
+      action,owner_admin_id,actor_admin_id,actor_username,actor_role,before_data)
+    VALUES($1,$2,'notification',$3,'edit',$4,$4,'target-root','super_admin','{"target":"must survive"}')`, [archiveEventId(1), id(31901), A.message, NEW.root]);
+  await localChange(db, 'private.deleted_employee_notifications', `INSERT INTO private.deleted_employee_notifications(id,record_id,message_id,message_data)
+    VALUES($1,$2,$3,'{"target":"notification must survive"}')`, [A.notification, A.account, A.message]);
+  await localChange(db, 'private.content_audit_recipient_versions', `INSERT INTO private.content_audit_recipient_versions(message_id,recipient_id,recipient_data)
+    VALUES($1,$2,'{"target":"recipient must survive"}')`, [A.message, A.employee]);
+  // Authentication fixture only: a real, hashed, unexpired employee session is not an admin token.
+  await localChange(db, 'public.employee_financial_sessions', `INSERT INTO public.employee_financial_sessions(user_id,token_hash,tab_id,session_marker,expires_at)
+    VALUES($1,private.hash_financial_token($2),'synthetic-archives-tab',$3,now()+interval '1 day')`, [A.employee, A.employeeToken, id(31702)]);
+}
+async function archiveCase(fn, { isolated = false } = {}) {
+  const original = db, originalSession = session; let clone;
+  try {
+    if (!archivesDb) {
+      archivesDb = new PGlite({ loadDataDir: archivesBaseline, extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await archivesDb.waitReady;
+      db = archivesDb; await transaction(seedArchiveTarget, db, true);
+    }
+    if (isolated) { clone = new PGlite({ loadDataDir: await archivesDb.dumpDataDir('none'), extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await clone.waitReady; }
+    db = clone ?? archivesDb; transport(); return await fn();
+  } finally { db = original; session = originalSession; await clone?.close(); transport(); }
+}
+const abind = (input = archives, extra = {}) => rpc('employee_import_archives_bind', { ...auth(), p_catalog: input.catalog, ...extra });
+const astageChunk = (key, no, text, extra = {}) => rpc('employee_import_archives_stage', { ...auth(), p_table_key: key, p_chunk_no: no, p_ndjson: text, ...extra });
+const aplan = (extra = {}) => rpc('get_employee_import_archives_plan', { ...auth(), ...extra });
+const abegin = (p, extra = {}) => rpc('employee_import_archives_begin', { ...auth(), p_plan_hash: p.plan_hash, ...extra });
+const achunk = (key, no, extra = {}) => rpc('employee_import_archives_chunk', { ...auth(), p_table_key: key, p_chunk_no: no, ...extra });
+const averify = (extra = {}) => rpc('employee_import_archives_verify', { ...auth(), ...extra });
+const astatus = (extra = {}) => rpc('get_employee_import_archives_status', { ...auth(), ...extra });
+const acounts = (input = archives) => Object.fromEntries(input.catalog.tables.map(t => [t.key, t.rows]));
+function archiveFlags(value) { flags(value); assert.equal(value.scope, 'site-archives'); assert.equal(value.media_pending, true); }
+function archiveStatus(value, input = archives) {
+  assert.deepEqual(modules.validateArchivesStatus(value), value); archiveFlags(value); assert.deepEqual(value.counts, acounts(input)); return value;
+}
+const archiveRecords = () => rows(db, `SELECT source_site_id,package_id,table_key,source_id,body::text,source_line,job_id,imported_at::text FROM ${ARCHIVE_RELATION}
+  ORDER BY source_site_id,package_id,table_key COLLATE "C",source_id COLLATE "C"`);
+const archiveOutside = () => business().then(snapshot => snapshot.filter(row => row.name !== ARCHIVE_RELATION));
+async function archiveReject(actions, pattern) {
+  const before = await business(), saved = await transferSnapshot(), records = await archiveRecords();
+  for (const action of actions) {
+    await assert.rejects(action(), pattern); assert.deepEqual(await business(), before); assert.deepEqual(await transferSnapshot(), saved);
+    assert.deepEqual(await archiveRecords(), records); assert.equal(await permits(), 0);
+  }
+}
+async function astage(input = archives, { omit = null } = {}) {
+  const bound = await abind(input); assert.deepEqual(modules.validateArchivesBind(bound), bound);
+  for (const key of KEYS.archives) for (const [no, text] of chunks(input.texts[key]).entries()) {
+    if (omit === `${key}:${no}`) continue;
+    const receipt = await astageChunk(key, no, text);
+    assert.deepEqual(modules.validateArchivesStage(receipt, lines(text).length, Buffer.byteLength(text), hash(text)), receipt);
+  }
+  const p = await aplan(); assert.deepEqual(modules.validateArchivesPlan(p), p); archiveFlags(p); assert.deepEqual(p.counts, acounts(input)); return p;
+}
+async function archiveChunks(begun, input = archives) {
+  let status = archiveStatus(begun, input);
+  for (const key of KEYS.archives) for (let no = status.completed_chunks[key]; no < status.chunks[key]; no++) {
+    status = archiveStatus(await achunk(key, no), input); assert.equal(status.completed_chunks[key], no + 1); assert.equal(await permits(), 0);
+  }
+  return status;
+}
+async function archiveRestore(input = archives) {
+  const p = await astage(input); assert.equal(p.can_restore, true, JSON.stringify(p.conflicts)); assert.deepEqual(p.conflicts, []);
+  await archiveChunks(await abegin(p), input); return archiveStatus(await averify(), input);
+}
+function changedArchives(changes) {
+  // Rehash untrusted public NDJSON only. Never write job options/summary, restore state or permits.
+  const texts = { ...archives.texts };
+  for (const [key, change] of Object.entries(changes)) texts[key] = lines(change(texts[key])).sort(compareRawIds).join('');
+  return { texts, catalog: { ...archives.catalog, tables: KEYS.archives.map(key => ({ key, rows: lines(texts[key]).length,
+    bytes: Buffer.byteLength(texts[key]), row_hashes_sha256: hash(lines(texts[key]).map(hash).join('')) })) } };
+}
+async function archiveReadTable(key, extra = {}) {
+  const result = new Map(); let after = null;
+  do {
+    const page = await rpc('get_employee_transferred_archive_page', { p_admin_session_token: session, p_source_site_id: archives.catalog.site_id,
+      p_package_id: packageId, p_table_key: key, p_after: after, p_limit: 200, ...extra });
+    modules.validateArchivesPage(page, key, after);
+    for (const source_line of lines(page.ndjson)) { const body = JSON.parse(source_line); result.set(body.id, { body, source_line }); }
+    after = page.next_after;
+  } while (after !== null);
+  return result;
+}
+async function aread(key, sourceId, extra = {}) {
+  const record = (await archiveReadTable(key, extra)).get(sourceId);
+  if (!record) throw new Error('Archive record is unavailable.');
+  return record;
+}
+async function assertArchiveRows(input = archives) {
+  const actual = await archiveRecords(); assert.equal(actual.length, input.catalog.tables.reduce((n, t) => n + t.rows, 0));
+  for (const key of KEYS.archives) {
+    const readRows = await archiveReadTable(key);
+    for (const line of lines(input.texts[key])) {
+    const sourceId = JSON.parse(line).id, record = actual.find(r => r.table_key === key && r.source_id === sourceId);
+    assert.ok(record, `${key}:${sourceId}`); assert.equal(record.source_line, line); assert.equal(record.job_id, task.job_id);
+    assert.equal(record.source_site_id, input.catalog.site_id); assert.equal(record.package_id, packageId); assert.ok(record.imported_at);
+    // Compare JSON in PostgreSQL, not rounded JavaScript values. Raw line includes its original LF.
+    assert.equal(record.body, await scalar(db, 'SELECT $1::jsonb::text', [line]));
+    const read = readRows.get(sourceId); assert.equal(read.source_line, line); assert.deepEqual(read.body, JSON.parse(line));
+    }
+  }
+}
+async function archiveStillClosed() {
+  await stillClosed(); const summary = await state();
+  for (const key of ['identity_catalog', 'finance_catalog', 'identity_restore', 'finance_restore']) assert.equal(summary[key], undefined, key);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.users WHERE id=ANY($1::uuid[])', [[...EMPLOYEES, A.absentEmployee]]), 0);
+  // The unrelated same-UUID live target fixture is preserved, not treated as the archived identity.
+  assert.equal(await scalar(db, 'SELECT is_active AND archived_at IS NULL FROM public.users WHERE id=$1', [A.employee]), true);
+  assert.equal(await scalar(source, 'SELECT NOT is_active AND archived_at IS NOT NULL FROM public.users WHERE id=$1', [A.employee]), true);
+}
+
+test('archives: six-table raw export-stage-plan-begin-chunks-verify-read round trip uses real backups without identity or finance', { timeout: 400000 }, () => archiveCase(() => transaction(async () => {
+  const outside = await archiveOutside(), sourceBefore = await business(source), original = await triggers();
+  assert.equal(archives.catalog.site_id, dispatch.catalog.site_id); assert.equal(archives.catalog.package_id, packageId);
+  assert.deepEqual(Object.keys(archives.catalog).sort(), ['version', 'scope', 'site_id', 'package_id', 'tables', 'full_site_complete'].sort());
+  assert.deepEqual(modules.ARCHIVES_TABLE_KEYS, KEYS.archives);
+  assert.ok(await scalar(db, 'SELECT sealed_at IS NOT NULL AND byte_count>0 FROM private.employee_transfer_shared_backups WHERE id=$1', [task.job_id]));
+  for (const key of KEYS.archives) {
+    const table = archives.catalog.tables.find(t => t.key === key); assert.ok(table.rows > 0, key);
+    assert.equal(table.rows, lines(archives.texts[key]).length); assert.equal(table.bytes, Buffer.byteLength(archives.texts[key]));
+    assert.equal(table.row_hashes_sha256, hash(lines(archives.texts[key]).map(hash).join('')));
+    assert.equal(archives.pages[key].reduce((n, count) => n + count, 0), table.rows);
+  }
+  assert.ok(archives.pages.content_audit_events.length >= 2);
+  assert.ok(archives.pages.content_audit_events.every(count => count > 0 && count <= 200));
+  const p = await astage(); assert.equal(p.can_restore, true); const begun = archiveStatus(await abegin(p));
+  assert.equal(begun.started, true); assert.equal(begun.records_verified, false); assert.deepEqual(await archiveOutside(), outside);
+  await archiveReject([() => aread('deleted_employee_accounts', A.account), () => averify()], /verified|incomplete|not complete|available/i);
+  const written = await archiveChunks(begun); assert.equal(written.records_verified, false);
+  await archiveReject([() => aread('deleted_employee_accounts', A.account)], /verified|available/i);
+  const verified = archiveStatus(await averify()); assert.equal(verified.records_verified, true); await assertArchiveRows();
+  assert.deepEqual(await archiveOutside(), outside); assert.deepEqual(await business(source), sourceBefore); assert.deepEqual(await triggers(), original); await archiveStillClosed();
+})));
+
+test('archives: JSON null SQL NULL precision microseconds UTF8 and media refs retain the original source lines', { timeout: 300000 }, () => archiveCase(() => transaction(async () => {
+  const event = n => JSON.parse(lines(archives.texts.content_audit_events).find(line => JSON.parse(line).id === archiveEventId(n)));
+  assert.equal(event(1).before_data, null); assert.equal(event(1).before_data_sql_null, true); assert.equal(event(1).after_data, null); assert.equal(event(1).after_data_sql_null, false);
+  assert.equal(event(2).before_data_sql_null, false); assert.equal(event(2).after_data_sql_null, true); assert.equal(event(3).actor_admin_id, null);
+  assert.match(archives.texts.content_audit_events, new RegExp(PRECISE.replace('.', '\\.'))); assert.ok(archives.texts.content_audit_events.includes(ARCHIVE_TEXT));
+  assert.equal(event(3).occurred_at, '2023-02-03T04:05:06.123456+00:00'); assert.equal(event(3).message_created_at, '2022-01-02T03:04:05.654321+00:00');
+  assert.deepEqual(event(3).media_refs, { [ARCHIVE_MEDIA]: 'synthetic-operation/evidence.png' });
+  const notes = lines(archives.texts.deleted_employee_notifications).map(JSON.parse);
+  assert.equal(notes.find(r => r.id === id(31502)).message_data_sql_null, true); assert.equal(notes.find(r => r.id === id(31502)).recipient_data_sql_null, false);
+  assert.equal(notes.find(r => r.id === id(31503)).message_data_sql_null, false); assert.equal(notes.find(r => r.id === id(31503)).recipient_data_sql_null, true);
+  const summaries = lines(archives.texts.deleted_employee_summaries).map(JSON.parse), present = summaries.find(r => r.id === A.account), absent = summaries.find(r => r.id === A.absentAccount);
+  assert.equal(present.source_present, true); assert.equal(present.is_verified, true); assert.equal(present.total_orders, '0');
+  assert.equal(absent.source_present, false); for (const field of ['is_verified', 'total_income', 'available_balance', 'frozen_balance']) assert.equal(absent[field], null);
+  const withdrawals = lines(archives.texts.deleted_employee_withdrawals).map(JSON.parse); assert.deepEqual(withdrawals.map(r => r.status).sort(), ['approved', 'pending', 'rejected']);
+  assert.equal(withdrawals.find(r => r.withdrawal_id === id(31602)).created_at, null);
+  assert.equal((await archiveRestore()).records_verified, true);
+  for (const key of ['content_audit_events', 'deleted_employee_notifications', 'deleted_employee_summaries', 'deleted_employee_withdrawals']) {
+    const saved = await scalar(db, `SELECT string_agg(source_line,'' ORDER BY source_id COLLATE "C") FROM ${ARCHIVE_RELATION} WHERE table_key=$1`, [key]);
+    assert.equal(saved, archives.texts[key]);
+  }
+  assert.equal(await scalar(db, `SELECT body#>>'{before_data,precise}' FROM ${ARCHIVE_RELATION} WHERE table_key='content_audit_events' AND source_id=$1`, [archiveEventId(3)]), PRECISE);
+  await archiveStillClosed();
+})));
+
+test('archives: namespaced evidence preserves target same-UUID live users wallets withdrawals audits and source operator IDs', { timeout: 300000 }, () => archiveCase(() => transaction(async () => {
+  const outside = await archiveOutside();
+  assert.deepEqual(await scalar(db, `SELECT array_agg(a.attname ORDER BY k.n) FROM pg_constraint c
+    CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY k(attnum,n)
+    JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
+    WHERE c.conrelid='${ARCHIVE_RELATION}'::regclass AND c.contype='p'`), ['source_site_id', 'package_id', 'table_key', 'source_id']);
+  await archiveRestore(); const beforeRead = await transferSnapshot();
+  const account = await aread('deleted_employee_accounts', A.account); assert.equal(account.body.employee_id, A.employee);
+  assert.equal(account.body.owner_admin_id, OLD.branch); assert.equal(account.body.actor_admin_id, OLD.root); assert.notEqual(OLD.root, NEW.root);
+  assert.equal(account.body.actor_username, 'source-root'); assert.equal(account.body.account_username, 'synthetic-deleted-account');
+  assert.deepEqual(await transferSnapshot(), beforeRead); assert.deepEqual(await archiveOutside(), outside);
+  const summary = await aread('deleted_employee_summaries', A.account), withdrawal = await aread('deleted_employee_withdrawals', `${A.account}:${A.withdrawal}`);
+  assert.equal(summary.body.total_income, 4321.25); assert.equal(summary.body.available_balance, 1234.56); assert.equal(withdrawal.body.amount, 17.25); assert.equal(withdrawal.body.status, 'pending');
+  await localChange(db, 'public.users', "UPDATE public.users SET total_income=555,username='synthetic-target-changed' WHERE id=$1", [A.employee]);
+  await localChange(db, 'public.wallets', 'UPDATE public.wallets SET available_balance=666 WHERE user_id=$1', [A.employee]);
+  await localChange(db, 'public.withdrawals', 'UPDATE public.withdrawals SET amount=777 WHERE id=$1', [A.withdrawal]);
+  await localChange(db, 'private.deleted_employee_accounts', "UPDATE private.deleted_employee_accounts SET actor_username='changed-target-operator' WHERE id=$1", [A.account]);
+  assert.deepEqual(await aread('deleted_employee_accounts', A.account), account); assert.deepEqual(await aread('deleted_employee_summaries', A.account), summary);
+  assert.deepEqual(await aread('deleted_employee_withdrawals', `${A.account}:${A.withdrawal}`), withdrawal);
+  await archiveReject([() => aread('deleted_employee_accounts', A.account, { p_source_site_id: randomUUID() }),
+    () => aread('deleted_employee_accounts', A.account, { p_package_id: randomUUID() })], /archive|record|available|verified|found/i);
+  await archiveStillClosed();
+})));
+
+test('archives: actual stored delivery claims and nested credentials are redacted while source drift blocks verify and close', { timeout: 300000 }, () => archiveCase(() => transaction(async () => {
+  const raw = await scalar(source, 'SELECT recipient_data FROM private.content_audit_recipient_versions WHERE message_id=$1 AND recipient_id=$2', [A.message, A.employee]);
+  for (const key of ARCHIVE_FORBIDDEN) { assert.ok(Object.hasOwn(raw, key)); assert.ok(Object.hasOwn(raw.nested[0], key)); }
+  function clean(value) {
+    if (Array.isArray(value)) return value.forEach(clean);
+    if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) { assert.ok(!ARCHIVE_FORBIDDEN.includes(key), key); clean(child); }
+  }
+  for (const key of KEYS.archives) for (const line of lines(archives.texts[key])) clean(JSON.parse(line));
+  assert.ok(archives.texts.content_audit_events.includes('password and delivery_claim_token are text, not keys'));
+  await transaction(async () => {
+    const job = await on(source, 'employee_export_archives_begin', { p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root, p_package_id: packageId });
+    await assert.rejects(on(source, 'employee_export_archives_close', auth(job, sourceSession)), /verified/i);
+    assert.equal(modules.validateArchivesVerification(await on(source, 'employee_export_archives_verify', auth(job, sourceSession))).media_pending, true);
+    await source.query("UPDATE private.content_audit_events SET before_data=jsonb_set(before_data,'{text}','\"same-count source drift\"') WHERE id=$1", [archiveEventId(3)]);
+    await assert.rejects(on(source, 'employee_export_archives_verify', auth(job, sourceSession)), /source changed|restart/i);
+    await assert.rejects(on(source, 'employee_export_archives_close', auth(job, sourceSession)), /source changed|restart/i);
+  }, source);
+  // Each malformed payload reaches SQL, not only the client's preflight validation.
+  const first = lines(archives.texts.content_audit_events).find(line => JSON.parse(line).id === archiveEventId(1)); await abind();
+  for (const field of ARCHIVE_FORBIDDEN) {
+    const line = first.replace('"before_data": null', `"before_data": {"nested":[{"${field}":"synthetic-only"}]}`)
+      .replace('"before_data_sql_null": true', '"before_data_sql_null": false');
+    assert.notEqual(line, first); await archiveReject([() => astageChunk('content_audit_events', 0, line)], /invalid archives import row|excluded/i);
+  }
+  await archiveStillClosed();
+})));
+
+test('archives: duplicate escaped keys unknown columns wrong package same site and missing parents are blocked without progress', { timeout: 400000 }, () => archiveCase(() => transaction(async () => {
+  for (const catalog of [{ ...archives.catalog, package_id: randomUUID() }, { ...archives.catalog, site_id: randomUUID() },
+    { ...archives.catalog, site_id: await scalar(db, 'SELECT site_id FROM private.employee_transfer_site') }, { ...archives.catalog, identity_catalog: identity.catalog }]) {
+    await archiveReject([() => abind({ catalog })], /catalog|package|different site|original|source binding/i);
+  }
+  await chatSavepoint(async () => {
+    await abind(); const first = lines(archives.texts.content_audit_events)[0], row = JSON.parse(first);
+    for (const line of [first.replace('{', `{"id":"${row.id}",`), first.replace('{', `{"\\u0069d":"${row.id}",`), first.replace('{', '{"unknown_column":true,')])
+      await archiveReject([() => astageChunk('content_audit_events', 0, line)], /invalid archives import row|unreviewed/i);
+    await archiveReject([() => astageChunk('not_an_archive_table', 0, first)], /unsupported|archive/i);
+    const two = lines(archives.texts.content_audit_events).slice(0, 2).reverse().join('');
+    await archiveReject([() => astageChunk('content_audit_events', 0, two)], /strictly ordered/i);
+    const duplicate = first + first; await archiveReject([() => astageChunk('content_audit_events', 0, duplicate)], /strictly ordered|duplicate/i);
+  });
+  for (const [key, field, oldId] of [['deleted_employee_notifications', 'record_id', A.account],
+    ['deleted_employee_notifications', 'archived_event_id', archiveEventId(3)], ['deleted_employee_summaries', 'employee_id', A.employee]]) await chatSavepoint(async () => {
+    const input = changedArchives({ [key]: text => text.replace(`"${field}": "${oldId}"`, `"${field}": "${F.outsider}"`) });
+    assert.notEqual(input.texts[key], archives.texts[key]); const p = await astage(input); assert.equal(p.can_restore, false);
+    assert.ok(p.conflicts.includes('archive_reference_missing')); await archiveReject([() => abegin(p)], /conflict|reference|restor/i);
+  });
+  await chatSavepoint(async () => {
+    const input = changedArchives({ deleted_employee_withdrawals: text => text.replaceAll(A.account, F.outsider) });
+    assert.notEqual(input.texts.deleted_employee_withdrawals, archives.texts.deleted_employee_withdrawals);
+    const p = await astage(input); assert.equal(p.can_restore, false); assert.ok(p.conflicts.includes('archive_reference_missing'));
+    await archiveReject([() => abegin(p)], /conflict|reference|restor/i);
+  });
+  await archiveStillClosed();
+})));
+
+test('archives: staging begin chunk verify are idempotent but same namespace ID with different content conflicts', { timeout: 400000 }, () => archiveCase(() => transaction(async () => {
+  await chatSavepoint(async () => {
+    // A conflicting TARGET row is a direct adversarial fixture, not an import success receipt.
+    const original = lines(archives.texts.content_audit_events).find(line => JSON.parse(line).id === archiveEventId(1));
+    const different = original.replace('source-root', 'conflicting-target-operator'); assert.notEqual(different, original);
+    await localChange(db, ARCHIVE_RELATION, `INSERT INTO ${ARCHIVE_RELATION}(source_site_id,package_id,table_key,source_id,body,source_line,job_id)
+      VALUES($1,$2,'content_audit_events',$3,$4::jsonb,$4,$5)`, [archives.catalog.site_id, packageId, archiveEventId(1), different, task.job_id]);
+    const p = await astage(); assert.equal(p.can_restore, false); assert.ok(p.conflicts.includes('archive_record_conflict'));
+    await archiveReject([() => abegin(p)], /conflict|restor/i);
+  });
+  const p = await astage(), first = chunks(archives.texts.content_audit_events)[0];
+  assert.equal((await abind()).repeated, true); assert.equal((await astageChunk('content_audit_events', 0, first)).repeated, true);
+  await archiveReject([() => astageChunk('content_audit_events', 0, first.replace('"actor_username":', '"actor_username" :'))], /content changed/i);
+  const begun = archiveStatus(await abegin(p)); assert.deepEqual(await abegin(p), begun); await achunk('content_audit_events', 0);
+  const recorded = await archiveRecords(), status = archiveStatus(await astatus()); assert.deepEqual(await achunk('content_audit_events', 0), status); assert.deepEqual(await archiveRecords(), recorded);
+  await archiveChunks(status); const verified = archiveStatus(await averify()); assert.equal(verified.records_verified, true); assert.deepEqual(await averify(), verified);
+  const full = await archiveRecords(); assert.deepEqual(await abegin(p), verified); assert.deepEqual(await archiveRecords(), full);
+  await localChange(db, ARCHIVE_RELATION, `UPDATE ${ARCHIVE_RELATION} SET body=jsonb_set(body,'{actor_username}','"conflicting existing record"'),
+    source_line=replace(source_line,'source-root','conflicting existing record') WHERE table_key='content_audit_events' AND source_id=$1`, [archiveEventId(1)]);
+  const ownerChunk = chunks(archives.texts.content_audit_events).findIndex(text => lines(text).some(line => JSON.parse(line).id === archiveEventId(1)));
+  assert.ok(ownerChunk >= 0); await archiveReject([() => achunk('content_audit_events', ownerChunk), () => averify(), () => astatus()], /changed|conflict|differ|mismatch/i);
+  await archiveStillClosed();
+})));
+
+test('archives: chunk ordering incomplete verify and late failure roll back only the current chunk and leak no permits', { timeout: 400000 }, () => archiveCase(() => transaction(async () => {
+  await chatSavepoint(async () => {
+    await abind(); const parts = chunks(archives.texts.content_audit_events); assert.ok(parts.length >= 2);
+    await archiveReject([() => astageChunk('content_audit_events', 1, parts[1])], /order|catalog|cursor/i);
+    await astageChunk('content_audit_events', 0, parts[0]); await archiveReject([() => aplan()], /catalog|verification|staged/i);
+  });
+  const p = await astage(), begun = archiveStatus(await abegin(p)); assert.equal(begun.completed_chunks.content_audit_events, 0);
+  await archiveReject([() => achunk('content_audit_events', 1), () => averify()], /order|chunk|incomplete|not complete/i);
+  await achunk('content_audit_events', 0); const saved = await archiveRecords(), original = await triggers(), status = await astatus();
+  const firstRows = lines(chunks(archives.texts.content_audit_events)[0]).length; assert.ok(firstRows > 0 && firstRows <= 200); assert.equal(saved.length, firstRows);
+  const failId = JSON.parse(lines(chunks(archives.texts.content_audit_events)[1]).at(-1)).id;
+  await db.exec(`CREATE FUNCTION public.archives_late_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.table_key='content_audit_events' AND NEW.source_id='${failId}' THEN
+      IF (SELECT count(*) FROM private.employee_transfer_archive_records WHERE table_key='content_audit_events')<=${firstRows}
+        OR (SELECT count(*) FROM private.employee_transfer_write_permits)<>1
+        OR NOT EXISTS(SELECT 1 FROM private.employee_transfer_write_permits WHERE table_names=ARRAY['private.employee_transfer_archive_records'])
+        THEN RAISE EXCEPTION 'archives late-failure precondition not reached'; END IF;
+      RAISE EXCEPTION 'late SQL34 archives chunk failure'; END IF; RETURN NEW; END $$;
+    CREATE TRIGGER archives_late_fail AFTER INSERT ON private.employee_transfer_archive_records FOR EACH ROW EXECUTE FUNCTION public.archives_late_fail()`);
+  await archiveReject([() => achunk('content_audit_events', 1)], /late SQL34 archives chunk failure/);
+  assert.deepEqual(await archiveRecords(), saved); assert.deepEqual(await astatus(), status); assert.equal(await permits(), 0);
+  await db.exec('DROP TRIGGER archives_late_fail ON private.employee_transfer_archive_records; DROP FUNCTION public.archives_late_fail()');
+  await archiveChunks(status); assert.equal((await averify()).records_verified, true); assert.deepEqual(await triggers(), original); await archiveStillClosed();
+})));
+
+test('archives: verified status refuses body raw-line namespace and missing-record drift instead of trusting saved completion', { timeout: 400000 }, () => archiveCase(() => transaction(async () => {
+  await archiveRestore(); const before = await archiveRecords();
+  for (const [sql, args] of [
+    [`UPDATE ${ARCHIVE_RELATION} SET body=jsonb_set(body,'{actor_username}','"drift"') WHERE table_key='content_audit_events' AND source_id=$1`, [archiveEventId(1)]],
+    [`UPDATE ${ARCHIVE_RELATION} SET source_line=source_line||' ' WHERE table_key='content_audit_events' AND source_id=$1`, [archiveEventId(1)]],
+    [`UPDATE ${ARCHIVE_RELATION} SET source_site_id=$2 WHERE table_key='content_audit_events' AND source_id=$1`, [archiveEventId(1), randomUUID()]],
+    [`DELETE FROM ${ARCHIVE_RELATION} WHERE table_key='content_audit_events' AND source_id=$1`, [archiveEventId(1)]],
+  ]) await chatSavepoint(async () => {
+    await localChange(db, ARCHIVE_RELATION, sql, args); await archiveReject([() => astatus(), () => averify()], /changed|conflict|differ|mismatch|incomplete/i);
+  });
+  assert.deepEqual(await archiveRecords(), before); assert.equal(archiveStatus(await astatus()).records_verified, true); await archiveStillClosed();
+})));
+
+test('archives: READ ONLY plan and status preserve heartbeat and permissions reject secondary emergency employee stranger and expired tasks', { timeout: 400000 }, () => archiveCase(async () => {
+  let p; await transaction(async () => { p = await astage(); await abegin(p); }, db, true);
+  const before = await business(), saved = await transferSnapshot(); await db.exec('BEGIN; SET TRANSACTION READ ONLY');
+    try { assert.deepEqual(await aplan(), p); assert.equal(archiveStatus(await astatus()).records_verified, false); await db.exec('COMMIT'); }
+    catch (error) { await db.exec('ROLLBACK'); throw error; }
+    assert.deepEqual(await business(), before); assert.deepEqual(await transferSnapshot(), saved);
+    await transaction(async () => {
+      for (const [name, args] of [
+        ['employee_export_archives_begin', ['p_admin_session_token', 'p_admin_password', 'p_package_id']],
+        ['get_employee_export_archives_page', ['p_admin_session_token', 'p_job_token', 'p_table_key', 'p_after', 'p_limit']],
+        ['employee_export_archives_verify', ['p_admin_session_token', 'p_job_token']], ['employee_export_archives_close', ['p_admin_session_token', 'p_job_token']],
+        ['employee_import_archives_bind', ['p_admin_session_token', 'p_job_token', 'p_catalog']],
+        ['employee_import_archives_stage', ['p_admin_session_token', 'p_job_token', 'p_table_key', 'p_chunk_no', 'p_ndjson']],
+        ['get_employee_import_archives_plan', ['p_admin_session_token', 'p_job_token']],
+        ['employee_import_archives_begin', ['p_admin_session_token', 'p_job_token', 'p_plan_hash']],
+        ['employee_import_archives_chunk', ['p_admin_session_token', 'p_job_token', 'p_table_key', 'p_chunk_no']],
+        ['employee_import_archives_verify', ['p_admin_session_token', 'p_job_token']], ['get_employee_import_archives_status', ['p_admin_session_token', 'p_job_token']],
+        [await archiveReadName(), ['p_admin_session_token', 'p_source_site_id', 'p_package_id', 'p_table_key', 'p_source_id']],
+      ]) {
+        const found = await rows(db, `SELECT oid,proargnames,prosecdef,proconfig,provolatile,
+          EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS everyone
+          FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=$1`, [name]); assert.equal(found.length, 1); const fn = found[0];
+        assert.deepEqual(fn.proargnames, args); assert.equal(fn.prosecdef, true); assert.equal(fn.everyone, false);
+        assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+        if (name === 'get_employee_import_archives_plan' || name === 'get_employee_import_archives_status' || name === await archiveReadName()) assert.equal(fn.provolatile, 's');
+        for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2::oid,'EXECUTE')", [role, fn.oid]), role !== 'service_role');
+      }
+      assert.equal(await scalar(db, `SELECT relrowsecurity FROM pg_class WHERE oid='${ARCHIVE_RELATION}'::regclass`), true);
+      for (const role of ['anon', 'authenticated', 'service_role']) for (const operation of ['SELECT', 'INSERT', 'UPDATE', 'DELETE'])
+        assert.equal(await scalar(db, 'SELECT has_table_privilege($1,$2,$3)', [role, ARCHIVE_RELATION, operation]), false);
+      const actions = extra => [() => abind(archives, extra), () => astageChunk('content_audit_events', 0, chunks(archives.texts.content_audit_events)[0], extra),
+        () => aplan(extra), () => abegin(p, extra), () => achunk('content_audit_events', 0, extra), () => averify(extra), () => astatus(extra)];
+      assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.employee_financial_sessions WHERE user_id=$1 AND token_hash=private.hash_financial_token($2) AND expires_at>now()', [A.employee, A.employeeToken]), 1);
+      await archiveReject(actions({ p_admin_session_token: other }), /Super administrator|invalid or expired|not authorized/i);
+      for (const token of [branch, emergency, A.employeeToken, randomUUID()]) {
+        await archiveReject(actions({ p_admin_session_token: token }), /Super administrator|invalid or expired|not authorized/i);
+        await archiveReject([() => aread('deleted_employee_accounts', A.account, { p_admin_session_token: token })], /Super administrator|invalid or expired|not authorized/i);
+      }
+      await archiveReject(actions({ p_job_token: randomUUID() }), /invalid or expired/i);
+      for (const [sql, args] of [["UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", [task.job_id]],
+        ["UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1", [task.job_id]],
+        ["UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1", [NEW.root]]]) await chatSavepoint(async () => {
+        await db.query(sql, args); await archiveReject(actions({}), /invalid or expired/i);
+      });
+      await archiveStillClosed();
+    });
+}, { isolated: true }));
+
+test('archives: real COMMIT lost response reopens with a new API session explicit status and verified reads survive cancellation or expiry', { timeout: 590000 }, () => archiveCase(async () => {
+  const originalSession = session, calls = []; let lose = true, reopened;
+  try {
+    let p; await transaction(async () => { p = await astage(); }, db, true);
+    const committedTransport = () => modules.setHarness({ token: session, rpc(name, args) {
+      const query = { abortSignal() { return query; }, then(resolve, reject) {
+        calls.push(name); return transaction(() => on(db, name, args), db, true).then(data => {
+          if (name === 'employee_import_archives_chunk' && lose) { lose = false; throw Error('synthetic loss after actual archives SQL COMMIT'); }
+          return { data, error: null };
+        }).then(resolve, reject);
+      } }; return query;
+    } });
+    committedTransport(); const first = modules.createArchivesRestoreSession(task.job_token, archives.catalog); await first.begin(p.plan_hash);
+    await assert.rejects(first.chunk('content_audit_events', 0), /unknown or unconfirmed/); const sent = calls.length;
+    await assert.rejects(first.chunk('content_audit_events', 0), /unknown or unconfirmed/); assert.equal(calls.length, sent, 'no automatic write retry after lost COMMIT response');
+    const dump = await db.dumpDataDir('none'); reopened = new PGlite({ loadDataDir: dump, extensions: { pgcrypto, pg_trgm, uuid_ossp } }); await reopened.waitReady; db = reopened;
+    session = await adminLogin(db, 'root', PASSWORDS.root); assert.notEqual(session, originalSession); committedTransport();
+    const resume = modules.createArchivesRestoreSession(task.job_token, archives.catalog), saved = await transferSnapshot();
+    const status = archiveStatus(await resume.status()); assert.equal(status.completed_chunks.content_audit_events, 1); assert.deepEqual(await transferSnapshot(), saved);
+    const before = await archiveRecords(); assert.deepEqual(await resume.chunk('content_audit_events', 0), status); assert.deepEqual(await archiveRecords(), before);
+    for (const key of KEYS.archives) for (let no = status.completed_chunks[key]; no < status.chunks[key]; no++) archiveStatus(await resume.chunk(key, no));
+    assert.equal(archiveStatus(await resume.verify()).records_verified, true); await transaction(async () => { await assertArchiveRows(); await archiveStillClosed(); }, db, true);
+    const account = await transaction(() => aread('deleted_employee_accounts', A.account), db, true), records = await archiveRecords();
+    for (const sql of ["UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1",
+      "UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1"]) await transaction(async () => {
+      await db.query(sql, [task.job_id]); await assert.rejects(astatus(), /invalid or expired/i);
+      assert.deepEqual(await aread('deleted_employee_accounts', A.account), account); assert.deepEqual(await archiveRecords(), records); await archiveStillClosed();
+    });
+    await transaction(() => rpc('employee_transfer_cancel', auth()), db, true);
+    await assert.rejects(resume.status(), /unknown or unconfirmed/);
+    await transaction(async () => { assert.deepEqual(await aread('deleted_employee_accounts', A.account), account); assert.deepEqual(await archiveRecords(), records); await archiveStillClosed(); }, db, true);
+    assert.equal(calls.filter(name => name === 'employee_import_archives_chunk').length, Object.values(status.chunks).reduce((n, count) => n + count, 0) + 1);
+  } finally { await reopened?.close(); }
+}, { isolated: true }));
