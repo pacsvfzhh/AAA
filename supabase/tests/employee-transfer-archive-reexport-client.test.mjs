@@ -10,8 +10,9 @@ import { build } from 'esbuild';
 
 // Real re-export, archive/media clients, WebCrypto and container authentication.
 // ONLY auth/RPC and the Edge transport are synthetic SQL38-shaped receipts.
-// Independent ciphertext is saved to disk; temporary plaintext is bounded, copied
-// memory, invalidated and zeroed on abort. No import, Storage or native PG claim.
+// Normal ciphertext fixtures are saved to disk; overwrite/loss regressions use
+// bounded memory slots. Temporary plaintext is copied, invalidated and zeroed on
+// abort. No import, Storage or native PG claim.
 mock.method(globalThis, 'fetch', () => assert.fail('All network/production access is forbidden'));
 after(() => { assert.equal(globalThis.fetch.mock.callCount(), 0); mock.restoreAll(); });
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -252,7 +253,8 @@ async function unpack(t, output) {
   return { data, manifest };
 }
 async function savedMatches(t, output, result, n) {
-  assert.equal(output.writes, 1); assert.equal(output.opens, 1); assert.equal(output.eof, 1, 'saved ciphertext was authenticated through EOF');
+  assert.equal(output.writes, 1); assert.equal(output.opens, 2);
+  assert.equal(output.eof, 2, 'saved ciphertext was authenticated through EOF and finally reopened through EOF');
   const encrypted = await readFile(output.path);
   assert.equal(encrypted.subarray(0, 8).toString(), 'EDXSTRM1');
   assert.equal(encrypted.includes(Buffer.from(PRECISE)), false); assert.equal(sha(encrypted), result.cipherSha256);
@@ -274,6 +276,50 @@ async function savedMatches(t, output, result, n) {
   assert.equal(result.rows, n.catalog.tables.reduce((sum, table) => sum + table.rows, 0));
   assert.equal(result.files, n.refs.length);
   return opened;
+}
+
+// Deliberately overwritable encrypted save locations, not cached sources: every
+// fresh wrapper opens the CURRENT bytes at its path. The adapter exposes only
+// write/open, and all retained ciphertext is bounded and zeroed after the test.
+function memoryCipherFiles(t) {
+  const slots = new Map(), outputs = [], events = [];
+  const replace = (path, bytes) => {
+    const copied = bytes === null ? null : Buffer.from(bytes);
+    assert.ok(copied === null || copied.length <= 1048576);
+    slots.get(path)?.fill(0);
+    if (copied === null) slots.delete(path); else slots.set(path, copied);
+    assert.ok([...slots.values()].reduce((n, value) => n + value.length, 0) <= 4 * 1048576);
+  };
+  t.after(() => { for (const bytes of slots.values()) bytes.fill(0); slots.clear(); });
+  const create = path => {
+    const output = { path, writes: 0, opens: 0, eof: 0, saves: [] };
+    output.file = {
+      async write(source, signal) {
+        output.writes++; const chunks = []; let size = 0;
+        try {
+          for await (const chunk of source) {
+            assert.equal(signal.aborted, false); assert.ok(chunk instanceof Uint8Array);
+            size += chunk.length; assert.ok(size <= 1048576); chunks.push(Buffer.from(chunk));
+          }
+          const bytes = Buffer.concat(chunks);
+          try { replace(path, bytes); output.saves.push({ bytes: size, sha256: sha(bytes) }); }
+          finally { bytes.fill(0); }
+          events.push({ kind: 'saved', output });
+        } finally { for (const chunk of chunks) chunk.fill(0); }
+      },
+      open() {
+        output.opens++; events.push({ kind: 'open', output });
+        return { async *[Symbol.asyncIterator]() {
+          const bytes = slots.get(path);
+          if (!bytes) throw Object.assign(new Error('Independent ciphertext is unavailable.'), { code: 'ENOENT' });
+          for (let i = 0; i < bytes.length; i += 113) yield Buffer.from(bytes.subarray(i, i + 113));
+          output.eof++; events.push({ kind: 'eof', output });
+        } };
+      },
+    };
+    outputs.push(output); return output;
+  };
+  return { slots, outputs, events, replace, create };
 }
 
 test('isolation includes actual archive/media/container clients but no Supabase/auth initialization', () => {
@@ -570,13 +616,14 @@ for (const change of ['fingerprint', 'snapshot', 'added namespace', 'removed nam
       if (change === 'catalog') reply.data.namespaces[0].catalog.tables[0].bytes++;
     };
     await assert.rejects(h.export(), sanitized); assert.equal(inventories, 2); assert.equal(h.outputs.length, 2);
-    for (const output of h.outputs) { assert.equal(output.writes, 1); assert.equal(output.eof, 1); assert.ok((await readFile(output.path)).length); await unpack(t, output); }
+    for (const output of h.outputs) { assert.equal(output.writes, 1); assert.equal(output.opens, 2); assert.equal(output.eof, 2); assert.ok((await readFile(output.path)).length); await unpack(t, output); }
     assert.equal(h.namespaceProgress.filter(p => p.completed === 2).length, 1, 'no final success progress after changed inventory');
   });
 test('final inventory RPC failure is not ignored after all saved files were individually verified', async t => {
   const h = harness(t, [namespace(SITE, PACKAGE, { empty: true })]); let count = 0;
   h.rpcEdit = call => { if (call.name === PREFIX + 'inventory' && ++count === 2) throw Error(SECRET); };
-  await assert.rejects(h.export(), sanitized); assert.equal(count, 2); assert.equal(h.outputs[0].eof, 1); await unpack(t, h.outputs[0]);
+  await assert.rejects(h.export(), sanitized); assert.equal(count, 2);
+  assert.equal(h.outputs[0].opens, 2); assert.equal(h.outputs[0].eof, 2); await unpack(t, h.outputs[0]);
 });
 test('failure reading second namespace does not skip it or falsely return first saved volume as full inventory success', async t => {
   const h = harness(t, [namespace(SITE, PACKAGE, { empty: true }), namespace(id(4))]);
@@ -594,6 +641,72 @@ test('two namespaces cannot reuse the same volume UUID', async t => {
   const h = harness(t, [namespace(SITE, PACKAGE, { empty: true }), namespace(id(4), PACKAGE, { empty: true })]);
   h.prepareEdit = prepared => { prepared.info.volumeId = id(50000); };
   await assert.rejects(h.export(), sanitized); assert.equal(h.outputs[0].eof, 1); assert.equal(h.outputs[1].writes, 0);
+});
+test('different source sites with the same package cannot reuse one file object: reject before the second write', async t => {
+  const h = harness(t, [namespace(SITE, PACKAGE, { empty: true }), namespace(id(4), PACKAGE, { empty: true })]);
+  const returned = [];
+  h.prepareEdit = (prepared, _output, index) => {
+    if (index === 1) prepared.file = h.outputs[0].file;
+    returned.push(prepared.file);
+  };
+  await assert.rejects(h.export(), sanitized);
+  assert.equal(h.prepareCalls.length, 2); assert.equal(returned[0], returned[1]);
+  assert.deepEqual(h.prepareCalls.map(call => [call.snapshot.catalog.site_id, call.snapshot.catalog.package_id]), [[SITE, PACKAGE], [id(4), PACKAGE]]);
+  assert.equal(h.outputs[0].writes, 1); assert.equal(h.outputs[1].writes, 0);
+  assert.equal(h.outputs[0].opens, 1); assert.equal(h.outputs[0].eof, 1);
+  assert.equal(h.spaces.length, 2, 'second namespace must not start even its plaintext workspace');
+  assert.equal(h.calls.some(call => call.args.p_source_site_id === id(4)), false);
+  assert.equal(h.calls.filter(call => call.name === PREFIX + 'inventory').length, 1);
+  assert.deepEqual(h.namespaceProgress.map(progress => progress.completed), [0, 1]);
+  await unpack(t, h.outputs[0]); // The first independent saved ciphertext remains authentic.
+});
+test('fresh file wrappers sharing one overwritable save path are rejected by final ciphertext reread, not reported as two saved volumes', async t => {
+  const h = harness(t, [namespace(SITE, PACKAGE, { empty: true }), namespace(id(4), PACKAGE, { empty: true })]);
+  const memory = memoryCipherFiles(t);
+  h.prepareEdit = prepared => { prepared.file = memory.create('shared.edx').file; };
+  await assert.rejects(h.export(), sanitized);
+  const [first, second] = memory.outputs;
+  assert.notEqual(first.file, second.file); assert.equal(first.path, second.path);
+  assert.equal(first.writes, 1); assert.equal(second.writes, 1);
+  assert.equal(first.saves[0].bytes, second.saves[0].bytes, 'equal lengths isolate actual hash mismatch rather than size rejection');
+  assert.notEqual(first.saves[0].sha256, second.saves[0].sha256);
+  assert.equal(sha(memory.slots.get(first.path)), second.saves[0].sha256, 'second write actually replaced current saved bytes');
+  assert.deepEqual([first.opens, first.eof, second.opens, second.eof], [2, 2, 1, 1]);
+  assert.deepEqual(memory.events.map(event => `${event.kind}:${memory.outputs.indexOf(event.output)}`),
+    ['saved:0', 'open:0', 'eof:0', 'saved:1', 'open:1', 'eof:1', 'open:0', 'eof:0']);
+  assert.equal(h.calls.filter(call => call.name === PREFIX + 'inventory').length, 1, 'final inventory follows, never precedes, all final file rereads');
+  assert.deepEqual(h.namespaceProgress.map(progress => progress.completed), [0, 1, 2], 'no final success callback after aliasing failure');
+  assert.ok(h.namespaceProgress.every(progress => progress.fullSiteComplete === false));
+});
+test('independent first volume tampered with or lost after both volumes finish must fail final reread before inventory success', async t => {
+  for (const mode of ['tampered', 'missing']) {
+    const h = harness(t, [namespace(SITE, PACKAGE, { empty: true }), namespace(id(4), PACKAGE, { empty: true })]);
+    const memory = memoryCipherFiles(t); let changes = 0;
+    h.prepareEdit = (prepared, _output, index) => { prepared.file = memory.create(`independent-${index}.edx`).file; };
+    await assert.rejects(h.export({ onNamespace(progress) {
+      h.namespaceProgress.push(progress);
+      if (progress.completed !== 2) return;
+      changes++;
+      assert.ok(memory.outputs.every(output => output.writes === 1 && output.opens === 1 && output.eof === 1), 'both saved files already authenticated');
+      const first = memory.outputs[0], bytes = Buffer.from(memory.slots.get(first.path));
+      try {
+        if (mode === 'tampered') { bytes[bytes.length - 20] ^= 1; memory.replace(first.path, bytes); }
+        else memory.replace(first.path, null); // Only remove a test memory slot, never a disk file.
+      } finally { bytes.fill(0); }
+    } }), sanitized);
+    const [first, second] = memory.outputs;
+    assert.equal(changes, 1); assert.notEqual(first.path, second.path); assert.notEqual(first.file, second.file);
+    assert.deepEqual([first.writes, second.writes], [1, 1]);
+    assert.deepEqual([first.opens, first.eof, second.opens, second.eof], [2, mode === 'tampered' ? 2 : 1, 1, 1]);
+    if (mode === 'tampered') {
+      assert.equal(memory.slots.get(first.path).length, first.saves[0].bytes);
+      assert.notEqual(sha(memory.slots.get(first.path)), first.saves[0].sha256);
+    } else assert.equal(memory.slots.has(first.path), false);
+    assert.equal(sha(memory.slots.get(second.path)), second.saves[0].sha256, 'unaffected independent ciphertext retained');
+    assert.equal(h.calls.filter(call => call.name === PREFIX + 'inventory').length, 1);
+    assert.deepEqual(h.namespaceProgress.map(progress => progress.completed), [0, 1, 2], `${mode}: no final successful all-source callback`);
+    assert.ok(h.namespaceProgress.every(progress => progress.fullSiteComplete === false));
+  }
 });
 for (const mode of ['saved write response lost', 'writer does not consume EOF', 'saved readback corrupted'])
   test(`${mode}: refuse success, no retry/delete/write RPC and keep independent disk output`, async t => {
