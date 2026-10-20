@@ -108,6 +108,26 @@ async function cloneJob(fixture, job, started) {
   await sealFixture(job, fixture.catalog);
   await bindSyntheticSidecar(job);
 }
+async function seedEmptyInventoryNamespaces(count, start = 2000, versionScale = 0) {
+  // Local persisted fixtures only, no verifier stubs. A high-scale numeric 1 is
+  // equal to catalog version 1 in SQL33, but expands real JSONB response bytes.
+  await db.query(`WITH generated AS (
+      SELECT ('38abcdef-0000-4000-8000-'||lpad(($2::integer+n)::text,12,'0'))::uuid AS new_id
+      FROM generate_series(1,$1::integer) n
+    ), catalogs AS (
+      SELECT g.new_id,t.*,jsonb_set(jsonb_set(t.summary->'archives_catalog','{site_id}',to_jsonb(g.new_id::text)),
+        '{version}',CASE WHEN $4::integer=0 THEN '1'::jsonb ELSE ('1.'||repeat('0',$4::integer))::jsonb END) AS catalog
+      FROM generated g CROSS JOIN private.employee_transfer_jobs t WHERE t.id=$3
+    )
+    INSERT INTO private.employee_transfer_jobs(id,kind,admin_id,admin_username,token_hash,status,options,summary,started_at,last_activity_at)
+    SELECT c.new_id,'import',c.admin_id,c.admin_username,'synthetic-inventory','cancelled',
+      jsonb_set(c.options,'{catalog,site_id}',to_jsonb(c.new_id::text)),
+      jsonb_build_object('archives_catalog',c.catalog,'archives_media',c.summary->'archives_media',
+        'archives_restore',(c.summary->'archives_restore')||jsonb_build_object('catalog',c.catalog,
+          'plan_hash',encode(extensions.digest(convert_to(jsonb_build_object('job_id',c.new_id,'catalog',c.catalog,
+            'namespace_hash',c.summary#>>'{archives_restore,initial_namespace_hash}','plan',c.summary#>'{archives_restore,plan}')::text,'UTF8'),'sha256'),'hex'))),
+      '2024-01-01','2024-01-01' FROM catalogs c`, [count, start, fixtures.c.job, versionScale]);
+}
 async function readRpc(name, args, role = 'anon') {
   const owned = !inside;
   if (owned) await db.exec('BEGIN');
@@ -132,6 +152,7 @@ const page = (hash, key = TABLES[0], fixture = fixtures.a, args = {}, role) => r
   { ...argsFor(fixture), p_snapshot_hash: hash, p_table_key: key, ...args }, role);
 const verify = (hash, fixture = fixtures.a, args = {}, role) => readRpc(`${PREFIX}verify`, { ...argsFor(fixture), p_snapshot_hash: hash, ...args }, role);
 const media = (hash, fixture = fixtures.a, args = {}, role) => readRpc(`${PREFIX}media`, { ...argsFor(fixture), p_snapshot_hash: hash, ...args }, role);
+const inventory = (args = {}, role) => readRpc(`${PREFIX}inventory`, { p_admin_session_token: session, ...args }, role);
 async function isolated(fn) {
   await db.exec('BEGIN'); inside = true;
   try { await fn(); } finally { inside = false; await db.exec('ROLLBACK'); }
@@ -161,7 +182,7 @@ before(async () => {
   fixtures = { a: await seedNamespace(),
     b: await seedNamespace({ site: id(21), job: id(41), label: '来源乙', refs: { 'https://old.invalid/original.png': 'synthetic/private-evidence.png' } }),
     c: await seedNamespace({ pkg: id(31), job: id(42), empty: true }),
-    unverified: await seedNamespace({ site: id(22), job: id(43), verified: false }) };
+    unverified: await seedNamespace({ site: id(22), job: id(43), verified: false, empty: true }) };
 }, { timeout: 120000 });
 after(async () => { await db?.close(); mock.restoreAll(); });
 
@@ -171,7 +192,7 @@ test('SQL38 installs after strict SQL37 replay, with exactly the 12 known histor
 });
 for (const [name, types, defaults] of [
   ['catalog', 'uuid,uuid,uuid', 0], ['page', 'uuid,uuid,uuid,text,text,text,integer', 2], ['verify', 'uuid,uuid,uuid,text', 0],
-  ['media', 'uuid,uuid,uuid,text', 0],
+  ['media', 'uuid,uuid,uuid,text', 0], ['inventory', 'uuid', 0],
 ]) test(`${name} is STABLE SECURITY DEFINER, fixed search_path, anon/authenticated only`, async () => {
   const signature = `public.${PREFIX}${name}(${types})`;
   const p = (await db.query(`SELECT provolatile,prosecdef,proconfig,proacl::text,pronargdefaults,pg_get_expr(proargdefaults,0) AS defaults FROM pg_proc WHERE oid=$1::regprocedure`, [signature])).rows[0];
@@ -196,7 +217,7 @@ test('private snapshot helper and persisted tables cannot be called or read by b
   }
 });
 for (const name of ['missing', 'random', 'secondary', 'emergency', 'revoked', 'expired', 'inactive', 'demoted'])
-  test(`all four RPCs reject ${name} administrator session`, async () => isolated(async () => {
+  test(`all five RPCs reject ${name} administrator session`, async () => isolated(async () => {
     const token = ({ missing: null, random: id(999), secondary: branch, emergency })[name];
     if (name === 'revoked') await db.query('UPDATE public.admin_financial_sessions SET revoked_at=now() WHERE admin_id=$1', [id(1)]);
     if (name === 'expired') await db.query(`UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 day' WHERE admin_id=$1`, [id(1)]);
@@ -204,13 +225,15 @@ for (const name of ['missing', 'random', 'secondary', 'emergency', 'revoked', 'e
     if (name === 'demoted') await db.query(`UPDATE public.admins SET role='secondary_admin' WHERE id=$1`, [id(1)]);
     await rejectsAll(fixtures.a, 'a'.repeat(64), /session|permission|administrator/i,
       { p_admin_session_token: token === undefined ? session : token });
+    await assert.rejects(inventory({ p_admin_session_token: token === undefined ? session : token }), /session|permission|administrator/i);
   }));
-test('service_role cannot call any of the four public RPCs even with a valid super-admin token', async () => {
+test('service_role cannot call any of the five public RPCs even with a valid super-admin token', async () => {
   const hash = (await catalog()).snapshot_hash;
   await assert.rejects(catalog(fixtures.a, {}, 'service_role'), /permission denied/);
   await assert.rejects(page(hash, TABLES[0], fixtures.a, {}, 'service_role'), /permission denied/);
   await assert.rejects(verify(hash, fixtures.a, {}, 'service_role'), /permission denied/);
   await assert.rejects(media(hash, fixtures.a, {}, 'service_role'), /permission denied/);
+  await assert.rejects(inventory({}, 'service_role'), /permission denied/);
 });
 test('catalog strictly returns the original SQL34 catalog and complete SHA256 snapshot binding', async () => {
   const result = await catalog(); assert.deepEqual(Object.keys(result).sort(), ['catalog', 'snapshot_hash']);
@@ -479,6 +502,103 @@ for (const [name, mutate] of [
   await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(jsonb_set(summary,'{archives_catalog}',$2::jsonb),'{archives_restore,catalog}',$2::jsonb) WHERE id=$1`, [fixtures.a.job, JSON.stringify(c)]);
   await rejectsAll(fixtures.a, hash, /catalog/);
 }));
+test('inventory contains every verified source/package once, including empty namespaces, in C order with exact JSONB fingerprint', async () => {
+  const expected = [];
+  for (const fixture of [fixtures.a, fixtures.c, fixtures.b]) expected.push(await catalog(fixture));
+  const result = await inventory();
+  const namespacesText = await scalar(db, 'SELECT $1::jsonb::text', [JSON.stringify(expected)]);
+  assert.deepEqual(result, { scope: 'transferred-archives', namespaces: expected, fingerprint: sha(namespacesText), full_site_complete: false });
+  assert.equal(result.namespaces.length, 3); assert.deepEqual(result.namespaces[1].catalog, fixtures.c.catalog);
+  assert.deepEqual(await inventory(), result); assert.deepEqual(await inventory({}, 'authenticated'), result);
+  assert.equal(await scalar(db, 'SELECT count(*)::integer FROM private.employee_transfer_archive_records WHERE source_site_id=$1 AND package_id=$2', [fixtures.c.site, fixtures.c.pkg]), 0);
+});
+for (const name of ['no matching verified job', 'only an unverified job'])
+  test(`inventory rejects physical archive records with ${name}, rather than returning a partial verified-only list`, async () => isolated(async () => {
+    if (name === 'only an unverified job') await seedNamespace({ site: id(23), job: id(60), verified: false });
+    else await db.query(`INSERT INTO private.employee_transfer_archive_records
+      SELECT $1,$2,table_key,source_id,body,source_line,job_id,imported_at FROM private.employee_transfer_archive_records
+      WHERE source_site_id=$3 AND package_id=$4 AND table_key=$5 LIMIT 1`, [id(23), id(32), fixtures.a.site, fixtures.a.pkg, TABLES[0]]);
+    assert.equal((await readRpc('get_employee_transferred_archive_namespaces', { p_admin_session_token: session })).items.length, 3,
+      'SQL36 reader still omits pending records, but the complete re-export inventory must not');
+    await assert.rejects(inventory(), /Verified archive namespace is required/);
+  }));
+for (const name of ['nonempty records', 'all-empty catalog'])
+  test(`inventory rejects the entire response for pending media in ${name}`, async () => isolated(async () => {
+    const fixture = name === 'all-empty catalog' ? fixtures.c : fixtures.b;
+    const state = await sidecarFor(fixture.job); state.verified = false; await setSidecar(fixture.job, state);
+    await assert.rejects(inventory(), /Verified archive media sidecar is required/);
+  }));
+test('inventory rejects a missing empty sidecar, not just missing attachments on nonempty records', async () => isolated(async () => {
+  await db.query(`UPDATE private.employee_transfer_jobs SET summary=summary-'archives_media' WHERE id=$1`, [fixtures.c.job]);
+  await assert.rejects(inventory(), /Verified archive media sidecar is required/);
+}));
+test('inventory returns an authenticated empty imported-only list and never claims native tables are included', async () => isolated(async () => {
+  await db.query('DELETE FROM private.employee_transfer_archive_records');
+  await db.query(`UPDATE private.employee_transfer_jobs SET summary=summary-'archives_restore' WHERE summary ? 'archives_restore'`);
+  // Real local native audit fixture must NOT create an imported namespace.
+  await db.query(`INSERT INTO private.content_audit_events(id,operation_id,entity_type,entity_id,action,owner_admin_id,
+    actor_admin_id,actor_username,actor_role,media_refs) VALUES($1,$2,'notification',$3,'edit',$4,$4,'archive-reexport-root','super_admin','{}')`,
+  [id(900), id(901), id(902), id(1)]);
+  const expected = { scope: 'transferred-archives', namespaces: [], fingerprint: sha('[]'), full_site_complete: false };
+  assert.deepEqual(await inventory(), expected); assert.deepEqual(await inventory({}, 'authenticated'), expected);
+  await assert.rejects(inventory({ p_admin_session_token: null }), /session|permission|administrator/i);
+}));
+test('inventory fails closed on a verified empty job with an incomplete catalog instead of skipping it', async () => isolated(async () => {
+  await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_restore,catalog,site_id}','null') WHERE id=$1`, [fixtures.c.job]);
+  await assert.rejects(inventory(), /namespace/);
+}));
+test('inventory revalidates record drift in every source, not only the first returned namespace', async () => isolated(async () => {
+  await db.query(`UPDATE private.employee_transfer_archive_records SET source_line=replace(source_line,'来源乙','漂移乙')
+    WHERE source_site_id=$1 AND package_id=$2 AND table_key=$3`, [fixtures.b.site, fixtures.b.pkg, TABLES[0]]);
+  await assert.rejects(inventory(), /namespace changed|records differ|raw lines differ/);
+}));
+test('inventory fingerprint changes on reverified raw/catalog drift without changing the namespace set', async () => isolated(async () => {
+  const before = await inventory();
+  await db.query(`UPDATE private.employee_transfer_archive_records SET source_line=replace(source_line,'"id" : ','"id"  : ')
+    WHERE source_site_id=$1 AND package_id=$2 AND table_key=$3`, [fixtures.a.site, fixtures.a.pkg, TABLES[0]]);
+  await refreshFixture(fixtures.a);
+  const changed = await inventory(); assert.equal(changed.namespaces.length, before.namespaces.length);
+  assert.notEqual(changed.fingerprint, before.fingerprint); assert.notEqual(changed.namespaces[0].snapshot_hash, before.namespaces[0].snapshot_hash);
+  assert.deepEqual(changed.namespaces.slice(1), before.namespaces.slice(1));
+}));
+test('inventory fingerprint binds complete sidecar drift even when all catalogs and counts are unchanged', async () => isolated(async () => {
+  const before = await inventory(); const state = await sidecarFor(fixtures.b.job);
+  for (const receipt of Object.values(state.receipts)) receipt.storage_origin = 'https://other-fixture.supabase.co';
+  await setSidecar(fixtures.b.job, state);
+  const changed = await inventory(); assert.notEqual(changed.fingerprint, before.fingerprint);
+  assert.deepEqual(changed.namespaces.map(n => n.catalog), before.namespaces.map(n => n.catalog));
+  state.receipts[state.refs[0].key].checked = false; await setSidecar(fixtures.b.job, state);
+  await assert.rejects(inventory(), /Verified archive media is incomplete/);
+}));
+test('inventory deduplicates physical/job namespaces and binds latest-job changes in its whole-list fingerprint', async () => isolated(async () => {
+  const before = await inventory(); await cloneJob(fixtures.a, id(50), '2024-01-03');
+  const changed = await inventory(); assert.equal(changed.namespaces.length, 3); assert.notEqual(changed.fingerprint, before.fingerprint);
+  assert.deepEqual(changed.namespaces[0], await catalog());
+  await cloneJob(fixtures.a, id(51), '2024-01-03'); assert.deepEqual(await inventory(), changed);
+}));
+test('inventory fingerprint detects addition and removal of an all-empty namespace between export passes', async () => isolated(async () => {
+  const before = await inventory();
+  const added = await seedNamespace({ site: id(19), pkg: id(32), job: id(60), empty: true });
+  const changed = await inventory(); assert.equal(changed.namespaces.length, 4); assert.notEqual(changed.fingerprint, before.fingerprint);
+  assert.deepEqual(changed.namespaces[0], await catalog(added));
+  await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_restore,records_verified}','false') WHERE id=$1`, [added.job]);
+  assert.deepEqual(await inventory(), before);
+}));
+test('inventory accepts exactly 1000 distinct namespaces but explicitly rejects 1001 instead of truncating', async () => isolated(async () => {
+  await seedEmptyInventoryNamespaces(997);
+  const result = await inventory(); assert.equal(result.namespaces.length, 1000);
+  assert.deepEqual(result.namespaces[0], await catalog());
+  await seedEmptyInventoryNamespaces(1, 4000);
+  await assert.rejects(inventory(), /inventory exceeds 1000 namespaces; no namespace was omitted/);
+}));
+test('inventory enforces the full 2MiB JSONB response bound without bypassing real SQL33/34/35 validators', async () => isolated(async () => {
+  await seedEmptyInventoryNamespaces(200, 2000, 6000);
+  const wireText = await scalar(db, 'SELECT public.get_employee_archive_reexport_inventory($1)::text', [session]);
+  assert.ok(Buffer.byteLength(wireText) > 1048576); assert.ok(Buffer.byteLength(wireText) <= 2097152);
+  assert.equal(JSON.parse(wireText).namespaces.length, 203);
+  await seedEmptyInventoryNamespaces(150, 3000, 6000);
+  await assert.rejects(inventory(), /inventory exceeds 2 MiB; no namespace was omitted/);
+}));
 test('SQL33 native-export migration body and previously-transferred-record blocker remain unchanged', async () => {
   await assert.rejects(db.query('SELECT private.employee_transfer_archives_catalog($1)', [id(999)]), /Previously transferred archive snapshots require a namespace-preserving re-export protocol/);
   const sql38 = await readFile(new URL(`../migrations/${MIGRATION}`, import.meta.url), 'utf8');
@@ -503,10 +623,12 @@ test('expired/cancelled/abandoned historical jobs read in READ ONLY, no staging/
   const hash = (await catalog()).snapshot_hash;
   // Successful default calls commit, so a before/after comparison can see effects.
   await page(hash); await verify(hash); await media(hash);
+  const wholeInventory = await inventory();
   const nonemptyHash = (await catalog(fixtures.b)).snapshot_hash;
   await media(nonemptyHash, fixtures.b);
   await db.exec('BEGIN READ ONLY'); inside = true;
   try {
+    assert.deepEqual(await inventory(), wholeInventory);
     for (const fixture of [fixtures.a, fixtures.b, fixtures.c]) {
       const result = await catalog(fixture);
       for (const key of TABLES) assert.equal((await page(result.snapshot_hash, key, fixture)).ndjson, fixture.texts[key]);
@@ -519,10 +641,12 @@ test('expired/cancelled/abandoned historical jobs read in READ ONLY, no staging/
 });
 test('historical job lifecycle/owner metadata changes do not expire or mutate a stable archive snapshot', async () => isolated(async () => {
   const before = await catalog(fixtures.b);
-  const inventory = await media(before.snapshot_hash, fixtures.b);
+  const mediaInventory = await media(before.snapshot_hash, fixtures.b);
+  const wholeInventory = await inventory();
   for (const status of ['abandoned', 'cancelled', 'finished']) {
     await db.query(`UPDATE private.employee_transfer_jobs SET status=$2,admin_id=$3,last_activity_at='2020-01-01',finished_at='2020-01-02' WHERE id=$1`, [fixtures.b.job, status, id(2)]);
     assert.deepEqual(await catalog(fixtures.b), before); assert.deepEqual(await verify(before.snapshot_hash, fixtures.b), RECEIPT);
-    assert.deepEqual(await media(before.snapshot_hash, fixtures.b), inventory);
+    assert.deepEqual(await media(before.snapshot_hash, fixtures.b), mediaInventory);
+    assert.deepEqual(await inventory(), wholeInventory);
   }
 }));

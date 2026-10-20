@@ -2,8 +2,8 @@ BEGIN;
 SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
 -- Permanent SQL34 records, not an active import/export job or staging snapshot.
--- Keep SQL33's native-export blocker unchanged: this protocol reads ONE explicit
--- source namespace and never silently substitutes native or other imported data.
+-- Keep SQL33's native-export blocker unchanged: individual readers bind an explicit
+-- source namespace, while inventory checks every imported namespace, never native data.
 CREATE FUNCTION private.employee_transfer_archive_reexport_snapshot(
   p_admin_session_token uuid, p_source_site_id uuid, p_package_id uuid
 ) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
@@ -159,17 +159,67 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION public.get_employee_archive_reexport_inventory(p_admin_session_token uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE
+  v_namespace record;
+  v_namespaces jsonb := '[]';
+  v_result jsonb;
+BEGIN
+  -- Authenticate even an empty inventory. This is ONLY imported archive history;
+  -- it neither includes this site's native six tables nor relaxes SQL33's blocker.
+  PERFORM private.employee_transfer_admin(p_admin_session_token);
+  FOR v_namespace IN
+    SELECT n.source_site_id, n.package_id, count(*) OVER () AS total
+    FROM (
+      SELECT r.source_site_id, r.package_id FROM private.employee_transfer_archive_records r
+      UNION
+      SELECT (j.summary#>>'{archives_restore,catalog,site_id}')::uuid,
+        (j.summary#>>'{archives_restore,catalog,package_id}')::uuid
+      FROM private.employee_transfer_jobs j
+      WHERE j.kind = 'import' AND j.options->>'import_protocol' = 'dispatch-submission-v1'
+        AND j.summary#>'{archives_restore,records_verified}' = 'true'::jsonb
+    ) n
+    ORDER BY (n.source_site_id::text || ':' || n.package_id::text) COLLATE "C"
+    LIMIT 1001
+  LOOP
+    -- The count is over the complete UNION, never a truncated/verified-only list.
+    IF v_namespace.total > 1000 THEN
+      RAISE EXCEPTION 'Archive re-export inventory exceeds 1000 namespaces; no namespace was omitted.';
+    END IF;
+    -- Every physical namespace must have a fully verified job AND media sidecar.
+    -- Job-only namespaces preserve verified all-empty catalogs. Any failure aborts
+    -- the ENTIRE inventory rather than silently skipping an unfinished import.
+    v_namespaces := v_namespaces || jsonb_build_array(private.employee_transfer_archive_reexport_snapshot(
+      p_admin_session_token, v_namespace.source_site_id, v_namespace.package_id));
+    IF octet_length(v_namespaces::text) > 2097152 THEN
+      RAISE EXCEPTION 'Archive re-export inventory exceeds 2 MiB; no namespace was omitted.';
+    END IF;
+  END LOOP;
+  v_result := jsonb_build_object('scope', 'transferred-archives', 'namespaces', v_namespaces,
+    'fingerprint', encode(extensions.digest(convert_to(v_namespaces::text, 'UTF8'), 'sha256'), 'hex'),
+    'full_site_complete', false);
+  IF octet_length(v_result::text) > 2097152 THEN
+    RAISE EXCEPTION 'Archive re-export inventory exceeds 2 MiB; no namespace was omitted.';
+  END IF;
+  RETURN v_result;
+END;
+$$;
+
 REVOKE ALL ON FUNCTION private.employee_transfer_archive_reexport_snapshot(uuid,uuid,uuid)
   FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.get_employee_archive_reexport_catalog(uuid,uuid,uuid),
   public.get_employee_archive_reexport_page(uuid,uuid,uuid,text,text,text,integer),
   public.get_employee_archive_reexport_verify(uuid,uuid,uuid,text),
-  public.get_employee_archive_reexport_media(uuid,uuid,uuid,text)
+  public.get_employee_archive_reexport_media(uuid,uuid,uuid,text),
+  public.get_employee_archive_reexport_inventory(uuid)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_employee_archive_reexport_catalog(uuid,uuid,uuid),
   public.get_employee_archive_reexport_page(uuid,uuid,uuid,text,text,text,integer),
   public.get_employee_archive_reexport_verify(uuid,uuid,uuid,text),
-  public.get_employee_archive_reexport_media(uuid,uuid,uuid,text)
+  public.get_employee_archive_reexport_media(uuid,uuid,uuid,text),
+  public.get_employee_archive_reexport_inventory(uuid)
   TO anon, authenticated;
 
 NOTIFY pgrst, 'reload schema';
