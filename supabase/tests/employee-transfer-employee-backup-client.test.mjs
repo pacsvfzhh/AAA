@@ -6,6 +6,7 @@ import { appendFile, mkdir, open, readFile, rm, writeFile } from 'node:fs/promis
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { inspect } from 'node:util';
 import { build } from 'esbuild';
 import http from 'node:http';
 import https from 'node:https';
@@ -18,7 +19,9 @@ for (const [module, name] of [[globalThis, 'fetch'], [http, 'request'], [https, 
 after(() => { assert.equal(globalThis.fetch.mock.callCount(), 0); mock.restoreAll(); });
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const compiled = await build({ stdin: { contents: `export * from './src/lib/employeeTransfer/employeeBackup.ts';
-  export * from './src/lib/employeeTransfer/container.ts';export {setHarness} from 'employee-backup-test:state';`, resolveDir: root },
+  export * from './src/lib/employeeTransfer/container.ts';
+  export {decryptTransferStream} from './src/lib/employeeTransfer/crypto.ts';
+  export {setHarness} from 'employee-backup-test:state';`, resolveDir: root },
   bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2020', metafile: true,
   plugins: [{ name: 'offline-only', setup(b) {
     b.onResolve({ filter: /^(?:employee-backup-test:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'offline' }));
@@ -166,6 +169,23 @@ function redacted(error) {
   assert.equal('cause' in error, false); assert.match(error.message, /not a complete employee backup/); return true;
 }
 function cleaned(h) { for (const w of h.workspaces) { assert.equal(w.cleaned, true); assert.equal(w.cleanups, 1); } }
+function deviceInfo(h, raw) {
+  const original = `"device_info":{"precise":${PRECISE},"tiny":${TINY},"null":null}`;
+  const all = lines(h.text.employee_login_history);
+  assert.equal(all[2].split(original).length, 2);
+  all[2] = all[2].replace(original, `"device_info":${raw}`);
+  h.text.employee_login_history = all.join(''); h.catalog = catalog(h.text);
+}
+function devicePageValidation(h) {
+  const key = 'employee_login_history', previous = JSON.parse(lines(h.text[key])[1]).id;
+  const page = h.reply(PAGE, { p_table_key: key, p_after: previous, p_catalog_fingerprint: h.catalog.fingerprint, p_limit: 200 });
+  const checkedCatalog = api.validateEmployeeBackupCatalog(h.catalog);
+  return () => api.validateEmployeeBackupPage(page, checkedCatalog, key, previous);
+}
+async function collect(source) {
+  const chunks = []; for await (const chunk of source) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
 async function unpack(h, passphrase = PASS) {
   const files = new Map();
   const manifest = await api.verifyEncryptedVolume(h.file.open(), passphrase, {
@@ -211,6 +231,117 @@ test('empty optional domains stay zero-byte entries rather than fabricated recor
   for (const key of TABLES.filter(key => key !== 'accounts')) h.text[key] = '';
   h.catalog = catalog(h.text); const result = await h.export(), restored = await unpack(h);
   assert.equal(result.rows, 1); assert.equal(restored.files.get(api.employeeBackupEntryPath('wallets')).length, 0); cleaned(h);
+});
+
+const DEVICE_SECRET_KEYS = ['currentSessionToken', 'currentTabId', 'sessionId', 'sessionToken', 'tokenHash',
+  'accessToken', 'refreshToken', 'serviceRoleKey', 'anonKey', 'password', 'passwordHash', 'token'];
+const normalizeDeviceKey = key => key.toLowerCase().replaceAll('_', '').replaceAll('-', '');
+const deviceNesting = [
+  pair => `{"hardware":{"details":{"security":{${pair}}}}}`,
+  pair => `[{"ordinary":true},[null,{"details":{${pair}}}]]`,
+  pair => `{"nested":[[[],{"payload":[{${pair}}]}]]}`,
+];
+for (const [index, key] of DEVICE_SECRET_KEYS.entries()) {
+  const snake = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+  const variants = [
+    ['camelCase', JSON.stringify(key)],
+    ['uppercase', JSON.stringify(key.toUpperCase())],
+    ['snake_case', JSON.stringify(snake)],
+    ['mixed-case hyphenated', JSON.stringify(snake.replaceAll('_', '-').split('').map((letter, i) => i % 2 ? letter.toUpperCase() : letter.toLowerCase()).join(''))],
+    ['interleaved separators', JSON.stringify([...key].join('_-'))],
+    ['Unicode-escaped', `"${[...snake].map(letter => `\\u${letter.charCodeAt(0).toString(16).padStart(4, '0')}`).join('')}"`],
+  ];
+  for (const [variantIndex, [variant, rawKey]] of variants.entries()) test(`device_info rejects deep ${key} ${variant} before persisting or disclosing content`, async t => {
+    assert.equal(normalizeDeviceKey(JSON.parse(rawKey)), normalizeDeviceKey(key));
+    const h = fixture(t), payload = deviceNesting[(index + variantIndex) % deviceNesting.length](`${rawKey}:${JSON.stringify(SECRET)}`);
+    deviceInfo(h, payload);
+    assert.throws(devicePageValidation(h));
+    let appended = 0, leakedToWorkspace = false;
+    h.workspaceHook = (_w, _path, raw) => {
+      appended++; leakedToWorkspace ||= Buffer.from(raw).includes(Buffer.from(SECRET));
+    };
+    await rejected(h, {}, error => {
+      const visible = [String(error), JSON.stringify(error), inspect(error)].join('\n');
+      for (const privateText of [SECRET, payload, PASS, SESSION, '$2a$hashed-account', '$2a$hashed-financial-password']) {
+        assert.equal(visible.includes(privateText), false, 'Failure details must not expose source contents');
+      }
+      assert.equal(error.phase, 'records-export'); assert.equal(error.encryptedFileState, 'not-written');
+      assert.equal(error.outcomeUnknown, false);
+    });
+    assert.ok(appended > 0); assert.equal(leakedToWorkspace, false);
+    assert.equal(h.writes, 0); assert.equal(h.opens, 0); assert.equal(h.verifyCount, 0);
+    await assert.rejects(readFile(h.filePath), { code: 'ENOENT' });
+  });
+}
+for (const value of ['null', 'false', '0', '[]', '{}']) test(`device_info rejects nested current_session_token even with ${value} value`, async t => {
+  const h = fixture(t); deviceInfo(h, `{"history":[{"current_session_token":${value}}]}`);
+  assert.throws(devicePageValidation(h));
+  await rejected(h); assert.equal(h.writes, 0); assert.equal(h.verifyCount, 0);
+  await assert.rejects(readFile(h.filePath), { code: 'ENOENT' });
+});
+const historicalDevice = `{
+  "session_created_at": ${JSON.stringify(TIME)},
+  "sessionCreatedAt": ${JSON.stringify(TIME)},
+  "SeSsIoN-CrEaTeD-At": ${JSON.stringify(TIME)},
+  "history": [null, {"\\u0073ession_created_at": ${JSON.stringify(TIME)}, "session_updated_at": null,
+    "precision": ${PRECISE}, "tiny": ${TINY}, "nullable": null}],
+  "description": ${JSON.stringify('current_session_token, password and tokenHash are historical labels; {"refreshToken":"text, not a structured key"}')}
+}`.replaceAll('\n', '');
+for (const [shape, raw] of [['object', historicalDevice], ['array', `[null,[${historicalDevice}],{"created_at":${JSON.stringify(TIME)},"value":null}]`]]) {
+  test(`device_info historical ${shape} preserves allowed session_created_at, raw precision, escapes and both null markers`, async t => {
+    const h = fixture(t); deviceInfo(h, raw); devicePageValidation(h)();
+    const result = await h.export(), { files } = await unpack(h);
+    const restored = files.get(api.employeeBackupEntryPath('employee_login_history'));
+    assert.deepEqual(restored, Buffer.from(h.text.employee_login_history));
+    assert.ok(restored.includes(Buffer.from(`"device_info":${raw}`)));
+    for (const original of [TIME, PRECISE, TINY, '"\\u0073ession_created_at"', '"session_updated_at": null', '"nullable": null']) {
+      assert.ok(restored.includes(Buffer.from(original)), 'Historical JSON bytes must not be normalized or rounded');
+    }
+    const loginRows = lines(restored.toString()).map(line => JSON.parse(line));
+    assert.deepEqual(loginRows.slice(0, 2).map(row => [row.device_info, row.device_info_is_sql_null]), [[null, true], [null, false]]);
+    assert.equal(result.recordsVerified, true); assert.equal(h.verifyCount, 2); cleaned(h);
+  });
+}
+
+test('employee backup uses separate 1 GiB payload, 1100 MiB ZIP and 1101 MiB ciphertext limits', () => {
+  const limits = api.EMPLOYEE_BACKUP_LIMITS, MiB = 1024 * 1024;
+  assert.equal(limits.maxTotalBytes, 1024 * MiB);
+  assert.equal(limits.maxZipBytes, 1100 * MiB); assert.equal(limits.maxCipherBytes, 1101 * MiB);
+  assert.ok(limits.maxZipBytes > limits.maxTotalBytes); assert.ok(limits.maxCipherBytes > limits.maxTotalBytes);
+  assert.ok(limits.maxCipherBytes > limits.maxZipBytes); assert.equal(Object.isFrozen(limits), true);
+});
+test('real encrypted small volume admits ZIP and cipher overhead beyond an exact payload limit without sharing their budgets', async t => {
+  const h = fixture(t), defaults = { ...api.EMPLOYEE_BACKUP_LIMITS };
+  const payloadBytes = h.catalog.tables.reduce((total, table) => total + table.bytes, 0)
+    + Buffer.byteLength(JSON.stringify(api.validateEmployeeBackupCatalog(h.catalog)) + '\n');
+  const result = await h.export({ limits: { maxTotalBytes: payloadBytes } });
+  const cipher = await readFile(h.filePath);
+  const zip = await collect(api.decryptTransferStream(h.file.open(), PASS, {
+    expectedMetadata: { exportId: h.info.exportId, volumeId: h.info.volumeId },
+  }));
+  assert.equal(cipher.subarray(0, 8).toString(), 'EDXSTRM1');
+  assert.equal(zip.readUInt32LE(0), 0x04034b50); assert.equal(zip.readUInt32LE(zip.length - 22), 0x06054b50);
+  assert.equal(result.bytes, payloadBytes); assert.equal(result.cipherBytes, cipher.length);
+  assert.ok(zip.length > payloadBytes); assert.ok(cipher.length > zip.length);
+  assert.ok(cipher.length < 1024 * 1024, 'This test must use a small real file, never a GiB allocation');
+  const { files, manifest } = await unpack(h);
+  assert.deepEqual(manifest, result.manifest);
+  assert.equal([...files.values()].reduce((total, raw) => total + raw.length, 0), payloadBytes);
+  const makeSink = () => ({ async append() {}, async abort() {} });
+  const source = () => (async function* () { yield cipher; })();
+  const expectedMetadata = { exportId: h.info.exportId, volumeId: h.info.volumeId };
+  assert.deepEqual(await api.verifyEncryptedVolume(source(), PASS, makeSink(), {
+    expectedMetadata, limits: { maxTotalBytes: payloadBytes, maxZipBytes: zip.length },
+  }), result.manifest);
+  await assert.rejects(api.verifyEncryptedVolume(source(), PASS, makeSink(), {
+    expectedMetadata, limits: { maxTotalBytes: payloadBytes - 1, maxZipBytes: zip.length },
+  }));
+  await assert.rejects(api.verifyEncryptedVolume(source(), PASS, makeSink(), {
+    expectedMetadata, limits: { maxTotalBytes: payloadBytes, maxZipBytes: zip.length - 1 },
+  }));
+  const tooSmall = fixture(t);
+  await rejected(tooSmall, { limits: { maxTotalBytes: payloadBytes - 1 } }); assert.equal(tooSmall.writes, 0);
+  assert.deepEqual(api.EMPLOYEE_BACKUP_LIMITS, defaults); assert.equal(h.verifyCount, 2); cleaned(h);
 });
 
 const catalogEdits = [

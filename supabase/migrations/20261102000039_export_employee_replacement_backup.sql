@@ -53,6 +53,37 @@ BEGIN
 END;
 $$;
 
+-- SQL39 only: the older activity export is unchanged. Reject, never strip/rewrite device JSON.
+-- Root depth is 0; every child value adds 1. Only exact normalized keys are denied.
+CREATE FUNCTION private.employee_transfer_replacement_device_check(p_value jsonb,p_depth integer DEFAULT 0)
+RETURNS void LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE v_key text;v_value jsonb;
+BEGIN
+  IF p_depth IS NULL OR p_depth<0 OR p_depth>64 THEN
+    RAISE EXCEPTION 'Replacement backup device information exceeds the reviewed depth.' USING ERRCODE='22023';
+  END IF;
+  CASE jsonb_typeof(p_value)
+    WHEN 'object' THEN
+      FOR v_key,v_value IN SELECT key,value FROM jsonb_each(p_value) LOOP
+        IF translate(lower(v_key COLLATE "C"),'_/-:','')=ANY(ARRAY[
+          'currentsessiontoken','currenttabid','sessionid','sessiontoken','tokenhash',
+          'accesstoken','refreshtoken','servicerolekey','anonkey','password','passwordhash',
+          'token','authorization','apikey','clientsecret','secret'
+        ]) THEN
+          RAISE EXCEPTION 'Replacement backup device information contains a structured secret.' USING ERRCODE='22023';
+        END IF;
+        PERFORM private.employee_transfer_replacement_device_check(v_value,p_depth+1);
+      END LOOP;
+    WHEN 'array' THEN
+      FOR v_value IN SELECT value FROM jsonb_array_elements(p_value) LOOP
+        PERFORM private.employee_transfer_replacement_device_check(v_value,p_depth+1);
+      END LOOP;
+    ELSE NULL;
+  END CASE;
+END;
+$$;
+
 CREATE FUNCTION private.employee_transfer_replacement_backup_catalog(p_job private.employee_transfer_jobs,p_source_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
@@ -77,6 +108,10 @@ BEGIN
   PERFORM private.employee_transfer_finance_schema();
   PERFORM private.employee_transfer_activity_schema();
   PERFORM private.employee_transfer_verification_schema();
+  -- All target login devices, not just a requested page. Foreign employees are outside scope.
+  -- Catalog, every page fingerprint recheck and verify all execute this guard before hashing.
+  PERFORM private.employee_transfer_replacement_device_check(login.device_info)
+    FROM public.employee_login_history AS login WHERE login.user_id=v_target;
   -- SQL37 already checks the identity schema. Review the two additional physical relations;
   -- new columns never get silently exported or silently treated as backed up.
   FOREACH v_key IN ARRAY ARRAY['dispatch_group_members','employee_submit_time_settings'] LOOP
@@ -195,7 +230,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION private.employee_transfer_replacement_backup_keys(),
+REVOKE ALL ON FUNCTION private.employee_transfer_replacement_device_check(jsonb,integer),
+  private.employee_transfer_replacement_backup_keys(),
   private.employee_transfer_replacement_backup_spec(),private.employee_transfer_replacement_backup_query(text),
   private.employee_transfer_replacement_backup_catalog(private.employee_transfer_jobs,uuid),
   private.employee_transfer_replacement_backup_check(jsonb,text) FROM PUBLIC,anon,authenticated,service_role;

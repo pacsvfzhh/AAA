@@ -37,6 +37,12 @@ const PRECISE = '12345678901234567890.12345678901234567890';
 const TINY = '0.00000000000000000001';
 const TIME = '2024-02-29T03:04:05.123456+00:00';
 const SECRET = id(9999);
+const DEVICE_SECRET_KEYS = ['currentsessiontoken', 'currenttabid', 'sessionid', 'sessiontoken', 'tokenhash', 'accesstoken',
+  'refreshtoken', 'servicerolekey', 'anonkey', 'password', 'passwordhash', 'token', 'authorization', 'apikey', 'clientsecret', 'secret'];
+const DEVICE_SECRET_VALUE = 'LOCAL-ONLY-VALID-SESSION-CANARY-DO-NOT-LEAK';
+const SAFE_DEVICE = { marker: 'ordinary device text', browser: { session_created_at: TIME, last_heartbeat_at: TIME,
+  token_count: 2, password_policy: 'ordinary policy', notes: 'session_id is a historical field name' },
+  devices: [{ browser: 'Chromium' }, null, false] };
 const sha = text => createHash('sha256').update(text).digest('hex');
 const lines = text => text.match(/[^\n]*\n/g) ?? [];
 let replay, source, db, session, sourceSession, branch, emergency, other, task, pkg, identity, modules, schemaBefore;
@@ -256,7 +262,7 @@ async function seedCore(user, base, foreign = false) {
   }
   for (const index of [0, 1, 2]) {
     await change('public.employee_login_history', `INSERT INTO public.employee_login_history(id,user_id,username,employee_id,action_type,session_id,created_at,device_info,user_agent)
-      SELECT $1,id,username,employee_id,'login',$3,$4,${index === 0 ? 'NULL' : index === 1 ? "'null'::jsonb" : `'${JSON.stringify({ marker })}'::jsonb || jsonb_build_object('precise',${PRECISE},'tiny',${TINY})`},$5 FROM public.users WHERE id=$2`,
+      SELECT $1,id,username,employee_id,'login',$3,$4,${index === 0 ? 'NULL' : index === 1 ? "'null'::jsonb" : `'${JSON.stringify({ ...SAFE_DEVICE, marker })}'::jsonb || jsonb_build_object('precise',${PRECISE},'tiny',${TINY})`},$5 FROM public.users WHERE id=$2`,
     [id(base + 40 + index), user, SECRET, TIME, marker]);
   }
   await change('public.work_sessions', `INSERT INTO public.work_sessions(id,user_id,start_time,end_time,duration_minutes,last_heartbeat_at,created_at)
@@ -279,7 +285,7 @@ before(async () => {
   const beforeFunctions = await scalar(db, "SELECT count(*)::int FROM pg_proc WHERE pronamespace IN ('public'::regnamespace,'private'::regnamespace)");
   const beforeTriggers = await triggers();
   await db.exec(await readFile(new URL(`../migrations/${MIGRATION}`, import.meta.url), 'utf8'));
-  assert.equal(await scalar(db, "SELECT count(*)::int FROM pg_proc WHERE pronamespace IN ('public'::regnamespace,'private'::regnamespace)"), beforeFunctions + 8);
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM pg_proc WHERE pronamespace IN ('public'::regnamespace,'private'::regnamespace)"), beforeFunctions + 9);
   assert.deepEqual(await schema(), schemaBefore); assert.deepEqual(await triggers(), beforeTriggers);
   await buildNewSite(source); await buildNewSite(db);
   await source.query('UPDATE private.employee_transfer_site SET site_id=$1', [randomUUID()]);
@@ -351,9 +357,12 @@ for (const [name, args] of [[CATALOG, ['p_admin_session_token', 'p_job_token', '
     for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, 'SELECT has_function_privilege($1,$2::oid,\'EXECUTE\')', [role, fn.oid]), role !== 'service_role');
   }));
 }
-test('all five helpers are denied to public/browser/service roles and are read-only', () => transaction(async () => {
-  const functions = await rows(db, `SELECT oid,provolatile,prosecdef,proconfig FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_replacement_backup_%'`);
-  assert.equal(functions.length, 5);
+test('all six helpers are denied to public/browser/service roles and are read-only', () => transaction(async () => {
+  const functions = await rows(db, `SELECT oid,proname,provolatile,prosecdef,proconfig,pronargdefaults FROM pg_proc WHERE pronamespace='private'::regnamespace
+    AND (proname LIKE 'employee_transfer_replacement_backup_%' OR proname='employee_transfer_replacement_device_check')`);
+  assert.equal(functions.length, 6);
+  const device = functions.find(fn => fn.proname === 'employee_transfer_replacement_device_check');
+  assert.equal(device.provolatile, 'i'); assert.equal(device.pronargdefaults, 1);
   for (const fn of functions) {
     assert.ok(['s', 'i'].includes(fn.provolatile)); assert.equal(fn.prosecdef, true);
     assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
@@ -388,7 +397,8 @@ test('actual raw pages cover all 15 core tables, independently recompute catalog
   }
   const all = Object.values(texts).join('');
   assert.doesNotMatch(all, /FOREIGN-EMPLOYEE-ONLY|SECRET-DETAILED-ORDER|SECRET-TRANSACTION|SECRET-ASSIGNMENT|SECRET-REQUEST-DATA|SECRET-FINANCIAL|secret-active-tab/);
-  assert.doesNotMatch(all, /current_session_token|current_tab_id|session_created_at|archived_at|token_hash|product_value|product_type_id|order_number|transaction_id|scheduled_process_at|assignment_id/);
+  assert.doesNotMatch(all, /current_session_token|current_tab_id|archived_at|token_hash|product_value|product_type_id|order_number|transaction_id|scheduled_process_at|assignment_id/);
+  assert.equal(Object.hasOwn(JSON.parse(texts.accounts), 'session_created_at'), false);
   assert.doesNotMatch(all, new RegExp(SECRET));
   const accountHash = await scalar(db, 'SELECT password_hash FROM public.users WHERE id=$1', [T.same]);
   const credentialHash = await scalar(db, 'SELECT password_hash FROM public.financial_employee_credentials WHERE user_id=$1', [T.same]);
@@ -432,6 +442,83 @@ test('empty domains produce true zero-row pages and empty-content hashes rather 
   }
 }));
 
+const DEVICE_KEY_ALIASES = ['Current_Session_Token', 'CURRENT-TAB-ID', 'Session/ID', 'Session:Token', 'TOKEN-HASH', 'Access_Token',
+  'REFRESH/TOKEN', 'Service-Role-Key', 'ANON_KEY', 'Password', 'PASSWORD_HASH', 'ToKeN', 'Authorization', 'API-Key', 'client_secret', 'Secret'];
+for (const [index, alias] of DEVICE_KEY_ALIASES.entries()) test(`SQL39 rejects normalized structured device key ${DEVICE_SECRET_KEYS[index]} in real catalog/page/verify and client before writing`, async t => {
+  assert.equal(alias.toLowerCase().replaceAll('_', '').replaceAll('/', '').replaceAll('-', '').replaceAll(':', ''), DEVICE_SECRET_KEYS[index]);
+  const h = await clientBackupDisk(t);
+  await transaction(async () => {
+    const c = await catalog();
+    const leaf = { [alias]: index % 2 === 0 ? session : DEVICE_SECRET_VALUE };
+    const device = index % 3 === 0 ? { browser: leaf } : index % 3 === 1 ? [{ ua: 'ordinary' }, null, { devices: [leaf] }]
+      : { browser: { devices: [null, [leaf]] } };
+    await change('public.employee_login_history', 'UPDATE public.employee_login_history SET device_info=$2::jsonb WHERE id=$1', [id(1042), JSON.stringify(device)]);
+    const before = await snapshot(), modes = await triggers();
+    await db.exec('SET TRANSACTION READ ONLY');
+    const redacted = error => {
+      assert.equal(error.code, '22023'); assert.equal(error.message, 'Replacement backup device information contains a structured secret.');
+      const details = [error.message, error.detail, error.hint, error.where].filter(Boolean).join('\n');
+      assert.equal(details.includes(DEVICE_SECRET_VALUE), false); assert.equal(details.includes(session), false);
+      assert.equal(details.includes(alias), false); return true;
+    };
+    await assert.rejects(catalog(), redacted);
+    // The bad device is in the LAST login row, outside this first one-row page.
+    await assert.rejects(page(c, 'employee_login_history', { p_limit: 1 }), redacted);
+    await assert.rejects(page(c, 'accounts'), redacted); await assert.rejects(verify(c), redacted);
+    await assert.rejects(h.export(c), error => {
+      assert.ok(error instanceof modules.EmployeeBackupError); assert.equal(error.encryptedFileState, 'not-written');
+      assert.equal(error.phase, 'records-export'); assert.equal(error.message.includes(DEVICE_SECRET_VALUE), false);
+      assert.equal(error.message.includes(session), false); assert.equal('cause' in error, false); return true;
+    });
+    assert.equal(h.fileWrites, 0); assert.equal(h.fileOpens, 0); assert.equal(h.workspaces.length, 0);
+    assert.equal(h.calls.length, 1); assert.equal(h.calls[0].name, CATALOG); assert.equal(h.calls[0].readOnly, 'on');
+    assert.equal(h.calls[0].data, undefined); assert.equal(h.calls[0].error.includes(DEVICE_SECRET_VALUE), false);
+    await assert.rejects(readFile(h.filePath), { code: 'ENOENT' });
+    assert.deepEqual(await snapshot(), before); assert.deepEqual(await triggers(), modes);
+    assert.deepEqual(await scalar(db, 'SELECT device_info FROM public.employee_login_history WHERE id=$1', [id(1042)]), device);
+  });
+});
+test('device check permits scalars, SQL NULL and JSON null, checks keys even with null values, and bounds every child at depth 64', () => transaction(async () => {
+  const check = async (value, depth = 0) => {
+    const point = `device_check_${++sequence}`; await db.exec(`SAVEPOINT ${point}`);
+    try {
+      await db.query('SELECT private.employee_transfer_replacement_device_check($1::jsonb,$2::integer)', [value, depth]);
+      await db.exec(`RELEASE SAVEPOINT ${point}`);
+    } catch (error) { await db.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); throw error; }
+  };
+  const before = await snapshot(); await db.exec('SET TRANSACTION READ ONLY');
+  for (const value of [null, 'null', 'true', '12345678901234567890.12345678901234567890', '"ordinary current_session_token text"', '[]', '{}']) await check(value);
+  let nested = null;
+  for (let i = 0; i < 64; i++) nested = i % 2 ? { device: nested } : [nested];
+  await check(JSON.stringify(nested));
+  await assert.rejects(check(JSON.stringify([nested])), /reviewed depth/);
+  for (const depth of [null, -1, 65]) await assert.rejects(check('{}', depth), /reviewed depth/);
+  await assert.rejects(check('{"browser":[{"token":null}]}'), /structured secret/);
+  await assert.rejects(check('{"browser":{"\\u0074oken":"hidden"}}'), /structured secret/);
+  assert.deepEqual(await snapshot(), before);
+}));
+test('directory and real client reject excessive target device depth without writes, but foreign employee unsafe devices do not block', async t => {
+  await transaction(async () => {
+    const c = await catalog(), h = await clientBackupDisk(t); let nested = null;
+    for (let i = 0; i < 65; i++) nested = i % 2 ? { device: nested } : [nested];
+    await change('public.employee_login_history', 'UPDATE public.employee_login_history SET device_info=$2::jsonb WHERE id=$1', [id(1042), JSON.stringify(nested)]);
+    const before = await snapshot(); await db.exec('SET TRANSACTION READ ONLY');
+    await assert.rejects(catalog(), /reviewed depth/); await assert.rejects(page(c, 'accounts'), /reviewed depth/); await assert.rejects(verify(c), /reviewed depth/);
+    await assert.rejects(h.export(c), error => error instanceof modules.EmployeeBackupError && error.encryptedFileState === 'not-written');
+    assert.equal(h.fileWrites, 0); assert.deepEqual(await snapshot(), before);
+  });
+  await transaction(async () => {
+    const c = await catalog(), h = await clientBackupDisk(t);
+    await change('public.employee_login_history', 'UPDATE public.employee_login_history SET device_info=$2::jsonb WHERE user_id=$1',
+      [T.other, JSON.stringify({ browser: [{ 'CURRENT-SESSION-TOKEN': DEVICE_SECRET_VALUE }] })]);
+    const before = await snapshot(); await db.exec('SET TRANSACTION READ ONLY');
+    assert.deepEqual(await catalog(), c); flags(await verify(c));
+    const result = await h.export(c); assert.equal(result.recordsVerified, true); assert.equal(result.completeEmployeeBackup, false);
+    const restored = await h.decrypt();
+    for (const raw of restored.files.values()) assert.equal(raw.includes(Buffer.from(DEVICE_SECRET_VALUE)), false);
+    assertClientWorkspacesClean(h); assert.deepEqual(await snapshot(), before);
+  });
+});
 const DRIFT = [
   ['account remarks', 'public.users', "UPDATE public.users SET remarks='same-count drift' WHERE id=$1"],
   ['credential password', 'public.financial_employee_credentials', "UPDATE public.financial_employee_credentials SET password_hash='changed-password-hash' WHERE user_id=$1"],
@@ -618,6 +705,9 @@ test('real SQL39 and employeeBackup client export all 15 raw tables to an indepe
     assert.equal(logins[0].device_info, null); assert.equal(logins[0].device_info_is_sql_null, true);
     assert.equal(logins[1].device_info, null); assert.equal(logins[1].device_info_is_sql_null, false);
     assert.ok(raw('employee_login_history').includes(PRECISE)); assert.ok(raw('employee_login_history').includes(TINY));
+    assert.deepEqual(logins[2].device_info.browser, SAFE_DEVICE.browser);
+    assert.deepEqual(logins[2].device_info.devices, SAFE_DEVICE.devices);
+    assert.equal(logins[2].device_info_is_sql_null, false);
     assert.doesNotMatch([...original.values()].join(''), /SECRET-FINANCIAL|SECRET-DETAILED-ORDER|secret-active-tab|current_session_token/);
     const reads = h.calls.slice(1), checks = reads.filter(call => call.name === VERIFY);
     assert.ok(reads.every(call => call.args.p_admin_session_token === renewed && call.readOnly === 'on'));

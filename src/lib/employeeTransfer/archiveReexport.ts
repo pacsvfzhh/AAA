@@ -13,6 +13,7 @@ import { exportArchiveBundle, type ArchiveBundleOptions, type ArchiveBundleResul
 import type { ReplacementBackupFile } from './replacementBackup';
 import { validateVolumeInfo, type VolumeInfo } from './manifest';
 import { Sha256 } from './sha256';
+import { MAX_CONTAINER_INPUT_BYTES } from './container';
 
 export interface ArchiveReexportSnapshot { catalog: ArchivesCatalog; snapshot_hash: string }
 export interface ArchiveReexportInventory {
@@ -173,6 +174,7 @@ export async function exportTransferredArchiveBundles(
 ): Promise<{ inventory: ArchiveReexportInventory; volumes: ArchiveBundleResult[]; fullSiteComplete: false }> {
   const inventory = await getArchiveReexportInventory(options.signal), baseline = JSON.stringify(inventory);
   const volumes: ArchiveBundleResult[] = [], ids = new Set<string>();
+  const filesSaved: ReplacementBackupFile[] = [];
   let rows = 0, files = 0, bytes = 0;
   const progress = () => {
     checkAbort(options.signal);
@@ -183,11 +185,30 @@ export async function exportTransferredArchiveBundles(
   for (const expected of inventory.namespaces) {
     const prepared = await withSignal(() => prepare(validateArchiveReexportSnapshot(expected), volumes.length, inventory.namespaces.length), options.signal);
     const info = validateVolumeInfo(prepared.info);
-    if (info.exportId !== expected.catalog.package_id || info.sourceSiteId !== expected.catalog.site_id || ids.has(info.volumeId)) invalid();
-    ids.add(info.volumeId);
+    if (info.exportId !== expected.catalog.package_id || info.sourceSiteId !== expected.catalog.site_id
+      || ids.has(info.volumeId) || filesSaved.includes(prepared.file)) invalid();
+    ids.add(info.volumeId); filesSaved.push(prepared.file);
     const session = createArchiveReexportSession(expected.catalog.site_id, expected.catalog.package_id, expected, options.transport);
     const result = await exportArchiveBundle(session.source, session.media, prepared.file, prepared.createWorkspace, passphrase, info, options);
     volumes.push(result); rows += result.rows; files += result.files; bytes += result.bytes; progress();
+  }
+  for (const [index, file] of filesSaved.entries()) {
+    const iterator = file.open()[Symbol.asyncIterator](), digest = new Sha256();
+    let size = 0, ended = false;
+    try {
+      while (true) {
+        const next = await withSignal(() => iterator.next(), options.signal);
+        checkAbort(options.signal);
+        if (next.done) { ended = true; break; }
+        if (!(next.value instanceof Uint8Array) || next.value.length > MAX_CONTAINER_INPUT_BYTES) invalid();
+        size += next.value.length;
+        if (size > volumes[index].cipherBytes) invalid();
+        digest.update(next.value);
+      }
+      if (size !== volumes[index].cipherBytes || digest.digestHex() !== volumes[index].cipherSha256) invalid();
+    } finally {
+      if (!ended) { try { void Promise.resolve(iterator.return?.()).catch(() => undefined); } catch { /* A blocked reader must not prevent cancellation. */ } }
+    }
   }
   const final = await getArchiveReexportInventory(options.signal);
   if (JSON.stringify(final) !== baseline) invalid();

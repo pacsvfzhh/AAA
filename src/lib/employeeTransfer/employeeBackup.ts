@@ -19,6 +19,7 @@ export type EmployeeBackupTableKey = typeof EMPLOYEE_BACKUP_TABLE_KEYS[number];
 export const EMPLOYEE_BACKUP_LIMITS = Object.freeze({
   maxRows: 500000, maxTableBytes: 268435456, maxTotalBytes: 1073741824,
   maxPageRows: 200, maxPageBytes: 262144, maxLineBytes: 65536, maxCatalogBytes: 65536,
+  maxZipBytes: 1100 * 1024 * 1024, maxCipherBytes: 1101 * 1024 * 1024,
 });
 const MISSING = ['chat', 'notifications', 'media', 'dispatch_configuration', 'used_order_data', 'orders_history', 'archive_evidence'];
 const EXCLUDED = ['active_sessions', 'account_locks', 'detailed_orders', 'financial_operations'];
@@ -176,6 +177,21 @@ export function validateEmployeeBackupCatalog(input: unknown): EmployeeBackupCat
   if (!result.username || enc.encode(JSON.stringify(result) + '\n').length > EMPLOYEE_BACKUP_LIMITS.maxCatalogBytes) invalid();
   return result;
 }
+const DEVICE_SECRET_KEYS = new Set([
+  'currentsessiontoken', 'currenttabid', 'sessionid', 'sessiontoken', 'tokenhash', 'accesstoken',
+  'refreshtoken', 'servicerolekey', 'anonkey', 'password', 'passwordhash', 'token',
+  'authorization', 'apikey', 'clientsecret', 'secret',
+]);
+function checkDeviceInfo(value: unknown, depth = 0): void {
+  if (depth > 64) invalid();
+  if (Array.isArray(value)) { for (const item of value) checkDeviceInfo(item, depth + 1); }
+  else if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      if (DEVICE_SECRET_KEYS.has(key.replace(/[A-Z]/g, char => char.toLowerCase()).replace(/[_/:-]/g, ''))) invalid();
+      checkDeviceInfo(item, depth + 1);
+    }
+  }
+}
 function rowIdentity(line: string, key: EmployeeBackupTableKey, catalog: EmployeeBackupCatalog): string {
   const value: unknown = JSON.parse(line), row = object(value, Object.keys(catalog.projections[key]));
   const stack: (Set<string> | null)[] = [];
@@ -214,6 +230,7 @@ function rowIdentity(line: string, key: EmployeeBackupTableKey, catalog: Employe
   if (key !== 'accounts' && key !== 'credentials' && row.user_id !== catalog.target_employee_id) invalid();
   if (key === 'accounts' && row.username !== catalog.username) invalid();
   if (key === 'orders' && row.status !== 'success' && row.status !== 'failure') invalid();
+  if (key === 'employee_login_history') checkDeviceInfo(row.device_info);
   if (key === 'employee_login_history' && ((row.session_id !== null && !/^history-[0-9a-f]{64}$/.test(text(row.session_id)))
     || (row.device_info_is_sql_null === true && row.device_info !== null))) invalid();
   return id;
@@ -308,7 +325,7 @@ class CipherScan {
   bytes = 0; ended = false; readonly hash = new Sha256();
   async *read(source: TransferByteSource, signal: AbortSignal): AsyncGenerator<Uint8Array> {
     for await (const raw of read(source, signal)) {
-      this.bytes += raw.length; if (this.bytes > EMPLOYEE_BACKUP_LIMITS.maxTotalBytes) invalid(); this.hash.update(raw); yield raw;
+      this.bytes += raw.length; if (this.bytes > EMPLOYEE_BACKUP_LIMITS.maxCipherBytes) invalid(); this.hash.update(raw); yield raw;
     }
     this.ended = true;
   }
@@ -360,7 +377,7 @@ export async function exportEmployeeBackup(
     phase = 'source-recheck'; progress(rows, bytes);
     validateEmployeeBackupVerification(await withSignal(() => source.verify(c, signal), signal), c);
     const limits: Partial<ContainerLimits> = { maxEntries: 16, maxEntryBytes: EMPLOYEE_BACKUP_LIMITS.maxTableBytes,
-      maxTotalBytes: maximum, maxZipBytes: EMPLOYEE_BACKUP_LIMITS.maxTotalBytes, maxManifestBytes: 65536, maxLineBytes: 65536 };
+      maxTotalBytes: maximum, maxZipBytes: EMPLOYEE_BACKUP_LIMITS.maxZipBytes, maxManifestBytes: 65536, maxLineBytes: 65536 };
     async function* entries(): AsyncGenerator<TransferEntry> {
       for (const e of expected) yield { path: e.path, bytes: e.bytes, open: () => snapshot.open(e.path) };
     }
