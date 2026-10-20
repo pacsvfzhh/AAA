@@ -218,6 +218,23 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
     ],
   },
   {
+    schema: 'private', name: 'employee_transfer_chat_backups', mode: 'exclude',
+    reason: '目标聊天合并前独立加密记录备份及封存回执属于本站安全资料；与派单和通知备份隔离，不导入另一站，已封存密文跨取消保留，不包含原媒体文件。',
+    columns: [
+      { name: 'id', type: 'uuid', nullable: false },
+      { name: 'job_id', type: 'uuid', nullable: false },
+      { name: 'admin_id', type: 'uuid', nullable: false },
+      { name: 'plan_hash', type: 'text', nullable: false },
+      { name: 'target_hash', type: 'text', nullable: false },
+      { name: 'catalog', type: 'jsonb', nullable: false },
+      { name: 'chunks', type: 'bytea[]', nullable: false },
+      { name: 'byte_count', type: 'integer', nullable: false },
+      { name: 'sealed_sha256', type: 'text', nullable: true },
+      { name: 'sealed_at', type: 'timestamp with time zone', nullable: true },
+      { name: 'created_at', type: 'timestamp with time zone', nullable: false },
+    ],
+  },
+  {
     schema: 'private', name: 'employee_transfer_notification_backups', mode: 'exclude',
     reason: '目标通知独立加密记录备份及封存回执仅为本站恢复准备，不迁入另一站或冒充成功；与派单备份隔离，已封存密文不随任务取消清除，媒体未包含。',
     columns: [

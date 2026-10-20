@@ -2429,6 +2429,68 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: import('../lib/employeeTransfer/chatTransfer').ChatPlan;
       };
+      get_employee_import_chat_merge_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_decisions: import('../lib/employeeTransfer/chatMergeApi').ChatMergeDecision[] };
+        Returns: import('../lib/employeeTransfer/chatMergeApi').ChatMergePlan;
+      };
+      employee_import_chat_backup_prepare: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string; p_decisions: import('../lib/employeeTransfer/chatMergeApi').ChatMergeDecision[] };
+        Returns: import('../lib/employeeTransfer/chatBackup').ChatBackupDescriptor;
+      };
+      get_employee_import_chat_backup_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_backup_id: string; p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: import('../lib/employeeTransfer/chatTransfer').ChatPage;
+      };
+      employee_import_chat_backup_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_backup_id: string };
+        Returns: import('../lib/employeeTransfer/chatBackup').ChatBackupVerification;
+      };
+      employee_import_chat_backup_append: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_backup_id: string; p_chunk_no: number; p_hex: string };
+        Returns: import('../lib/employeeTransfer/chatBackup').ChatBackupAppendReceipt;
+      };
+      employee_import_chat_backup_seal: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_backup_id: string; p_sha256: string; p_bytes: number };
+        Returns: import('../lib/employeeTransfer/chatBackup').ChatBackupSealReceipt;
+      };
+      get_employee_chat_saved_backup_chunk: {
+        Args: { p_admin_session_token: string; p_backup_id: string; p_chunk_no: number };
+        Returns: import('../lib/employeeTransfer/chatMergeApi').ChatSavedBackupChunk;
+      };
+      get_employee_transfer_chat_media: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_direction: 'export' | 'import' };
+        Returns: import('../lib/employeeTransfer/chatMedia').ChatMediaInventory;
+      };
+      employee_import_chat_media_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_files: import('../lib/employeeTransfer/chatMedia').ChatMediaFile[] };
+        Returns: { success: true; version: 1; scope: 'site-chat-media'; files: number; bytes: number; repeated: boolean; full_site_complete: false };
+      };
+      employee_transfer_chat_media_authorize: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: EmployeeVerificationMediaAction; p_object_key: string };
+        Returns: { direction: 'export' | 'import'; key: string; bucket: import('../lib/employeeTransfer/chatMedia').ChatMediaBucket;
+          path: string; source_url: string; file: import('../lib/employeeTransfer/chatMedia').ChatMediaFile | null; avatar: boolean; generation: string };
+      };
+      employee_transfer_chat_media_commit: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: EmployeeVerificationMediaAction; p_object_key: string;
+          p_bytes: number; p_sha256: string; p_content_type: import('../lib/employeeTransfer/chatMedia').ChatMediaType; p_storage_origin: string; p_generation: string };
+        Returns: { success: true; key: string; bytes: number; sha256: string; content_type: import('../lib/employeeTransfer/chatMedia').ChatMediaType; full_site_complete: false };
+      };
+      employee_import_chat_begin: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/chatRestoreApi').ChatRestoreReceipt;
+      };
+      employee_import_chat_chunk: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_chunk_no: number };
+        Returns: import('../lib/employeeTransfer/chatRestoreApi').ChatRestoreReceipt;
+      };
+      employee_import_chat_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/chatRestoreApi').ChatRestoreReceipt;
+      };
+      get_employee_import_chat_restore_status: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/chatRestoreApi').ChatRestoreReceipt;
+      };
       employee_export_notifications_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_package_id: string };
         Returns: { success: true; job_id: string; job_token: string; site_id: string;

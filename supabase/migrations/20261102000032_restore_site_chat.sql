@@ -217,7 +217,7 @@ BEGIN
         WHERE s.job_id=p_job.id AND s.table_key='chat-backup:simulated_customers' AND line<>'' AND line::jsonb->>'id'=v_role->>'target_id';
       v_row:=v_original;v_action:='merge';
       SELECT array_agg(employee ORDER BY employee) INTO v_visibility FROM (
-        SELECT DISTINCT value::uuid AS employee FROM jsonb_array_elements(p_job.summary#>'{chat_restore,plan,roles}') r
+        SELECT DISTINCT a.value::uuid AS employee FROM jsonb_array_elements(p_job.summary#>'{chat_restore,plan,roles}') r
           CROSS JOIN LATERAL jsonb_array_elements_text(r->'visibility_employee_ids') a(value)
           WHERE r->>'target_id'=v_role->>'target_id' AND r->'allow_visibility'='true'::jsonb
         UNION SELECT unnest((SELECT target_employee_ids FROM jsonb_populate_record(NULL::public.simulated_customers,v_original)))
