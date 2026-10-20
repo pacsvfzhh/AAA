@@ -29,7 +29,16 @@ function hash(input: unknown): string {
   if (typeof input !== 'string' || input.length !== 64) invalid();
   return dispatchTransferChecks.hash(input);
 }
-function equal(a: unknown, b: unknown): void { if (JSON.stringify(a) !== JSON.stringify(b)) invalid(); }
+function equal(a: unknown, b: unknown): void {
+  const stable = (value: unknown) => JSON.stringify(value, (_, item: unknown) => {
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      const record = item as Record<string, unknown>;
+      return Object.fromEntries(Object.keys(record).sort().map(key => [key, record[key]]));
+    }
+    return item;
+  });
+  if (stable(a) !== stable(b)) invalid();
+}
 export function validateArchiveReexportSnapshot(input: unknown): ArchiveReexportSnapshot {
   const r = object(input, ['catalog', 'snapshot_hash']);
   return { catalog: validateArchivesCatalog(r.catalog), snapshot_hash: hash(r.snapshot_hash) };

@@ -249,15 +249,7 @@ export function validateEmployeeBackupVerification(input: unknown, catalog: Empl
 }
 
 type AuthArgs = { p_admin_session_token: string; p_job_token: string; p_source_employee_id: string };
-type CheckArgs = AuthArgs & { p_catalog_fingerprint: string };
-type Calls = {
-  get_employee_import_replacement_backup: AuthArgs;
-  get_employee_import_replacement_backup_page: CheckArgs & { p_table_key: EmployeeBackupTableKey; p_after: string | null; p_limit: number };
-  employee_import_replacement_backup_verify: CheckArgs;
-};
 type Query = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): Query };
-// Local typed SQL39 surface until the shared Database RPC registry is synchronized.
-const client = supabase as unknown as { rpc<K extends keyof Calls>(name: K, args: Calls[K]): Query };
 export function createEmployeeBackupSession(jobToken: string, sourceEmployeeId: string, expectedJobId?: string): EmployeeBackupSession {
   uuid(jobToken); uuid(sourceEmployeeId); if (expectedJobId !== undefined) uuid(expectedJobId);
   let busy = false, baseline: EmployeeBackupCatalog | null = null;
@@ -278,7 +270,7 @@ export function createEmployeeBackupSession(jobToken: string, sourceEmployeeId: 
   };
   return {
     catalog(signal) {
-      return request(() => client.rpc('get_employee_import_replacement_backup', args()), value => {
+      return request(() => supabase.rpc('get_employee_import_replacement_backup', args()), value => {
         const checked = validateEmployeeBackupCatalog(value);
         if (checked.source_employee_id !== sourceEmployeeId || (expectedJobId && checked.job_id !== expectedJobId)) invalid();
         if (baseline) same(checked, baseline); else baseline = validateEmployeeBackupCatalog(checked);
@@ -289,12 +281,12 @@ export function createEmployeeBackupSession(jobToken: string, sourceEmployeeId: 
       let c: EmployeeBackupCatalog;
       return request(() => {
         c = bound(input); employeeBackupEntryPath(key); if (previous !== null) cursor(key, previous);
-        return client.rpc('get_employee_import_replacement_backup_page', { ...args(), p_catalog_fingerprint: c.fingerprint, p_table_key: key, p_after: previous, p_limit: 200 });
+        return supabase.rpc('get_employee_import_replacement_backup_page', { ...args(), p_catalog_fingerprint: c.fingerprint, p_table_key: key, p_after: previous, p_limit: 200 });
       }, value => { validateEmployeeBackupPage(value, c, key, previous); return value; }, signal);
     },
     verify(input, signal) {
       let c: EmployeeBackupCatalog;
-      return request(() => { c = bound(input); return client.rpc('employee_import_replacement_backup_verify', { ...args(), p_catalog_fingerprint: c.fingerprint }); },
+      return request(() => { c = bound(input); return supabase.rpc('employee_import_replacement_backup_verify', { ...args(), p_catalog_fingerprint: c.fingerprint }); },
         value => { validateEmployeeBackupVerification(value, c); return value; }, signal);
     },
   };

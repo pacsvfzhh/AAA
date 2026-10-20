@@ -18,7 +18,7 @@ import {
 import { dispatchTransferChecks } from './dispatchTransfer';
 import { Sha256 } from './sha256';
 
-// Native SQL33 six-table archives only, NOT namespace re-export or a full-site package.
+// One original namespace per volume; not a full-site package.
 export const ARCHIVE_BUNDLE_PROTOCOL = 'site-archives-bundle-v1';
 export const ARCHIVE_BUNDLE_MEDIA_PATH = 'data/archive-media.ndjson';
 export const ARCHIVE_BUNDLE_CATALOG_PATH = 'data/archive-catalog.ndjson';

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { after, before, mock, test } from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, open, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import http from 'node:http';
@@ -160,6 +160,75 @@ async function collect(c, key, limit = 2) {
   assert.equal(table.row_hashes_sha256, sha(lines(text).map(sha).join('')));
   return text;
 }
+async function clientBackupDisk(t, token = session) {
+  const dir = await mkdtemp(join(tmpdir(), 'employee-backup-real-sql39-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const h = { token, tokenReads: 0, calls: [], workspaces: [], events: [], fileWrites: 0, fileOpens: 0, afterWrite: null,
+    filePath: join(dir, 'independent-employee-records.edx') };
+  h.rpc = (name, args) => {
+    assert.ok([CATALOG, PAGE, VERIFY].includes(name));
+    assert.equal(args.p_job_token, task.job_token); assert.equal(args.p_source_employee_id, S.same);
+    assert.equal(args.p_admin_session_token, h.token);
+    const query = { signal: null, abortSignal(signal) { query.signal = signal; return query; }, then(resolve, reject) {
+      return Promise.resolve().then(async () => {
+        assert.notEqual(query.signal?.aborted, true);
+        const call = { name, args: structuredClone(args), readOnly: await scalar(db, "SELECT current_setting('transaction_read_only')") };
+        h.calls.push(call); h.events.push(name);
+        // Real anon SQL execution, with the existing negative-test savepoint. Never fabricate responses.
+        try { call.data = await rpc(name, args); return { data: call.data, error: null }; }
+        catch (error) { call.error = error.message; throw error; }
+      }).then(resolve, reject);
+    } }; return query;
+  };
+  h.createWorkspace = () => {
+    const base = join(dir, `plaintext-${h.workspaces.length}`);
+    const w = { base, cleaned: false, cleanups: 0,
+      async append(path, raw, signal) {
+        assert.equal(w.cleaned, false); assert.notEqual(signal?.aborted, true);
+        assert.ok(path === modules.EMPLOYEE_BACKUP_CATALOG_PATH || TABLES.some(key => path === modules.employeeBackupEntryPath(key)));
+        await mkdir(dirname(join(base, path)), { recursive: true });
+        assert.equal(w.cleaned, false); await appendFile(join(base, path), raw);
+      },
+      open(path) { assert.equal(w.cleaned, false); return disk(join(base, path)); },
+      async abort() {
+        w.cleaned = true; w.cleanups++; h.events.push(`cleanup-${h.workspaces.indexOf(w)}`);
+        await rm(base, { recursive: true, force: true });
+      },
+    }; h.workspaces.push(w); return w;
+  };
+  h.file = {
+    async write(stream, signal) {
+      h.fileWrites++; h.events.push('file-write');
+      const handle = await open(h.filePath, 'wx');
+      try { for await (const raw of stream) { assert.equal(signal.aborted, false); await handle.writeFile(raw); } await handle.sync(); }
+      finally { await handle.close(); }
+      h.events.push('file-saved'); if (h.afterWrite) await h.afterWrite();
+    },
+    open() { h.fileOpens++; h.events.push('file-open'); return (async function* () { yield* disk(h.filePath); h.events.push('file-eof'); })(); },
+  };
+  h.export = (c, client) => {
+    modules.setHarness(h);
+    h.info = { scope: 'replacement-backup', sourceSiteId: c.target_site_id, exportId: randomUUID(), volumeId: randomUUID(),
+      volumeIndex: 1, volumeCount: 1, createdAt: new Date().toISOString() };
+    return modules.exportEmployeeBackup(client ?? modules.createEmployeeBackupSession(task.job_token, S.same, task.job_id),
+      h.file, h.createWorkspace, 'real-sql39-independent-employee-backup', h.info);
+  };
+  h.decrypt = async () => {
+    const paths = new Set(), w = h.createWorkspace();
+    try {
+      const manifest = await modules.verifyEncryptedVolume(h.file.open(), 'real-sql39-independent-employee-backup', {
+        async append(path, raw, signal) { paths.add(path); await w.append(path, raw, signal); }, abort: reason => w.abort(reason),
+      }, { expectedMetadata: { exportId: h.info.exportId, volumeId: h.info.volumeId } });
+      const files = new Map(); for (const path of paths) files.set(path, await readFile(join(w.base, path)));
+      return { manifest, files };
+    } finally { await w.abort(new Error('Independent SQL39 backup readback discarded.')); }
+  };
+  return h;
+}
+function assertClientWorkspacesClean(h) {
+  assert.ok(h.workspaces.length >= 2);
+  for (const w of h.workspaces) { assert.equal(w.cleaned, true); assert.equal(w.cleanups, 1); }
+}
 async function seedCore(user, base, foreign = false) {
   const marker = foreign ? 'FOREIGN-EMPLOYEE-ONLY' : '原始後台備註\n𠮷 é é';
   await change('public.users', `UPDATE public.users SET total_income=$2::numeric,remarks=$3,tags=ARRAY['標籤',NULL,E'含,逗號\n'],is_pinned=true,
@@ -229,8 +298,19 @@ before(async () => {
   branch = await adminLogin(db, 'branch', PASSWORDS.branch); emergency = await adminLogin(db, 'emergency', PASSWORDS.emergency);
   other = await adminLogin(db, 'backup-other-root', PASSWORDS.root); pkg = randomUUID();
   const compiled = await build({ stdin: { contents: `export {createReplacementBackup} from './src/lib/employeeTransfer/replacementBackup.ts';
-    export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
-  bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020' });
+    export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';
+    export * from './src/lib/employeeTransfer/employeeBackup.ts';
+    export {verifyEncryptedVolume} from './src/lib/employeeTransfer/container.ts';
+    export {setHarness} from 'employee-backup-db:state';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
+  bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', metafile: true,
+  plugins: [{ name: 'local-sql39-only', setup(builder) {
+    builder.onResolve({ filter: /^(?:employee-backup-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'employee-backup-db' }));
+    builder.onLoad({ filter: /.*/, namespace: 'employee-backup-db' }, ({ path }) => ({ contents: path === 'employee-backup-db:state'
+      ? 'let h;export const setHarness=value=>{h=value};export const current=()=>h;'
+      : path === '../auth' ? 'import{current}from"employee-backup-db:state";export const getAdminFinancialSessionToken=()=>{const h=current();h.tokenReads++;return h.token;};'
+        : 'import{current}from"employee-backup-db:state";export const supabase={rpc:(...args)=>current().rpc(...args)};' }));
+  } }] });
+  assert.ok(!Object.keys(compiled.metafile.inputs).some(path => /node_modules\/@supabase|src\/lib\/(?:supabase|auth)\.ts/.test(path)));
   modules = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
   const captured = await transaction(async () => ({ shared: await capture('shared'), dispatch: await capture('dispatch'), identity: await capture('identity') }), source, true);
   identity = captured.identity;
@@ -490,6 +570,96 @@ test('checkpoint survives a genuine committed boundary and owner re-login withou
     assert.equal((await page(c, 'accounts', { p_admin_session_token: newSession })).fingerprint, c.fingerprint);
     assert.equal((await verify(c, { p_admin_session_token: newSession })).verified, true);
     assert.equal(await scalar(db, 'SELECT last_activity_at::text FROM private.employee_transfer_jobs WHERE id=$1', [task.job_id]), heartbeat);
+  });
+});
+test('real SQL39 and employeeBackup client export all 15 raw tables to an independently encrypted disk file in READ ONLY after re-login', async t => {
+  const h = await clientBackupDisk(t);
+  await transaction(async () => {
+    modules.setHarness(h);
+    const client = modules.createEmployeeBackupSession(task.job_token, S.same, task.job_id);
+    const bound = await client.catalog();
+    assert.equal(h.calls[0].args.p_admin_session_token, session);
+    const renewed = await adminLogin(db, 'root', PASSWORDS.root);
+    assert.notEqual(renewed, session); h.token = renewed;
+    const before = await snapshot(), modes = await triggers();
+    await db.exec('SET TRANSACTION READ ONLY');
+    const c = await catalog({ p_admin_session_token: renewed }), original = new Map();
+    assert.deepEqual(c, bound);
+    for (const key of TABLES) original.set(modules.employeeBackupEntryPath(key), Buffer.from(await collect(c, key)));
+    const result = await h.export(c, client);
+    assert.equal(result.recordsVerified, true);
+    for (const key of ['completeEmployeeBackup', 'mediaIncluded', 'canArchive', 'canReplace', 'fullSiteComplete']) assert.equal(result[key], false, key);
+    assert.deepEqual(result.missingDomains, MISSING); assert.equal(h.fileWrites, 1); assert.equal(h.fileOpens, 1);
+    assertClientWorkspacesClean(h);
+    const ciphertext = await readFile(h.filePath);
+    assert.equal(result.cipherBytes, ciphertext.length); assert.equal(result.cipherSha256, sha(ciphertext));
+    assert.equal(ciphertext.includes(Buffer.from(PRECISE)), false);
+    const restored = await h.decrypt();
+    assert.deepEqual(restored.manifest, result.manifest); assert.equal(restored.manifest.sourceSiteId, c.target_site_id);
+    assert.equal(restored.manifest.scope, 'replacement-backup'); assert.equal(restored.manifest.exportId, h.info.exportId);
+    assert.notEqual(restored.manifest.exportId, pkg); assert.notEqual(restored.manifest.exportId, task.job_id);
+    assert.deepEqual([...restored.files.keys()], [...TABLES.map(modules.employeeBackupEntryPath), modules.EMPLOYEE_BACKUP_CATALOG_PATH]);
+    for (const table of c.tables) {
+      const path = modules.employeeBackupEntryPath(table.key), raw = restored.files.get(path);
+      assert.deepEqual(raw, original.get(path), table.key); assert.equal(raw.length, table.bytes);
+      assert.equal(sha(lines(raw.toString()).map(sha).join('')), table.row_hashes_sha256);
+      assert.equal(restored.manifest.entries.find(entry => entry.path === path).sha256, sha(raw));
+    }
+    const metadata = JSON.parse(restored.files.get(modules.EMPLOYEE_BACKUP_CATALOG_PATH).toString());
+    assert.deepEqual(metadata, result.catalog); assert.equal(metadata.package_id, pkg); assert.equal(metadata.job_id, task.job_id);
+    assert.equal(metadata.source_employee_id, S.same); assert.equal(metadata.target_employee_id, T.same);
+    flags(metadata); assert.equal(metadata.complete_employee_backup, false); assert.equal(metadata.backup_sealed, false); assert.deepEqual(metadata.missing_domains, MISSING);
+    const raw = key => restored.files.get(modules.employeeBackupEntryPath(key)).toString();
+    assert.ok(raw('wallet_transactions').includes(PRECISE)); assert.match(raw('wallet_transactions'), /\.123456\+00:00/);
+    assert.match(raw('wallet_ledger_entries'), /"id": "9007199254740993"/);
+    assert.match(raw('wallet_reconciliation_audit'), /"id": "9007199254740999"/);
+    assert.match(raw('accounts'), /"updated_at": null/);
+    const logins = lines(raw('employee_login_history')).map(JSON.parse);
+    assert.equal(logins[0].device_info, null); assert.equal(logins[0].device_info_is_sql_null, true);
+    assert.equal(logins[1].device_info, null); assert.equal(logins[1].device_info_is_sql_null, false);
+    assert.ok(raw('employee_login_history').includes(PRECISE)); assert.ok(raw('employee_login_history').includes(TINY));
+    assert.doesNotMatch([...original.values()].join(''), /SECRET-FINANCIAL|SECRET-DETAILED-ORDER|secret-active-tab|current_session_token/);
+    const reads = h.calls.slice(1), checks = reads.filter(call => call.name === VERIFY);
+    assert.ok(reads.every(call => call.args.p_admin_session_token === renewed && call.readOnly === 'on'));
+    assert.equal(h.tokenReads, h.calls.length); assert.equal(checks.length, 2);
+    assert.deepEqual(reads.filter(call => call.name === PAGE).map(call => call.args.p_table_key), TABLES);
+    for (const check of checks) { assert.equal(check.data.verified, true); flags(check.data); }
+    assert.ok(h.events.indexOf(VERIFY) < h.events.indexOf('file-write'));
+    assert.ok(h.events.indexOf('cleanup-0') < h.events.indexOf('file-open'));
+    assert.ok(h.events.indexOf('file-eof') < h.events.lastIndexOf(VERIFY));
+    assert.deepEqual(await snapshot(), before); assert.deepEqual(await triggers(), modes); assertClientWorkspacesClean(h);
+  });
+});
+test('real SQL39 final verify rejects post-file-write target drift instead of returning a client backup success', async t => {
+  const h = await clientBackupDisk(t);
+  await transaction(async () => {
+    const c = await catalog(), original = Buffer.from(await collect(c, 'wallet_transactions'));
+    const before = await snapshot(), modes = await triggers(); let changed;
+    h.afterWrite = async () => {
+      h.events.push('intentional-target-drift');
+      await change('public.wallet_transactions', "UPDATE public.wallet_transactions SET remarks='local post-save target drift' WHERE id=$1", [id(1011)]);
+      changed = await snapshot();
+    };
+    await assert.rejects(h.export(c), error => {
+      assert.ok(error instanceof modules.EmployeeBackupError); assert.equal(error.phase, 'target-recheck');
+      assert.equal(error.encryptedFileState, 'verified'); assert.equal(error.cleanupRequired, false); assert.equal(error.outcomeUnknown, false);
+      assert.equal(error.cancelled, false); assert.equal(error.recordsVerified, undefined); return true;
+    });
+    assert.equal(h.fileWrites, 1); assert.equal(h.fileOpens, 1); assertClientWorkspacesClean(h);
+    const checks = h.calls.filter(call => call.name === VERIFY);
+    assert.equal(checks.length, 2); assert.equal(checks[0].data.verified, true);
+    assert.equal(checks[1].data, undefined); assert.match(checks[1].error, /source or target changed/);
+    assert.ok(h.events.indexOf('file-saved') < h.events.indexOf('intentional-target-drift'));
+    assert.ok(h.events.indexOf('file-eof') < h.events.lastIndexOf(VERIFY));
+    assert.deepEqual(await snapshot(), changed); assert.deepEqual(await triggers(), modes);
+    assert.deepEqual(changed.filter((row, index) => row.digest !== before[index].digest).map(row => row.name), ['public.wallet_transactions']);
+    assert.deepEqual(changed.map(row => row.n), before.map(row => row.n));
+    const restored = await h.decrypt();
+    assert.deepEqual(restored.files.get(modules.employeeBackupEntryPath('wallet_transactions')), original);
+    const stored = JSON.parse(restored.files.get(modules.EMPLOYEE_BACKUP_CATALOG_PATH).toString());
+    assert.equal(stored.fingerprint, c.fingerprint); flags(stored); assertClientWorkspacesClean(h);
+    const fresh = await catalog(); assert.notEqual(fresh.fingerprint, c.fingerprint);
+    assert.notDeepEqual(Buffer.from(await collect(fresh, 'wallet_transactions')), original);
   });
 });
 test('SQL39 cannot bypass archive maintenance; archived-only, multiple historical candidates and live identity with archive evidence all reject', () => transaction(async () => {
