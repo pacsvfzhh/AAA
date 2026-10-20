@@ -23,6 +23,15 @@
 - SQL42 `20261102000042_stop_owned_export.sql`：超管密码和「確認停止導出任務」二次确认，仅能按ID停止本人白名单协议的running导出，行锁后清其技术暂存并审计；不能停止导入、改钱包、删除业务/已保存文件或解除维护。过期/终态不重复清理，结果不明先重新查核。
 - 三份只新增迁移，不修改旧迁移、现有业务表/函数/触发器；本地完整回放569份仍精确保留原12项历史失败，109根表/967列不变，非干净建库证明。迁移/Edge/Storage/cron和前端均未部署正式环境。
 
+## 维护态整站恢复（SQL43–45，本地未部署）
+- SQL43 `20261102000043_preserve_transfer_announcements.sql`：最小替换三个共享设置helper，导出及目标备份排除公告轮播两键；旧包携入时明确拒绝。公告、分类、发布与轮播目标原值不变，不改其他共享设置规则。
+- SQL44 `20261102000044_preflight_site_restore.sql`：超管STABLE只读 `get_employee_import_site_preflight(uuid,uuid)`，核对来源站、全局任务、跨过期维护、未营业目标及110个固定RPC签名；不创建任务/清过期/发写许可，不代表Edge/Storage可用。
+- SQL45 `20261102000045_verify_site_prerequisites.sql`：原共享/产品apply移至private保留实现，public同签名包装在首次真实apply同事务记录目标摘要，重复apply不刷新。共享摘要绑定完整目标capture；产品按服务器映射核对六列，不把后续占位产品算漂移。private base/helper全撤权。
+- `employee_import_site_verify_prerequisites(uuid,uuid)` 要求原超管、同包同来源唯一apply及匹配维护，进入维护后配置写前、十领域恢复后各重验一次；漂移/缺记录/多义拒绝，不启用账号或解除维护。回执仅表示前置配置已验证，不是完整业务恢复。
+- SQL45的preflight包装将协议升为 `site-maintenance-restore-v2`，增加第111项复核RPC存在检查。新客户端拒绝44-only的v1成功结果，防写到一半才发现缺接口；`can_release/full_site_complete`恒false。SQL44原迁移未改。
+- 网络层全部 `get_employee_import_*` POST不自动重试，含固化备份/计划的dry-run；真正只读导出仍可重试。新写入RPC为120秒单次请求，失败需明确核对原任务。
+- 严格回放572份SQL，仍精确保留原12项历史失败，109根表/967列不变；不是干净建库或原生PG并发验收。没有正式库/Storage/Edge/cron/前端部署，完整切站仍禁止。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：

@@ -42,7 +42,7 @@
 |---|---|
 | `contentAudit.ts` | 调用 Edge Function `content-audit` 的全部封装（留证改删、永久删除、私有附件读取） |
 | `employeeTransfer/crypto.ts` | WebCrypto 流式分块认证，解密可绑定预期包/卷和取消信号；须等整卷 EOF/结束认证后才可提交业务资料；独立解密工具为 `scripts/decrypt-employee-export.mjs` |
-| `employeeTransfer/container.ts`、`manifest.ts`、`sha256.ts` | 双遍读取不可变临时文件，生成标准 STORED ZIP32；流式校验文件哈希/清单/卷集合/中央目录及外层结束认证，受大小与路径白名单限制。sink 仅写临时隔离区，abort 须阻断包括迟到完成在内的全部写入；浏览器OPFS/目录保存及十领域验证版导出页面已接入（见siteTransfer行）；全站导入与最终放行尚未接入，不代表完整媒体迁移 |
+| `employeeTransfer/container.ts`、`manifest.ts`、`sha256.ts` | 双遍读取不可变临时文件，生成标准 STORED ZIP32；流式校验文件哈希/清单/卷集合/中央目录及外层结束认证，受大小与路径白名单限制。sink 仅写临时隔离区，abort 须阻断包括迟到完成在内的全部写入；浏览器OPFS/目录保存及十领域验证版导出页面已接入（见siteTransfer行）；维护态十域导入已本地联通（第40节），可营业的最终放行仍未接入，不代表完整媒体迁移 |
 | `employeeTransfer/sharedExport.ts`、`api.ts` | 管理员/共享设置七表的固定协议分页导出，原始 NDJSON 哈希、写入后真实计数及源快照核对；清理失败显式标记不可复用。已接入验证版十领域串行导出，SQL40正常close释放任务而不冒充全站完成；未部署 |
 | `employeeTransfer/sharedImport.ts`、`api.ts` | 七表两遍校验/暂存并取得干跑；create-only 与同名来源 replacement 分入口，业务 apply 独立确认、不自动执行。replacement 冻结备份 descriptor/计划与接收器，公开对象副本不能改变内部绑定；账号启用、全站协调/续接与页面仍待实现 |
 | `employeeTransfer/replacementBackup.ts` | 七表冻结快照写临时文件→加密保存独立文件→重读完整认证及清单对照→重读密文按128KiB上传/回执→封存；最大9MiB，不自动apply/重试。失败清临时明文、不删除独立密文；封存结果不明须核对，真实浏览器磁盘适配/恢复向导仍待接入 |
@@ -66,7 +66,8 @@
 | `employeeTransfer/archiveMedia.ts`、`archiveBundle.ts`、`archiveReader.ts` | SQL35/36私有留证的独立archives scope、按来源站/包/事件/ref/原行hash绑定、真实回读及Blob查看；单卷记录+媒体加密独立保存/回读、整卷认证后才导入，按服务端已提交状态续传、不重启begin。来源命名空间只读索引接「遷入檔案」页，原文保持精度。多来源再导出见下行，真实Storage/原生PG/整站验收未完成，未部署，见第37–38节 |
 | `employeeTransfer/archiveReexport.ts` | SQL38全迁入来源目录及严格快照读取，原站/包/六表原文和附件身份保留，逐来源独立加密保存/认证，最终逐卷重读及全量目录复核。拒未核验来源和保存位置复用，不含本站原生档案，不代表多来源再导入已实现；无UI/部署，见第38节 |
 | `employeeTransfer/employeeBackup.ts` | SQL39服务端选择唯一同名目标，15表核心记录真实分页导出、独立UUID加密保存/完整认证回读及目标二次核验；明文1GiB/ZIP1100MiB/密文1101MiB，嵌套设备秘密键阻断。缺聊天/通知/媒体等，不算完整备份、无sealed/封存/替换许可；无UI/部署，见第38节 |
-| `employeeTransfer/siteTransfer.ts`、`siteExportApi.ts` | 十领域真实导出适配与串行协调；SQL41同一MVCC目录基线、每领域catalog绑定、独立密文保存/认证/明文清理后close，最终源目录及全部密文复核后写加密index。11文件本机检查核对同包/域/卷/行摘要；媒体调用各领域只读inspect，反向验证记录引用与附件及魔数。失败无自动写重试/取消，不启用业务；当前始终importReady/fullSiteComplete=false。仅验证版导出，不是完整站点可恢复协议，见计划第39节 |
+| `employeeTransfer/siteTransfer.ts`、`siteExportApi.ts` | 十领域真实导出适配与串行协调；SQL41同一MVCC目录基线、每领域catalog绑定、独立密文保存/认证/明文清理后close，最终源目录及全部密文复核后写加密index。11文件本机检查核对同包/域/卷/行摘要；媒体调用各领域只读inspect，反向验证记录引用与附件及魔数。新增withAuthenticatedSiteBundleSet先全组认证，之后每域重新认证同索引摘要及目录才给恢复器，callback后真实清理、结束后不能再读；档案额外重读绑定原catalog/密文哈希/字节数。失败无自动写重试/取消，不启用业务；当前始终importReady/fullSiteComplete=false。不是完整站点可恢复协议，见计划第39–40节 |
+| `employeeTransfer/siteImport.ts`、`siteRestoreApi.ts` | 认证全部11文件后才作目标准入；仅接受SQL45 v2，拒同站/业务残留/任务与维护。串联五份独立加密备份及十域实际恢复、身份后再恢复派单依赖、最终媒体回读/核验；SQL45进入维护后与末尾重验前置配置。所有账号停用/自动化暂停/dirty维护持续，结果不明不自动重跑、不是全站营业放行或完整同名员工替换；没有接入页面，见计划第40节 |
 | `employeeTransfer/browserStorage.ts` | 用户手势选独立随机子目录，输出一次写入、不覆写、不删密文；OPFS随机明文工作区流式append/open/abort，读后路径冻结、迟到操作不可复活，清理失败阻断成功。真实Chromium OPFS已本地复验；原生目录选择器/CORS/配额仍待实机验收 |
 | `employeeTransfer/deviceInfo.ts` | 登录设备JSON共享秘密键拒绝规则；普通历史时间/文本及原始数字不改写。activity传输及员工独立备份均调用；SQL41开始前复用SQL39服务端检查，不把会话秘密写进迁移文件 |
 | `employeeTransfer/employeeReplacement.ts` | SQL37同任务员工替换前置只读计划/状态；同名目标资金风险以十进制字符串呈现，内容指纹检测同数量变更、原封存记录和账号释放独立核对。can_archive/can_replace恒false，现有共享设置备份不算员工完整备份；UUID映射/完整独立员工备份及封存导入串联仍待做，见第37节 |
