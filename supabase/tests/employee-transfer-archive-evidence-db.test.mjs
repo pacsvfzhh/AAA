@@ -78,6 +78,10 @@ async function prepare(kind, input) {
   const identity = client.identity();return { client, job: { job_id: identity.jobId, job_token: identity.jobToken }, plan };
 }
 async function inCase(fn) {
+  // A SQL rollback is test isolation, not a real-world session rollback. Do not carry
+  // immutable client observations from one synthetic history into the next one.
+  sourceClient = modules.createArchiveMediaSession(sourceJob.job_token, 'export', transport);
+  targetClient = modules.createArchiveMediaSession(dispatchJob.job_token, 'import', transport);
   await source.exec('SAVEPOINT case_source');await target.exec('SAVEPOINT case_target');
   try { return await fn(); } finally { await source.exec('ROLLBACK TO SAVEPOINT case_source;RELEASE SAVEPOINT case_source');await target.exec('ROLLBACK TO SAVEPOINT case_target;RELEASE SAVEPOINT case_target'); }
 }
@@ -288,8 +292,25 @@ test('permanent read survives cancel, expiry and staging deletion, but wrong nam
   await assert.rejects(modules.readArchiveMedia(binding, undefined, transport));
 }));
 
+test('cleared evidence with remaining media_refs blocks rather than resurrecting or silently skipping attachments', () => inCase(async () => {
+  await source.query(`UPDATE private.content_audit_events SET cleared_at='2024-01-01' WHERE id=$1`, [EVENT]);
+  // Simulate a genuine source snapshot with inconsistent legacy cleared metadata.
+  const refreshed = await scalar(source, 'SELECT private.employee_transfer_archives_catalog($1)', [PACKAGE]);
+  await source.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{archives_catalog}',$1::jsonb) WHERE id=$2`, [JSON.stringify(refreshed), sourceJob.job_id]);
+  await assert.rejects(rpc(source, PREFIX + 'inventory', { ...auth(sourceJob, sourceToken), p_direction: 'export' }), /Cleared archive evidence/);
+  assert.equal(await scalar(source, 'SELECT summary ? \'archives_media\' FROM private.employee_transfer_jobs WHERE id=$1', [sourceJob.job_id]), false);
+}));
+
+test('unreferenced objects and keys never authorize, including an actual private object outside the frozen archive', () => inCase(async () => {
+  const unauthorized = sha(`${OP}/shared/unreferenced`);
+  const before = calls.length;
+  await assert.rejects(rpc(source, PREFIX + 'authorize', { ...auth(sourceJob, sourceToken), p_action: 'download', p_object_key: unauthorized }, 'service_role'), /outside this job/);
+  assert.equal(calls.length, before);
+}));
+
 test('actual COMMIT followed by lost upload response and a new client: status and explicit recheck resume permanent sidecar', async () => {
   // Commit authentic SQL34 setup, not fabricated verified flags. A fresh API then observes media COMMIT.
+  sourceClient = modules.createArchiveMediaSession(sourceJob.job_token, 'export', transport);
   await source.exec('COMMIT;BEGIN');await target.exec('COMMIT;BEGIN');
   stores.set(target, new Map());const data = await exportMedia();await source.exec('COMMIT;BEGIN');activate(target, targetToken);
   let drop = true;

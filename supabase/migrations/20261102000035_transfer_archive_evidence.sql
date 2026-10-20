@@ -46,6 +46,11 @@ BEGIN
   END IF;
   FOR v_row IN EXECUTE v_query USING v_site::uuid,v_package::uuid LOOP
     IF jsonb_typeof(v_row.body->'media_refs') IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'Unsupported archive media_refs; no reference was omitted.';END IF;
+    -- Preserve the raw row, but never resurrect evidence that its source marked cleared.
+    -- An inconsistent nonempty manifest is a blocker, not permission to skip attachments.
+    IF v_row.body->>'cleared_at' IS NOT NULL AND v_row.body->'media_refs'<>'{}'::jsonb THEN
+      RAISE EXCEPTION 'Cleared archive evidence still contains media references.';
+    END IF;
     v_line_hash:=private.employee_transfer_archive_media_hash(v_row.source_line);
     FOR v_ref IN SELECT key,value FROM jsonb_each(v_row.body->'media_refs') LOOP
       IF octet_length(v_ref.key) NOT BETWEEN 1 AND 4096 OR v_ref.key ~ '[[:cntrl:]]'

@@ -388,7 +388,9 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
         if (!UUID_PATTERN.test(admin) || admin.length !== 36 || request.signal.aborted ||
           request.headers.has('content-encoding') || request.headers.has('content-range') ||
           request.headers.has('x-transfer-job-token') || request.headers.has('x-transfer-object-key')) fail(400, 'INVALID_REQUEST');
-        const raw = await readBounded(request, 8192, declaredLength(request, 8192));
+        // A 4096-byte opaque ref key can expand sixfold when JSON-escaped.
+        // Keep the request bounded without rejecting valid original metadata.
+        const raw = await readBounded(request, 32768, declaredLength(request, 32768));
         let body: unknown;
         try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)); } catch { fail(400, 'INVALID_REQUEST'); }
         if (!record(body) || !exact(body, ['source_site_id', 'package_id', 'event_id', 'ref_key']) ||

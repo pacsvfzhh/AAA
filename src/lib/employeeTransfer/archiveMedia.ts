@@ -92,7 +92,9 @@ export function validateArchiveMediaInventory(value: unknown, direction: Archive
   const transferred = array(r.transferred, refs.length).map(hash), checked = array(r.checked, refs.length).map(hash);
   ordered(transferred); ordered(checked);
   if (transferred.some(key => !refs.some(ref => ref.key === key && ref.file)) || checked.some(key => !transferred.includes(key)) ||
-    (r.verified && (!r.bound || checked.length !== refs.length)) || (r.bound && direction === 'import' && refs.some(ref => !ref.file))) invalid();
+    (r.verified && (!r.bound || checked.length !== refs.length)) || (r.bound && direction === 'import' && refs.some(ref => !ref.file)) ||
+    (direction === 'export' && (!r.bound || refs.some(ref => ref.file && !transferred.includes(ref.key)))) ||
+    (direction === 'import' && !r.bound && (refs.some(ref => ref.file) || transferred.length !== 0))) invalid();
   if (catalog.tables.reduce((n, t) => n + t.bytes, refs.reduce((n, f) => n + (f.file?.bytes ?? 0), 0)) > ARCHIVE_MEDIA_LIMITS.maxTotalBytes) invalid();
   return { version: 1, scope: 'site-archives-media', direction, archives_catalog: catalog, files: refs, bound: r.bound,
     verified: r.verified, transferred, checked, full_site_complete: false };
@@ -156,6 +158,9 @@ export interface ArchiveMediaSession {
 export function createArchiveMediaSession(jobToken: string, direction: ArchiveMediaDirection, transport: typeof fetch = globalThis.fetch): ArchiveMediaSession {
   uuid(jobToken);if (direction !== 'export' && direction !== 'import') invalid();
   const { endpoint, apiKey } = config();let busy = false, requiresStatus = false, snapshot: string | null = null;
+  let references: string | null = null, requested: ArchiveMediaFile[] | null = null;
+  let confirmed: ArchiveMediaInventory | null = null;
+  const observed = new Map<string, ArchiveMediaFile>();
   const params = () => ({ p_admin_session_token: admin(), p_job_token: jobToken });
   const run = async <T>(operation: (mark: () => void) => Promise<T>, status = false, signal?: AbortSignal): Promise<T> => {
     if (busy || (requiresStatus && !status)) throw new ArchiveMediaError(requiresStatus);
@@ -170,7 +175,22 @@ export function createArchiveMediaSession(jobToken: string, direction: ArchiveMe
   };
   const validate = (value: unknown) => {
     const checked = validateArchiveMediaInventory(value, direction), next = JSON.stringify(checked.archives_catalog);
-    if (snapshot !== null && snapshot !== next) invalid();snapshot = next;return checked;
+    const refs = JSON.stringify(checked.files.map(ref => ({ ...ref, file: null })));
+    if ((snapshot !== null && snapshot !== next) || (references !== null && references !== refs)) invalid();
+    if (confirmed && ((confirmed.bound && !checked.bound) || (confirmed.verified && !checked.verified) ||
+      confirmed.transferred.some(key => !checked.transferred.includes(key)) || confirmed.checked.some(key => !checked.checked.includes(key)))) invalid();
+    for (const [index, ref] of checked.files.entries()) {
+      const old = observed.get(ref.key);
+      if (old && (!ref.file || !same(old, ref.file))) invalid();
+      if (direction === 'import' && checked.bound && requested && (!ref.file || !same(requested[index], ref.file))) invalid();
+    }
+    // Commit local observations only after the ENTIRE receipt is accepted.
+    snapshot = next;references = refs;
+    confirmed = { ...checked, archives_catalog: validateArchivesCatalog(checked.archives_catalog),
+      files: checked.files.map(ref => ({ ...ref, file: ref.file && { ...ref.file } })),
+      transferred: [...checked.transferred], checked: [...checked.checked] };
+    for (const ref of checked.files) if (ref.file) observed.set(ref.key, { ...ref.file });
+    return checked;
   };
   const inventory = async (status: boolean, signal?: AbortSignal) => validate(await rpc(`employee_transfer_archive_media_${status ? 'status' : 'inventory'}`, { ...params(), p_direction: direction }, signal));
   const post = async (action: string, key: string, mark: () => void, signal?: AbortSignal, body?: Uint8Array) => {
@@ -198,9 +218,13 @@ export function createArchiveMediaSession(jobToken: string, direction: ArchiveMe
     inventory: (signal?: AbortSignal) => run(() => inventory(false, signal), false, signal),
     status: (signal?: AbortSignal) => run(async () => { const result = await inventory(true, signal);check(signal);requiresStatus = false;return result; }, true, signal),
     bind: (input: readonly ArchiveMediaFile[], signal?: AbortSignal) => run(async mark => {
-      if (direction !== 'import') invalid();const checked = files(input);matches(await inventory(false, signal), checked);
-      const args = { ...params(), p_files: checked };mark();const r = object(await rpc('employee_transfer_archive_media_bind', args, signal), ['success', 'files', 'bytes', 'repeated', 'full_site_complete']);
+      if (direction !== 'import') invalid();const checked = files(input);
+      if (requested && (requested.length !== checked.length || requested.some((file, i) => !same(file, checked[i])))) invalid();
+      matches(await inventory(false, signal), checked);
+      const args = { ...params(), p_files: checked };requested = checked;mark();
+      const r = object(await rpc('employee_transfer_archive_media_bind', args, signal), ['success', 'files', 'bytes', 'repeated', 'full_site_complete']);
       if (r.success !== true || r.files !== checked.length || r.bytes !== checked.reduce((n, f) => n + f.bytes, 0) || typeof r.repeated !== 'boolean' || r.full_site_complete !== false) invalid();
+      validate({ ...confirmed!, bound: true, files: confirmed!.files.map((ref, i) => ({ ...ref, file: checked[i] })) });
     }, false, signal),
     download: (input: ArchiveMediaReference, signal?: AbortSignal) => run(async mark => {
       if (direction !== 'export') invalid();const ref = reference(input);

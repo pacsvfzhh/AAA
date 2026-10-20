@@ -132,6 +132,20 @@ test('pre-aborted archives read never authorizes or downloads', async () => {
   const h = harness('read'), controller = new AbortController();controller.abort();
   await failed(await h.handler(new Request(h.request(), { signal: controller.signal })), 400);assert.deepEqual(h.calls, []);
 });
+for (const escaped of [false, true]) test(`read preserves a full 4096-byte opaque ref key, JSON escaped=${escaped}`, async () => {
+  const refKey = '"'.repeat(4096), h = harness('read');
+  const identity = `archive-evidence-v1:${SITE}:${PACKAGE}:${EVENT}:${'a'.repeat(64)}:${sha(refKey)}:${sha(PATH)}`;
+  const key = sha(identity);h.ctx.key = key;h.ctx.source_url = identity;h.ctx.path = `transfer-archives/${JOB}/${key}`;
+  h.ctx.file = { ...h.file, key, source_url: identity };h.objects.set(h.ctx.path, JPEG);
+  const body = JSON.stringify({ source_site_id: SITE, package_id: PACKAGE, event_id: EVENT, ref_key: refKey });
+  const encoded = escaped ? body.slice(0, body.indexOf('"ref_key":') + 10) + '"' + '\\u0022'.repeat(4096) + '"}' : body;
+  const response = await h.handler(h.request({}, encoded));assert.equal(response.status, 200);
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), JPEG);
+  assert.equal(h.calls[0].args.p_ref_key, refKey);assert.deepEqual(ops(h), [READ, 'download', READ]);
+});
+test('read body remains bounded before authorization, including giant escaped metadata', async () => {
+  const h = harness('read');await failed(await h.handler(h.request({}, 'x'.repeat(32769))), 413);assert.deepEqual(h.calls, []);
+});
 test('read rejects unexpected job token header and nonempty transfer requests reject bodies', async () => {
   const h = harness('read');await failed(await h.handler(h.request({ 'x-transfer-job-token': JOB })), 400);assert.deepEqual(h.calls, []);
   const d = harness('download');await failed(await d.handler(d.request({}, 'arbitrary path')), 413);assert.deepEqual(ops(d), [AUTH]);
