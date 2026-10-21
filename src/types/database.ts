@@ -2610,6 +2610,26 @@ export interface Database {
           p_source_fingerprint: string; p_target_fingerprint: string };
         Returns: import('../lib/employeeTransfer/employeeIdentityReservation').EmployeeIdentityReservationStatus;
       };
+      employee_import_mapped_identity_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedIdentity').EmployeeMappedIdentityPlan;
+      };
+      employee_import_mapped_identity_core: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedIdentity').EmployeeMappedIdentityStatus;
+      };
+      employee_import_mapped_identity_orders: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string; p_chunk_no: number };
+        Returns: import('../lib/employeeTransfer/employeeMappedIdentity').EmployeeMappedIdentityStatus;
+      };
+      employee_import_mapped_identity_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedIdentity').EmployeeMappedIdentityStatus;
+      };
+      employee_import_mapped_identity_status: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedIdentity').EmployeeMappedIdentityStatus;
+      };
       employee_import_replacement_plan: {
         Args: { p_admin_session_token: string; p_job_token: string; p_after?: string | null; p_limit?: number };
         Returns: import('../lib/employeeTransfer/employeeReplacement').EmployeeReplacementPlan;
