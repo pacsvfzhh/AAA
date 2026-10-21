@@ -1143,7 +1143,9 @@ for (const earlyReturn of [false, true]) test(`identity projection: valid output
   await projectIdentity(h, async p => {
     for (let attempt = 0; attempt < 2; attempt++) {
       const iterator = p.open('accounts')[Symbol.asyncIterator](), first = await iterator.next();
-      assert.equal(first.done, false); assert.equal(eof, attempt + 1, 'Each open must authenticate its complete current output before exposing any bytes');
+      assert.equal(first.done, false);
+      assert.equal(started, (attempt + 1) * 2, 'Each open performs full-file preflight, then independently reads the baseline-verified blocks');
+      assert.equal(eof, (attempt + 1) * 2, 'Both passes reach EOF before the small fixture can expose its partial block');
       if (earlyReturn) await iterator.return();
       else {
         const chunks = [Buffer.from(first.value)];
@@ -1152,7 +1154,7 @@ for (const earlyReturn of [false, true]) test(`identity projection: valid output
       }
     }
   });
-  assert.equal(started, 2); assert.equal(eof, 2); projectionOffline(h, baseline); cleaned(h);
+  assert.equal(started, 4); assert.equal(eof, 4); projectionOffline(h, baseline); cleaned(h);
 });
 
 for (const variant of ['same-size-tail', 'extra-tail', 'missing-tail', 'missing-lf', 'invalid-row']) for (const earlyReturn of [false, true]) test(`identity projection: output stream rejects ${variant} before yielding, ${earlyReturn ? 'early return cannot hide drift' : 'full read'}`, async t => {
@@ -1211,5 +1213,160 @@ for (const stage of ['pair-records', 'pair-media', 'second-records', 'output']) 
   } finally {
     rejectCleanup?.(new Error(SECRET)); if (mode === 'deadline') mock.timers.reset();
     await projectionWithin(outcome);
+  }
+});
+
+// 64KiB is the public bounded-read contract, not imported from implementation internals.
+const PROJECTION_TEST_BLOCK_BYTES = 64 * 1024;
+for (const variant of ['changed-byte', 'oversized', 'truncated']) test(`identity projection: second-pass small ${variant} never exposes its unchecked partial block`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h), path = api.employeeSafetyBackupEntryPath('accounts');
+  const expected = enc(expectedProjectionLine(h.texts.accounts, 'accounts')); let preflightEof = false, secondPass = false, emitted = 0;
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== baseline.spaces + 3 || current !== path || count < 2) return;
+    if (count === 2) return { async *[Symbol.asyncIterator]() { yield expected; preflightEof = true; } };
+    assert.equal(count, 3); assert.equal(preflightEof, true); secondPass = true;
+    const bytes = variant === 'changed-byte' ? enc(new TextDecoder().decode(expected).replace('原始', '修改'))
+      : variant === 'oversized' ? Buffer.concat([expected, enc('unexpected trailing bytes')]) : expected.subarray(0, -1);
+    assert.notEqual(sha(bytes), sha(expected));
+    return { async *[Symbol.asyncIterator]() { yield bytes.subarray(0, 17); yield bytes.subarray(17); } };
+  };
+  await assert.rejects(projectIdentity(h, async p => {
+    for await (const bytes of p.open('accounts')) emitted += bytes.length;
+  }), e => projectionRedacted(e, { cancelled: false, cleanupRequired: false }));
+  assert.equal(preflightEof, true); assert.equal(secondPass, true); assert.equal(emitted, 0, 'Even an unchanged small prefix stays private until its whole block matches');
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+async function projectionBlockPrepared(t, totalBytes) {
+  const key = 'wallet_transactions', rows = [];
+  for (let index = 0; index < 3; index++) {
+    const row = rowObject(key, index); row.remarks = `${index}:` + 'x'.repeat(3 * PROJECTION_TEST_BLOCK_BYTES / 4); rows.push(row);
+  }
+  let text = rows.map(projectionSerialize).join(''), extra = Buffer.byteLength(text) - totalBytes;
+  assert.ok(extra >= 0 && extra < rows.at(-1).remarks.length);
+  rows.at(-1).remarks = rows.at(-1).remarks.slice(0, rows.at(-1).remarks.length - extra); text = rows.map(projectionSerialize).join('');
+  assert.equal(Buffer.byteLength(text), totalBytes);
+  for (const raw of lines(text)) assert.ok(Buffer.byteLength(raw) < PROJECTION_TEST_BLOCK_BYTES, 'Real-schema rows fit the 64KiB SQL46 line bound');
+  const expected = Buffer.from(lines(text).map(raw => expectedProjectionLine(raw, key)).join(''));
+  assert.equal(expected.length, totalBytes);
+  const h = await projectionPrepared(t, { empty: true, change(h) { h.texts[key] = text; } });
+  return { h, expected, key, path: api.employeeSafetyBackupEntryPath(key) };
+}
+function projectionChunked(raw, cuts, onEof = () => {}) {
+  return { async *[Symbol.asyncIterator]() {
+    let start = 0;
+    for (const end of cuts) { assert.ok(end > start && end < raw.length); yield raw.subarray(start, end); start = end; }
+    yield raw.subarray(start); onEof();
+  } };
+}
+for (const layout of ['one-byte-edges', 'straddling-chunks']) test(`identity projection: multi-block ${layout} verifies baseline hashes independent of workspace chunk boundaries`, async t => {
+  const { h, expected, key, path } = await projectionBlockPrepared(t, 2 * PROJECTION_TEST_BLOCK_BYTES + 113), baseline = projectionBaseline(h);
+  const block = PROJECTION_TEST_BLOCK_BYTES, chunks = []; let preflightEof = false, secondEof = false;
+  const cuts = layout === 'one-byte-edges' ? [block - 1, block, block + 1, 2 * block - 1, 2 * block, 2 * block + 1] : [7, block + 19, 2 * block + 31];
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== baseline.spaces + 3 || current !== path || count < 2) return;
+    if (count === 2) return projectionChunked(expected, [block - 3, 2 * block + 3], () => { preflightEof = true; });
+    assert.equal(count, 3); assert.equal(preflightEof, true);
+    return projectionChunked(expected, cuts, () => { secondEof = true; });
+  };
+  await projectIdentity(h, async p => {
+    for await (const bytes of p.open(key)) {
+      assert.equal(preflightEof, true, 'No block can precede the complete file preflight');
+      if (chunks.length < 2) assert.equal(secondEof, false, 'Matched full blocks stream without buffering the whole table');
+      else assert.equal(secondEof, true, 'Partial tail waits for second-pass EOF');
+      chunks.push(Buffer.from(bytes));
+    }
+  });
+  assert.deepEqual(chunks.map(raw => raw.length), [block, block, 113]); assert.deepEqual(Buffer.concat(chunks), expected);
+  projectionOffline(h, baseline); cleaned(h);
+});
+for (const variant of ['first-block-last-byte', 'second-block-first-byte', 'second-block-last-byte', 'tail-first-byte', 'truncated-second-block', 'truncated-tail', 'oversized-tail']) test(`identity projection: multi-block second-pass ${variant} emits only prior verified blocks`, async t => {
+  const { h, expected, key, path } = await projectionBlockPrepared(t, 2 * PROJECTION_TEST_BLOCK_BYTES + 113), baseline = projectionBaseline(h), block = PROJECTION_TEST_BLOCK_BYTES;
+  let bytes = Buffer.from(expected), allowedBlocks, preflightEof = false, secondPass = false;
+  const offset = { 'first-block-last-byte': block - 1, 'second-block-first-byte': block, 'second-block-last-byte': 2 * block - 1, 'tail-first-byte': 2 * block }[variant];
+  if (offset !== undefined) { bytes[offset] ^= 1; allowedBlocks = Math.floor(offset / block); }
+  else if (variant === 'truncated-second-block') { bytes = bytes.subarray(0, block + 37); allowedBlocks = 1; }
+  else if (variant === 'truncated-tail') { bytes = bytes.subarray(0, -1); allowedBlocks = 2; }
+  else { bytes = Buffer.concat([bytes, enc('extra tail')]); allowedBlocks = 2; }
+  const chunks = [];
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== baseline.spaces + 3 || current !== path || count < 2) return;
+    if (count === 2) return projectionChunked(expected, [block + 5], () => { preflightEof = true; });
+    assert.equal(count, 3); assert.equal(preflightEof, true); secondPass = true;
+    // One read may contain a valid block and a corrupt next block: checking only IO chunks is insufficient.
+    return projectionChunked(bytes, [block - 1, block + 1]);
+  };
+  await assert.rejects(projectIdentity(h, async p => {
+    for await (const raw of p.open(key)) { assert.equal(preflightEof, true); chunks.push(Buffer.from(raw)); }
+  }), e => projectionRedacted(e, { cancelled: false, cleanupRequired: false }));
+  assert.equal(secondPass, true); assert.deepEqual(chunks.map(raw => raw.length), Array(allowedBlocks).fill(block));
+  assert.deepEqual(Buffer.concat(chunks), expected.subarray(0, allowedBlocks * block), 'A damaged block contributes zero bytes; earlier matching blocks are not an atomic DB restore');
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+test('identity projection: exact 64KiB second-pass extension rejects without exposing the extra block', async t => {
+  const block = PROJECTION_TEST_BLOCK_BYTES, { h, expected, key, path } = await projectionBlockPrepared(t, 2 * block), baseline = projectionBaseline(h), chunks = [];
+  let secondPass = false;
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== baseline.spaces + 3 || current !== path || count < 2) return;
+    if (count === 2) return projectionChunked(expected, [block - 1]);
+    assert.equal(count, 3); secondPass = true;
+    return projectionChunked(Buffer.concat([expected, Buffer.alloc(block, 120)]), [block - 1, block + 1, 2 * block + 1]);
+  };
+  await assert.rejects(projectIdentity(h, async p => { for await (const raw of p.open(key)) chunks.push(Buffer.from(raw)); }), e => projectionRedacted(e));
+  assert.equal(secondPass, true); assert.deepEqual(chunks.map(raw => raw.length), [block, block]); assert.deepEqual(Buffer.concat(chunks), expected);
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const size of ['small-file', 'multi-block-tail']) for (const exit of ['return', 'throw']) test(`identity projection: reader exit ${exit} rejects late second-pass EOF for ${size} while cleanup is stalled`, { timeout: 20000 }, async t => {
+  const block = PROJECTION_TEST_BLOCK_BYTES;
+  const fixture = size === 'small-file' ? { h: await projectionPrepared(t, { empty: true }), key: 'accounts', path: api.employeeSafetyBackupEntryPath('accounts') }
+    : await projectionBlockPrepared(t, 2 * block + 113);
+  const { h, key, path } = fixture, expected = fixture.expected ?? Buffer.from(expectedProjectionLine(h.texts.accounts, 'accounts')), baseline = projectionBaseline(h);
+  let reachEof, releaseEof, reachCleanup, releaseCleanup, eofWaits = 0, lateEofs = 0, reader, iterator, deferred, notStarted, pendingNext, lateOutcome;
+  const eofEntered = new Promise(resolve => { reachEof = resolve; }), cleanupEntered = new Promise(resolve => { reachCleanup = resolve; });
+  const eof = new Promise(resolve => { releaseEof = resolve; }), cleanup = new Promise(resolve => { releaseCleanup = resolve; });
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== baseline.spaces + 3 || current !== path || count < 2) return;
+    if (count === 2) return stream(expected);
+    assert.equal(count, 3); let sent = false;
+    return { [Symbol.asyncIterator]() { return {
+      async next() {
+        if (!sent) { sent = true; return { done: false, value: expected }; }
+        eofWaits++; reachEof(); await eof; lateEofs++; return { done: true };
+      },
+      return() { return Promise.resolve({ done: true }); },
+    }; } };
+  };
+  // Pause the nested source-reader cleanup, before the output workspace is discarded. A late
+  // read must be forbidden by callback lifetime, not merely by eventual file removal.
+  h.cleanupHook = w => { if (h.spaces.indexOf(w) === baseline.spaces + 2) { reachCleanup(); return cleanup; } };
+  const operation = projectIdentity(h, async p => {
+    reader = p; deferred = p.open(key); notStarted = p.open(key)[Symbol.asyncIterator](); iterator = p.open(key)[Symbol.asyncIterator]();
+    if (size === 'multi-block-tail') for (let index = 0; index < 2; index++) {
+      const next = await iterator.next(); assert.equal(next.done, false); assert.deepEqual(Buffer.from(next.value), expected.subarray(index * block, (index + 1) * block));
+    }
+    pendingNext = iterator.next(); lateOutcome = pendingNext.then(value => ({ value }), error => ({ error }));
+    await projectionWithin(eofEntered);
+    if (exit === 'throw') throw new Error(SECRET);
+    return 'callback has ended';
+  });
+  const outcome = operation.then(value => ({ value }), error => ({ error }));
+  try {
+    await projectionWithin(cleanupEntered); assert.equal(eofWaits, 1);
+    assert.equal(h.spaces[baseline.spaces + 3].cleaned, false, 'Output still exists while cleanup is suspended');
+    assert.throws(() => reader.open(key)); await assert.rejects(collect(deferred), e => projectionRedacted(e)); await assert.rejects(notStarted.next(), e => projectionRedacted(e));
+    // Ending consume must abort an already-pending read even before the untrusted EOF resolves.
+    const beforeLateEof = await projectionWithin(lateOutcome);
+    assert.ok(beforeLateEof.error, 'A pending read cannot outlive consume or return the buffered small file/tail'); projectionRedacted(beforeLateEof.error);
+    releaseEof(); await new Promise(resolve => setImmediate(resolve)); assert.equal(lateEofs, 1, 'The stale EOF really arrived while output cleanup remained suspended');
+    const afterLateEof = await lateOutcome; assert.equal(afterLateEof.error, beforeLateEof.error); assert.equal(Object.hasOwn(afterLateEof, 'value'), false);
+    const exhausted = await iterator.next(); assert.equal(exhausted.done, true); assert.equal(exhausted.value, undefined);
+    releaseCleanup(); const settled = await projectionWithin(outcome);
+    if (exit === 'throw') projectionRedacted(settled.error); else { assert.equal(settled.error, undefined); assert.equal(settled.value, 'callback has ended'); }
+    assert.throws(() => reader.open(key)); projectionOffline(h, baseline); cleaned(h);
+  } finally {
+    releaseEof(); releaseCleanup(); await projectionWithin(outcome);
+    if (lateOutcome) await projectionWithin(lateOutcome);
   }
 });
