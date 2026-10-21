@@ -1,6 +1,8 @@
 # 全站业务资料导出 / 导入实施计划（精简历史订单）
 
-最新补充：第47节新增SQL48/employeeIdentityReservation服务端候选身份绑定：复用真实导入任务及来源目录，服务器生成候选UUID，固定来源/目标指纹，重复请求返回同一候选，漂移或占用阻断。只写私有技术暂存/审计，不占用users全局身份空间、不消费SQL46/47备份证明、不接实际恢复/封存；全部完成/恢复/替换门禁仍false。五专项392项及整站维护态28项最终完整通过，正式环境未访问/部署。
+最新补充：第48节SQL49/employeeMappedIdentity已接候选UUID的实际停用账号/凭据/精简订单恢复及逐字段核验，字段/原文/源与目标漂移、幂等、UTC与失败事务回滚已本地验证。只允许无同名活跃或封存历史的新身份，不消费完整备份证明、不开放覆盖；其他领域映射/封存窗口仍待做。七专项885/885及SQL49下整站维护态28/28通过，正式未访问/部署。
+
+第47节新增SQL48/employeeIdentityReservation服务端候选身份绑定：复用真实导入任务及来源目录，服务器生成候选UUID，固定来源/目标指纹，重复请求返回同一候选，漂移或占用阻断。只写私有技术暂存/审计，不占用users全局身份空间、不消费SQL46/47备份证明、不接实际恢复/封存；全部完成/恢复/替换门禁仍false。五专项392项及整站维护态28项最终完整通过，正式环境未访问/部署。
 
 第46节新增employeeIdentityProjection本机转换层：先认证双包、再绑定精确记录密文，固定48表员工UUID/复合键无损转换，保留金额/员工号/正文/媒体/留证原文；只读回调及全部工作区限时清理，未预留服务器UUID、未写库/接UI。服务器预留、其他实体ID、共享配置/缺失submit_time_groups、账本游标、媒体/档案/工时及DB核对仍阻断，canRestore/canArchive/canReplace恒false。198项新增专项按100+98互斥分组最终通过，非完整374项或全套通过，详见第46节。第45节已将SQL46记录与SQL47附件串联至EmployeeSafetyBackupPanel：同一任务内记录保存/认证→实际附件独立加密保存/认证→两份.edx成对回读/全部清理→最后源附件与记录复核→显式close。零附件也保存独立可核验目录卷；各文件回执、成对状态与任务结束分别显示，失败/取消/丢响应保持互锁，不自动stop/close/retry/delete。记录v1及media_included:false不变，页面报告另为v2/employee-safety-pair-v1；完整员工恢复、统一UUID/全部引用映射和安全封存窗口仍缺，completeEmployeeBackup/canArchive/canReplace/fullSiteComplete恒false。双浏览器各54独立场景（含父组110项）、旧向导24、客户端/Storage431、SQL47专项26均本地通过；真实Storage/原生picker/PG未验。自动化续接/最终营业放行、统一迁入档案/共享媒体/容量多卷及跨会话续接仍待做，无正式服务访问或SQL/Edge/Storage/config/前端部署调整，不可正式迁移；页面证据见第45节；身份转换准备见第46节。
 
@@ -1144,4 +1146,41 @@ DROP FUNCTION public.employee_import_identity_reserve(uuid,uuid,uuid,text,text);
 DROP FUNCTION public.employee_import_identity_reservation_status(uuid,uuid,uuid);
 DROP FUNCTION private.employee_transfer_identity_reservation_status(private.employee_transfer_jobs,uuid);
 DROP FUNCTION private.employee_transfer_identity_candidate_free(private.employee_transfer_jobs,uuid,uuid);
+```
+
+## 48. 新身份账号、凭据与精简订单实际恢复（2026-10-22，UTC+8，本地未部署）
+
+### 48.1 本轮真正写入的范围
+- 新增`20261102000049_restore_mapped_employee_identities.sql`，只追加五个私有helper和五个公共RPC，无新表或旧迁移/函数修改；`employee_import_mapped_identity_plan/status`为STABLE只读，`core/orders/verify`是显式写操作。全部SECURITY DEFINER/固定search_path/UTC及ISO日期，撤销PUBLIC/service_role与私有helper直接执行权，公共RPC仅授予anon/authenticated并在内部验证超管及本人任务。
+- 复用SQL37真实任务、已封存配置备份、已恢复配置与dirty维护；读取SQL48服务端候选，不接受客户端目标UUID或备份证明。账户原文由SQL37重验，另外逐块重验credentials/orders的NDJSON、解析行、行哈希、数量/字节，目录和源/目标指纹不符阻断；金融数字保持Postgres numeric，不经浏览器JSON重序列化。
+- `plan`逐来源员工报告固定冲突、总数及全局订单块数，绑定完整站点/包/来源/候选/源目录/管理员映射。源UUID已被占用、同名员工或管理员、员工号、任何未清同名封存历史、订单UUID、缺管理员映射或已启用占位产品均拒绝；**尚不允许真正的同名替换或封存后恢复。** 不能把SQL48候选误当完整备份许可。
+- `core`先锁维护库存表、再锁任务并重验计划，单事务写新UUID的停用users、原登录密码指纹、原业务属性与实际同包管理员映射，清空全部登录会话；原financial_employee_credentials有则精确复制到新user_id，没有就保持缺失。复用/建立停用占位产品，wallet仅由既有触发器创建零可用/冻结余额，不在这里恢复资金或人工补财务凭据。
+- `orders`按原身份暂存的全局块游标处理，只取该来源员工的行，保留订单UUID和精简字段，user_id改为该员工候选；固定SQL15占位金额0.01/停用产品/IMPORTED-*及空派单快照。某块属于其他员工时仍显式推进零行块。遇到已占用订单UUID拒绝，不覆盖/跳过到错员工，不导入处理中订单或真实产品/金额/内容。
+- 复用SQL15精确列写许可及已审核wallet/order触发器旁路/原模式恢复，不新增permit范围；写失败整次事务回滚，包含账号/凭据/钱包或该订单块、游标/事件，其他已完成块不假称撤销。每次读写均复核源绑定、完整保存计划/hash/安全标志、账号/凭据原字段、停用无会话、零钱包/无账本基准、占位产品和已提交订单内容与实际行数；未完成块/数量不足不能verify。
+
+### 48.2 状态与后续领域隔离
+- 仅在原staging的`mapped-identity-v1`保存逐员工计划、管理员映射、占位产品、真实计数/游标与verified；不会设置旧`summary.identity_restore`或伪造`verified_identity_map`。旧依赖/财务等恢复器仍拒绝把来源ID直接当新ID，必须由后续明确接入此映射。两种身份恢复路径不能混用；现有整站协调器仍走原路径，未自动选SQL49。
+- `verified=true`仅表示**本阶段账号/凭据/精简订单**一致；`can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false`，`dependencies_pending=true`。不启用账号、封存/删旧员工、合并聊天或解除dirty维护；取消也不自动删除已经提交的停用账号或订单。
+- 新`employeeMappedIdentity.ts`严格校验固定字段/计数/游标/任务及每来源候选，冻结计划快照；每次请求重新取会话、互斥、不自动重试。未知写入会阻断后续写步骤，必须显式status核对；即使取消后底层请求仍运行，也保留本地互斥至实际请求结束。已用真实client→anon RPC验证“core已提交但响应丢失→status明确核对→继续订单/verify”，不重复建立账号。
+- 尚缺SQL46/47精确双密文与服务端映射认证、完整48类依赖（含submit_time_groups）、派单/已用交单、六表资金和账本游标、活动/实名/通知/聊天/媒体/档案等使用同一新员工及必要实体映射；既有封存安全窗口/覆盖流程、前端协调与最终营业放行仍未完成。本机投影的完整恢复阻断不解除，不把SQL49核验等同整站备份可恢复。
+
+### 48.3 本地证据与部署边界
+- 七文件最终完整885/885：新数据库75、新客户端417、SQL48数据库44/候选client179、SQL37旧client77、基础/范围93；另最新SQL49下真实两站/11密文/维护态整站完整28/28，合计913项，均无失败/取消/跳过。真实密码/高精度NULL/标签备注/时间/多员工映射与零行块、凭据缺失、权限/过期/撤权、同名及原生封存阻断、订单/候选占用、源及写后字段漂移、计划篡改、幂等/中断、事务约束失败触发器恢复及真实客户端丢响应均覆盖。
+- 审查发现并修正CASE与JSON减字段表达式括号、UTC偏移比较问题；补非UTC会话、全部任务/站点/包/源/安全标志和保存plan_hash核验。修正测试源管理员“同UUID异名”自相矛盾夹具，保留不同UUID同名管理员的真实服务器对应；未放宽共享备份门禁或删除旧身份/订单保护。修复后全部75/885/28完整重跑，早期安装/夹具失败不算通过；独立复审无新高置信发现。
+- 严格576份SQL仍精确12项已知历史失败、109表/967列不变，不是干净建库证明。typecheck/lint/build、聊天6/稽核48及差异检查通过，保留既有构建体积警告；未跑完整employee-transfer总套件。
+- 本轮无UI变更/浏览器功能测试，无正式服务访问、SQL/Edge部署或Storage/权限/config/cron/正式前端变更。PGlite不等于原生PG并发/PostgREST验收；无真实Storage/CORS/原生目录或正式备份封存演练，不能正式覆盖或恢复营业。
+
+### 48.4 SQL49回滚参考（未执行）
+- 正式执行需另行确认；先停用该入口。以下只移除函数，不撤销已提交账号/订单，也不删除历史留证、任务或审计；不能将DROP称为数据回滚。SQL48需先移除依赖它的本阶段函数，不能直接执行第47.4节。
+```sql
+DROP FUNCTION public.employee_import_mapped_identity_plan(uuid,uuid,uuid);
+DROP FUNCTION public.employee_import_mapped_identity_status(uuid,uuid,uuid);
+DROP FUNCTION public.employee_import_mapped_identity_core(uuid,uuid,uuid,text);
+DROP FUNCTION public.employee_import_mapped_identity_orders(uuid,uuid,uuid,integer);
+DROP FUNCTION public.employee_import_mapped_identity_verify(uuid,uuid,uuid);
+DROP FUNCTION private.employee_transfer_mapped_identity_receipt(jsonb);
+DROP FUNCTION private.employee_transfer_mapped_identity_plan(private.employee_transfer_jobs,uuid);
+DROP FUNCTION private.employee_transfer_mapped_identity_check_written(private.employee_transfer_jobs,uuid,jsonb);
+DROP FUNCTION private.employee_transfer_mapped_identity_saved(private.employee_transfer_jobs,uuid);
+DROP FUNCTION private.employee_transfer_mapped_identity_source(private.employee_transfer_jobs,uuid);
 ```

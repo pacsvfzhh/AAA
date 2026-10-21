@@ -75,5 +75,10 @@ job 的两种状态：
 - `can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete`恒false；既有archive_employee_without_media、content-audit、维护拦截与历史UUID/留证均不变。真实封存会改变目标指纹，当前只报告漂移，不自动批准或改写保存的映射。
 - 本地实际封存/原UUID保留/旧SQL15恢复拒绝回归已通过；封存窗口和所有域新身份实际恢复仍未完成，无正式服务访问/部署或UI/浏览器改动，详见计划第47节。
 
+## 候选UUID实际身份恢复与封存隔离（第48节，2026-10-22，本地未部署）
+- SQL49/employeeMappedIdentity已能在服务器候选UUID下实际恢复停用账号、凭据和精简订单；任何未清同名封存历史、同名活员工或源UUID占用仍阻断，不调用archive_employee_without_media/content-audit，不重写原封存UUID、稽核行/媒体或通知留证。
+- 该阶段verified只核对账号/凭据/订单，不是SQL46/47精确双密文的完整备份证明；不填旧identity_restore/verified_identity_map，不解锁旧依赖恢复器或覆盖/启用/维护解除。完整备份/封存/替换/放行恒false，其他领域新身份和安全封存窗口仍需完成。
+- 本地真实现有封存流程产生历史后，新入口仍拒绝；新DB75/客户端417与相关七专项885/885、整站28/28通过，实际client丢core响应只能显式status后继续。无正式服务访问/部署或UI/本轮浏览器测试；详见计划第48节。
+
 ## 现状（2026-10-09）
 - 超管已清空两个板块：稽核记录、已删员工档案与通知、私有证据文件、确认暂存、待重试任务均为 0。

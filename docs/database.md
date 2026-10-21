@@ -62,6 +62,13 @@
 - **不是users全局UUID占位，也不是完整备份或恢复授权。** 尚未绑定SQL46/47精确双密文、接入投影或各域apply/verify；所有can_restore/完整备份/封存/替换/全站完成恒false，SQL15/37/45旧阻断不变。真实封存保留旧UUID并改变目标指纹，不能靠此接口自动批准封存窗口。
 - 本地五专项392/392（含实际client→anon RPC）与SQL48整站维护态28/28、聊天6/稽核48及静态检查/构建通过；575份回放仍12旧失败、109表/967列不变。未访问或部署正式服务，无UI/本轮浏览器或真实Storage/原生PG并发验收；详见计划第47节。
 
+## 新员工UUID实际身份恢复（SQL49，2026-10-22，本地未部署）
+- 新`20261102000049_restore_mapped_employee_identities.sql`只追加五私有helper/五公共RPC，无新表、不改旧函数。`employee_import_mapped_identity_plan/status`为STABLE，`core/orders/verify`显式写入；固定SECURITY DEFINER/search_path/UTC/ISO，PUBLIC/service_role及私有helper撤权，公共接口仅anon/authenticated且重验超管/任务/维护与真实备份前置。
+- SQL48候选及源/目标指纹核对后，逐员工写停用users、原凭据与新user_id；订单按全局块仅取该员工、保留原精简列/订单UUID、改user_id并固定旧SQL15占位。源UUID、同名活账号/管理员或未清封存历史、员工号、订单及管理员对应缺口阻断，不开放覆盖。源accounts/credentials/orders全部原文/解析/摘要复核，保存完整计划及hash重验，数字不经JS重序列化。
+- 写前锁维护表→任务→重新核对；精确复用已审核permit/触发器旁路并恢复，失败回滚本事务。每次读写重新检查新账号/凭据/已提交订单原字段、真实计数/游标、零钱包/无账本基准及无会话；verified仅本阶段一致，取消不假称移除已提交账号/订单。
+- 状态只存原staging的mapped-identity-v1，不填旧identity_restore/verified_identity_map；旧依赖/财务恢复器不能直接消费，仍须逐域接新映射。全部完整恢复/备份/封存/替换/全站完成标志false，dependencies_pending=true；不启用或解除dirty维护，未绑定SQL46/47密文证明或接UI。
+- 本地新DB75/client417、含旧身份与基础范围七文件885/885，SQL49整站维护态28/28；静态/构建/聊天6/稽核48通过。576份SQL仍12旧失败、109表/967列，不是干净建库/原生PG验收。无正式访问或SQL/Edge/Storage/config/前端部署、UI/本轮浏览器测试，见计划第48节（含非数据回滚的DROP参考）。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：
