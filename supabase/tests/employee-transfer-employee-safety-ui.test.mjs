@@ -9,7 +9,8 @@ import postcss from 'postcss';
 import tailwindcss from 'tailwindcss';
 import loadTailwindConfig from 'tailwindcss/loadConfig.js';
 
-// Real client/AES/ZIP with synthetic RPC/IO; desktop-UA WebKit is not native-picker evidence.
+// Real SQL46/47 clients, paired reader and AES/ZIP; only RPC/fetch/IO are synthetic.
+// No real database, Storage, native picker or full-employee recovery acceptance.
 const root = fileURLToPath(new URL('../../', import.meta.url));
 let playwright;
 if (process.env.EMPLOYEE_TRANSFER_PLAYWRIGHT_MODULE) playwright = await import(pathToFileURL(process.env.EMPLOYEE_TRANSFER_PLAYWRIGHT_MODULE).href);
@@ -25,12 +26,14 @@ const STOP_TEXT = '確認停止員工備份任務';
 const BEGIN = 'employee_safety_backup_begin', CATALOG = 'get_employee_safety_backup_catalog';
 const PAGE = 'get_employee_safety_backup_page', VERIFY = 'employee_safety_backup_verify';
 const CLOSE = 'employee_safety_backup_close', STOP = 'employee_safety_backup_stop_owned';
+const MEDIA = 'get_employee_safety_backup_media', MEDIA_VERIFY = 'employee_safety_backup_media_verify';
+const ORIGIN = 'https://employee-safety-ui-fixture.supabase.co', API_KEY = 'synthetic-ui-anon-key';
 const desktopUA = 'Mozilla/5.0 Chrome/145.0.0.0 Safari/537.36';
 
 // Browser fixtures use the real table inventory so protocol changes cannot silently lose coverage.
 function installHarness(api, constants) {
-  const { keys, projections, Sha256, readBackup, entryPath, catalogPath } = api;
-  const { NAME, PASSWORD, PASS, HASH, BEGIN, CATALOG, PAGE, VERIFY, CLOSE, STOP, STOP_TEXT } = constants;
+  const { keys, projections, Sha256, readBackup, readPair, entryPath, catalogPath, mediaPath, mediaCatalogPath } = api;
+  const { NAME, PASSWORD, PASS, HASH, BEGIN, CATALOG, PAGE, VERIFY, CLOSE, STOP, STOP_TEXT, MEDIA, MEDIA_VERIFY, ORIGIN, API_KEY } = constants;
   const id = n => `a8000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const enc = new TextEncoder(), dec = new TextDecoder();
   const sha = value => new Sha256().update(typeof value === 'string' ? enc.encode(value) : value).digestHex();
@@ -38,7 +41,8 @@ function installHarness(api, constants) {
   const h = window.__h = {
     calls: [], events: [], forbidden: [], violations: [], workspaces: [], directories: [], reportAttempts: [], reports: [],
     fault: {}, siteCalls: [], waiting: null, release: null, serverRunning: false, signals: [], verifyCount: 0,
-    reportSignals: [], reportSettlements: [],
+    reportSignals: [], reportSettlements: [], edgeCalls: [], mediaVerifyCount: 0, mediaInventoryCount: 0, pageCount: 0,
+    mediaRefs: [], mediaBound: new Map(), mediaChecked: new Set(), edgeSignals: [], rechecks: 0,
     keys: [...keys], projectionFields: Object.keys(projections.accounts), flags,
   };
   const check = (ok, reason) => { if (!ok) { h.violations.push(reason); throw Error(reason); } };
@@ -59,9 +63,32 @@ function installHarness(api, constants) {
   check(Object.keys(values).every(key => h.projectionFields.includes(key)), 'unexpected account fields');
   h.account = Object.fromEntries(h.projectionFields.map(key => { check(Object.hasOwn(values, key), 'missing account field'); return [key, values[key]]; }));
   h.texts = Object.fromEntries(keys.map(key => [key, key === 'accounts' ? JSON.stringify(h.account) + '\n' : '']));
-  h.catalog = { version: 1, protocol: 'employee-safety-records-v1', scope: 'employee-safety-records', job_id: id(2), site_id: id(1), employee_id: id(3), username: NAME,
-    tables: keys.map(key => ({ key, rows: key === 'accounts' ? 1 : 0, bytes: enc.encode(h.texts[key]).length,
-      row_hashes_sha256: key === 'accounts' ? sha(sha(h.texts[key])) : sha('') })), fingerprint: 'b'.repeat(64), ...flags };
+  h.refreshCatalog = () => {
+    h.catalog = { version: 1, protocol: 'employee-safety-records-v1', scope: 'employee-safety-records', job_id: id(2), site_id: id(1), employee_id: id(3), username: NAME,
+      tables: keys.map(key => { const lines = h.texts[key].match(/[^\n]*\n/g) ?? []; return {
+        key, rows: lines.length, bytes: enc.encode(h.texts[key]).length, row_hashes_sha256: sha(lines.map(sha).join('')),
+      }; }), fingerprint: 'b'.repeat(64), ...flags };
+  };
+  h.refreshCatalog();
+  const mediaFlags = { complete_employee_backup: false, can_archive: false, can_replace: false, full_site_complete: false };
+  h.mediaBytes = Uint8Array.of(255, 216, 255, 0, 1, 2);
+  h.addAttachment = () => {
+    check(!h.calls.length, 'fixture must precede task');
+    const path = `id-front/${id(3)}-PRIVATE-document-CANARY.jpg`, bucket = 'verification-documents';
+    const original = `${ORIGIN}/storage/v1/object/public/${bucket}/${path}`;
+    const row = { id: id(7), user_id: id(3), real_name: 'PRIVATE-real-name-CANARY', wallet_address: 'PRIVATE-document-number-CANARY',
+      phone: 'PRIVATE-phone-CANARY', email: 'PRIVATE-address-CANARY', status: 'pending', audit_remark: null, audited_by: null,
+      audited_at: null, created_at: '2026-10-21T00:00:00.123456+00:00', updated_at: null, id_front_url: original, id_back_url: null, selfie_url: null };
+    check(JSON.stringify(Object.keys(row).sort()) === JSON.stringify(Object.keys(projections.verification_requests).sort()), 'real verification projection required');
+    // Preserve exact line bytes, not JSON reserialization, for row/ref SHA binding.
+    h.texts.verification_requests = JSON.stringify(row).replace('"id":', '"\\u0069d":') + ' \r\n';
+    h.refreshCatalog();
+    const source_url = `employee-safety-media-v1:${id(1)}:${id(2)}:${id(3)}:${h.catalog.fingerprint}:${sha(h.texts.verification_requests)}:${sha(`verification_requests:${row.id}:id_front_url:${original}`)}:${sha(bucket + '/' + path)}`;
+    h.mediaRefs = [{ key: sha(source_url), source_url, bucket, path, kind: 'verification', avatar: false, file: null }];
+  };
+  h.mediaInventory = () => ({ version: 1, scope: 'employee-safety-media', records_catalog: structuredClone(h.catalog),
+    files: h.mediaRefs.map(ref => ({ ...ref, file: h.mediaBound.get(ref.key) ?? null })),
+    verified: h.mediaRefs.every(ref => h.mediaChecked.has(ref.key)), ...mediaFlags });
   const gate = (name, signal) => new Promise((resolve, reject) => {
     h.waiting = name;
     let settled = false;
@@ -82,7 +109,7 @@ function installHarness(api, constants) {
       abortSignal(value) { signal = value; h.signals.push(value); return query; },
       then(resolve, reject) {
         pending ??= Promise.resolve().then(async () => {
-          check([BEGIN, CATALOG, PAGE, VERIFY, CLOSE, STOP].includes(name), 'unexpected RPC: ' + name);
+          check([BEGIN, CATALOG, PAGE, VERIFY, CLOSE, STOP, MEDIA, MEDIA_VERIFY].includes(name), 'unexpected RPC: ' + name);
           check(args.p_admin_session_token === id(5), 'admin session not forwarded');
           const fields = name === BEGIN ? ['p_admin_session_token', 'p_admin_password', 'p_username']
             : name === STOP ? ['p_admin_session_token', 'p_admin_password', 'p_confirmation', 'p_job_id']
@@ -111,19 +138,38 @@ function installHarness(api, constants) {
           if (name === CATALOG) return { data: structuredClone(h.catalog), error: null };
           check(args.p_catalog_fingerprint === h.catalog.fingerprint, 'catalog fingerprint not forwarded');
           if (name === PAGE) {
+            if (++h.pageCount === h.fault.holdPageAt) await gate('record-page:' + h.pageCount, signal);
             check(keys.includes(args.p_table_key) && args.p_after === null && args.p_limit === 200, 'wrong page request');
             if (h.fault.page === 'lost') throw Error(PASSWORD + NAME);
             const ndjson = h.texts[args.p_table_key];
             return { data: { table_key: args.p_table_key, count: ndjson ? 1 : 0, bytes: enc.encode(ndjson).length,
               ndjson, next_after: null, sha256: h.fault.page === 'corrupt' ? 'f'.repeat(64) : sha(ndjson), fingerprint: h.catalog.fingerprint }, error: null };
           }
+          if ([MEDIA, MEDIA_VERIFY].includes(name)) {
+            if (name === MEDIA) h.mediaInventoryCount++; else h.mediaVerifyCount++;
+            if (h.fault.mediaMissing === name) return { data: null, error: { code: 'PGRST202', message: PASSWORD + PASS + NAME } };
+            if (name === MEDIA_VERIFY && h.fault.mediaVerifyFailAt === h.mediaVerifyCount) return { data: null, error: { message: PASSWORD + PASS } };
+            if (name === MEDIA_VERIFY && h.fault.holdMediaVerifyAt === h.mediaVerifyCount) await gate('final-media-verify', signal);
+            const inventory = h.mediaInventory();
+            if (h.fault.omitMediaRef) inventory.files = [];
+            if (h.fault.forgeMediaRef) {
+              const ref = inventory.files[0], parts = ref.source_url.split(':');
+              parts[h.fault.forgeMediaRef === 'row' ? 5 : 6] = 'e'.repeat(64);
+              ref.source_url = parts.join(':'); ref.key = sha(ref.source_url);
+            }
+            return { data: inventory, error: null };
+          }
           if (name === VERIFY) {
             h.verifyCount++;
             return { data: { verified: true, fingerprint: h.fault.driftAt === h.verifyCount ? 'c'.repeat(64) : h.catalog.fingerprint, ...flags }, error: null };
           }
           if (name === CLOSE) {
-            check(h.workspaces.length >= 2 && h.workspaces.every(w => w.cleaned), 'close before temporary plaintext cleanup');
-            check(h.directories.some(d => d.files.some(f => f.eof === 1)), 'close before full ciphertext EOF');
+            check(h.workspaces.length >= 7 && h.workspaces.every(w => w.cleaned && w.cleanups === 1 && !w.cleanupFailed), 'close before ALL plaintext cleanup');
+            const files = h.directories.at(-1).files;
+            check(files.length === 2 && files.every(f => f.writes === 1), 'close before two independent encrypted saves');
+            check(files[0].eof === 3 && files[1].eof === 2, 'close before both ciphertext EOFs and paired full readback');
+            check(h.workspaces.at(-2).opened.includes(entryPath('accounts')) && h.workspaces.at(-1).opened.includes(mediaCatalogPath), 'close before pair validation');
+            check(h.verifyCount >= 3 && h.mediaVerifyCount >= 3 && h.rechecks === h.mediaRefs.length * 3, 'close before FINAL record/media source checks');
             h.serverRunning = false;
             if (h.fault.closeLost) throw Error(PASSWORD + PASS + id(4));
             return { data: { success: true, scope: 'employee-safety-records', full_site_complete: false }, error: null };
@@ -134,12 +180,41 @@ function installHarness(api, constants) {
     };
     return query;
   };
+  // The real source captures this controlled transport. Never delegate to native fetch.
+  window.fetch = async (url, init) => {
+    const headers = new Headers(init?.headers), action = headers.get('x-transfer-action');
+    check(url === ORIGIN + '/functions/v1/employee-transfer-media', 'unexpected media endpoint');
+    check(init.method === 'POST' && init.redirect === 'error' && init.credentials === 'omit' && init.cache === 'no-store' && init.body === undefined, 'unsafe Edge request');
+    check(headers.get('apikey') === API_KEY && headers.get('content-type') === 'application/octet-stream'
+      && headers.get('x-transfer-scope') === 'employee-safety' && headers.get('x-admin-session-token') === id(5)
+      && headers.get('x-transfer-job-token') === id(4) && !headers.has('authorization'), 'wrong Edge auth/scope');
+    check(JSON.stringify([...headers.keys()].sort()) === JSON.stringify(['apikey', 'content-type', 'x-transfer-action', 'x-transfer-job-token', 'x-transfer-object-key', 'x-transfer-scope', 'x-admin-session-token'].sort()), 'unexpected Edge headers');
+    const ref = h.mediaRefs.find(ref => ref.key === headers.get('x-transfer-object-key'));
+    check(Boolean(ref) && ['download', 'recheck-export'].includes(action), 'unexpected Edge action/object');
+    check(h.serverRunning, 'media request after task close');
+    h.edgeCalls.push({ url, action, key: ref.key }); h.events.push('edge-' + action); h.edgeSignals.push(init.signal); alive(init.signal);
+    if (h.fault.holdEdge === action) { h.fault.holdEdge = null; await gate('edge-' + action, init.signal); }
+    alive(init.signal);
+    const file = { key: ref.key, source_url: ref.source_url, bytes: h.mediaBytes.length, sha256: sha(h.mediaBytes), content_type: 'image/jpeg' };
+    if (action === 'download') {
+      h.mediaBound.set(ref.key, file); // A lost response may have committed its technical receipt.
+      if (h.fault.downloadLost) throw Error(PASSWORD + PASS + ref.source_url);
+      return new Response(h.mediaBytes.slice(), { headers: { 'content-type': 'application/octet-stream', 'content-length': String(file.bytes),
+        'x-transfer-sha256': file.sha256, 'x-transfer-content-type': file.content_type } });
+    }
+    h.rechecks++;
+    check(h.mediaBound.has(ref.key), 'recheck before download receipt');
+    h.mediaChecked.add(ref.key);
+    const receipt = { success: true, key: file.key, bytes: file.bytes, sha256: h.fault.mediaDriftAt === h.rechecks ? 'f'.repeat(64) : file.sha256, content_type: file.content_type, ...mediaFlags };
+    const text = JSON.stringify(receipt);
+    return new Response(text, { headers: { 'content-type': 'application/json', 'content-length': String(enc.encode(text).length) } });
+  };
   h.createWorkspace = () => {
     const data = new Map(), frozen = new Set();
     const w = { cleaned: false, cleanups: 0, appended: [], opened: [],
       async append(path, bytes, signal) {
         alive(signal); check(!w.cleaned && !frozen.has(path), 'append to invalidated/frozen workspace');
-        check(path === catalogPath || keys.some(key => path === entryPath(key)), 'unexpected workspace path');
+        check(path === catalogPath || path === mediaCatalogPath || keys.some(key => path === entryPath(key)) || h.mediaRefs.some(ref => path === mediaPath(ref)), 'unexpected workspace path');
         check(bytes instanceof Uint8Array, 'non-byte workspace append');
         w.appended.push(path); data.set(path, [...(data.get(path) ?? []), new Uint8Array(bytes)]);
       },
@@ -148,7 +223,12 @@ function installHarness(api, constants) {
         const bytes = join(data.get(path));
         for (let offset = 0; offset < bytes.length; offset += 257) { check(!w.cleaned, 'late plaintext read'); yield bytes.slice(offset, offset + 257); }
       } }; },
-      async abort() { w.cleaned = true; w.cleanups++; data.clear(); h.events.push('cleanup:' + h.workspaces.indexOf(w)); },
+      async abort() {
+        w.cleanups++;
+        const index = h.workspaces.indexOf(w);
+        if (h.fault.cleanupAt === index) { w.cleanupFailed = true; h.events.push('cleanup-failed:' + index); throw Error(PASSWORD + PASS); }
+        w.cleaned = true; data.clear(); h.events.push('cleanup:' + index);
+      },
     };
     h.workspaces.push(w); return w;
   };
@@ -158,22 +238,31 @@ function installHarness(api, constants) {
     const directory = { name: 'isolated-employee-records-' + (h.directories.length + 1), files: [],
       createFile(name) {
         check(!directory.files.some(f => f.name === name), 'output overwrite');
-        const f = { name, bytes: new Uint8Array(), writes: 0, opens: 0, eof: 0, readBytes: 0 };
+        const kind = name.startsWith('employee-attachments-') ? 'media' : 'records';
+        const f = { name, kind, bytes: new Uint8Array(), writes: 0, opens: 0, eof: 0, readBytes: 0, reads: [] };
         directory.files.push(f);
         return {
           async write(source, signal) {
-            check(++f.writes === 1, 'duplicate encrypted write'); h.events.push('cipher-write');
+            check(++f.writes === 1, 'duplicate encrypted write'); h.events.push('cipher-write'); h.events.push(kind + '-write');
             const pieces = [];
             for await (const bytes of source) { alive(signal); pieces.push(new Uint8Array(bytes)); }
-            f.bytes = join(pieces); h.events.push('cipher-saved');
-            if (h.fault.corruptFile) f.bytes[f.bytes.length - 1] ^= 1;
+            f.bytes = join(pieces); h.events.push('cipher-saved'); h.events.push(kind + '-saved');
+            if (h.fault.corruptFile || h.fault.corruptSaved === kind) f.bytes[f.bytes.length - 1] ^= 1;
+            if (h.fault.saveLost === kind) throw Error(PASSWORD + PASS);
           },
-          open() { f.opens++; h.events.push('cipher-open'); return { async *[Symbol.asyncIterator]() {
-            for (let offset = 0; offset < f.bytes.length; offset += 113) {
-              const bytes = f.bytes.slice(offset, offset + 113); f.readBytes += bytes.length; yield bytes;
-            }
-            f.eof++; h.events.push('cipher-eof');
-          } }; },
+          open() {
+            const number = ++f.opens, read = { number, bytes: 0, eof: false };
+            f.reads.push(read); h.events.push('cipher-open'); h.events.push(kind + '-open:' + number);
+            return { async *[Symbol.asyncIterator]() {
+              for (let offset = 0; offset < f.bytes.length; offset += 113) {
+                const bytes = f.bytes.slice(offset, offset + 113);
+                // Only the full second (paired) read is altered, not the metadata probe.
+                if (h.fault.corruptPair === kind && number === (kind === 'records' ? 5 : 4) && offset + bytes.length === f.bytes.length) bytes[bytes.length - 1] ^= 1;
+                f.readBytes += bytes.length; read.bytes += bytes.length; yield bytes;
+              }
+              f.eof++; read.eof = true; h.events.push('cipher-eof'); h.events.push(kind + '-eof:' + number);
+            } };
+          },
         };
       },
       async writeText(name, text, signal) {
@@ -195,10 +284,25 @@ function installHarness(api, constants) {
     };
     h.directories.push(directory); return directory;
   };
+  const savedFile = f => ({ open: () => ({ async *[Symbol.asyncIterator]() {
+    for (let offset = 0; offset < f.bytes.length; offset += 137) yield f.bytes.slice(offset, offset + 137);
+  } }) });
+  h.readSavedPair = async () => {
+    const files = h.directories.at(-1).files;
+    return readPair(savedFile(files[0]), savedFile(files[1]), PASS, h.createWorkspace, async reader => {
+      const media = {};
+      for (const ref of reader.inventory.files) {
+        const pieces = []; for await (const raw of reader.open(mediaPath(ref))) pieces.push(raw);
+        media[ref.key] = Array.from(join(pieces));
+      }
+      return { inventory: reader.inventory, manifest: reader.manifest, media,
+        flags: { completeEmployeeBackup: reader.completeEmployeeBackup, canArchive: reader.canArchive, canReplace: reader.canReplace, fullSiteComplete: reader.fullSiteComplete } };
+    });
+  };
   h.readSaved = async () => {
     const f = h.directories.flatMap(d => d.files)[0];
     check(Boolean(f), 'missing saved ciphertext');
-    const file = { open: () => ({ async *[Symbol.asyncIterator]() { for (let offset = 0; offset < f.bytes.length; offset += 137) yield f.bytes.slice(offset, offset + 137); } }) };
+    const file = savedFile(f);
     return readBackup(file, PASS, h.createWorkspace, async reader => {
       const texts = {};
       for (const key of keys) { const pieces = []; for await (const raw of reader.open(entryPath(key))) pieces.push(raw); texts[key] = dec.decode(join(pieces)); }
@@ -230,18 +334,20 @@ before(async () => {
     stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';
       import Page from './src/components/admin/EmployeeDataMigration.tsx';
       import{EMPLOYEE_SAFETY_BACKUP_TABLE_KEYS as keys,EMPLOYEE_SAFETY_BACKUP_CATALOG_PATH as catalogPath,employeeSafetyBackupEntryPath as entryPath,withAuthenticatedEmployeeSafetyBackup as readBackup}from'./src/lib/employeeTransfer/employeeSafetyBackup.ts';
+      import{withAuthenticatedEmployeeSafetyMediaBackup as readPair,employeeSafetyMediaEntryPath as mediaPath,EMPLOYEE_SAFETY_MEDIA_CATALOG_PATH as mediaCatalogPath}from'./src/lib/employeeTransfer/employeeSafetyMedia.ts';
       import{EMPLOYEE_BACKUP_PROJECTIONS as projections}from'./src/lib/employeeTransfer/employeeBackup.ts';
       import{Sha256}from'./src/lib/employeeTransfer/sha256.ts';
-      (${installHarness.toString()})({keys,projections,Sha256,readBackup,entryPath,catalogPath},${JSON.stringify({ NAME, PASSWORD, PASS, HASH, BEGIN, CATALOG, PAGE, VERIFY, CLOSE, STOP, STOP_TEXT })});
+      (${installHarness.toString()})({keys,projections,Sha256,readBackup,readPair,entryPath,catalogPath,mediaPath,mediaCatalogPath},${JSON.stringify({ NAME, PASSWORD, PASS, HASH, BEGIN, CATALOG, PAGE, VERIFY, CLOSE, STOP, STOP_TEXT, MEDIA, MEDIA_VERIFY, ORIGIN, API_KEY })});
       const r=createRoot(document.getElementById('root'));window.__unmount=()=>r.unmount();r.render(<Page/>);`, resolveDir: root, loader: 'tsx' },
     bundle: true, write: false, platform: 'browser', format: 'esm', jsx: 'automatic', metafile: true,
+    define: { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(ORIGIN), 'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(API_KEY) },
     plugins: [{ name: 'isolated-safety-ui-boundaries', setup(builder) {
       builder.onResolve({ filter: /^(?:\.\.\/(?:auth|supabase)|.*employeeTransfer\/(?:siteTransfer|siteImport|browserStorage))$/ }, () => ({ path: 'boundaries', namespace: 'synthetic' }));
       builder.onLoad({ filter: /.*/, namespace: 'synthetic' }, () => ({ contents: boundaries }));
     } }],
   });
   const inputs = Object.keys(compiled.metafile.inputs);
-  for (const file of ['EmployeeDataMigration.tsx', 'EmployeeSafetyBackupPanel.tsx', 'EmployeeSiteImport.tsx', 'employeeSafetyBackup.ts', 'employeeBackup.ts', 'crypto.ts', 'container.ts', 'manifest.ts']) {
+  for (const file of ['EmployeeDataMigration.tsx', 'EmployeeSafetyBackupPanel.tsx', 'EmployeeSiteImport.tsx', 'employeeSafetyBackup.ts', 'employeeSafetyMedia.ts', 'employeeBackup.ts', 'crypto.ts', 'container.ts', 'manifest.ts']) {
     assert.ok(inputs.some(path => path.endsWith('/' + file)), 'must bundle real ' + file);
   }
   assert.ok(!inputs.some(path => /node_modules\/@supabase|src\/lib\/(?:auth|supabase)\.ts|employeeTransfer\/(?:siteTransfer|siteImport|browserStorage)\.ts/.test(path)), 'production access/storage boundaries must not enter bundle');
@@ -294,8 +400,8 @@ async function scenario(browser, run, { unsupported = false, viewport = { width:
     assert.deepEqual(errors, [], 'zero uncaught browser errors');
   } finally { await context.close(); }
 }
-const panel = page => page.getByRole('region', { name: '獨立員工記錄備份', exact: true });
-const start = page => panel(page).getByRole('button', { name: '開始獨立員工記錄備份', exact: true });
+const panel = page => page.getByRole('region', { name: '獨立員工記錄與附件備份', exact: true });
+const start = page => panel(page).getByRole('button', { name: '開始獨立員工記錄與附件備份', exact: true });
 const stop = page => panel(page).getByRole('button', { name: '確認停止本人的員工備份任務', exact: true });
 const cancelReport = page => panel(page).getByRole('button', { name: '停止等待報告保存', exact: true });
 const reset = page => panel(page).getByRole('button', { name: '核對原檔案後，準備另一份新備份', exact: true });
@@ -317,7 +423,9 @@ async function finished(page, reportFailed = false) {
   await page.waitForFunction(() => !document.getElementById('employee-safety-stop-password').matches(':disabled'));
 }
 async function report(page) {
-  return page.evaluate(() => JSON.parse(window.__h.reportAttempts.at(-1).text));
+  const attempt = await page.evaluate(() => window.__h.reportAttempts.at(-1));
+  assert.equal(attempt.name, 'employee-backup-report.json');
+  return JSON.parse(attempt.text);
 }
 async function heldReport(page) {
   await page.waitForFunction(() => window.__h.waiting === 'report-write');
@@ -344,15 +452,23 @@ async function cancelHeldReport(page) {
 function safeReport(value) {
   const raw = JSON.stringify(value);
   for (const canary of [NAME, PASSWORD, PASS, HASH, id(4), id(5), 'LOCAL-ACCOUNT-CANARY', 'raw-record-CANARY']) assert.equal(raw.includes(canary), false, 'report must not contain ' + canary);
-  assert.equal(value.recordsOnly, true);
-  for (const flag of ['mediaIncluded', 'completeEmployeeBackup', 'canArchive', 'canReplace', 'fullSiteComplete', 'rollbackConfirmed']) assert.equal(value[flag], false, flag);
+  for (const canary of ['PRIVATE-real-name', 'PRIVATE-document', 'PRIVATE-phone', 'PRIVATE-address', ORIGIN, 'employee-safety-media-v1:']) assert.equal(raw.includes(canary), false, 'no raw attachment identity/PII');
+  assert.equal(value.version, 2); assert.equal(value.protocol, 'employee-safety-pair-v1');
+  assert.equal(value.recordsOnly, false); assert.equal(typeof value.pairVerified, 'boolean');
+  assert.equal(value.mediaIncluded, value.pairVerified);
+  for (const flag of ['completeEmployeeBackup', 'canArchive', 'canReplace', 'fullSiteComplete', 'rollbackConfirmed']) assert.equal(value[flag], false, flag);
+  for (const key of ['encryptedFileState', 'mediaEncryptedFileState']) assert.ok(['not-written', 'unknown', 'saved', 'verified'].includes(value[key]), key);
   assert.match(value.startedAtUTC, /Z$/); assert.match(value.finishedAtUTC, /Z$/);
-  assert.deepEqual(Object.keys(value).sort(), ['version', 'protocol', 'startedAtUTC', 'finishedAtUTC', 'status', 'jobId', 'receipt', 'lastProgress', 'encryptedFileState', 'temporaryPlaintextCleanupUnconfirmed', 'taskCloseConfirmed', 'recordsOnly', 'mediaIncluded', 'completeEmployeeBackup', 'canArchive', 'canReplace', 'fullSiteComplete', 'rollbackConfirmed'].sort());
+  assert.deepEqual(Object.keys(value).sort(), ['version', 'protocol', 'startedAtUTC', 'finishedAtUTC', 'status', 'jobId', 'receipt', 'mediaReceipt', 'lastProgress', 'encryptedFileState', 'mediaEncryptedFileState', 'pairVerified', 'temporaryPlaintextCleanupUnconfirmed', 'taskCloseConfirmed', 'recordsOnly', 'mediaIncluded', 'completeEmployeeBackup', 'canArchive', 'canReplace', 'fullSiteComplete', 'rollbackConfirmed'].sort());
+  assert.deepEqual(Object.keys(value.lastProgress).sort(), ['stage', 'phase', 'rows', 'files', 'bytes'].sort());
   if (value.receipt) assert.deepEqual(Object.keys(value.receipt).sort(), ['backupId', 'siteId', 'jobId', 'filename', 'fingerprint', 'cipherSha256', 'cipherBytes', 'rows', 'tables'].sort());
+  if (value.mediaReceipt) assert.deepEqual(Object.keys(value.mediaReceipt).sort(), ['filename', 'cipherSha256', 'cipherBytes', 'files'].sort());
 }
 async function noRecovery(page, begins = 1, closes = 0, stops = 0) {
-  // Deliberate quiescence window catches effect/timer-triggered automatic retries.
+  // Deliberate quiescence window catches effect/timer-triggered retries of ANY RPC or Edge action.
+  const before = await page.evaluate(() => ({ rpc: window.__h.calls.length, edge: window.__h.edgeCalls.length }));
   await page.waitForTimeout(120);
+  assert.deepEqual(await page.evaluate(() => ({ rpc: window.__h.calls.length, edge: window.__h.edgeCalls.length })), before, 'no automatic RPC/Edge retries');
   const calls = await rpcCalls(page);
   assert.equal(calls.filter(c => c.name === BEGIN).length, begins);
   assert.equal(calls.filter(c => c.name === CLOSE).length, closes);
@@ -395,20 +511,25 @@ async function parentLocked(page) {
 }
 
 for (const engine of ['chromium', 'webkit']) {
-  test(`isolated ${engine} employee safety UI: real SQL46 client/AES/ZIP, synthetic RPC/picker/workspace`, { skip: !playwright, timeout: 240000 }, async t => {
+  test(`isolated ${engine} employee safety UI: real SQL46/47 clients/paired AES/ZIP, synthetic RPC/Edge/picker/workspace`, { skip: !playwright, timeout: 360000 }, async t => {
     const browser = await playwright[engine].launch({ headless: true });
     try {
-      await t.test('begin -> all 48 pages -> encrypt/save -> authenticate every entry -> explicit close -> safe report', () => scenario(browser, async page => {
+      await t.test('actual attachment: 48 pages -> records -> SQL47 download/media AES/ZIP -> paired readback -> final source -> explicit close', () => scenario(browser, async page => {
+        await page.evaluate(() => window.__h.addAttachment());
         await prepare(page); await fault(page, { holdRpc: CLOSE }); await start(page).click();
         await page.waitForFunction(name => window.__h.waiting === name, CLOSE);
-        await panel(page).getByText('獨立記錄檔案已核驗，任務結束尚未確認', { exact: true }).waitFor();
+        await panel(page).getByText('來源複核或任務結束尚未確認', { exact: true }).waitFor();
         const beforeClose = await page.evaluate(() => ({ calls: window.__h.calls, events: window.__h.events, reports: window.__h.reports,
           keys: window.__h.keys, spaces: window.__h.workspaces.map(w => ({ cleaned: w.cleaned, cleanups: w.cleanups, opened: w.opened })),
-          file: window.__h.directories[0].files[0] }));
-        assert.deepEqual(beforeClose.calls.map(c => c.name), [BEGIN, CATALOG, ...Array(48).fill(PAGE), VERIFY, VERIFY, CLOSE]);
+          files: window.__h.directories[0].files.map(f => ({ ...f, bytes: f.bytes.length })) }));
+        assert.deepEqual(beforeClose.calls.map(c => c.name), [BEGIN, CATALOG, ...Array(48).fill(PAGE), VERIFY, VERIFY,
+          MEDIA, MEDIA, MEDIA, MEDIA_VERIFY, MEDIA, MEDIA_VERIFY, MEDIA, MEDIA_VERIFY, VERIFY, CLOSE]);
         assert.deepEqual(beforeClose.calls.filter(c => c.name === PAGE).map(c => c.args.p_table_key), beforeClose.keys);
-        assert.equal(beforeClose.file.writes, 1); assert.equal(beforeClose.file.opens, 1); assert.equal(beforeClose.file.eof, 1);
-        assert.equal(beforeClose.file.readBytes, Object.keys(beforeClose.file.bytes).length);
+        const [records, media] = beforeClose.files;
+        assert.equal(records.writes, 1); assert.equal(records.opens, 5); assert.equal(records.eof, 3);
+        assert.equal(media.writes, 1); assert.equal(media.opens, 4); assert.equal(media.eof, 2);
+        for (const file of [records, media]) for (const read of file.reads.filter(read => read.eof)) assert.equal(read.bytes, file.bytes, 'each authenticated read reaches full EOF');
+        assert.ok(records.readBytes >= records.bytes * 3 && media.readBytes >= media.bytes * 2);
         assert.equal(beforeClose.reports.length, 0, 'no completed report before explicit close response');
         assert.ok(beforeClose.spaces.every(w => w.cleaned && w.cleanups === 1));
         assert.equal(new Set(beforeClose.spaces[1].opened).size, 49, 'reopened all decrypted tables plus catalog');
@@ -416,18 +537,43 @@ for (const engine of ['chromium', 'webkit']) {
         assert.ok(events.indexOf(VERIFY) < events.indexOf('cipher-write'));
         assert.ok(events.indexOf('cleanup:0') < events.indexOf('cipher-open'));
         assert.ok(events.indexOf('cipher-eof') < events.lastIndexOf(VERIFY));
-        assert.ok(events.lastIndexOf(VERIFY) < events.indexOf('cleanup:1') && events.indexOf('cleanup:1') < events.indexOf(CLOSE));
+        const recordVerifies = events.flatMap((event, index) => event === VERIFY ? [index] : []);
+        assert.ok(recordVerifies[1] < events.indexOf('cleanup:1'), 'original SQL46 post-readback check precedes cleanup');
+        assert.ok(events.indexOf('records-eof:3') < events.indexOf(MEDIA), 'SQL47 begins only after re-authenticating records');
+        assert.ok(events.indexOf('media-saved') < events.indexOf('media-eof:2'));
+        assert.ok(events.indexOf('records-eof:5') < events.indexOf('media-eof:4'), 'paired records and attachments fully authenticated');
+        for (let i = 0; i < beforeClose.spaces.length; i++) assert.ok(events.indexOf('cleanup:' + i) < recordVerifies[2], 'ALL plaintext discarded before last source verification');
+        assert.ok(events.indexOf('media-eof:4') < events.lastIndexOf('edge-recheck-export'));
+        assert.ok(events.lastIndexOf('edge-recheck-export') < events.lastIndexOf(MEDIA_VERIFY));
+        assert.ok(events.lastIndexOf(MEDIA_VERIFY) < recordVerifies[2] && recordVerifies[2] < events.indexOf(CLOSE));
+        await panel(page).getByRole('heading', { name: '獨立記錄檔案已核驗', exact: true }).waitFor();
+        await panel(page).getByRole('heading', { name: '獨立附件檔案已核驗', exact: true }).waitFor();
+        await panel(page).getByText('記錄與附件成對核驗已通過', { exact: true }).waitFor();
         await page.evaluate(() => window.__h.release()); await finished(page);
-        await panel(page).getByText('獨立記錄檔案已核驗，任務結束已確認', { exact: true }).waitFor();
+        await panel(page).getByText('來源複核及任務結束已確認', { exact: true }).waitFor();
         const result = await report(page); safeReport(result);
-        assert.equal(result.status, 'verified-records-and-task-closed'); assert.equal(result.taskCloseConfirmed, true);
-        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.receipt.tables, 48); assert.equal(result.receipt.rows, 1);
+        assert.equal(result.status, 'verified-pair-and-task-closed'); assert.equal(result.taskCloseConfirmed, true);
+        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.receipt.tables, 48); assert.equal(result.receipt.rows, 2);
+        assert.equal(result.mediaEncryptedFileState, 'verified'); assert.equal(result.mediaReceipt.files, 1); assert.equal(result.pairVerified, true);
         assert.equal(result.temporaryPlaintextCleanupUnconfirmed, false);
         const ciphertext = Buffer.from(await page.evaluate(() => Array.from(window.__h.directories[0].files[0].bytes)));
         assert.equal(result.receipt.cipherBytes, ciphertext.length);
         assert.equal(result.receipt.cipherSha256, createHash('sha256').update(ciphertext).digest('hex'));
         for (const secret of [NAME, PASSWORD, PASS, HASH, 'raw-record-CANARY']) assert.equal(ciphertext.includes(Buffer.from(secret)), false);
+        const mediaCiphertext = Buffer.from(await page.evaluate(() => Array.from(window.__h.directories[0].files[1].bytes)));
+        assert.equal(result.mediaReceipt.cipherBytes, mediaCiphertext.length);
+        assert.equal(result.mediaReceipt.cipherSha256, createHash('sha256').update(mediaCiphertext).digest('hex'));
+        assert.match(result.receipt.filename, /^employee-records-[0-9a-f-]+\.edx$/);
+        assert.equal(result.mediaReceipt.filename, result.receipt.filename.replace('employee-records-', 'employee-attachments-'));
+        for (const secret of [NAME, PASS, HASH, 'PRIVATE-document', 'PRIVATE-real-name', ORIGIN]) assert.equal(mediaCiphertext.includes(Buffer.from(secret)), false);
         const originalCalls = (await rpcCalls(page)).length;
+        const originalEdgeCalls = await page.evaluate(() => window.__h.edgeCalls.length);
+        const paired = await page.evaluate(() => window.__h.readSavedPair());
+        assert.deepEqual(paired.inventory, await page.evaluate(() => window.__h.mediaInventory()));
+        assert.equal(paired.manifest.entries.length, 2);
+        assert.deepEqual(Object.values(paired.media), [[255, 216, 255, 0, 1, 2]]);
+        assert.ok(Object.values(paired.flags).every(value => value === false));
+        assert.equal(await page.evaluate(() => window.__h.edgeCalls.length), originalEdgeCalls, 'independent paired reader never calls Edge');
         const decoded = await page.evaluate(() => window.__h.readSaved());
         const expected = await page.evaluate(() => ({ catalog: window.__h.catalog, texts: window.__h.texts, fields: window.__h.projectionFields, keys: window.__h.keys, flags: window.__h.flags }));
         assert.deepEqual(decoded.catalog, expected.catalog); assert.deepEqual(decoded.texts, expected.texts);
@@ -442,6 +588,156 @@ for (const engine of ['chromium', 'webkit']) {
         assert.deepEqual(await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } })), { local: {}, session: {} });
         await noRecovery(page, 1, 1);
         if (process.env.EMPLOYEE_TRANSFER_UI_SCREENSHOT && engine === 'chromium') await page.screenshot({ path: process.env.EMPLOYEE_TRANSFER_UI_SCREENSHOT, fullPage: true });
+      }));
+      await t.test('zero references still saves/authenticates a distinct media volume and pairs before close, without fetching', () => scenario(browser, async page => {
+        await prepare(page); await start(page).click(); await finished(page);
+        const result = await report(page); safeReport(result);
+        assert.equal(result.status, 'verified-pair-and-task-closed'); assert.equal(result.receipt.rows, 1);
+        assert.equal(result.mediaReceipt.files, 0); assert.equal(result.pairVerified, true); assert.equal(result.taskCloseConfirmed, true);
+        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.mediaEncryptedFileState, 'verified');
+        await panel(page).getByText(/0 個附件引用.*已核對全部記錄，沒有支援格式的附件引用/).waitFor();
+        const decoded = await page.evaluate(() => window.__h.readSavedPair());
+        assert.equal(decoded.inventory.verified, true); assert.deepEqual(decoded.inventory.files, []);
+        assert.deepEqual(decoded.media, {}); assert.equal(decoded.manifest.entries.length, 1);
+        assert.deepEqual(await page.evaluate(() => window.__h.edgeCalls), []);
+        assert.equal(await page.evaluate(() => window.__h.mediaVerifyCount), 3);
+        assert.ok(await page.evaluate(() => window.__h.directories[0].files.length === 2 && window.__h.workspaces.every(w => w.cleaned && w.cleanups === 1)));
+        await noRecovery(page, 1, 1);
+      }));
+      for (const missing of [MEDIA, MEDIA_VERIFY]) await t.test(`SQL47 missing ${missing} retains verified records without claiming media/pair or closing`, () => scenario(browser, async page => {
+        await page.evaluate(() => window.__h.addAttachment());
+        await prepare(page); await fault(page, { mediaMissing: missing }); await start(page).click(); await finished(page);
+        const result = await report(page); safeReport(result);
+        assert.equal(result.status, 'unconfirmed'); assert.equal(result.receipt.rows, 2);
+        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.mediaEncryptedFileState, 'not-written');
+        assert.equal(result.mediaReceipt, null); assert.equal(result.pairVerified, false); assert.equal(result.taskCloseConfirmed, false);
+        assert.equal((await rpcCalls(page)).filter(c => c.name === missing).length, 1);
+        await panel(page).getByText('記錄與附件成對核驗尚未確認', { exact: true }).waitFor();
+        assert.ok(await page.evaluate(() => window.__h.workspaces.every(w => w.cleaned && w.cleanups === 1)));
+        await parentLocked(page); await noRecovery(page);
+      }));
+      for (const [label, changes] of [['omitted reference', { omitMediaRef: true }], ['forged row SHA', { forgeMediaRef: 'row' }], ['forged reference SHA', { forgeMediaRef: 'ref' }]]) {
+        await t.test(`${label}: SQL47 inventory must match the actual 48-class NDJSON before ANY download`, () => scenario(browser, async page => {
+          await page.evaluate(() => window.__h.addAttachment()); await prepare(page); await fault(page, changes);
+          await start(page).click(); await finished(page);
+          const result = await report(page); safeReport(result);
+          assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.mediaEncryptedFileState, 'not-written');
+          assert.equal(result.mediaReceipt, null); assert.equal(result.pairVerified, false); assert.equal(result.taskCloseConfirmed, false);
+          assert.deepEqual(await page.evaluate(() => window.__h.edgeCalls), []);
+          assert.equal(await page.evaluate(() => window.__h.mediaInventoryCount), 1);
+          await parentLocked(page); await noRecovery(page);
+        }));
+      }
+      for (const [label, changes, mediaState, hasReceipt, paired, cleanup] of [
+        ['download response loss after technical receipt', { downloadLost: true }, 'not-written', false, false, false],
+        ['source bytes drift before media encryption', { mediaDriftAt: 1 }, 'not-written', false, false, false],
+        ['source bytes drift after media authentication', { mediaDriftAt: 2 }, 'verified', false, false, false],
+        ['source bytes drift after paired readback', { mediaDriftAt: 3 }, 'verified', true, true, false],
+        ['media save response loss', { saveLost: 'media' }, 'unknown', false, false, false],
+        ['saved media ciphertext tampering', { corruptSaved: 'media' }, 'saved', false, false, false],
+        ['paired record second full-read tampering', { corruptPair: 'records' }, 'verified', true, false, false],
+        ['paired media second full-read tampering', { corruptPair: 'media' }, 'verified', true, false, false],
+        ['media snapshot cleanup failure', { cleanupAt: 3 }, 'saved', false, false, true],
+        ['media authenticated-readback cleanup failure', { cleanupAt: 4 }, 'verified', false, false, true],
+        ['paired-media cleanup failure', { cleanupAt: 6 }, 'verified', true, false, true],
+        ['last SQL47 source verify failure', { mediaVerifyFailAt: 3 }, 'verified', true, true, false],
+        ['last SQL46 source verify failure', { driftAt: 3 }, 'verified', true, true, false],
+      ]) await t.test(`${label}: accurate independent file states, no close/retry/replacement`, () => scenario(browser, async page => {
+        await page.evaluate(() => window.__h.addAttachment()); await prepare(page); await fault(page, changes);
+        await start(page).click(); await finished(page);
+        const result = await report(page); safeReport(result);
+        assert.equal(result.status, 'unconfirmed'); assert.equal(result.receipt.rows, 2);
+        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.mediaEncryptedFileState, mediaState);
+        assert.equal(Boolean(result.mediaReceipt), hasReceipt); assert.equal(result.pairVerified, paired);
+        assert.equal(result.taskCloseConfirmed, false); assert.equal(result.temporaryPlaintextCleanupUnconfirmed, cleanup);
+        assert.equal(await page.evaluate(() => window.__h.serverRunning), true);
+        assert.equal(await reset(page).count(), 0);
+        const state = await page.evaluate(() => ({ edges: window.__h.edgeCalls, bound: window.__h.mediaBound.size, mediaVerifies: window.__h.mediaVerifyCount,
+          verifies: window.__h.verifyCount, files: window.__h.directories[0].files.map(f => ({ kind: f.kind, writes: f.writes, bytes: f.bytes.length, opens: f.opens, eof: f.eof })),
+          spaces: window.__h.workspaces.map(w => ({ cleaned: w.cleaned, cleanups: w.cleanups, failed: Boolean(w.cleanupFailed), appended: w.appended })) }));
+        assert.equal(state.edges.filter(c => c.action === 'download').length, 1);
+        assert.equal(state.bound, 1, 'no fake technical-receipt rollback');
+        assert.ok(state.spaces.every((w, index) => w.cleanups === 1 && (index === changes.cleanupAt ? w.failed && !w.cleaned : w.cleaned)));
+        if (cleanup) assert.ok(state.spaces[changes.cleanupAt].appended.some(path => path.includes('employee-safety-media') || path.startsWith('media/')), 'fault targets actual media plaintext');
+        if (changes.downloadLost) assert.equal(state.edges.length, 1);
+        if (changes.corruptPair) {
+          assert.equal(state.files.find(f => f.kind === changes.corruptPair).opens, changes.corruptPair === 'records' ? 5 : 4);
+          assert.equal(state.mediaVerifies, 2, 'failed pair cannot reach final source verify');
+        }
+        if (changes.mediaVerifyFailAt) { assert.equal(state.mediaVerifies, 3); assert.equal(state.verifies, 2, 'final media failure precedes final record verify'); }
+        if (changes.driftAt === 3) { assert.equal(state.verifies, 3); assert.equal(state.mediaVerifies, 3); }
+        await parentLocked(page); await noRecovery(page);
+      }));
+      await t.test('real progress is record/file/byte counts, followed by paired readback and final source verification (no estimates)', () => scenario(browser, async page => {
+        await page.evaluate(() => window.__h.addAttachment()); await prepare(page);
+        await fault(page, { holdRpc: PAGE, holdPageAt: 2, holdEdge: 'recheck-export', holdMediaVerifyAt: 3 }); await start(page).click();
+        const progress = () => panel(page).locator('[aria-label="員工備份實際進度"]').locator('dd').allTextContents();
+        await page.waitForFunction(name => window.__h.waiting === name, PAGE);
+        const initial = await progress();
+        assert.equal(initial[0], '記錄：驗證超管並建立員工記錄快照'); assert.equal(initial[1], '0'); assert.equal(initial[2], '0'); assert.equal(initial[3], '0');
+        await parentLocked(page);
+        await page.evaluate(() => window.__h.release()); await page.waitForFunction(() => window.__h.waiting === 'record-page:2');
+        const firstPage = await progress(); assert.equal(firstPage[0], '記錄：分頁讀取員工及關聯記錄');
+        assert.equal(firstPage[1], '1'); assert.equal(firstPage[2], '0');
+        const firstBytes = await page.evaluate(() => new TextEncoder().encode(JSON.stringify(window.__h.catalog) + '\n' + window.__h.texts.accounts).length);
+        assert.equal(Number(firstPage[3].replaceAll(',', '')), firstBytes);
+        await page.evaluate(() => window.__h.release());
+        await page.waitForFunction(() => window.__h.waiting === 'edge-recheck-export');
+        const downloaded = await progress(); assert.equal(downloaded[0], '附件：下載並核對實際附件');
+        assert.equal(downloaded[1], '2'); assert.equal(downloaded[2], '1');
+        const recordBytes = await page.evaluate(() => window.__h.catalog.tables.reduce((n, t) => n + t.bytes, 0) + new TextEncoder().encode(JSON.stringify(window.__h.catalog) + '\n').length);
+        assert.equal(Number(downloaded[3].replaceAll(',', '')), recordBytes + 6, 'bytes are processed raw record entries plus downloaded media');
+        assert.equal((await rpcCalls(page)).some(c => c.name === CLOSE), false);
+        await page.evaluate(() => window.__h.release()); await page.waitForFunction(() => window.__h.waiting === 'final-media-verify');
+        const final = await progress(); assert.equal(final[0], '成對檔案已核驗，最後複核來源記錄及附件');
+        assert.equal(final[1], '2'); assert.equal(final[2], '1');
+        assert.ok(Number(final[3].replaceAll(',', '')) > recordBytes + 6);
+        await panel(page).getByText('記錄與附件成對核驗已通過', { exact: true }).waitFor();
+        assert.ok(await page.evaluate(() => window.__h.workspaces.every(w => w.cleaned && w.cleanups === 1)));
+        assert.equal((await rpcCalls(page)).some(c => c.name === CLOSE), false);
+        await parentLocked(page); await page.evaluate(() => window.__h.release()); await finished(page);
+        const result = await report(page); safeReport(result);
+        assert.deepEqual(result.lastProgress, { stage: 'close', phase: 'close', rows: 2, files: 1, bytes: Number(final[3].replaceAll(',', '')) });
+        assert.equal((await progress())[0], '記錄與附件核對完成，請求結束技術任務');
+        assert.equal((await panel(page).innerText()).includes('%'), false);
+        await noRecovery(page, 1, 1);
+      }));
+      for (const unmount of [false, true]) await t.test(`during actual attachment download ${unmount ? 'unmount' : 'local cancel'} aborts only and preserves the owned task`, () => scenario(browser, async page => {
+        await page.evaluate(() => window.__h.addAttachment()); await prepare(page); await fault(page, { holdEdge: 'download' }); await start(page).click();
+        await page.waitForFunction(() => window.__h.waiting === 'edge-download');
+        await panel(page).getByRole('heading', { name: '獨立記錄檔案已核驗', exact: true }).waitFor();
+        await parentLocked(page);
+        if (unmount) await page.evaluate(() => window.__unmount());
+        else await panel(page).getByRole('button', { name: '停止本機備份處理', exact: true }).click();
+        await page.waitForFunction(() => window.__h.waiting === null && window.__h.edgeSignals[0].aborted && window.__h.workspaces.every(w => w.cleaned), null, { timeout: 2000 });
+        assert.ok(await page.evaluate(() => window.__h.events.includes('gate-aborted:edge-download')));
+        assert.equal(await page.evaluate(() => window.__h.serverRunning), true);
+        if (unmount) {
+          assert.equal(await page.locator('#root').innerText(), '');
+          assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), 0);
+        } else {
+          await finished(page); const result = await report(page); safeReport(result);
+          assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.mediaEncryptedFileState, 'not-written');
+          assert.equal(result.mediaReceipt, null); assert.equal(result.pairVerified, false); assert.equal(result.taskCloseConfirmed, false);
+          await parentLocked(page); await openStop(page); await fillStop(page); await stop(page).click();
+          await panel(page).getByText(/^服務端已確認停止本人的員工記錄備份技術任務/).waitFor();
+          assert.equal((await rpcCalls(page)).find(c => c.name === STOP).args.p_job_id, id(2));
+          assert.equal(await reset(page).isEnabled(), true);
+        }
+        assert.equal(await page.evaluate(() => window.__h.edgeCalls.length), 1);
+        await noRecovery(page, 1, 0, unmount ? 0 : 1);
+      }));
+      await t.test('cancelling stalled report after attachment failure preserves records and pending parent lock, leaving explicit stop reachable', () => scenario(browser, async page => {
+        await prepareParent(page); await page.evaluate(() => window.__h.addAttachment());
+        await prepare(page); await fault(page, { downloadLost: true, holdReport: true }); await start(page).click();
+        await heldReport(page); await parentLocked(page);
+        const result = await report(page); safeReport(result);
+        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.mediaEncryptedFileState, 'not-written');
+        assert.equal(result.pairVerified, false); assert.equal(result.taskCloseConfirmed, false);
+        await cancelHeldReport(page); await parentLocked(page); assert.deepEqual(await report(page), result);
+        await openStop(page); await fillStop(page); await stop(page).click();
+        await panel(page).getByText(/^服務端已確認停止本人的員工記錄備份技術任務/).waitFor();
+        assert.equal(await importStart(page).isEnabled(), true); await noRecovery(page, 1, 0, 1);
       }));
       await t.test('changing exact username invalidates acknowledgment even when changing it back', () => scenario(browser, async page => {
         await prepare(page); await page.locator('#employee-safety-username').fill('Changed-Name');
@@ -468,10 +764,11 @@ for (const engine of ['chromium', 'webkit']) {
       }));
       for (const mode of ['unavailable', 'lost']) await t.test(`backend begin ${mode}: no automatic retry/close and safe unknown outcome`, () => scenario(browser, async page => {
         await prepare(page); await fault(page, { begin: mode }); await start(page).click(); await finished(page);
-        await panel(page).getByRole('alert').filter({ hasText: /^本次員工記錄備份未能確認全部完成/ }).waitFor();
+        await panel(page).getByRole('alert').filter({ hasText: /^本次員工備份未能確認全部完成/ }).waitFor();
         const result = await report(page); safeReport(result);
         assert.equal(result.status, 'unconfirmed'); assert.equal(result.jobId, null); assert.equal(result.receipt, null);
         assert.equal(result.taskCloseConfirmed, false); assert.equal(result.encryptedFileState, 'not-written');
+        assert.equal(result.mediaEncryptedFileState, 'not-written'); assert.equal(result.mediaReceipt, null); assert.equal(result.pairVerified, false);
         assert.equal(await start(page).isDisabled(), true); assert.equal(await reset(page).count(), 0);
         assert.equal(await page.evaluate(() => window.__h.serverRunning), mode === 'lost');
         await noRecovery(page);
@@ -482,11 +779,13 @@ for (const engine of ['chromium', 'webkit']) {
         ['source drift before encryption', { driftAt: 1 }, 'not-written', 1],
         ['source drift after complete readback', { driftAt: 2 }, 'verified', 2],
         ['saved ciphertext corruption', { corruptFile: true }, 'saved', 1],
+        ['record save response loss', { saveLost: 'records' }, 'unknown', 1],
       ]) await t.test(`${label} prevents close and never retries or reports success`, () => scenario(browser, async page => {
         await prepare(page); await fault(page, changes); await start(page).click(); await finished(page);
         const result = await report(page); safeReport(result);
         assert.equal(result.status, 'unconfirmed'); assert.equal(result.jobId, id(2)); assert.equal(result.receipt, null);
         assert.equal(result.encryptedFileState, expectedState); assert.equal(result.taskCloseConfirmed, false);
+        assert.equal(result.mediaEncryptedFileState, 'not-written'); assert.equal(result.mediaReceipt, null); assert.equal(result.pairVerified, false);
         assert.equal(await page.evaluate(() => window.__h.verifyCount), expectedVerifies);
         assert.ok(await page.evaluate(() => window.__h.workspaces.every(w => w.cleaned && w.cleanups === 1)));
         if (changes.page) assert.equal((await rpcCalls(page)).filter(c => c.name === PAGE).length, 1);
@@ -494,11 +793,15 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await reset(page).count(), 0); await parentLocked(page); await noRecovery(page);
       }));
       await t.test('lost close response retains verified receipt but leaves task outcome unknown', () => scenario(browser, async page => {
+        await page.evaluate(() => window.__h.addAttachment());
         await prepare(page); await fault(page, { closeLost: true }); await start(page).click(); await finished(page);
-        await panel(page).getByText('獨立記錄檔案已核驗，任務結束尚未確認', { exact: true }).waitFor();
+        await panel(page).getByText('來源複核或任務結束尚未確認', { exact: true }).waitFor();
         const result = await report(page); safeReport(result);
         assert.equal(result.status, 'unconfirmed'); assert.equal(result.encryptedFileState, 'verified');
-        assert.equal(result.taskCloseConfirmed, false); assert.equal(result.receipt.rows, 1); assert.equal(result.receipt.tables, 48);
+        assert.equal(result.taskCloseConfirmed, false); assert.equal(result.receipt.rows, 2); assert.equal(result.receipt.tables, 48);
+        assert.equal(result.mediaEncryptedFileState, 'verified'); assert.equal(result.mediaReceipt.files, 1); assert.equal(result.pairVerified, true);
+        await panel(page).getByText('記錄與附件成對核驗已通過', { exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => window.__h.serverRunning), false, 'server may have closed, but no receipt means UI must remain pending');
         assert.equal(await reset(page).count(), 0); await parentLocked(page); await noRecovery(page, 1, 1);
       }));
       await t.test('busy/pending lock previously actionable parent export/import, not explicit known-job stop; fresh prepare required', () => scenario(browser, async page => {
@@ -596,15 +899,20 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.evaluate(() => window.__h.reports.length), 0);
       }));
       await t.test('stalled report-only cancellation after SUCCESS preserves verified receipt/close confirmation and unlocks parent without rerun', () => scenario(browser, async page => {
-        await prepareParent(page); await prepare(page); await fault(page, { holdReport: true }); await start(page).click();
+        await prepareParent(page); await page.evaluate(() => window.__h.addAttachment()); await prepare(page); await fault(page, { holdReport: true }); await start(page).click();
         await heldReport(page); await parentLocked(page);
-        await panel(page).getByText('獨立記錄檔案已核驗，任務結束已確認', { exact: true }).waitFor();
+        await panel(page).getByText('來源複核及任務結束已確認', { exact: true }).waitFor();
         const result = await report(page); safeReport(result);
-        assert.equal(result.status, 'verified-records-and-task-closed'); assert.equal(result.taskCloseConfirmed, true);
-        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.receipt.rows, 1); assert.equal(result.receipt.tables, 48);
+        assert.equal(result.status, 'verified-pair-and-task-closed'); assert.equal(result.taskCloseConfirmed, true);
+        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.receipt.rows, 2); assert.equal(result.receipt.tables, 48);
+        assert.equal(result.mediaEncryptedFileState, 'verified'); assert.equal(result.mediaReceipt.files, 1); assert.equal(result.pairVerified, true);
+        const mediaBefore = await page.evaluate(() => { const file = window.__h.directories.at(-1).files[1]; return { name: file.name, size: file.bytes.length, writes: file.writes, opens: file.opens, eof: file.eof }; });
         const fileBefore = await page.evaluate(() => { const file = window.__h.directories.flatMap(directory => directory.files)[0]; return { name: file.name, size: file.bytes.length, writes: file.writes, opens: file.opens, eof: file.eof }; });
+        // SQL47 deadline signals are intentionally aborted when each request finishes.
+        // Cancelling the report must not change ANY existing signal or abort the still-live SQL46 session requests.
+        const signalsBefore = await page.evaluate(() => window.__h.signals.map(signal => signal.aborted));
         await cancelHeldReport(page);
-        await panel(page).getByText('獨立記錄檔案已核驗，任務結束已確認', { exact: true }).waitFor();
+        await panel(page).getByText('來源複核及任務結束已確認', { exact: true }).waitFor();
         const receiptView = panel(page).locator('[aria-label="員工記錄備份核驗結果"]');
         assert.ok((await receiptView.innerText()).includes(result.receipt.filename));
         assert.ok((await receiptView.innerText()).includes(result.receipt.cipherSha256));
@@ -613,9 +921,12 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.locator('#migration-panel-export button[type="submit"]').isEnabled(), true);
         assert.equal(await page.getByRole('button', { name: '重新檢查能力', exact: true }).isEnabled(), true);
         assert.equal(await page.evaluate(() => window.__h.serverRunning), false);
-        assert.equal(await page.evaluate(() => window.__h.signals.some(signal => signal.aborted)), false, 'only the reporting signal is aborted');
+        assert.deepEqual(await page.evaluate(() => window.__h.signals.map(signal => signal.aborted)), signalsBefore, 'report cancellation leaves completed media deadlines and backup controllers unchanged');
+        assert.ok(await page.evaluate(names => window.__h.calls.every((call, i) => names.includes(call.name) || !window.__h.signals[i].aborted), [MEDIA, MEDIA_VERIFY]), 'report cancel does not abort SQL46 session requests');
         assert.deepEqual(await report(page), result);
         assert.deepEqual(await page.evaluate(() => { const file = window.__h.directories.flatMap(directory => directory.files)[0]; return { name: file.name, size: file.bytes.length, writes: file.writes, opens: file.opens, eof: file.eof }; }), fileBefore);
+        assert.deepEqual(await page.evaluate(() => { const file = window.__h.directories.at(-1).files[1]; return { name: file.name, size: file.bytes.length, writes: file.writes, opens: file.opens, eof: file.eof }; }), mediaBefore);
+        const pair = await page.evaluate(() => window.__h.readSavedPair()); assert.equal(pair.inventory.files.length, 1);
         const decoded = await page.evaluate(() => window.__h.readSaved());
         assert.deepEqual(JSON.parse(decoded.texts.accounts), await page.evaluate(() => window.__h.account));
         assert.equal(decoded.manifest.entries.length, 49);
@@ -653,7 +964,7 @@ for (const engine of ['chromium', 'webkit']) {
       }));
       await t.test('report save failure retains verified result/task-close evidence without rerun', () => scenario(browser, async page => {
         await prepare(page); await fault(page, { reportFail: true }); await start(page).click(); await finished(page, true);
-        await panel(page).getByText('獨立記錄檔案已核驗，任務結束已確認', { exact: true }).waitFor();
+        await panel(page).getByText('來源複核及任務結束已確認', { exact: true }).waitFor();
         const result = await report(page); safeReport(result); assert.equal(result.taskCloseConfirmed, true);
         assert.equal(result.encryptedFileState, 'verified'); assert.equal(await page.evaluate(() => window.__h.reports.length), 0);
         assert.equal(await start(page).isDisabled(), true); assert.equal(await reset(page).isEnabled(), true);
@@ -668,12 +979,12 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.evaluate(() => window.__h.signals.some(s => s.aborted)), false);
         await page.getByRole('tab', { name: '導出', exact: true }).click();
         await page.getByRole('button', { name: '查看員工備份狀態', exact: true }).click();
-        await panel(page).getByText('員工記錄備份執行中', { exact: true }).waitFor();
+        await panel(page).getByText('員工記錄與附件備份執行中', { exact: true }).waitFor();
         await page.evaluate(() => window.__h.release()); await finished(page);
         const before = await report(page);
         await page.getByRole('tab', { name: '紀錄', exact: true }).click();
         await page.getByRole('tab', { name: '導入', exact: true }).click();
-        await panel(page).getByText('獨立記錄檔案已核驗，任務結束已確認', { exact: true }).waitFor();
+        await panel(page).getByText('來源複核及任務結束已確認', { exact: true }).waitFor();
         assert.deepEqual(await report(page), before); await noRecovery(page, 1, 1);
       }));
       await t.test('local cancel only aborts processing; server task requires a separate explicit stop', () => scenario(browser, async page => {
@@ -699,10 +1010,17 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.evaluate(() => window.__h.reports.length), 0);
       }));
       await t.test('375px supported-path result and explicit-stop controls do not overflow', () => scenario(browser, async page => {
-        await prepare(page); await start(page).click(); await finished(page); await openStop(page);
+        await page.evaluate(() => window.__h.addAttachment()); await prepare(page); await start(page).click(); await finished(page); await openStop(page);
         await fillStop(page);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no document horizontal overflow');
+        await panel(page).getByRole('heading', { name: '獨立附件檔案已核驗', exact: true }).waitFor();
+        await panel(page).getByText('記錄與附件成對核驗已通過', { exact: true }).waitFor();
+        await panel(page).getByText('來源複核及任務結束已確認', { exact: true }).waitFor();
+        const result = await report(page); safeReport(result); assert.equal(result.mediaReceipt.files, 1);
         const bounds = await panel(page).boundingBox(); assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 375);
+        for (const label of ['員工記錄備份核驗結果', '員工附件備份核驗結果', '員工備份成對核驗狀態']) {
+          const box = await panel(page).locator(`[aria-label="${label}"]`).boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= 375, label);
+        }
         for (const selector of ['#employee-safety-stop-password', '#employee-safety-stop-confirmation']) {
           const box = await page.locator(selector).boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= 375);
         }
