@@ -247,6 +247,7 @@ function installHarness(api, constants) {
             const pieces = [];
             for await (const bytes of source) { alive(signal); pieces.push(new Uint8Array(bytes)); }
             f.bytes = join(pieces); h.events.push('cipher-saved'); h.events.push(kind + '-saved');
+            if (h.fault.holdCipherSave === kind) { h.fault.holdCipherSave = null; await gate('cipher-save:' + kind, signal); }
             if (h.fault.corruptFile || h.fault.corruptSaved === kind) f.bytes[f.bytes.length - 1] ^= 1;
             if (h.fault.saveLost === kind) throw Error(PASSWORD + PASS);
           },
@@ -254,6 +255,12 @@ function installHarness(api, constants) {
             const number = ++f.opens, read = { number, bytes: 0, eof: false };
             f.reads.push(read); h.events.push('cipher-open'); h.events.push(kind + '-open:' + number);
             return { async *[Symbol.asyncIterator]() {
+              if (h.fault.holdPairRead === kind && number === (kind === 'records' ? 5 : 4)) {
+                h.fault.holdPairRead = null;
+                // The stream's IO boundary has no signal; cancellation must return the iterator
+                // without waiting for its blocked next(), and late IO must not trigger close.
+                await gate('pair-read:' + kind);
+              }
               for (let offset = 0; offset < f.bytes.length; offset += 113) {
                 const bytes = f.bytes.slice(offset, offset + 113);
                 // Only the full second (paired) read is altered, not the metadata probe.
@@ -511,8 +518,11 @@ async function parentLocked(page) {
 }
 
 for (const engine of ['chromium', 'webkit']) {
-  test(`isolated ${engine} employee safety UI: real SQL46/47 clients/paired AES/ZIP, synthetic RPC/Edge/picker/workspace`, { skip: !playwright, timeout: 360000 }, async t => {
-    const browser = await playwright[engine].launch({ headless: true });
+  test(`isolated ${engine} employee safety UI: real SQL46/47 clients/paired AES/ZIP, synthetic RPC/Edge/picker/workspace`, { skip: !playwright, timeout: 600000 }, async t => {
+    // Optional explicit paths let temporary runners use existing cached browsers without
+    // installing modules/binaries in the repository or silently skipping a launch failure.
+    const executablePath = process.env[`EMPLOYEE_TRANSFER_${engine.toUpperCase()}_EXECUTABLE`];
+    const browser = await playwright[engine].launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
     try {
       await t.test('actual attachment: 48 pages -> records -> SQL47 download/media AES/ZIP -> paired readback -> final source -> explicit close', () => scenario(browser, async page => {
         await page.evaluate(() => window.__h.addAttachment());
@@ -726,6 +736,42 @@ for (const engine of ['chromium', 'webkit']) {
         }
         assert.equal(await page.evaluate(() => window.__h.edgeCalls.length), 1);
         await noRecovery(page, 1, 0, unmount ? 0 : 1);
+      }));
+      for (const phase of ['save', 'pair']) for (const unmount of [false, true]) await t.test(`attachment ${phase} ${unmount ? 'unmount' : 'cancel'} keeps both files and cannot close even after late IO completes`, () => scenario(browser, async page => {
+        await page.evaluate(() => window.__h.addAttachment()); await prepare(page);
+        await fault(page, phase === 'save' ? { holdCipherSave: 'media' } : { holdPairRead: 'media' }); await start(page).click();
+        const gateName = phase === 'save' ? 'cipher-save:media' : 'pair-read:media';
+        await page.waitForFunction(name => window.__h.waiting === name, gateName);
+        await page.evaluate(() => { window.__h.lateMediaRelease = window.__h.release; });
+        await parentLocked(page);
+        const before = await page.evaluate(() => ({ files: window.__h.directories.at(-1).files.map(f => ({ name: f.name, writes: f.writes, bytes: f.bytes.length })),
+          edges: window.__h.edgeCalls.length, mediaVerifies: window.__h.mediaVerifyCount }));
+        assert.equal(before.files.length, 2); assert.ok(before.files.every(f => f.bytes > 0 && f.writes === 1));
+        assert.equal(before.mediaVerifies, phase === 'save' ? 1 : 2);
+        if (unmount) await page.evaluate(() => window.__unmount());
+        else await panel(page).getByRole('button', { name: '停止本機備份處理', exact: true }).click();
+        await page.waitForFunction(() => window.__h.workspaces.every(w => w.cleaned && w.cleanups === 1), null, { timeout: 2000 });
+        if (unmount) {
+          assert.equal(await page.locator('#root').innerText(), '');
+          assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), 0);
+        } else {
+          await finished(page); const result = await report(page); safeReport(result);
+          assert.equal(result.status, 'unconfirmed'); assert.equal(result.encryptedFileState, 'verified');
+          assert.equal(result.mediaEncryptedFileState, phase === 'save' ? 'unknown' : 'verified');
+          assert.equal(Boolean(result.mediaReceipt), phase === 'pair');
+          assert.equal(result.pairVerified, false); assert.equal(result.taskCloseConfirmed, false);
+          assert.equal(result.temporaryPlaintextCleanupUnconfirmed, false);
+          assert.equal(result.lastProgress.stage, phase === 'save' ? 'media' : 'pair');
+          assert.equal(await reset(page).count(), 0); await parentLocked(page);
+        }
+        await page.evaluate(() => window.__h.lateMediaRelease());
+        await page.waitForFunction(() => window.__h.waiting === null);
+        await noRecovery(page);
+        assert.equal(await page.evaluate(() => window.__h.serverRunning), true);
+        assert.equal(await page.evaluate(() => window.__h.edgeCalls.length), before.edges);
+        assert.equal(await page.evaluate(() => window.__h.mediaVerifyCount), before.mediaVerifies);
+        assert.deepEqual(await page.evaluate(() => window.__h.directories.at(-1).files.map(f => ({ name: f.name, writes: f.writes, bytes: f.bytes.length }))), before.files, 'late IO cannot overwrite or delete either ciphertext');
+        assert.ok(await page.evaluate(() => window.__h.workspaces.every(w => w.cleaned && w.cleanups === 1)));
       }));
       await t.test('cancelling stalled report after attachment failure preserves records and pending parent lock, leaving explicit stop reachable', () => scenario(browser, async page => {
         await prepareParent(page); await page.evaluate(() => window.__h.addAttachment());
