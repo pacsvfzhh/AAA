@@ -54,7 +54,7 @@ export interface EmployeeSafetyBackupSession extends EmployeeSafetyBackupSource 
   // Only after exportEmployeeSafetyBackup has saved, authenticated, rechecked and cleaned up.
   close(catalog: EmployeeSafetyBackupCatalog, signal?: AbortSignal): Promise<unknown>;
 }
-export type EmployeeSafetyBackupPhase = 'begin' | 'catalog' | 'page' | 'verify' | 'close' | 'records-export'
+export type EmployeeSafetyBackupPhase = 'begin' | 'catalog' | 'page' | 'verify' | 'close' | 'stop' | 'records-export'
   | 'source-recheck' | 'save' | 'authenticate' | 'validate' | 'target-recheck' | 'consume';
 export interface EmployeeSafetyBackupOptions {
   signal?: AbortSignal;
@@ -207,6 +207,7 @@ export function validateEmployeeSafetyBackupRow(line: string, key: EmployeeSafet
   // not its UUID. Login history still belongs to the employee through user_id.
   for (const field of ['user_id', 'employee_id', 'recipient_id']) {
     if (field === 'employee_id' && (key === 'accounts' || key === 'employee_login_history')) continue;
+    if (field === 'employee_id' && key === 'content_audit_events' && row.entity_type === 'notification' && row.employee_id === null) continue;
     if (Object.prototype.hasOwnProperty.call(row, field) && row[field] !== c.employee_id) invalid();
   }
   return id;
@@ -233,6 +234,31 @@ export function validateEmployeeSafetyBackupVerification(input: unknown, c: Empl
 }
 
 type Query = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): Query };
+export async function stopOwnedEmployeeSafetyBackup(password: string, confirmation: string, jobId: string | null = null, signal?: AbortSignal) {
+  let sent = false;
+  try {
+    checkAbort(signal);
+    if (!password || confirmation !== '確認停止員工備份任務') invalid();
+    if (jobId !== null) uuid(jobId);
+    const { data, error } = await withSignal(() => {
+      const query = supabase.rpc('employee_safety_backup_stop_owned', {
+        p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_admin_password: password,
+        p_confirmation: confirmation, p_job_id: jobId,
+      });
+      sent = true;
+      return signal ? query.abortSignal(signal) : query;
+    }, signal);
+    checkAbort(signal);
+    if (error) invalid();
+    const r = object(data, ['success', 'cancelled', 'job_id', 'scope', 'full_site_complete']);
+    if (r.success !== true || typeof r.cancelled !== 'boolean' || r.scope !== 'employee-safety-records' || r.full_site_complete !== false) invalid();
+    const id = r.job_id === null ? null : uuid(r.job_id);
+    if ((r.cancelled && (id === null || (jobId !== null && jobId !== id))) || (!r.cancelled && id !== null)) invalid();
+    return { success: true as const, cancelled: r.cancelled, jobId: id, fullSiteComplete: false as const };
+  } catch {
+    throw new EmployeeSafetyBackupError('stop', signal?.aborted === true, sent, 'not-written', false);
+  } finally { password = ''; }
+}
 export function createEmployeeSafetyBackupSession(inputUsername: string, password: string): EmployeeSafetyBackupSession {
   const name = username(inputUsername);
   if (typeof password !== 'string' || !password.length) invalid();

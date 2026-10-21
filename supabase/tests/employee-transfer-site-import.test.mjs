@@ -18,7 +18,7 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // are real disk files; temporary plaintext workspaces and Edge Storage are in memory.
 // Source fixture trigger changes finish BEFORE import; no importer error is bypassed.
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const LAST = '20261102000045_verify_site_prerequisites.sql';
+const LAST = '20261102000046_backup_employee_before_restore.sql';
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';
@@ -280,9 +280,9 @@ after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   const foreign = edge.foreign.slice(); mock.restoreAll(); assert.deepEqual(foreign, []);
 });
-test('strict latest 43/44/45 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
-  assert.deepEqual(replay.files.slice(-3), ['20261102000043_preserve_transfer_announcements.sql',
-    '20261102000044_preflight_site_restore.sql', LAST]);
+test('strict latest 43/44/45/46 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
+  assert.deepEqual(replay.files.slice(-4), ['20261102000043_preserve_transfer_announcements.sql',
+    '20261102000044_preflight_site_restore.sql', '20261102000045_verify_site_prerequisites.sql', LAST]);
   assert.equal(replay.failures.length, 12);
   const paths = Object.keys(compiled.metafile.inputs);
   for (const module of ['siteTransfer', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])

@@ -19,6 +19,23 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // Privileged fixture edits below restore every original trigger mode. No Storage/media success
 // is simulated: this contract is records_only, NOT an archive/replacement/full employee backup.
 const MIGRATION = '20261102000046_backup_employee_before_restore.sql';
+const PREVIOUS = '20261102000045_verify_site_prerequisites.sql';
+const STOP = 'employee_safety_backup_stop_owned';
+const STOP_CONFIRMATION = '確認停止員工備份任務';
+const PROTOCOL_KINDS = [
+  ['shared-import', 'import', 'import_protocol', 'shared-import-v1'],
+  ['products-import', 'import', 'import_protocol', 'products-v1'],
+  ['dispatch-import', 'import', 'import_protocol', 'dispatch-submission-v1'],
+  ['products-export', 'export', 'export_protocol', 'products-v1'],
+  ['dispatch-export', 'export', 'export_protocol', 'dispatch-submission-v1'],
+  ['identity-export', 'export', 'export_protocol', 'employee-identity-v1'],
+  ['finance-export', 'export', 'export_protocol', 'employee-finance-v1'],
+  ['activity-export', 'export', 'export_protocol', 'employee-activity-v1'],
+  ['verification-export', 'export', 'export_protocol', 'employee-verification-v1'],
+  ['notifications-export', 'export', 'export_protocol', 'site-notifications-v1'],
+  ['chat-export', 'export', 'export_protocol', 'site-chat-v1'],
+  ['archives-export', 'export', 'export_protocol', 'site-archives-v1'],
+];
 const BEGIN = 'employee_safety_backup_begin', CATALOG = 'get_employee_safety_backup_catalog';
 const PAGE = 'get_employee_safety_backup_page', VERIFY = 'employee_safety_backup_verify', CLOSE = 'employee_safety_backup_close';
 const CORE = ['accounts', 'credentials', 'orders', 'wallets', 'wallet_balance_baselines', 'wallet_ledger_entries',
@@ -45,7 +62,7 @@ const flags = value => {
   for (const [key, expected] of Object.entries({ records_only: true, media_included: false, complete_employee_backup: false,
     can_archive: false, can_replace: false, full_site_complete: false })) assert.equal(value[key], expected, key);
 };
-let db, replay, modules, session, secondary, emergency, otherRoot, employeeToken;
+let db, replay, modules, session, secondary, emergency, otherRoot, employeeToken, previousJobDefinition, nativeAuditId;
 let sequence = 0, forbiddenNetworkCalls = 0;
 const expected = new Map();
 const selected = new Map();
@@ -75,6 +92,20 @@ const page = (job, key, extra = {}) => rpc(PAGE, { ...fingerprintArgs(job), p_ta
 const verify = job => rpc(VERIFY, fingerprintArgs(job));
 const close = job => rpc(CLOSE, fingerprintArgs(job));
 const jobRow = job => scalar(db, 'SELECT to_jsonb(j)::text FROM private.employee_transfer_jobs j WHERE id=$1', [job.job_id]);
+const stop = (extra = {}) => rpc(STOP, { p_admin_session_token: session, p_admin_password: PASSWORDS.root,
+  p_confirmation: STOP_CONFIRMATION, ...extra });
+async function isolated(fn) {
+  const point = `safety_isolated_${++sequence}`; await db.exec(`SAVEPOINT ${point}`);
+  try { return await fn(); } finally { await db.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); }
+}
+// Runtime private helper checks execute the real function with genuine public-begin tokens.
+// This is privileged LOCAL SQL only, not a browser privilege grant or synthetic job receipt.
+const kindHelper = (job, kind) => isolated(() => scalar(db,
+  'SELECT (private.employee_transfer_job($1,$2,$3)).id', [session, job.job_token, kind]));
+function assertStop(result, cancelled, jobId) {
+  assert.deepEqual(result, { success: true, cancelled, job_id: jobId, scope: 'employee-safety-records', full_site_complete: false });
+  assert.doesNotMatch(JSON.stringify(result), /token|password|credential/i);
+}
 
 // Only for initial local records and rollback-only source drift / clock simulation, never used
 // to create or alter task tokens, ownership, protocol, summary, password hashes, or maintenance.
@@ -148,10 +179,24 @@ async function seedChat() {
       ($2,$3,'Foreign only','LOCAL-FOREIGN','aaa_service',ARRAY[$5]::uuid[],NULL)`, [id(300), id(301), NEW.root, TARGET, FOREIGN, MEDIA_REFERENCE]);
   await db.query(`INSERT INTO public.cs_message_templates(id,admin_id,name,content,content_type,source_type,created_at)
     VALUES($1,$3::text,'Selected template',$4,'rich_card','ccc_service',$5),($2,$3::text,'Unrelated template','FOREIGN-LIBRARY','richtext','aaa_service',$5)`, [id(310), id(311), NEW.root, HTML, TIME]);
+  // Keep the unrelated library under another owner; unrestricted roles select their OWN
+  // administrator/source library, not every administrator's templates.
+  await db.query('UPDATE public.cs_message_templates SET admin_id=$2::text WHERE id=$1', [id(311), NEW.branch]);
+  await db.query(`INSERT INTO public.simulated_customers(id,admin_id,customer_name,customer_id,source_type,target_employee_ids)
+    VALUES($1,$4,'No-chat unrestricted NULL','LOCAL-UNRESTRICTED-NULL','aaa_service',NULL),
+      ($2,$4,'No-chat unrestricted empty','LOCAL-UNRESTRICTED-EMPTY','ccc_service',ARRAY[]::uuid[]),
+      ($3,$5,'Other owner unrestricted','LOCAL-OTHER-OWNER','aaa_service',NULL)`, [id(302), id(303), id(304), NEW.root, NEW.branch]);
+  await db.query(`INSERT INTO public.cs_message_templates(id,admin_id,name,content,content_type,source_type,created_at)
+    VALUES($1,$2::text,'Unsent no-chat template','NO-CHAT-TEMPLATE','rich_card','aaa_service',$3)`, [id(312), NEW.root, TIME]);
   await db.query(`INSERT INTO public.customer_auto_messages(id,customer_id,admin_id,message_type,name,content,content_type)
     VALUES($1,$3,$5::text,'quick_send','Selected auto','original auto','text'),($2,$4,$5::text,'quick_send','Foreign auto','FOREIGN-AUTO','text')`, [id(320), id(321), id(300), id(301), NEW.root]);
   await db.query(`INSERT INTO public.rich_card_contents(id,html_content,source_template_id,content_hash,created_at)
     VALUES($1,$3,$4,md5($3),$5),($2,'FOREIGN-CARD',NULL,md5('FOREIGN-CARD'),$5)`, [id(330), id(331), HTML, id(310), TIME]);
+  await db.query(`INSERT INTO public.customer_auto_messages(id,customer_id,admin_id,message_type,name,content,content_type)
+    VALUES($1,$3,$5::text,'quick_send','Unsent no-chat auto','NO-CHAT-AUTO','text'),
+      ($2,$4,$6::text,'quick_send','Other owner auto','FOREIGN-OWNER-AUTO','text')`, [id(322), id(323), id(302), id(304), NEW.root, NEW.branch]);
+  await db.query(`INSERT INTO public.rich_card_contents(id,html_content,source_template_id,content_hash,created_at)
+    VALUES($1,'NO-CHAT-FROZEN-CARD',$2,md5('NO-CHAT-FROZEN-CARD'),$3)`, [id(332), id(312), TIME]);
   for (const [user, base] of [[TARGET, 340], [FOREIGN, 350]]) {
     await change('public.customer_employee_conversations', `INSERT INTO public.customer_employee_conversations(id,customer_id,employee_id,sender_type,message_content,message_type,source_type,rating_data,rich_card_content_id,source_template_id,created_at)
       VALUES($1,$2,$3,'customer',$4,'rich_card','ccc_service',('{"amount":'||$5::text||'}')::jsonb,$6,$7,$8)`, [id(base), id(300), user, user === TARGET ? HTML : 'FOREIGN-CHAT', PRECISE, id(330), id(310), TIME]);
@@ -202,12 +247,39 @@ async function seedNotifications() {
     VALUES($1,$2,$3,'text','all',$4)`, [id(470), NEW.root, HTML, TIME]);
   for (const [recipient, user] of [[471, TARGET], [472, FOREIGN]]) await db.query('INSERT INTO public.broadcast_recipients(id,broadcast_id,employee_id,created_at) VALUES($1,$2,$3,$4)', [id(recipient), id(470), user, TIME]);
 }
+async function seedNotificationEvidence() {
+  // Real native notification edit: keep the audit trigger enabled and let PostgreSQL
+  // construct employee_id=NULL plus BOTH recipients' original snapshots.
+  const operation = randomUUID();
+  await db.query("SELECT set_config('content_audit.actor',$1,true),set_config('content_audit.operation',$2,true)", [NEW.root, operation]);
+  await db.query("UPDATE public.messages SET title='Native shared notification edit',content=$2 WHERE id=$1", [id(440), HTML + '\nEdited']);
+  const native = await rows(db, 'SELECT id,employee_id,entity_type,before_data FROM private.content_audit_events WHERE operation_id=$1', [operation]);
+  assert.equal(native.length, 1); assert.equal(native[0].employee_id, null); assert.equal(native[0].entity_type, 'notification');
+  assert.deepEqual(native[0].before_data.recipients.map(r => r.recipient_id).sort(), [TARGET, FOREIGN].sort());
+  nativeAuditId = native[0].id;
+  const sharedRecipients = [{ recipient_id: TARGET, note: 'Target original snapshot' },
+    { recipient_id: FOREIGN, note: 'Shared other-recipient snapshot retained verbatim' }];
+  // Ordinary local evidence rows cover each independent SQL46 link, including deleted
+  // messages with no current recipient/version. No task or maintenance row is fabricated.
+  for (const [eventId, entity, entityType, before, after] of [
+    [520, 440, 'notification', { message: { title: 'Entity-only evidence' } }, null],
+    [521, 600, 'notification', { recipients: sharedRecipients, original: HTML }, null],
+    [522, 601, 'notification', null, { recipients: sharedRecipients, original: HTML }],
+    [523, 441, 'notification', { recipients: [{ recipient_id: FOREIGN }] }, null],
+    [524, 602, 'notification', { recipients: [{ employee_id: TARGET }] }, null],
+    [525, 603, 'notification', { nested: { recipients: [{ recipient_id: TARGET }] } }, null],
+    [526, 604, 'ccc_service', { recipients: [{ recipient_id: TARGET }] }, null],
+  ]) await db.query(`INSERT INTO private.content_audit_events(id,operation_id,entity_type,entity_id,action,owner_admin_id,actor_admin_id,
+      actor_username,actor_role,employee_id,before_data,after_data,occurred_at)
+    VALUES($1,$2,$3,$4,'edit',$5,$5,'root','super_admin',NULL,$6::jsonb,$7::jsonb,$8)`,
+  [id(eventId), randomUUID(), entityType, id(entity), NEW.root, before === null ? null : JSON.stringify(before), after === null ? null : JSON.stringify(after), TIME]);
+}
 async function oracle() {
   if (expected.size === TABLES.length) return;
   // Independent scope oracle: use reviewed domain projections (not SQL46's selection/query),
   // exact explicit fixture IDs for shared dependencies, and direct employee predicates.
-  for (const [key, ids] of Object.entries({ simulated_customers: [id(300)], cs_message_templates: [id(310)], customer_auto_messages: [id(320)],
-    rich_card_contents: [id(330)], notification_automation_plans: [id(400)], notification_automation_tasks: [id(401), id(402), id(403)],
+  for (const [key, ids] of Object.entries({ simulated_customers: [id(300), id(302), id(303)], cs_message_templates: [id(310), id(312)], customer_auto_messages: [id(320), id(322)],
+    rich_card_contents: [id(330), id(332)], content_audit_events: [id(510), nativeAuditId, id(520), id(521), id(522)], notification_automation_plans: [id(400)], notification_automation_tasks: [id(401), id(402), id(403)],
     messages: [id(440)], message_templates: [id(460)], broadcast_messages: [id(470)], dispatch_groups: [NEW.groupA],
     valid_order_data: [id(1090)] })) selected.set(key, ids);
   for (const key of TABLES) {
@@ -317,6 +389,9 @@ before(async () => {
     [net, 'connect'], [net, 'createConnection'], [net.Socket.prototype, 'connect'], [tls, 'connect'], [dgram, 'createSocket']]) {
     mock.method(module, name, () => { forbiddenNetworkCalls++; assert.fail('All network and production services are forbidden'); });
   }
+  const previous = await replayMigrations({ upTo: PREVIOUS, strict: true });
+  try { previousJobDefinition = await scalar(previous.db, "SELECT pg_get_functiondef('private.employee_transfer_job(uuid,uuid,text)'::regprocedure)"); }
+  finally { await previous.db.close(); }
   replay = await replayMigrations({ upTo: MIGRATION, strict: true }); db = replay.db;
   await db.exec('BEGIN');
   try {
@@ -326,7 +401,7 @@ before(async () => {
     await db.query('INSERT INTO public.financial_admin_credentials(admin_id,password_hash) SELECT id,password_hash FROM public.admins WHERE id=$1', [OTHER_ROOT]);
     await db.query("INSERT INTO public.product_types(id,name) VALUES($1,'Local-only safety fixture')", [NEW.product]);
     await seedCore(TARGET, 1000); await seedCore(FOREIGN, 2000);
-    await seedChat(); await seedNotifications();
+    await seedChat(); await seedNotifications(); await seedNotificationEvidence();
     await db.query(`INSERT INTO public.dispatch_group_orders(id,group_id,pool_id,order_content,created_by)
       SELECT $1,group_id,id,$2,$3 FROM public.dispatch_order_pools WHERE group_id=$4 AND is_base`, [id(500), HTML, NEW.root, NEW.groupA]);
     for (const user of [TARGET, FOREIGN]) await db.query(`INSERT INTO private.content_audit_events(id,operation_id,entity_type,entity_id,action,owner_admin_id,
@@ -570,5 +645,156 @@ test('pre-save client cancellation leaves a real task running, cleans plaintext,
   await assert.rejects(h.export({ signal: controller.signal, onProgress() { controller.abort(); } }), error => error instanceof modules.EmployeeSafetyBackupError && error.cancelled);
   assertClean(h); assert.equal(h.writes, 0); assert.equal(JSON.parse(await jobRow(h.begin)).status, 'running');
   assert.ok(!h.calls.includes(CLOSE));
+}));
+test('SQL45 to SQL46 preserves every SQL14 and six later protocol mapping plus BOTH isolation guards', () => transaction(async () => {
+  const current = await scalar(db, "SELECT pg_get_functiondef('private.employee_transfer_job(uuid,uuid,text)'::regprocedure)");
+  for (const [label, definition] of [['full replay through SQL45', previousJobDefinition], ['full replay through SQL46', current]]) {
+    const compact = definition.replace(/\s+/g, '').toLowerCase();
+    for (const [kind, base, field, protocol] of PROTOCOL_KINDS) {
+      assert.ok(compact.includes(`when'${kind}'then'${base}'`), `${label}: mapping ${kind}`);
+      assert.ok(compact.includes(`v_job.options->>'${field}'='${protocol}'andp_kind<>'${kind}'`), `${label}: protocol cannot escape to another kind: ${protocol}`);
+      assert.ok(compact.includes(`p_kind='${kind}'andv_job.options->>'${field}'isdistinctfrom'${protocol}'`), `${label}: kind cannot consume another protocol: ${kind}`);
+    }
+    for (const gate of ["admin_id=v_admin", "status='running'", "interval'3hours'", "interval'12hours'"]) assert.ok(compact.includes(gate), `${label}: ${gate}`);
+  }
+  assert.match(current, /independent employee safety task cannot use another transfer protocol/i);
+  for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db,
+    "SELECT has_function_privilege($1,'private.employee_transfer_job(uuid,uuid,text)','EXECUTE')", [role]), false);
+}));
+test('six genuine domain begins preserve runtime kind isolation; real finance page works while legacy finish cannot consume it', { timeout: 180000 }, () => transaction(async () => {
+  for (const domain of ['finance', 'activity', 'verification', 'notifications', 'chat', 'archives']) await isolated(async () => {
+    const job = await rpc(`employee_export_${domain}_begin`, { p_admin_session_token: session, p_admin_password: PASSWORDS.root, p_package_id: randomUUID() });
+    assert.equal(job.success, true, domain); assert.equal(await kindHelper(job, `${domain}-export`), job.job_id);
+    const saved = await jobRow(job);
+    for (const kind of [...PROTOCOL_KINDS.map(([kind]) => kind), 'export', 'import']) if (kind !== `${domain}-export`) {
+      await assert.rejects(kindHelper(job, kind), /protocol|invalid|expired/i, `${domain} cannot become ${kind}`);
+    }
+    await assert.rejects(rpc('employee_export_finish', { ...auth(job), p_summary: {} }), /protocol/i);
+    // Deliberately untrusted request fingerprint, never persisted as a catalog/receipt.
+    // Supply every required argument so the REAL owner/protocol guard rejects this token.
+    await rejectAccess({ ...job, catalog: { fingerprint: 'a'.repeat(64) } }, session, /owner task.*invalid|expired/i);
+    if (domain === 'finance') {
+      const p = await rpc('get_employee_export_finance_page', { ...auth(job), p_table_key: 'wallets', p_after: null, p_limit: 200 });
+      assert.equal(p.count, 2); assert.equal(p.sha256, sha(p.ndjson)); assert.ok(p.ndjson.includes(PRECISE));
+    }
+    assert.equal(await jobRow(job), saved, 'failed isolation checks do not change the genuine task');
+  });
+}));
+test('safety token cannot enter any old kind, export_core, any domain page or legacy finish', () => transaction(async () => {
+  const job = await begin(), before = await snapshot();
+  for (const kind of [...PROTOCOL_KINDS.map(([kind]) => kind), 'export', 'import', null]) await assert.rejects(kindHelper(job, kind), /independent.*protocol/i);
+  await assert.rejects(rpc('get_employee_export_core', { ...auth(job), p_employee_id: TARGET }), /independent.*protocol/i);
+  await assert.rejects(rpc('employee_export_finish', { ...auth(job), p_summary: { full_site_complete: true } }), /independent.*protocol/i);
+  for (const [domain, key] of [['finance', 'wallets'], ['activity', 'employee_login_history'], ['verification', 'verification_requests'],
+    ['notifications', 'messages'], ['chat', 'simulated_customers'], ['archives', 'content_audit_events']]) {
+    await assert.rejects(rpc(`get_employee_export_${domain}_page`, { ...auth(job), p_table_key: key, p_after: null, p_limit: 200 }), /independent.*protocol/i);
+  }
+  assert.deepEqual(await snapshot(), before);
+}));
+test('same-owner unrestricted no-chat roles include NULL/empty visibility, unsent template/auto/card dependencies, but not other owners', () => transaction(async () => {
+  const job = await begin(); await oracle();
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.customer_employee_conversations WHERE customer_id=ANY($1::uuid[])', [[id(302), id(303)]]), 0);
+  for (const key of ['simulated_customers', 'cs_message_templates', 'customer_auto_messages', 'rich_card_contents']) assert.equal(await collect(job, key), expected.get(key), key);
+  const roles = lines(await collect(job, 'simulated_customers')).map(JSON.parse);
+  assert.deepEqual(roles.map(r => r.id).sort(), [id(300), id(302), id(303)].sort());
+  assert.equal(roles.find(r => r.id === id(302)).target_employee_ids, null);
+  assert.deepEqual(roles.find(r => r.id === id(303)).target_employee_ids, []);
+  const dependencies = (await collect(job, 'cs_message_templates')) + (await collect(job, 'customer_auto_messages')) + (await collect(job, 'rich_card_contents'));
+  assert.match(dependencies, /NO-CHAT-TEMPLATE/); assert.match(dependencies, /NO-CHAT-AUTO/); assert.match(dependencies, /NO-CHAT-FROZEN-CARD/);
+  assert.doesNotMatch(dependencies, /FOREIGN-OWNER-AUTO|FOREIGN-LIBRARY/);
+}));
+for (const [label, relation, sql, rowId] of [
+  ['role', 'public.simulated_customers', "UPDATE public.simulated_customers SET remarks='unrestricted role same-count drift' WHERE id=$1", id(302)],
+  ['template', 'public.cs_message_templates', "UPDATE public.cs_message_templates SET content='unused template same-count drift' WHERE id=$1", id(312)],
+  ['auto', 'public.customer_auto_messages', "UPDATE public.customer_auto_messages SET content='unused auto same-count drift' WHERE id=$1", id(322)],
+]) test(`unrestricted no-chat ${label} same-count mutation blocks catalog/page/verify/close`, () => transaction(async () => {
+  const job = await begin(), counts = job.catalog.tables.map(t => t.rows);
+  await change(relation, sql, [rowId]);
+  // Recompute privately only to establish unchanged quantities, not manufacture a stored receipt.
+  const actual = await scalar(db, 'SELECT private.employee_safety_backup_catalog($1,$2)', [job.job_id, TARGET]);
+  assert.deepEqual(actual.tables.map(t => t.rows), counts);
+  await assert.rejects(catalog(job), /content changed/i); await assert.rejects(page(job, 'accounts'), /content changed/i);
+  await assert.rejects(verify(job), /content changed/i); await assert.rejects(close(job), /content changed/i);
+}));
+test('native NULL-employee notification audit and explicit before/after recipient evidence keep original shared snapshots but exclude unrelated evidence', () => transaction(async () => {
+  const job = await begin(); await oracle(); const text = await collect(job, 'content_audit_events');
+  assert.equal(text, expected.get('content_audit_events'));
+  const exported = lines(text).map(JSON.parse);
+  assert.deepEqual(exported.map(r => r.id).sort(), [id(510), nativeAuditId, id(520), id(521), id(522)].sort());
+  const native = exported.find(r => r.id === nativeAuditId); assert.equal(native.employee_id, null); assert.equal(native.entity_type, 'notification');
+  assert.deepEqual(native.before_data.recipients.map(r => r.recipient_id).sort(), [TARGET, FOREIGN].sort());
+  assert.equal(native.before_data.message.title, 'Shared notification'); assert.equal(native.after_data.message.title, 'Native shared notification edit');
+  for (const [rowId, field] of [[id(521), 'before_data'], [id(522), 'after_data']]) {
+    const row = exported.find(r => r.id === rowId); assert.equal(row.employee_id, null);
+    assert.deepEqual(row[field].recipients.map(r => r.recipient_id).sort(), [TARGET, FOREIGN].sort());
+    assert.match(row[field].recipients[1].note, /retained verbatim/);
+  }
+  // SQL text oracle is checked above BEFORE client acceptance: never strip NULL or other recipients
+  // just to satisfy a client guard. Parent owns any required client correction.
+  const clientErrors = [];
+  for (const line of lines(text)) try { modules.validateEmployeeSafetyBackupRow(line, 'content_audit_events', job.catalog); }
+  catch (error) { clientErrors.push({ id: JSON.parse(line).id, error: error.message }); }
+  assert.deepEqual(clientErrors, [], 'Client must accept SQL-selected original shared notification evidence');
+}));
+test('editing an included shared notification evidence snapshot with the same row count invalidates every safety read/close', () => transaction(async () => {
+  const job = await begin();
+  await change('private.content_audit_events', "UPDATE private.content_audit_events SET before_data=jsonb_set(before_data,'{message,title}','\"audit same-count drift\"'::jsonb) WHERE id=$1", [nativeAuditId]);
+  await assert.rejects(catalog(job), /content changed/i); await assert.rejects(page(job, 'content_audit_events'), /content changed/i);
+  await assert.rejects(verify(job), /content changed/i); await assert.rejects(close(job), /content changed/i);
+}));
+test('stop_owned recovers a genuinely expired lost-token task by default NULL id with only technical task/audit changes and no replacement begin', () => transaction(async () => {
+  const job = await begin(); await db.query("UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours',started_at=now()-interval '13 hours' WHERE id=$1", [job.job_id]);
+  await rejectAccess(job, session, /owner task.*invalid|expired/i);
+  const before = await snapshot(), modes = await triggerModes();
+  const result = await stop(); assertStop(result, true, job.job_id);
+  const state = JSON.parse(await jobRow(job)); assert.equal(state.status, 'cancelled'); assert.equal(state.summary.stopped_by_owner, true);
+  assert.equal(state.summary.records_only, true); assert.equal(state.summary.complete_employee_backup, false);
+  assert.equal(state.summary.can_archive, false); assert.equal(state.summary.can_replace, false);
+  const after = await snapshot(); assert.deepEqual(after.filter((r, i) => r.digest !== before[i].digest || r.n !== before[i].n).map(r => r.name).sort(),
+    ['private.employee_transfer_events', 'private.employee_transfer_jobs']);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_jobs'), 1);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), 0);
+  assert.equal(await scalar(db, "SELECT count(*)::int FROM private.employee_transfer_events WHERE job_id=$1 AND action='export_cancelled'", [job.job_id]), 1);
+  assert.deepEqual(await triggerModes(), modes); await rejectAccess(job, session, /owner task.*invalid|expired/i);
+}));
+test('stop_owned requires exact confirmation, correct second password, a live super-admin session and browser execute permission', () => transaction(async () => {
+  const job = await begin(), saved = await jobRow(job);
+  for (const p_confirmation of [null, '', '確認停止導出任務', STOP_CONFIRMATION + ' ']) await assert.rejects(stop({ p_confirmation }), /confirmation/i);
+  assert.equal((await stop({ p_admin_password: 'wrong-local-stop-password' })).success, false);
+  for (const token of [secondary, emergency, employeeToken, randomUUID()]) await assert.rejects(stop({ p_admin_session_token: token }), /permission|session|invalid|expired/i);
+  await isolated(async () => {
+    await db.query("UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE token_hash=private.hash_financial_token($1)", [session]);
+    await assert.rejects(stop(), /session|expired|invalid/i);
+  });
+  await assert.rejects(rpc(STOP, { p_admin_session_token: session, p_admin_password: PASSWORDS.root, p_confirmation: STOP_CONFIRMATION }, 'service_role'), /permission denied/i);
+  assert.equal(await scalar(db, "SELECT has_function_privilege('anon','public.employee_safety_backup_stop_owned(uuid,text,text,uuid)','EXECUTE')"), true);
+  assert.equal(await scalar(db, "SELECT has_function_privilege('authenticated','public.employee_safety_backup_stop_owned(uuid,text,text,uuid)','EXECUTE')"), true);
+  assert.equal(await jobRow(job), saved);
+}));
+test('stop_owned cannot fall back from a wrong job id or stop another super-admin; explicit owner id stops only that genuine task', () => transaction(async () => {
+  const job = await begin(), before = await snapshot();
+  assertStop(await stop({ p_job_id: randomUUID() }), false, null);
+  assertStop(await stop({ p_admin_session_token: otherRoot, p_job_id: job.job_id }), false, null);
+  assertStop(await stop({ p_admin_session_token: otherRoot }), false, null);
+  assert.deepEqual(await snapshot(), before);
+  assertStop(await stop({ p_job_id: job.job_id }), true, job.job_id);
+  assert.equal(JSON.parse(await jobRow(job)).status, 'cancelled');
+}));
+test('stop_owned never ends a different real export protocol, creates a task, or changes maintenance/business state', () => transaction(async () => {
+  for (const domain of ['shared', 'finance']) await isolated(async () => {
+    const job = await rpc(`employee_export_${domain}_begin`, { p_admin_session_token: session, p_admin_password: PASSWORDS.root,
+      ...(domain === 'finance' ? { p_package_id: randomUUID() } : {}) });
+    const before = await snapshot(); assertStop(await stop({ p_job_id: job.job_id }), false, null); assertStop(await stop(), false, null);
+    assert.deepEqual(await snapshot(), before); assert.equal(JSON.parse(await jobRow(job)).status, 'running');
+  });
+  const before = await snapshot(); assertStop(await stop(), false, null); assert.deepEqual(await snapshot(), before);
+}));
+test('stop_owned replay after cancelled or explicitly finished tasks is a no-op, never an implicit restart', () => transaction(async () => {
+  for (const end of ['stop', 'close']) await isolated(async () => {
+    const job = await begin(); if (end === 'stop') assertStop(await stop({ p_job_id: job.job_id }), true, job.job_id);
+    else assert.equal((await close(job)).success, true);
+    const before = await snapshot(); assertStop(await stop({ p_job_id: job.job_id }), false, null); assertStop(await stop({ p_job_id: null }), false, null);
+    assert.deepEqual(await snapshot(), before);
+  });
 }));
 test('all database and encryption cases made zero network/production calls', () => { assert.equal(forbiddenNetworkCalls, 0); });
