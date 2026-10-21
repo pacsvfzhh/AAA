@@ -1118,3 +1118,98 @@ test('identity projection: output workspace cannot reuse an authenticated source
   await assert.rejects(projectIdentity(h, async () => { consumed = true; }, {}, PROJECTED_EMPLOYEE, PASS, h.records, () => previous), e => projectionRedacted(e));
   assert.equal(consumed, false); projectionOffline(h, baseline); cleaned(h);
 });
+
+// These checks must fail before any wrapping/authentication can hide raw-handle identity.
+for (const file of ['records', 'media']) test(`identity projection: identical raw ${file} handles reject before open or workspace acquisition`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h), raw = h[file], originalOpen = raw.open;
+  let opens = 0, consumed = false, progress = 0;
+  raw.open = () => { opens++; return originalOpen(); }; h.media = raw;
+  await assert.rejects(projectIdentity(h, async () => { consumed = true; }, { onProgress() { progress++; } }, PROJECTED_EMPLOYEE, PASS, raw), e => projectionRedacted(e, { cancelled: false, cleanupRequired: false }));
+  assert.equal(opens, 0, 'Compare caller handles before creating scannedRecords');
+  assert.equal(consumed, false); assert.equal(progress, 0); assert.equal(h.spaces.length, baseline.spaces);
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const earlyReturn of [false, true]) test(`identity projection: valid output reaches EOF before first yield even with ${earlyReturn ? 'early iterator return' : 'full consumption'}`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h), path = api.employeeSafetyBackupEntryPath('accounts');
+  const expected = enc(expectedProjectionLine(h.texts.accounts, 'accounts')); let eof = 0, started = 0;
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== baseline.spaces + 3 || current !== path || count < 2) return;
+    started++;
+    return { async *[Symbol.asyncIterator]() {
+      yield expected.subarray(0, 31); yield expected.subarray(31, expected.length - 1); yield expected.subarray(-1); eof++;
+    } };
+  };
+  await projectIdentity(h, async p => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const iterator = p.open('accounts')[Symbol.asyncIterator](), first = await iterator.next();
+      assert.equal(first.done, false); assert.equal(eof, attempt + 1, 'Each open must authenticate its complete current output before exposing any bytes');
+      if (earlyReturn) await iterator.return();
+      else {
+        const chunks = [Buffer.from(first.value)];
+        for (;;) { const next = await iterator.next(); if (next.done) break; chunks.push(Buffer.from(next.value)); }
+        assert.deepEqual(Buffer.concat(chunks), Buffer.from(expected));
+      }
+    }
+  });
+  assert.equal(started, 2); assert.equal(eof, 2); projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const variant of ['same-size-tail', 'extra-tail', 'missing-tail', 'missing-lf', 'invalid-row']) for (const earlyReturn of [false, true]) test(`identity projection: output stream rejects ${variant} before yielding, ${earlyReturn ? 'early return cannot hide drift' : 'full read'}`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h), path = api.employeeSafetyBackupEntryPath('accounts');
+  const expected = expectedProjectionLine(h.texts.accounts, 'accounts'); let changed = false, emitted = 0, consumed = false, returned = 0;
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== baseline.spaces + 3 || current !== path || count !== 2) return;
+    changed = true;
+    const bytes = enc(variant === 'same-size-tail' ? expected.replace('原始', '修改') : variant === 'extra-tail' ? expected + expected
+      : variant === 'missing-tail' ? expected.slice(0, -7) : variant === 'missing-lf' ? expected.slice(0, -1) : expected.replace('"is_pinned":true', '"is_pinned":null'));
+    assert.notEqual(sha(bytes), sha(expected));
+    return { async *[Symbol.asyncIterator]() {
+      try { yield bytes.subarray(0, 37); yield bytes.subarray(37); } finally { returned++; }
+    } };
+  };
+  await assert.rejects(projectIdentity(h, async p => {
+    consumed = true;
+    for await (const bytes of p.open('accounts')) { emitted += bytes.length; if (earlyReturn) return 'must not succeed after first unchecked chunk'; }
+    return 'must not succeed after drift';
+  }), e => projectionRedacted(e, { cancelled: false, cleanupRequired: false }));
+  assert.equal(changed, true); assert.equal(consumed, true); assert.equal(emitted, 0, 'A rejected table must not expose even an unchanged prefix'); assert.equal(returned, 1);
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+const projectionRealSetTimeout = setTimeout, projectionRealClearTimeout = clearTimeout;
+async function projectionWithin(promise, milliseconds = 5000) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = projectionRealSetTimeout(() => reject(new Error('Identity projection did not settle after its cleanup cancellation/deadline')), milliseconds);
+    })]);
+  } finally { projectionRealClearTimeout(timer); }
+}
+for (const stage of ['pair-records', 'pair-media', 'second-records', 'output']) for (const mode of ['cancel', 'deadline']) test(`identity projection: ${stage} stalled cleanup ${mode} settles with cleanupRequired and ignores late rejection`, { timeout: 20000 }, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h), controller = new AbortController();
+  const index = baseline.spaces + ['pair-records', 'pair-media', 'second-records', 'output'].indexOf(stage);
+  let entered, rejectCleanup, consumed = false;
+  const ready = new Promise(resolve => { entered = resolve; });
+  h.cleanupHook = w => {
+    if (h.spaces.indexOf(w) !== index) return;
+    entered(); return new Promise((_, reject) => { rejectCleanup = reject; });
+  };
+  if (mode === 'deadline') mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = projectIdentity(h, async () => { consumed = true; return 'cleanup not yet confirmed'; }, { signal: controller.signal });
+  // Always attach a handler before advancing a timer or cancelling; no rejected promise is left unobserved.
+  const outcome = pending.then(value => ({ value }), error => ({ error }));
+  try {
+    await projectionWithin(ready);
+    if (mode === 'cancel') controller.abort(); else mock.timers.tick(api.EMPLOYEE_SAFETY_MEDIA_TIMEOUT_MS);
+    const settled = await projectionWithin(outcome);
+    assert.ok(settled.error, 'Unconfirmed plaintext cleanup must never return success');
+    projectionRedacted(settled.error, { cancelled: mode === 'cancel', cleanupRequired: true });
+    if (stage === 'pair-records') assert.equal(consumed, false, 'First reader cleanup blocks all subsequent output');
+    rejectCleanup(new Error(SECRET + PASS)); await new Promise(resolve => setImmediate(resolve));
+    projectionOffline(h, baseline); cleaned(h);
+  } finally {
+    rejectCleanup?.(new Error(SECRET)); if (mode === 'deadline') mock.timers.reset();
+    await projectionWithin(outcome);
+  }
+});

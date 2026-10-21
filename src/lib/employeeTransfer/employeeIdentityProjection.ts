@@ -59,6 +59,7 @@ const FLAGS = Object.freeze({ canRestore: false, completeEmployeeBackup: false, 
 const IMMUTABLE = new Set<EmployeeSafetyBackupTableKey>(['content_audit_events', 'content_audit_recipient_versions', 'administrators']);
 const COMPOSITE = new Set<EmployeeSafetyBackupTableKey>(['notification_automation_task_recipients', 'notification_automation_progress', 'notification_automation_failures']);
 const usedWorkspaces = new WeakSet<ArchiveBundleWorkspace>();
+const BLOCK_BYTES = 64 * 1024;
 function invalid(): never { throw new Error('Invalid employee identity projection.'); }
 function uuid(value: unknown): string {
   if (typeof value !== 'string' || value.length !== 36) invalid();
@@ -150,9 +151,22 @@ export async function withEmployeeSafetyIdentityProjection<T>(
 ): Promise<T> {
   const lifetime = new AbortController(), signal = lifetime.signal, abort = () => lifetime.abort();
   options.signal?.addEventListener('abort', abort, { once: true }); if (options.signal?.aborted) abort();
-  let output: ArchiveBundleWorkspace | null = null, cleanupRequired = false;
+  let cleanupRequired = false, failed = false, result: T | undefined;
+  const spaces: { workspace: ArchiveBundleWorkspace; cleanup?: Promise<void> }[] = [];
+  const discard = (item: typeof spaces[number], reason: unknown): Promise<void> => item.cleanup ??= (async () => {
+    const cleanup = new AbortController(); let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    const stop = () => { abortTimer ??= setTimeout(() => cleanup.abort(), 0); };
+    options.signal?.addEventListener('abort', stop, { once: true }); if (options.signal?.aborted) stop();
+    const timer = setTimeout(() => cleanup.abort(), EMPLOYEE_SAFETY_MEDIA_TIMEOUT_MS);
+    try { await withSignal(() => item.workspace.abort(reason), cleanup.signal); }
+    catch { cleanupRequired = true; throw new EmployeeIdentityProjectionError(options.signal?.aborted === true, true); }
+    finally { clearTimeout(timer); clearTimeout(abortTimer); options.signal?.removeEventListener('abort', stop); }
+  })();
   const trackedFactory = () => {
-    checkAbort(signal); const w = factory(); if (usedWorkspaces.has(w)) invalid(); usedWorkspaces.add(w); return w;
+    checkAbort(signal); const w = factory(); if (usedWorkspaces.has(w)) invalid(); usedWorkspaces.add(w);
+    const item: typeof spaces[number] = { workspace: w }; spaces.push(item);
+    return { open: (path: string) => w.open(path), append: (path: string, raw: Uint8Array, s: AbortSignal) => w.append(path, raw, s),
+      abort: (reason: unknown) => discard(item, reason) };
   };
   const scans: { digest: Sha256; bytes: number; complete: boolean }[] = [];
   const scannedRecords = { open(): TransferByteSource {
@@ -163,9 +177,10 @@ export async function withEmployeeSafetyIdentityProjection<T>(
     } };
   } };
   try {
+    if (recordsFile === mediaFile) invalid();
     const target = uuid(targetEmployeeId);
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(target)) invalid();
-    return await withAuthenticatedEmployeeSafetyMediaBackup(scannedRecords, mediaFile, passphrase, trackedFactory, async pair => {
+    result = await withAuthenticatedEmployeeSafetyMediaBackup(scannedRecords, mediaFile, passphrase, trackedFactory, async pair => {
       const baseline = scans[scans.length - 1]; if (!baseline?.complete) invalid();
       const recordsCipherSha256 = baseline.digest.digestHex(), recordsCipherBytes = baseline.bytes, original = pair.inventory.records_catalog;
       if ([original.employee_id, original.site_id, original.job_id].includes(target)) invalid();
@@ -175,13 +190,14 @@ export async function withEmployeeSafetyIdentityProjection<T>(
           || JSON.stringify(records.catalog) !== JSON.stringify(original)) invalid();
         const manifest = records.manifest;
         if ([manifest.exportId, manifest.volumeId].includes(target)) invalid();
-        output = trackedFactory(); const workspace = output;
+        const workspace = trackedFactory(), blocks = new Map<EmployeeSafetyBackupTableKey, string[]>();
         const catalog: EmployeeSafetyBackupCatalog = { ...original, employee_id: target };
         const tables: EmployeeIdentityProjectionTable[] = [], blockers = new Set<EmployeeIdentityProjectionBlocker>(EMPLOYEE_IDENTITY_PROJECTION_PENDING);
         let totalRows = 0, totalBytes = 0;
         for (const [index, table] of original.tables.entries()) {
           const digest = new Sha256(), rowHashes = new Sha256(), projectedHash = new Sha256();
-          let bytes = 0, rows = 0, projectedBytes = 0;
+          let bytes = 0, rows = 0, projectedBytes = 0, blockUsed = 0;
+          const block = new Uint8Array(BLOCK_BYTES), blockHashes: string[] = [];
           const path = employeeSafetyBackupEntryPath(table.key), expected = manifest.entries[index];
           await withSignal(() => workspace.append(path, new Uint8Array(), signal), signal);
           await eachLine(records.open(path), signal, async raw => {
@@ -203,10 +219,17 @@ export async function withEmployeeSafetyIdentityProjection<T>(
             projectedBytes += next.length;
             if (projectedBytes > EMPLOYEE_SAFETY_BACKUP_LIMITS.maxTableBytes) invalid();
             projectedHash.update(next);
+            for (let offset = 0; offset < next.length;) {
+              const size = Math.min(BLOCK_BYTES - blockUsed, next.length - offset);
+              block.set(next.subarray(offset, offset + size), blockUsed); blockUsed += size; offset += size;
+              if (blockUsed === BLOCK_BYTES) { blockHashes.push(new Sha256().update(block).digestHex()); blockUsed = 0; }
+            }
             await withSignal(() => workspace.append(path, next, signal), signal);
           });
           if (rows !== table.rows || bytes !== table.bytes || rowHashes.digestHex() !== table.row_hashes_sha256
             || expected.path !== path || expected.bytes !== bytes || expected.sha256 !== digest.digestHex()) invalid();
+          if (blockUsed) blockHashes.push(new Sha256().update(block.subarray(0, blockUsed)).digestHex());
+          block.fill(0); blocks.set(table.key, blockHashes);
           tables.push({ key: table.key, rows, bytes: projectedBytes, sha256: projectedHash.digestHex() });
           totalRows += rows; totalBytes += projectedBytes;
           if (totalBytes > EMPLOYEE_SAFETY_BACKUP_LIMITS.maxTotalBytes) invalid();
@@ -230,12 +253,32 @@ export async function withEmployeeSafetyIdentityProjection<T>(
             if (!active || !(EMPLOYEE_SAFETY_BACKUP_TABLE_KEYS as readonly string[]).includes(key)) invalid();
             const expected = tables.find(t => t.key === key)!;
             return { async *[Symbol.asyncIterator]() {
-              if (!active) invalid(); const hash = new Sha256(); let bytes = 0;
-              for await (const raw of read(workspace.open(employeeSafetyBackupEntryPath(key)), signal)) {
-                if (!active) invalid(); hash.update(raw); bytes += raw.length;
-                if (bytes > expected.bytes) invalid(); yield raw;
-              }
-              if (!active || bytes !== expected.bytes || hash.digestHex() !== expected.sha256) invalid();
+              const block = new Uint8Array(BLOCK_BYTES); let used = 0, index = 0;
+              try {
+                if (!active) invalid(); const hash = new Sha256(); let bytes = 0;
+                for await (const raw of read(workspace.open(employeeSafetyBackupEntryPath(key)), signal)) {
+                  if (!active) invalid(); bytes += raw.length; if (bytes > expected.bytes) invalid(); hash.update(raw);
+                }
+                if (!active || bytes !== expected.bytes || hash.digestHex() !== expected.sha256) invalid();
+                const expectedBlocks = blocks.get(key)!;
+                for await (const raw of read(workspace.open(employeeSafetyBackupEntryPath(key)), signal)) {
+                  if (!active) invalid();
+                  for (let offset = 0; offset < raw.length;) {
+                    const size = Math.min(BLOCK_BYTES - used, raw.length - offset);
+                    block.set(raw.subarray(offset, offset + size), used); used += size; offset += size;
+                    if (used === BLOCK_BYTES) {
+                      if (new Sha256().update(block).digestHex() !== expectedBlocks[index++]) invalid();
+                      yield block.slice(); if (!active) invalid(); used = 0;
+                    }
+                  }
+                }
+                if (used) {
+                  if (new Sha256().update(block.subarray(0, used)).digestHex() !== expectedBlocks[index++]) invalid();
+                  yield block.slice(0, used);
+                }
+                if (!active || index !== expectedBlocks.length) invalid();
+              } catch { throw new EmployeeIdentityProjectionError(options.signal?.aborted === true, cleanupRequired); }
+              finally { block.fill(0); }
             } };
           },
         });
@@ -243,20 +286,16 @@ export async function withEmployeeSafetyIdentityProjection<T>(
         finally { active = false; }
       }, { signal });
     }, { signal });
+    checkAbort(signal);
   } catch (error) {
+    failed = true;
     if (error && typeof error === 'object' && 'cleanupRequired' in error && error.cleanupRequired === true) cleanupRequired = true;
-    throw new EmployeeIdentityProjectionError(options.signal?.aborted === true, cleanupRequired);
   } finally {
     lifetime.abort(); options.signal?.removeEventListener('abort', abort);
-    if (output) {
-      const workspace: ArchiveBundleWorkspace = output, cleanup = new AbortController();
-      let abortTimer: ReturnType<typeof setTimeout> | undefined;
-      const stop = () => { abortTimer ??= setTimeout(() => cleanup.abort(), 0); };
-      options.signal?.addEventListener('abort', stop, { once: true }); if (options.signal?.aborted) stop();
-      const timer = setTimeout(() => cleanup.abort(), EMPLOYEE_SAFETY_MEDIA_TIMEOUT_MS);
-      try { await withSignal(() => workspace.abort(new Error('Employee identity projection discarded.')), cleanup.signal); }
-      catch { throw new EmployeeIdentityProjectionError(options.signal?.aborted === true, true); }
-      finally { clearTimeout(timer); clearTimeout(abortTimer); options.signal?.removeEventListener('abort', stop); }
+    for (const item of spaces) {
+      try { await discard(item, new Error('Employee identity projection discarded.')); } catch { cleanupRequired = true; }
     }
   }
+  if (failed || cleanupRequired || options.signal?.aborted) throw new EmployeeIdentityProjectionError(options.signal?.aborted === true, cleanupRequired);
+  return result!;
 }
