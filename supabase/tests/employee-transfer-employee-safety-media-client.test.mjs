@@ -28,6 +28,7 @@ after(async () => {
 const root = fileURLToPath(new URL('../../', import.meta.url)), ORIGIN = 'https://employee-safety-fixture.supabase.co';
 const built = await build({ stdin: { resolveDir: root, contents: `export * from './src/lib/employeeTransfer/employeeSafetyMedia.ts';
   export * from './src/lib/employeeTransfer/employeeSafetyBackup.ts';
+  export * from './src/lib/employeeTransfer/employeeIdentityProjection.ts';
   export {EMPLOYEE_BACKUP_PROJECTIONS} from './src/lib/employeeTransfer/employeeBackup.ts';
   export {writeEncryptedVolume} from './src/lib/employeeTransfer/container.ts';
   export {setHarness} from 'safety-media:state';` },
@@ -735,4 +736,385 @@ test('more than 3000 authentic distinct references is rejected before inventory 
   setMediaRows(h, Array.from({ length: 3001 }, (_, index) => ({ table: 'messages', index, field: 'content', kind: 'notifications', bucket: 'chat-images', path: `${index}.jpg`, original: publicUrl('chat-images', `${index}.jpg`) })));
   await h.writeRecords(); await failedExport(h, {}, e => assert.equal(e.phase, 'records-authenticate'));
   assert.equal(h.calls.length, 0); assert.equal(h.transportCalls, 0); assert.equal(h.media.writes, 0);
+});
+
+// Identity projection is local plaintext only: real paired files, never a DB restore/reservation.
+const PROJECTED_EMPLOYEE = id(999999);
+// Independent contract oracle. Never derive expected fields/bytes from the implementation.
+const EXPECTED_IDENTITY_FIELDS = {
+  accounts: ['id'], credentials: ['id'], orders: ['user_id'], wallets: ['id', 'user_id'],
+  wallet_balance_baselines: ['id', 'user_id'], wallet_ledger_entries: ['user_id'], wallet_transactions: ['user_id'],
+  withdrawals: ['user_id'], wallet_reconciliation_audit: ['user_id'], employee_login_history: ['user_id'],
+  work_sessions: ['user_id'], work_stop_markers: ['id', 'user_id'], verification_requests: ['user_id'],
+  dispatch_group_members: ['user_id'], employee_submit_time_settings: ['user_id'],
+  simulated_customers: ['target_employee_id', 'target_employee_ids'], cs_message_templates: [], customer_auto_messages: [], rich_card_contents: [],
+  customer_employee_conversations: ['employee_id'], customer_service_sessions: ['employee_id'],
+  ccc_conversation_annotations: ['employee_id'], customer_auto_message_logs: ['employee_id'], rating_requests: ['employee_id'], service_ratings: ['employee_id'],
+  notification_automation_plans: [], notification_automation_tasks: [], notification_automation_plan_members: ['id', 'user_id'],
+  notification_automation_task_recipients: ['user_id'], notification_automation_progress: ['user_id'],
+  notification_automation_executions: ['user_id'], notification_automation_date_runs: [], notification_automation_failures: ['user_id'],
+  messages: [], message_recipients: ['recipient_id'], message_templates: [], broadcast_messages: [], broadcast_recipients: ['employee_id'],
+  dispatch_config: [], dispatch_groups: [], dispatch_order_pools: [], dispatch_group_orders: [], valid_order_data: [], used_order_data: ['user_id'],
+  content_audit_events: [], content_audit_recipient_versions: [], orders_history: ['user_id'], administrators: [],
+};
+const EXPECTED_PROJECTION_PENDING = [
+  'server_identity_reservation', 'dependent_record_ids', 'shared_configuration_resolution', 'ledger_cursor_mapping',
+  'media_relocation', 'archive_namespace', 'work_session_finalization', 'database_restore_and_verify',
+];
+const PROJECTION_FLAGS = { canRestore: false, completeEmployeeBackup: false, canArchive: false, canReplace: false, fullSiteComplete: false };
+const escapedField = field => ({ id: '"\\u0069d"', user_id: '"\\u0075ser_id"', employee_id: '"\\u0065mployee_id"', recipient_id: '"\\u0072ecipient_id"' })[field] ?? JSON.stringify(field);
+const regexLiteral = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SIMULATED_SOURCE_ARRAY = `[  null , "${OTHER}" , "\\u0038${EMPLOYEE.slice(1)}" , "${EMPLOYEE}"  ]`;
+const SIMULATED_TARGET_ARRAY = `[  null , "${OTHER}" , "${PROJECTED_EMPLOYEE}" , "${PROJECTED_EMPLOYEE}"  ]`;
+function projectionSerialize(row) {
+  let raw = serialize(row);
+  for (const field of ['user_id', 'employee_id', 'recipient_id']) raw = raw.replace(JSON.stringify(field) + ':', escapedField(field) + ' \t:  ');
+  return ' \t' + raw.replace('{"\\u0069d":', '{ "\\u0069d" \t:  ')
+    .replaceAll('"__overflow__"', '1e400').replaceAll('"__large_integer__"', '900719925474099312345678901234567890')
+    .replaceAll('"__negative_zero__"', '-0').replaceAll('"__tiny__"', '9e-400');
+}
+function expectedProjectionLine(raw, key) {
+  const row = JSON.parse(raw); let expected = raw;
+  for (const field of EXPECTED_IDENTITY_FIELDS[key]) {
+    if (field === 'target_employee_ids') {
+      if (row[field]?.includes(EMPLOYEE)) {
+        assert.ok(expected.includes(SIMULATED_SOURCE_ARRAY)); expected = expected.replace(SIMULATED_SOURCE_ARRAY, SIMULATED_TARGET_ARRAY);
+      }
+    } else if (row[field] === EMPLOYEE) {
+      const pattern = new RegExp(`(${regexLiteral(escapedField(field))}\\s*:\\s*)${regexLiteral(JSON.stringify(EMPLOYEE))}`);
+      assert.match(expected, pattern); expected = expected.replace(pattern, (_, prefix) => prefix + JSON.stringify(PROJECTED_EMPLOYEE));
+    }
+  }
+  if (['notification_automation_task_recipients', 'notification_automation_progress', 'notification_automation_failures', 'ccc_conversation_annotations'].includes(key)) {
+    const parent = key === 'ccc_conversation_annotations' ? row.customer_id : row.task_id;
+    const pattern = new RegExp(`(${regexLiteral(escapedField('id'))}\\s*:\\s*)${regexLiteral(JSON.stringify(row.id))}`);
+    assert.match(expected, pattern); expected = expected.replace(pattern, (_, prefix) => prefix + JSON.stringify(`${parent}:${PROJECTED_EMPLOYEE}`));
+  }
+  return expected;
+}
+function projectionRedacted(error, expected = {}) {
+  assert.ok(error instanceof api.EmployeeIdentityProjectionError, inspect(error));
+  for (const [key, value] of Object.entries(expected)) assert.equal(error[key], value);
+  for (const secret of [SECRET, NAME, PASS, TOKEN, SESSION, '$2a$private-record-hash', 'PRIVATE-evidence']) assert.ok(!inspect(error).includes(secret));
+  assert.equal('cause' in error, false);
+  assert.match(error.message, /No database restore, identity reservation, archive, replacement, retry, activation or maintenance release/);
+  return true;
+}
+function projectionOffline(h, baseline) {
+  assert.equal(h.calls.length, baseline.calls, 'No extra RPC, even a read'); assert.equal(h.transportCalls, baseline.transport, 'No Edge/Storage');
+  for (const [module, name] of [[globalThis, 'fetch'], [http, 'request'], [https, 'request'], [net, 'connect'], [tls, 'connect']]) assert.equal(module[name].mock.callCount(), 0);
+  noLifecycle(h);
+}
+function projectionBaseline(h) { return { calls: h.calls.length, transport: h.transportCalls, spaces: h.spaces.length }; }
+function projectIdentity(h, consume = async () => {}, options = {}, target = PROJECTED_EMPLOYEE, password = PASS, records = h.records, factory = h.factory) {
+  return api.withEmployeeSafetyIdentityProjection(records, h.media, password, target, factory, consume, options);
+}
+// Rebind real Edge media identities after editing raw rows, without using the projection module.
+function rebindProjectionFixture(h, before) {
+  h.refresh();
+  h.refs = before.refs.map(r => {
+    const matches = [];
+    for (const [table, fields] of Object.entries(MEDIA_FIELDS)) for (const [index, raw] of lines(before.texts[table]).entries()) {
+      if (sha(raw) !== r.source_url.split(':')[5]) continue;
+      const row = JSON.parse(raw);
+      for (const field of fields) {
+        const candidates = field === 'media_refs' ? Object.keys(row[field] ?? {}) : [publicUrl(r.bucket, r.path)];
+        for (const original of candidates) if (exactRef(before.catalog, table, raw, field, original, r.kind, r).key === r.key) matches.push({ table, index, field, original });
+      }
+    }
+    assert.equal(matches.length, 1); const e = matches[0];
+    return exactRef(h.catalog, e.table, lines(h.texts[e.table])[e.index], e.field, e.original, r.kind, { bucket: r.bucket, path: r.path, avatar: r.avatar });
+  }).sort((a, b) => a.key.localeCompare(b.key));
+  h.objects.clear(); h.seedObjects();
+}
+async function projectionPrepared(t, { empty = false, decorated = false, change } = {}) {
+  const h = harness(t, empty), before = { texts: { ...h.texts }, refs: h.refs, catalog: h.catalog };
+  if (decorated) {
+    for (const key of TABLES) h.texts[key] = lines(h.texts[key]).map(raw => {
+      const row = JSON.parse(raw);
+      // A non-employee reference may equal the old UUID; it must still not be rewritten.
+      for (const [field, type] of Object.entries(projections[key])) {
+        if (type.replace(/!$/, '') === 'uuid' && field !== 'id' && !EXPECTED_IDENTITY_FIELDS[key].includes(field)) row[field] = EMPLOYEE;
+        if (type.replace(/!$/, '').startsWith('numeric')) row[field] = '__precise__';
+      }
+      if (key === 'ccc_conversation_annotations') row.id = `${row.customer_id}:${row.employee_id}`;
+      if (['notification_automation_task_recipients', 'notification_automation_progress', 'notification_automation_failures'].includes(key)) row.id = `${row.task_id}:${row.user_id}`;
+      if (key === 'notification_automation_date_runs') row.id = `${row.task_id}:0000000001:all`;
+      if (key === 'content_audit_recipient_versions') row.id = `${row.message_id}:${row.recipient_id}`;
+      if (key === 'accounts') Object.assign(row, { employee_id: EMPLOYEE, total_income: '__precise__', remarks: `原始備註\n𠮷 ${EMPLOYEE}`, tags: [EMPLOYEE, null, 'é é'] });
+      if (key === 'credentials') row.password_hash += ':' + EMPLOYEE;
+      if (key === 'employee_login_history') Object.assign(row, { employee_id: EMPLOYEE, device_info: { employee_id: EMPLOYEE, nested: [{ user_id: EMPLOYEE, text: '原文\t𠮷', overflow: '__overflow__', integer: '__large_integer__' }] }, device_info_is_sql_null: false });
+      if (key === 'wallet_transactions') Object.assign(row, { amount: '__overflow__', balance_before: '__large_integer__', balance_after: '__negative_zero__', remarks: `保留原文 ${EMPLOYEE}\r\n𠮷` });
+      if (key === 'withdrawals') row.amount = '__tiny__';
+      if (key === 'wallet_balance_baselines') row.available_balance = '__precise__';
+      if (key === 'wallet_ledger_entries') Object.assign(row, { available_delta: '__precise__', frozen_delta: '__overflow__', income_delta: '__negative_zero__' });
+      if (key === 'simulated_customers') Object.assign(row, { target_employee_id: EMPLOYEE, target_employee_ids: [null, OTHER, EMPLOYEE, EMPLOYEE] });
+      if (key === 'content_audit_events') row.before_data = { employee_id: EMPLOYEE, nested: { user_id: EMPLOYEE, original: 'https://historical.invalid/image.png', huge: '__overflow__' } };
+      if (key === 'administrators') row.username = '原始管理员文字 ' + EMPLOYEE;
+      return projectionSerialize(row).replace('"target_employee_ids":[null,' + JSON.stringify(OTHER) + ',' + JSON.stringify(EMPLOYEE) + ',' + JSON.stringify(EMPLOYEE) + ']', '"target_employee_ids":' + SIMULATED_SOURCE_ARRAY);
+    }).join('');
+  }
+  if (change) await change(h);
+  rebindProjectionFixture(h, before); await h.writeRecords(); h.result = await h.export(); cleaned(h); return h;
+}
+
+// Prefix new cases so the original 176 can be excluded for a focused first run.
+test('identity projection: independent 48-table raw-byte contract, exact cipher binding and offline lifecycle', async t => {
+  assert.equal(Object.keys(EXPECTED_IDENTITY_FIELDS).length, 48); assert.deepEqual(Object.keys(EXPECTED_IDENTITY_FIELDS), [...TABLES]);
+  assert.deepEqual(api.EMPLOYEE_IDENTITY_PROJECTION_FIELDS, EXPECTED_IDENTITY_FIELDS);
+  assert.deepEqual(api.EMPLOYEE_IDENTITY_PROJECTION_PENDING, EXPECTED_PROJECTION_PENDING);
+  assert.ok(Object.isFrozen(api.EMPLOYEE_IDENTITY_PROJECTION_FIELDS));
+  for (const fields of Object.values(api.EMPLOYEE_IDENTITY_PROJECTION_FIELDS)) assert.ok(Object.isFrozen(fields));
+  const h = await projectionPrepared(t, { decorated: true }), baseline = projectionBaseline(h), progress = [];
+  const originalRecords = await readFile(h.records.path), originalMedia = await readFile(h.media.path), events = []; let recordOpens = 0, mediaOpens = 0;
+  const recordsOpen = h.records.open, mediaOpen = h.media.open;
+  h.records.open = () => { const n = ++recordOpens; events.push('records-open-' + n); return { async *[Symbol.asyncIterator]() { yield* recordsOpen(); events.push('records-eof-' + n); } }; };
+  h.media.open = () => { const n = ++mediaOpens; events.push('media-open-' + n); return { async *[Symbol.asyncIterator]() { yield* mediaOpen(); events.push('media-eof-' + n); } }; };
+  const result = await projectIdentity(h, async projection => {
+    events.push('consume'); assert.equal(h.spaces.length - baseline.spaces, 4);
+    assert.equal(h.spaces[baseline.spaces].cleaned, true, 'Pair record authentication has already been cleaned');
+    assert.ok(events.indexOf('records-eof-2') < events.indexOf('media-open-1'));
+    assert.ok(events.indexOf('media-eof-2') < events.indexOf('records-open-3'), 'Pair before second independent records authentication');
+    assert.ok(events.indexOf('records-eof-4') < events.indexOf('consume'));
+    assert.equal(projection.sourceSiteId, SITE); assert.equal(projection.sourceJobId, JOB);
+    assert.equal(projection.sourceEmployeeId, EMPLOYEE); assert.equal(projection.targetEmployeeId, PROJECTED_EMPLOYEE); assert.equal(projection.sourceFingerprint, FINGERPRINT);
+    assert.equal(projection.recordsCipherSha256, sha(originalRecords)); assert.equal(projection.recordsCipherBytes, originalRecords.length);
+    for (const [flag, expected] of Object.entries(PROJECTION_FLAGS)) assert.equal(projection[flag], expected);
+    assert.deepEqual([...projection.blockers].sort(), [...EXPECTED_PROJECTION_PENDING, 'submit_time_group_not_in_backup', 'external_employee_visibility'].sort());
+    for (const value of [projection, projection.tables, projection.blockers, ...projection.tables]) assert.ok(Object.isFrozen(value));
+    assert.throws(() => { projection.tables[0].bytes++; }); assert.throws(() => projection.blockers.pop());
+    for (const key of ['append', 'restore', 'reserve', 'close', 'stop', 'seal', 'upload', 'delete']) assert.equal(Object.hasOwn(projection, key), false);
+    assert.throws(() => projection.open(CATALOG_PATH)); assert.throws(() => projection.open('not-a-table'));
+    for (const key of TABLES) await t.test(`identity projection: exact raw ${key}`, async () => {
+      const original = h.texts[key], expected = lines(original).map(raw => expectedProjectionLine(raw, key)).join('');
+      const actual = await collect(projection.open(key)), table = projection.tables.find(v => v.key === key);
+      assert.ok(lines(original).length > 0, 'Every table has real-schema rows');
+      assert.deepEqual(actual, Buffer.from(expected), `Only allowlisted identity tokens change in ${key}`);
+      assert.deepEqual(table, { key, rows: lines(expected).length, bytes: Buffer.byteLength(expected), sha256: sha(expected) });
+      const before = lines(original).map(JSON.parse), after = lines(actual.toString()).map(JSON.parse);
+      for (const [index, row] of before.entries()) {
+        for (const field of ['user_id', 'employee_id', 'recipient_id']) if (Object.hasOwn(row, field)) {
+          const immutable = ['content_audit_events', 'content_audit_recipient_versions'].includes(key) || (field === 'employee_id' && ['accounts', 'employee_login_history'].includes(key));
+          assert.equal(after[index][field], immutable ? row[field] : PROJECTED_EMPLOYEE, `${key}.${field}`);
+        }
+      }
+      if (['content_audit_events', 'content_audit_recipient_versions', 'administrators'].includes(key)) assert.deepEqual(actual, Buffer.from(original));
+      assert.ok(actual.toString().startsWith(' \t{ "\\u0069d" \t:  ')); assert.ok(actual.toString().endsWith(' \r\n'));
+    });
+    const login = (await collect(projection.open('employee_login_history'))).toString();
+    assert.ok(login.includes('1e400')); assert.ok(login.includes('900719925474099312345678901234567890'));
+    assert.equal(JSON.parse(login).device_info.nested[0].user_id, EMPLOYEE);
+    const transaction = (await collect(projection.open('wallet_transactions'))).toString();
+    assert.ok(transaction.includes('1e400')); assert.ok(transaction.includes('"balance_after":-0'));
+    assert.ok((await collect(projection.open('withdrawals'))).toString().includes('9e-400'));
+    assert.ok((await collect(projection.open('wallet_ledger_entries'))).toString().includes(PRECISE));
+    assert.notEqual(JSON.stringify(JSON.parse(transaction)) + '\n', transaction, 'Reserialization destroys numeric lexemes, precision, escaping and whitespace');
+    assert.equal(JSON.parse((await collect(projection.open('work_sessions'))).toString()).end_time, null, 'No work-session finalization');
+    const customer = JSON.parse((await collect(projection.open('simulated_customers'))).toString());
+    assert.equal(customer.target_employee_id, PROJECTED_EMPLOYEE); assert.deepEqual(customer.target_employee_ids, [null, OTHER, PROJECTED_EMPLOYEE, PROJECTED_EMPLOYEE]);
+    return 'local-only-consumed';
+  }, { onProgress: p => progress.push(p) });
+  assert.equal(result, 'local-only-consumed'); assert.equal(recordOpens, 4); assert.equal(mediaOpens, 2); assert.equal(progress.length, 48);
+  for (const [index, p] of progress.entries()) {
+    const expected = TABLES.slice(0, index + 1).map(key => lines(h.texts[key]).map(raw => expectedProjectionLine(raw, key)).join(''));
+    assert.deepEqual(p, { tables: index + 1, rows: expected.reduce((n, text) => n + lines(text).length, 0), bytes: expected.reduce((n, text) => n + Buffer.byteLength(text), 0), canRestore: false, fullSiteComplete: false });
+    assert.ok(!inspect(p).includes(EMPLOYEE)); assert.ok(!inspect(p).includes(NAME));
+  }
+  assert.deepEqual(await readFile(h.records.path), originalRecords); assert.deepEqual(await readFile(h.media.path), originalMedia);
+  assert.equal(h.records.writes, 1); assert.equal(h.media.writes, 1); projectionOffline(h, baseline); cleaned(h);
+});
+
+test('identity projection: zero media, mandatory account and all 47 empty table files remain valid', async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h);
+  assert.equal(h.refs.length, 0);
+  await projectIdentity(h, async projection => {
+    assert.equal(projection.tables.length, 48); assert.deepEqual(projection.blockers, EXPECTED_PROJECTION_PENDING);
+    for (const table of projection.tables) {
+      const actual = await collect(projection.open(table.key));
+      if (table.key === 'accounts') { assert.equal(JSON.parse(actual.toString()).id, PROJECTED_EMPLOYEE); assert.equal(table.rows, 1); }
+      else {
+        assert.deepEqual(actual, Buffer.alloc(0)); assert.deepEqual(table, { key: table.key, rows: 0, bytes: 0, sha256: sha('') });
+        assert.deepEqual(await readFile(join(h.spaces.at(-1).base, api.employeeSafetyBackupEntryPath(table.key))), Buffer.alloc(0));
+      }
+    }
+    for (const [flag, value] of Object.entries(PROJECTION_FLAGS)) assert.equal(projection[flag], value);
+  });
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const [label, targetId, targetIds, blocker] of [
+  ['only this employee', EMPLOYEE, [EMPLOYEE, null], false], ['unrestricted null visibility', null, null, false],
+  ['empty visibility list', null, [], false], ['external singular visibility', OTHER, null, true],
+  ['external list visibility', null, [OTHER, EMPLOYEE, null], true],
+]) test(`identity projection: customer visibility ${label}`, async t => {
+  const h = await projectionPrepared(t, { empty: true, change(h) {
+    const row = rowObject('simulated_customers'); Object.assign(row, { target_employee_id: targetId, target_employee_ids: targetIds }); h.texts.simulated_customers = serialize(row);
+  } }), baseline = projectionBaseline(h);
+  await projectIdentity(h, async p => {
+    const row = JSON.parse((await collect(p.open('simulated_customers'))).toString());
+    assert.equal(row.target_employee_id, targetId === EMPLOYEE ? PROJECTED_EMPLOYEE : targetId);
+    assert.deepEqual(row.target_employee_ids, targetIds?.map(v => v === EMPLOYEE ? PROJECTED_EMPLOYEE : v) ?? null);
+    assert.deepEqual([...p.blockers].sort(), [...EXPECTED_PROJECTION_PENDING, ...(blocker ? ['external_employee_visibility'] : [])].sort());
+  });
+  projectionOffline(h, baseline); cleaned(h);
+});
+for (const groupId of [null, OTHER]) test(`identity projection: submit-time group ${groupId === null ? 'null' : 'dependency blocker'}`, async t => {
+  const h = await projectionPrepared(t, { empty: true, change(h) {
+    const row = rowObject('employee_submit_time_settings'); row.group_id = groupId; h.texts.employee_submit_time_settings = serialize(row);
+  } }), baseline = projectionBaseline(h);
+  await projectIdentity(h, async p => {
+    const row = JSON.parse((await collect(p.open('employee_submit_time_settings'))).toString());
+    assert.equal(row.group_id, groupId); assert.equal(row.user_id, PROJECTED_EMPLOYEE);
+    assert.deepEqual([...p.blockers].sort(), [...EXPECTED_PROJECTION_PENDING, ...(groupId === null ? [] : ['submit_time_group_not_in_backup'])].sort());
+  });
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+test('identity projection: reject invalid, source, site, job, export, volume and every existing UUID row identity', async t => {
+  const h = await projectionPrepared(t), baseline = projectionBaseline(h);
+  const cases = [
+    ['null', null], ['object', {}], ['number', 123], ['empty', ''], ['whitespace', ' ' + PROJECTED_EMPLOYEE],
+    ['uppercase', PROJECTED_EMPLOYEE.toUpperCase()], ['non UUID', SECRET], ['UUID v1', PROJECTED_EMPLOYEE.replace('-4000-', '-1000-')],
+    ['invalid variant', PROJECTED_EMPLOYEE.replace('-8000-', '-7000-')], ['source', EMPLOYEE], ['site', SITE], ['job', JOB],
+    ['records export', h.recordInfo.exportId], ['records volume', h.recordInfo.volumeId], ['visible external employee', OTHER],
+  ];
+  const ids = new Set();
+  for (const [key, text] of Object.entries(h.texts)) for (const raw of lines(text)) {
+    const value = JSON.parse(raw).id;
+    if (typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value) && value !== EMPLOYEE && !ids.has(value)) { ids.add(value); cases.push(['existing ' + key, value]); }
+  }
+  for (const [label, target] of cases) await t.test(`identity projection: rejects target ${label}`, async () => {
+    let consumed = false;
+    await assert.rejects(projectIdentity(h, async () => { consumed = true; }, {}, target), e => projectionRedacted(e, { cancelled: false, cleanupRequired: false }));
+    assert.equal(consumed, false); projectionOffline(h, baseline); cleaned(h);
+  });
+});
+
+for (const variant of ['wrong-password', 'records-tamper', 'records-truncate', 'media-tamper', 'media-truncate', 'mixed-record-ciphertext', 'missing-media-reference']) test(`identity projection: pair gate rejects ${variant} before output/callback`, async t => {
+  const h = await projectionPrepared(t, { empty: variant !== 'missing-media-reference' });
+  if (variant === 'mixed-record-ciphertext') { h.records = h.diskFile('mixed-identity-records.edx'); await h.writeRecords(); }
+  else if (variant === 'missing-media-reference') await rewriteMedia(h, c => { c.inventory.files.pop(); return c; });
+  else if (variant !== 'wrong-password') {
+    const file = variant.startsWith('records-') ? h.records : h.media, bytes = await readFile(file.path);
+    if (variant.endsWith('tamper')) bytes[bytes.length - 5] ^= 1;
+    await writeFile(file.path, variant.endsWith('truncate') ? bytes.subarray(0, -7) : bytes);
+  }
+  const baseline = projectionBaseline(h); let consumed = false, progress = 0;
+  await assert.rejects(projectIdentity(h, async () => { consumed = true; }, { onProgress() { progress++; } }, PROJECTED_EMPLOYEE, variant === 'wrong-password' ? SECRET : PASS), e => projectionRedacted(e));
+  assert.equal(consumed, false); assert.equal(progress, 0); assert.ok(h.spaces.length - baseline.spaces <= 2, 'No second records/output before pair gate');
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const variant of ['same-metadata-new-cipher', 'different-size-valid-cipher', 'tampered-second-cipher']) test(`identity projection: second records authentication binds exact digest/bytes (${variant})`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), original = h.records;
+  const originalBytes = await readFile(original.path); h.records = h.diskFile('second-auth-identity.edx');
+  if (variant === 'different-size-valid-cipher') {
+    const row = JSON.parse(h.texts.accounts); row.remarks += ' a different but fully authentic row'; h.texts.accounts = serialize(row); h.refresh();
+  }
+  await h.writeRecords(); const alternate = h.records; h.records = original;
+  const alternateBytes = await readFile(alternate.path);
+  if (variant === 'tampered-second-cipher') { alternateBytes[alternateBytes.length - 5] ^= 1; await writeFile(alternate.path, alternateBytes); }
+  if (variant === 'same-metadata-new-cipher') { assert.equal(originalBytes.length, alternateBytes.length); assert.notEqual(sha(originalBytes), sha(alternateBytes)); }
+  if (variant === 'different-size-valid-cipher') assert.notEqual(originalBytes.length, alternateBytes.length);
+  const baseline = projectionBaseline(h); let opened = 0, consumed = false;
+  const switchAfterPair = { open() { return (++opened <= 2 ? original : alternate).open(); } };
+  await assert.rejects(projectIdentity(h, async () => { consumed = true; }, {}, PROJECTED_EMPLOYEE, PASS, switchAfterPair), e => projectionRedacted(e));
+  assert.equal(opened, 4); assert.equal(consumed, false); assert.equal(h.spaces.length - baseline.spaces, 3, 'No output after second-auth mismatch');
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const stage of ['pair-records', 'second-records', 'output']) for (const variant of ['same-size', 'removed', 'extra', 'missing-lf', 'oversized-chunk']) test(`identity projection: ${stage} workspace drift rejects ${variant}`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h), path = api.employeeSafetyBackupEntryPath('accounts');
+  const workspaceIndex = baseline.spaces + ({ 'pair-records': 0, 'second-records': 2, output: 3 })[stage]; let changed = false, consumed = false;
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== workspaceIndex || current !== path || count !== (stage === 'output' ? 1 : 2)) return;
+    changed = true; const original = stage === 'output' ? h.texts.accounts.replace(JSON.stringify(EMPLOYEE), JSON.stringify(PROJECTED_EMPLOYEE)) : h.texts.accounts;
+    const raw = variant === 'same-size' ? enc(original.replace('原始', '修改')) : variant === 'removed' ? enc('')
+      : variant === 'extra' ? enc(original + original) : variant === 'missing-lf' ? enc(original.slice(0, -1)) : new Uint8Array(1024 * 1024 + 1);
+    return variant === 'oversized-chunk' ? { async *[Symbol.asyncIterator]() { yield raw; } } : stream(raw);
+  };
+  await assert.rejects(projectIdentity(h, async () => { consumed = true; }), e => projectionRedacted(e));
+  assert.equal(changed, true); assert.equal(consumed, false); projectionOffline(h, baseline); cleaned(h);
+});
+
+test('identity projection: post-validation output drift cannot produce successful consumption', async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h); let consumed = false;
+  h.openHook = (w, path, count) => {
+    if (h.spaces.indexOf(w) === baseline.spaces + 3 && path === api.employeeSafetyBackupEntryPath('accounts') && count === 2) return stream(enc(h.texts.accounts.replace(JSON.stringify(EMPLOYEE), JSON.stringify(PROJECTED_EMPLOYEE)).replace('原始', '修改')));
+  };
+  await assert.rejects(projectIdentity(h, async p => { consumed = true; await collect(p.open('accounts')); }), e => projectionRedacted(e));
+  assert.equal(consumed, true); projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const stage of ['pair-records', 'pair-media', 'second-records', 'output']) test(`identity projection: ${stage} cleanup failure forbids success and cleans exactly once`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h), index = baseline.spaces + ['pair-records', 'pair-media', 'second-records', 'output'].indexOf(stage); let consumed = false;
+  h.cleanupHook = w => { if (h.spaces.indexOf(w) === index) throw new Error(SECRET); };
+  await assert.rejects(projectIdentity(h, async () => { consumed = true; return 'not successful'; }), e => projectionRedacted(e, { cleanupRequired: true, cancelled: false }));
+  if (stage === 'pair-records') assert.equal(consumed, false, 'Failed record cleanup stops before pair/output callback');
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const stage of ['before-start', 'second-record-file', 'second-record-read', 'output-append', 'output-read', 'consume', 'cleanup']) test(`identity projection: abort releases stalled ${stage}, redacts errors and cleans all acquired workspaces`, { timeout: 15000 }, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h), controller = new AbortController(); let entered = false, consumed = false, opens = 0, returned = 0;
+  let records = h.records, captured;
+  if (stage === 'before-start') controller.abort();
+  if (stage === 'second-record-file') records = { open() {
+    if (++opens < 4) return h.records.open();
+    return { [Symbol.asyncIterator]() { return { next() { entered = true; return new Promise(() => {}); }, return() { returned++; return new Promise(() => {}); } }; } };
+  } };
+  if (['second-record-read', 'output-read'].includes(stage)) h.openHook = (w, path, count) => {
+    if (h.spaces.indexOf(w) === baseline.spaces + (stage === 'output-read' ? 3 : 2) && path === api.employeeSafetyBackupEntryPath('accounts') && count === (stage === 'output-read' ? 1 : 2)) return { [Symbol.asyncIterator]() { return { next() { entered = true; return new Promise(() => {}); }, return() { returned++; return new Promise(() => {}); } }; } };
+  };
+  if (stage === 'output-append') h.appendHook = w => { if (h.spaces.indexOf(w) === baseline.spaces + 3) { entered = true; return new Promise(() => {}); } };
+  if (stage === 'cleanup') h.cleanupHook = w => { if (h.spaces.indexOf(w) === baseline.spaces + 3) { entered = true; return new Promise(() => {}); } };
+  const pending = projectIdentity(h, async p => {
+    consumed = true; captured = p;
+    if (stage === 'consume') { entered = true; return new Promise(() => {}); }
+  }, { signal: controller.signal }, PROJECTED_EMPLOYEE, PASS, records);
+  const rejected = assert.rejects(pending, e => {
+    projectionRedacted(e, { cancelled: true }); assert.equal(typeof e.cleanupRequired, 'boolean');
+    // After abort, real fs cleanup may outlive the immediate cancellation deadline.
+    // This is uncertain cleanup, never success; an intentionally stalled cleanup must say so.
+    if (stage === 'cleanup') assert.equal(e.cleanupRequired, true);
+    return true;
+  });
+  if (stage !== 'before-start') { await waitFor(() => entered); controller.abort(); }
+  await rejected;
+  if (stage === 'second-record-file') { await waitFor(() => returned > 0); assert.equal(returned, 1); }
+  if (!['consume', 'cleanup'].includes(stage)) assert.equal(consumed, false);
+  if (captured) assert.throws(() => captured.open('accounts'));
+  if (stage === 'before-start') assert.equal(h.spaces.length, baseline.spaces);
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const failure of ['consume', 'progress', 'factory', 'append', 'open']) test(`identity projection: ${failure} exception is sanitized without retry or lifecycle calls`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h); let consumed = false, escaped;
+  if (failure === 'append') h.appendHook = w => { if (h.spaces.indexOf(w) === baseline.spaces + 3) throw new Error(SECRET + PASS); };
+  if (failure === 'open') h.openHook = (w, path) => { if (h.spaces.indexOf(w) === baseline.spaces + 3 && path === api.employeeSafetyBackupEntryPath('accounts')) throw new Error(SECRET + NAME); };
+  const factory = failure === 'factory' ? () => { if (h.spaces.length === baseline.spaces + 3) throw new Error(SECRET); return h.factory(); } : h.factory;
+  await assert.rejects(projectIdentity(h, async p => { consumed = true; escaped = p; throw new Error(SECRET + NAME + PASS); }, failure === 'progress' ? { onProgress() { throw new Error(SECRET); } } : {}, PROJECTED_EMPLOYEE, PASS, h.records, factory), e => projectionRedacted(e, { cancelled: false, cleanupRequired: false }));
+  assert.equal(consumed, failure === 'consume'); if (escaped) assert.throws(() => escaped.open('accounts'));
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+for (const failure of [false, true]) test(`identity projection: reader, deferred stream and started iterator expire after ${failure ? 'throw' : 'success'}`, async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h); let reader, deferred, notStarted, started;
+  const pending = projectIdentity(h, async p => {
+    reader = p; deferred = p.open('accounts'); notStarted = p.open('accounts')[Symbol.asyncIterator](); started = p.open('accounts')[Symbol.asyncIterator]();
+    assert.equal((await started.next()).done, false);
+    if (failure) throw new Error(SECRET); return 73;
+  });
+  if (failure) await assert.rejects(pending, e => projectionRedacted(e)); else assert.equal(await pending, 73);
+  assert.throws(() => reader.open('accounts')); await assert.rejects(collect(deferred)); await assert.rejects(notStarted.next()); await assert.rejects(started.next());
+  projectionOffline(h, baseline); cleaned(h);
+});
+
+test('identity projection: output workspace cannot reuse an authenticated source or a previous projection workspace', async t => {
+  const h = await projectionPrepared(t, { empty: true }), baseline = projectionBaseline(h); let consumed = false;
+  const reusedFactory = () => h.spaces.length === baseline.spaces + 3 ? h.spaces[baseline.spaces + 2] : h.factory();
+  await assert.rejects(projectIdentity(h, async () => { consumed = true; }, {}, PROJECTED_EMPLOYEE, PASS, h.records, reusedFactory), e => projectionRedacted(e));
+  assert.equal(consumed, false); cleaned(h);
+  await projectIdentity(h); const previous = h.spaces.at(-1);
+  await assert.rejects(projectIdentity(h, async () => { consumed = true; }, {}, PROJECTED_EMPLOYEE, PASS, h.records, () => previous), e => projectionRedacted(e));
+  assert.equal(consumed, false); projectionOffline(h, baseline); cleaned(h);
 });
