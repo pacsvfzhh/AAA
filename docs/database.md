@@ -38,7 +38,7 @@
 - 固定48类记录：原核心15表、聊天10表、通知/广播/自动化13表、派单6表、员工关联稽核事件/收件版本、精简orders_history及管理员六列无密码身份元数据。个人聊天/收件/进度严格按员工，相关共享角色/范本/任务祖先/组池配置作为依赖快照；同归属不限员工的空角色也纳入。通知留证可能employee_id=NULL，通过消息或before/after收件快照关联；共享通知原始收件证据不裁剪。历史订单只取id/user/status/commission/created_at/completed_at，不虚构不存在的rate/processed列，不搬真实交易详情。
 - 目录只含数量/字节/摘要，凭据及证件地址等仅进加密原文。任一相关记录或共享依赖变更均使页/verify/close拒绝；历史session不可逆脱敏，设备秘密键阻断，未结束工时保持备份原文，未伪造在线状态。
 - 追加私有任务校验器的独立协议隔离，保留SQL17–33动态追加的finance/activity/verification/notifications/chat/archives映射和双向保护；不关业务触发器，不增表。`stop_owned`需密码及「確認停止員工備份任務」，可不传ID以找回本人唯一running独立备份，过期亦可显式结束；不返回令牌、不停止别人的任务或其他协议、不自动开始新任务、不删文件或解除维护。
-- 客户端实际磁盘保存/重新认证/48表行摘要检查/最后源核对/清理后，才允许显式close；独立本机reader完整认证再开放只读回调，退出即失效。**仍为records_only，实际媒体、完整同站恢复、备份封存和跨域UUID替换未完成；complete_employee_backup/can_archive/can_replace始终false。** 新接口暂未接后台，不改变原导入入口。
+- 客户端实际磁盘保存/重新认证/48表行摘要检查/最后源核对/清理后，才允许显式close；独立本机reader完整认证再开放只读回调，退出即失效。**仍为records_only，实际媒体、完整同站恢复、备份封存和跨域UUID替换未完成；complete_employee_backup/can_archive/can_replace始终false。** 第43节已接后台独立记录备份与本人停止入口，成功不会解锁原SQL45空站准入或员工覆盖；没有新增/修改数据库接口。报告保存可独立取消，未知任务仍阻挡其他迁移。
 - 573份SQL回放精确保留12项历史失败，109根表/967列不变，非干净建库证明。未访问或部署正式库、Edge、Storage、cron或前端；详见计划第42节。
 
 ## RPC 与安全约定

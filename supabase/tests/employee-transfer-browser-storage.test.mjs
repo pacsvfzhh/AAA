@@ -255,6 +255,31 @@ for (const name of unsafeNames) test(`unsafe output filename ${JSON.stringify(na
   assert.equal(fs.log.length, before);
 });
 
+test('already-cancelled text report does not start filesystem writes', async t => {
+  const { fs } = fixture(t);
+  const directory = await api.pickTransferDirectory(), controller = new AbortController();
+  const before = fs.log.length; controller.abort();
+  await assert.rejects(directory.writeText('report.json', '{}', controller.signal), abortError);
+  assert.equal(fs.log.length, before);
+  await assert.rejects(directory.writeText('report.json', '{}'), /Duplicate/);
+});
+
+for (const method of ['write', 'close']) test(`text report cancellation releases a blocked ${method} without removing or retrying output`, async t => {
+  const { fs } = fixture(t);
+  const directory = await api.pickTransferDirectory(), controller = new AbortController(), blocked = gate();
+  fs.hook = async event => {
+    if (event.method === method && event.phase === 'before' && event.path.endsWith('/report.json')) await blocked.block();
+  };
+  const writing = directory.writeText('report.json', '{"recordsOnly":true}', controller.signal);
+  const rejected = assert.rejects(writing, abortError);
+  await blocked.entered; controller.abort(); await promptly(rejected); await tick();
+  assert.ok(fs.log.some(event => event.method === 'abort'));
+  blocked.release(); await tick();
+  assert.ok(fs.log.every(event => event.method !== 'remove'));
+  assert.equal(fs.log.filter(event => event.method === 'writer').length, 1);
+  await assert.rejects(directory.writeText('report.json', '{}'), /Duplicate/);
+});
+
 test('output name reservations reject same/case aliases, including failed and concurrent attempts', async t => {
   const { fs } = fixture(t);
   const directory = await api.pickTransferDirectory();

@@ -9,10 +9,7 @@ import postcss from 'postcss';
 import tailwindcss from 'tailwindcss';
 import loadTailwindConfig from 'tailwindcss/loadConfig.js';
 
-// No SQL, Supabase, production credentials or services are used. The SQL46 CLIENT,
-// AES/ZIP/hash/record validation and both actual UI components are real. RPC,
-// directory picker, output files and temporary workspaces are synthetic adapters.
-// WebKit's supported paths use a desktop Chromium UA, NOT a native-picker claim.
+// Real client/AES/ZIP with synthetic RPC/IO; desktop-UA WebKit is not native-picker evidence.
 const root = fileURLToPath(new URL('../../', import.meta.url));
 let playwright;
 if (process.env.EMPLOYEE_TRANSFER_PLAYWRIGHT_MODULE) playwright = await import(pathToFileURL(process.env.EMPLOYEE_TRANSFER_PLAYWRIGHT_MODULE).href);
@@ -30,8 +27,7 @@ const PAGE = 'get_employee_safety_backup_page', VERIFY = 'employee_safety_backup
 const CLOSE = 'employee_safety_backup_close', STOP = 'employee_safety_backup_stop_owned';
 const desktopUA = 'Mozilla/5.0 Chrome/145.0.0.0 Safari/537.36';
 
-// Serialized into the browser bundle: table keys and projections are imported
-// from the REAL modules at browser runtime, never copied from a SQL fixture.
+// Browser fixtures use the real table inventory so protocol changes cannot silently lose coverage.
 function installHarness(api, constants) {
   const { keys, projections, Sha256, readBackup, entryPath, catalogPath } = api;
   const { NAME, PASSWORD, PASS, HASH, BEGIN, CATALOG, PAGE, VERIFY, CLOSE, STOP, STOP_TEXT } = constants;
@@ -42,6 +38,7 @@ function installHarness(api, constants) {
   const h = window.__h = {
     calls: [], events: [], forbidden: [], violations: [], workspaces: [], directories: [], reportAttempts: [], reports: [],
     fault: {}, siteCalls: [], waiting: null, release: null, serverRunning: false, signals: [], verifyCount: 0,
+    reportSignals: [], reportSettlements: [],
     keys: [...keys], projectionFields: Object.keys(projections.accounts), flags,
   };
   const check = (ok, reason) => { if (!ok) { h.violations.push(reason); throw Error(reason); } };
@@ -67,7 +64,10 @@ function installHarness(api, constants) {
       row_hashes_sha256: key === 'accounts' ? sha(sha(h.texts[key])) : sha('') })), fingerprint: 'b'.repeat(64), ...flags };
   const gate = (name, signal) => new Promise((resolve, reject) => {
     h.waiting = name;
+    let settled = false;
     const finish = error => {
+      if (settled) return;
+      settled = true;
       signal?.removeEventListener('abort', abort); h.waiting = null; h.release = null;
       if (error) reject(error); else resolve();
     };
@@ -176,10 +176,21 @@ function installHarness(api, constants) {
           } }; },
         };
       },
-      async writeText(name, text) {
+      async writeText(name, text, signal) {
+        // Record invocation before checking abort so a NEW post-unmount write is detectable.
         h.events.push('report-attempt'); h.reportAttempts.push({ name, text, directory: directory.name });
-        if (h.fault.reportFail) throw Error('synthetic report storage failure');
-        h.reports.push({ name, text, directory: directory.name });
+        check(signal instanceof AbortSignal, 'report write requires its own AbortSignal');
+        h.reportSignals.push(signal);
+        let saved = false;
+        try {
+          alive(signal);
+          if (h.fault.holdReport) { h.fault.holdReport = false; await gate('report-write', signal); }
+          alive(signal);
+          if (h.fault.reportFail) throw Error('synthetic report storage failure');
+          h.reports.push({ name, text, directory: directory.name }); h.events.push('report-saved'); saved = true;
+        } finally {
+          h.reportSettlements.push({ aborted: signal.aborted, saved }); h.events.push('report-settled');
+        }
       },
     };
     h.directories.push(directory); return directory;
@@ -235,8 +246,7 @@ before(async () => {
   }
   assert.ok(!inputs.some(path => /node_modules\/@supabase|src\/lib\/(?:auth|supabase)\.ts|employeeTransfer\/(?:siteTransfer|siteImport|browserStorage)\.ts/.test(path)), 'production access/storage boundaries must not enter bundle');
   script = compiled.outputFiles[0].text;
-  // Compile CURRENT source styles in memory, not an optional/stale dist file.
-  // This makes hidden tabs, real checkbox appearance and 375px checks meaningful.
+  // Current styles prevent stale dist output from hiding layout or checkbox regressions.
   const cssSource = await readFile(new URL('../../src/index.css', import.meta.url), 'utf8');
   const componentSources = await Promise.all(['EmployeeDataMigration', 'EmployeeSafetyBackupPanel', 'EmployeeSiteImport'].map(name => readFile(new URL(`../../src/components/admin/${name}.tsx`, import.meta.url), 'utf8')));
   const tailwindConfig = loadTailwindConfig(root + 'tailwind.config.js');
@@ -287,6 +297,7 @@ async function scenario(browser, run, { unsupported = false, viewport = { width:
 const panel = page => page.getByRole('region', { name: '獨立員工記錄備份', exact: true });
 const start = page => panel(page).getByRole('button', { name: '開始獨立員工記錄備份', exact: true });
 const stop = page => panel(page).getByRole('button', { name: '確認停止本人的員工備份任務', exact: true });
+const cancelReport = page => panel(page).getByRole('button', { name: '停止等待報告保存', exact: true });
 const reset = page => panel(page).getByRole('button', { name: '核對原檔案後，準備另一份新備份', exact: true });
 const importStart = page => page.getByRole('button', { name: '開始實際導入（保持維護）', exact: true });
 const ack = page => panel(page).getByRole('checkbox', { name: /^我已核對新站/ });
@@ -307,6 +318,28 @@ async function finished(page, reportFailed = false) {
 }
 async function report(page) {
   return page.evaluate(() => JSON.parse(window.__h.reportAttempts.at(-1).text));
+}
+async function heldReport(page) {
+  await page.waitForFunction(() => window.__h.waiting === 'report-write');
+  await panel(page).getByText('正在保存結果報告（不改變備份或任務結果）', { exact: true }).waitFor();
+  assert.equal(await cancelReport(page).isEnabled(), true);
+  assert.equal(await page.locator('#employee-safety-stop-password').isDisabled(), true, 'reporting still holds local busy');
+  assert.equal(await page.evaluate(() => window.__h.reportSignals.length), 1);
+  assert.equal(await page.evaluate(() => window.__h.reportSignals[0].aborted), false);
+  assert.ok(await page.evaluate(() => window.__h.signals.every(signal => signal !== window.__h.reportSignals[0])), 'report controller is independent of backup RPC controllers');
+  await page.evaluate(() => { window.__h.lateReportRelease = window.__h.release; });
+}
+async function cancelHeldReport(page) {
+  await cancelReport(page).click({ timeout: 2000 });
+  await page.waitForFunction(() => !document.getElementById('employee-safety-stop-password').matches(':disabled'), null, { timeout: 2000 });
+  await panel(page).getByText(/^結果報告保存失敗或已停止等待/).waitFor({ timeout: 2000 });
+  assert.equal(await cancelReport(page).count(), 0);
+  assert.equal(await page.evaluate(() => window.__h.reportSignals[0].aborted), true);
+  assert.deepEqual(await page.evaluate(() => window.__h.reportSettlements), [{ aborted: true, saved: false }]);
+  // A late completion of the synthetic picker/workspace adapter must not save a report.
+  await page.evaluate(() => window.__h.lateReportRelease());
+  assert.equal(await page.evaluate(() => window.__h.reports.length), 0);
+  assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), 1);
 }
 function safeReport(value) {
   const raw = JSON.stringify(value);
@@ -506,6 +539,110 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await reset(page).isEnabled(), true); assert.equal(await start(page).isDisabled(), true);
         assert.equal((await report(page)).receipt, null); await noRecovery(page, 1, 0, 1);
       }));
+      await t.test('failed explicit stop BEFORE any backup locks every new-backup control until a fresh successful stop', () => scenario(browser, async page => {
+        await prepareParent(page); await prepare(page);
+        assert.deepEqual(await rpcCalls(page), [], 'valid form and chosen directory have not begun a backup');
+        // Model a pre-existing owned task; this page has never received its begin receipt.
+        await page.evaluate(() => { window.__h.serverRunning = true; });
+        const pickerCount = await page.evaluate(() => window.__h.events.filter(event => event === 'synthetic-picker').length);
+        await openStop(page); await fillStop(page); await fault(page, { stopFail: true }); await stop(page).click();
+        await panel(page).getByText(/^無法確認停止結果/).waitFor();
+        await page.waitForFunction(() => !document.getElementById('employee-safety-stop-password').matches(':disabled'));
+        for (const selector of ['#employee-safety-username', '#employee-safety-password', '#employee-safety-passphrase', '#employee-safety-confirmation']) assert.equal(await page.locator(selector).isDisabled(), true, selector);
+        assert.equal(await ack(page).isDisabled(), true);
+        assert.equal(await start(page).isDisabled(), true);
+        const choose = panel(page).getByRole('button', { name: '選擇員工備份保存目錄', exact: true });
+        assert.equal(await choose.isDisabled(), true);
+        await panel(page).locator('form').first().dispatchEvent('submit');
+        await choose.dispatchEvent('click');
+        assert.equal(await page.evaluate(() => window.__h.events.filter(event => event === 'synthetic-picker').length), pickerCount, 'pending must not choose a fresh directory');
+        await parentLocked(page); await noRecovery(page, 0, 0, 1);
+        assert.equal(await stop(page).isDisabled(), true, 'failed stop clears credentials');
+        await fillStop(page); assert.equal(await stop(page).isEnabled(), true, 'pending still permits owner stop with fresh credentials');
+        await fault(page, { stopFail: false }); await stop(page).click();
+        await panel(page).getByText(/^服務端已確認停止本人的員工記錄備份技術任務/).waitFor();
+        await page.waitForFunction(() => !document.getElementById('employee-safety-username').matches(':disabled'));
+        for (const selector of ['#employee-safety-username', '#employee-safety-password', '#employee-safety-passphrase', '#employee-safety-confirmation']) assert.equal(await page.locator(selector).isEnabled(), true, selector);
+        assert.equal(await ack(page).isEnabled(), true); assert.equal(await choose.isEnabled(), true);
+        assert.equal(await start(page).isEnabled(), true, 'original valid inputs are now available only for explicit submission');
+        assert.equal(await importStart(page).isEnabled(), true);
+        assert.equal(await page.locator('#migration-panel-export button[type="submit"]').isEnabled(), true);
+        assert.deepEqual((await rpcCalls(page)).map(call => ({ name: call.name, job: call.args.p_job_id })), [{ name: STOP, job: null }, { name: STOP, job: null }]);
+        assert.equal(await page.evaluate(() => window.__h.serverRunning), false);
+        assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), 0);
+        await noRecovery(page, 0, 0, 2);
+      }));
+      await t.test('stalled report after FAILED begin can be cancelled promptly without clearing pending or closing the unknown task', () => scenario(browser, async page => {
+        await prepareParent(page); await prepare(page); await fault(page, { begin: 'lost', holdReport: true }); await start(page).click();
+        await heldReport(page); await parentLocked(page);
+        const result = await report(page); safeReport(result);
+        assert.equal(result.status, 'unconfirmed'); assert.equal(result.jobId, null); assert.equal(result.receipt, null);
+        assert.equal(result.taskCloseConfirmed, false); assert.equal(await page.evaluate(() => window.__h.serverRunning), true);
+        await cancelHeldReport(page);
+        await parentLocked(page);
+        await panel(page).getByText(/^員工備份任務結果尚未確認/).waitFor();
+        assert.equal(await reset(page).count(), 0); assert.equal(await start(page).isDisabled(), true);
+        assert.equal(await page.evaluate(() => window.__h.signals.some(signal => signal.aborted)), false, 'report-only cancel must not abort the independent backup controller');
+        assert.equal(await page.evaluate(() => window.__h.serverRunning), true);
+        assert.deepEqual(await report(page), result); await noRecovery(page);
+        await openStop(page); await fillStop(page);
+        assert.equal(await stop(page).isEnabled(), true, 'report cancellation promptly makes owner stop reachable');
+        await stop(page).click();
+        await panel(page).getByText(/^服務端已確認停止本人的員工記錄備份技術任務/).waitFor();
+        assert.equal((await rpcCalls(page)).find(call => call.name === STOP).args.p_job_id, null);
+        assert.equal(await reset(page).isEnabled(), true); assert.equal(await start(page).isDisabled(), true);
+        await noRecovery(page, 1, 0, 1);
+        assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), 1);
+        assert.equal(await page.evaluate(() => window.__h.reports.length), 0);
+      }));
+      await t.test('stalled report-only cancellation after SUCCESS preserves verified receipt/close confirmation and unlocks parent without rerun', () => scenario(browser, async page => {
+        await prepareParent(page); await prepare(page); await fault(page, { holdReport: true }); await start(page).click();
+        await heldReport(page); await parentLocked(page);
+        await panel(page).getByText('獨立記錄檔案已核驗，任務結束已確認', { exact: true }).waitFor();
+        const result = await report(page); safeReport(result);
+        assert.equal(result.status, 'verified-records-and-task-closed'); assert.equal(result.taskCloseConfirmed, true);
+        assert.equal(result.encryptedFileState, 'verified'); assert.equal(result.receipt.rows, 1); assert.equal(result.receipt.tables, 48);
+        const fileBefore = await page.evaluate(() => { const file = window.__h.directories.flatMap(directory => directory.files)[0]; return { name: file.name, size: file.bytes.length, writes: file.writes, opens: file.opens, eof: file.eof }; });
+        await cancelHeldReport(page);
+        await panel(page).getByText('獨立記錄檔案已核驗，任務結束已確認', { exact: true }).waitFor();
+        const receiptView = panel(page).locator('[aria-label="員工記錄備份核驗結果"]');
+        assert.ok((await receiptView.innerText()).includes(result.receipt.filename));
+        assert.ok((await receiptView.innerText()).includes(result.receipt.cipherSha256));
+        assert.equal(await page.locator('#migration-files').isEnabled(), true);
+        assert.equal(await importStart(page).isEnabled(), true);
+        assert.equal(await page.locator('#migration-panel-export button[type="submit"]').isEnabled(), true);
+        assert.equal(await page.getByRole('button', { name: '重新檢查能力', exact: true }).isEnabled(), true);
+        assert.equal(await page.evaluate(() => window.__h.serverRunning), false);
+        assert.equal(await page.evaluate(() => window.__h.signals.some(signal => signal.aborted)), false, 'only the reporting signal is aborted');
+        assert.deepEqual(await report(page), result);
+        assert.deepEqual(await page.evaluate(() => { const file = window.__h.directories.flatMap(directory => directory.files)[0]; return { name: file.name, size: file.bytes.length, writes: file.writes, opens: file.opens, eof: file.eof }; }), fileBefore);
+        const decoded = await page.evaluate(() => window.__h.readSaved());
+        assert.deepEqual(JSON.parse(decoded.texts.accounts), await page.evaluate(() => window.__h.account));
+        assert.equal(decoded.manifest.entries.length, 49);
+        assert.equal(await start(page).isDisabled(), true); assert.equal(await reset(page).isEnabled(), true);
+        await noRecovery(page, 1, 1);
+        assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), 1);
+        assert.equal(await page.evaluate(() => window.__h.reports.length), 0);
+      }));
+      for (const succeeded of [false, true]) await t.test(`unmount during held ${succeeded ? 'SUCCESS' : 'FAILED'} report aborts writing promptly with no late save or recovery action`, () => scenario(browser, async page => {
+        await prepare(page); await fault(page, { holdReport: true, ...(!succeeded ? { begin: 'lost' } : {}) }); await start(page).click();
+        await heldReport(page);
+        const result = await report(page); safeReport(result); assert.equal(result.taskCloseConfirmed, succeeded);
+        const writesBeforeUnmount = await page.evaluate(() => window.__h.reportAttempts.length);
+        assert.equal(writesBeforeUnmount, 1);
+        await page.evaluate(() => window.__unmount());
+        await page.waitForFunction(() => window.__h.reportSignals[0].aborted && window.__h.reportSettlements.length === 1 && window.__h.waiting === null, null, { timeout: 2000 });
+        assert.equal(await page.locator('#root').innerText(), '');
+        assert.deepEqual(await page.evaluate(() => window.__h.reportSettlements), [{ aborted: true, saved: false }]);
+        assert.ok(await page.evaluate(() => window.__h.events.includes('gate-aborted:report-write')));
+        await page.evaluate(() => window.__h.lateReportRelease());
+        await noRecovery(page, 1, succeeded ? 1 : 0);
+        assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), writesBeforeUnmount, 'unmount cannot start another report write');
+        assert.equal(await page.evaluate(() => window.__h.reports.length), 0, 'aborted report must not be committed by a late release');
+        assert.equal(await page.evaluate(() => window.__h.serverRunning), !succeeded);
+        assert.ok(await page.evaluate(() => window.__h.workspaces.every(workspace => workspace.cleaned)));
+        assert.deepEqual(await report(page), result);
+      }));
       await t.test('denied synthetic directory permission never begins a task', () => scenario(browser, async page => {
         await fault(page, { pickerDenied: true });
         await panel(page).getByRole('button', { name: '選擇員工備份保存目錄', exact: true }).click();
@@ -550,11 +687,16 @@ for (const engine of ['chromium', 'webkit']) {
       for (const held of [BEGIN, PAGE]) await t.test(`unmount during ${held} aborts only, never automatically stops/closes/restarts`, () => scenario(browser, async page => {
         await prepare(page); await fault(page, { holdRpc: held }); await start(page).click();
         await page.waitForFunction(name => window.__h.waiting === name, held);
+        const writesBeforeUnmount = await page.evaluate(() => window.__h.reportAttempts.length);
+        assert.equal(writesBeforeUnmount, 0);
         await page.evaluate(() => window.__unmount());
-        await page.waitForFunction(() => window.__h.signals.some(s => s.aborted) && window.__h.reportAttempts.length === 1);
+        await page.waitForFunction(() => window.__h.signals.some(s => s.aborted) && window.__h.waiting === null && window.__h.workspaces.every(w => w.cleaned), null, { timeout: 2000 });
         assert.equal(await page.locator('#root').innerText(), '');
-        assert.ok(await page.evaluate(() => window.__h.workspaces.every(w => w.cleaned)));
-        const result = await report(page); safeReport(result); assert.equal(result.status, 'unconfirmed'); await noRecovery(page);
+        assert.ok(await page.evaluate(name => window.__h.events.includes('gate-aborted:' + name), held));
+        await noRecovery(page);
+        assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), writesBeforeUnmount, 'unmount must not start a NEW report write');
+        assert.equal(await page.evaluate(() => window.__h.reportSignals.length), 0);
+        assert.equal(await page.evaluate(() => window.__h.reports.length), 0);
       }));
       await t.test('375px supported-path result and explicit-stop controls do not overflow', () => scenario(browser, async page => {
         await prepare(page); await start(page).click(); await finished(page); await openStop(page);
