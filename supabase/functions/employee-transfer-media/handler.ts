@@ -21,13 +21,16 @@ const ARCHIVE_BUCKET = 'content-audit-evidence';
 const ARCHIVE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4']);
 const ARCHIVE_IDENTITY = new RegExp(`^archive-evidence-v1:(${UUID}):(${UUID}):(${UUID}):([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})$`);
 const ARCHIVE_TARGET = new RegExp(`^transfer-archives/${UUID}/[0-9a-f]{64}$`);
+const EMPLOYEE_SAFETY_IDENTITY = new RegExp(`^employee-safety-media-v1:(${UUID}):(${UUID}):(${UUID}):([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})$`);
 const RPCS = {
   verification: { authorize: 'employee_transfer_verification_media_authorize', commit: 'employee_transfer_verification_media_commit' },
   notifications: { authorize: 'employee_transfer_notification_media_authorize', commit: 'employee_transfer_notification_media_commit' },
   chat: { authorize: 'employee_transfer_chat_media_authorize', commit: 'employee_transfer_chat_media_commit' },
   archives: { authorize: 'employee_transfer_archive_media_authorize', commit: 'employee_transfer_archive_media_commit' },
+  'employee-safety': { authorize: 'employee_safety_backup_media_authorize', commit: 'employee_safety_backup_media_commit' },
 };
 type Scope = keyof typeof RPCS;
+type MediaKind = Exclude<Scope, 'employee-safety'>;
 const ACTIONS = new Set(['download', 'recheck-export', 'upload', 'recheck-import']);
 const ALLOWED_HEADERS = 'authorization, apikey, content-type, x-client-info, x-transfer-action, x-transfer-scope, x-admin-session-token, x-transfer-job-token, x-transfer-object-key';
 const CORS = {
@@ -54,7 +57,7 @@ export interface MediaHandlerDependencies {
 
 type RecordValue = Record<string, unknown>;
 type FileTuple = { key: string; source_url: string; bytes: number; sha256: string; content_type: string };
-type Context = { direction: string; key: string; bucket: string; path: string; source_url: string; file: FileTuple | null; generation: string; avatar: boolean };
+type Context = { direction: string; key: string; bucket: string; path: string; source_url: string; file: FileTuple | null; generation: string; avatar: boolean; kind?: MediaKind };
 
 // All failures have fixed, non-sensitive responses, including uncertain writes.
 class Failure extends Error {
@@ -101,7 +104,7 @@ function notificationSourcePath(value: unknown, bucket: string): string {
   if (!safeNotificationPath(path)) fail();
   return path;
 }
-function fileTuple(value: unknown, key: string, source: string, scope: Scope, avatar: boolean): FileTuple {
+function fileTuple(value: unknown, key: string, source: string, scope: MediaKind, avatar: boolean): FileTuple {
   if (!record(value) || !exact(value, ['key', 'source_url', 'bytes', 'sha256', 'content_type']) ||
     value.key !== key || value.source_url !== source || !Number.isSafeInteger(value.bytes) ||
     (value.bytes as number) < 1 || (value.bytes as number) > MAX_MEDIA_BYTES ||
@@ -132,7 +135,32 @@ async function archiveContext(value: unknown, action: string, key: string | null
   const file = value.file === null && action === 'download' ? null : fileTuple(value.file, value.key, value.source_url, 'archives', false);
   return { direction, key: value.key, bucket: ARCHIVE_BUCKET, path: value.path, source_url: value.source_url, file, generation: value.generation, avatar: false };
 }
+async function employeeSafetyContext(value: unknown, action: string, key: string, crypto: Pick<Crypto, 'subtle'>): Promise<Context> {
+  if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation', 'avatar', 'kind']) ||
+    value.direction !== 'export' || value.key !== key || typeof value.source_url !== 'string' ||
+    typeof value.bucket !== 'string' || typeof value.path !== 'string' ||
+    typeof value.avatar !== 'boolean' || (value.avatar && value.kind !== 'chat') ||
+    (value.kind !== 'verification' && value.kind !== 'chat' && value.kind !== 'notifications' && value.kind !== 'archives')) fail();
+  const identity = EMPLOYEE_SAFETY_IDENTITY.exec(value.source_url);
+  if (!identity || identity[0] !== value.source_url || value.generation !== identity[4]) fail();
+  if (value.kind === 'verification') {
+    if (value.bucket !== BUCKET || !safePath(value.path) || value.path.split('/')[1].slice(0, 36) !== identity[3]) fail();
+  } else if (value.kind === 'archives') {
+    if (value.bucket !== ARCHIVE_BUCKET || value.path.length > 512 ||
+      !/^[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/.test(value.path) ||
+      value.path !== value.path.trim() || value.path.includes('..')) fail();
+  } else {
+    if (!(value.kind === 'chat' ? CHAT_BUCKETS : NOTIFICATION_BUCKETS).has(value.bucket) || !safeNotificationPath(value.path) ||
+      value.path.length > 1024 || (value.bucket === 'super-customer-avatars' && (!value.path.startsWith('avatars/') || !value.avatar))) fail();
+  }
+  if (await digest(new TextEncoder().encode(value.source_url), crypto) !== key ||
+    await digest(new TextEncoder().encode(value.bucket + '/' + value.path), crypto) !== identity[7]) fail();
+  const file = value.file === null && action === 'download' ? null : fileTuple(value.file, key, value.source_url, value.kind, value.avatar);
+  return { direction: 'export', key, bucket: value.bucket, path: value.path, source_url: value.source_url,
+    file, generation: identity[4], avatar: value.avatar, kind: value.kind };
+}
 async function context(value: unknown, action: string, key: string, origin: string, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<Context> {
+  if (scope === 'employee-safety') return employeeSafetyContext(value, action, key, crypto);
   if (scope === 'archives') return archiveContext(value, action, key, crypto);
   const direction = action === 'download' || action === 'recheck-export' ? 'export' : 'import';
   if (!record(value) || !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation', ...(scope === 'chat' ? ['avatar'] : [])]) ||
@@ -222,7 +250,7 @@ function isMp4(bytes: Uint8Array): boolean {
   return false;
 }
 // Only byte signatures establish MIME; caller metadata is not evidence. Not a decoder/AV scan.
-function detectType(bytes: Uint8Array, scope: Scope): string {
+function detectType(bytes: Uint8Array, scope: MediaKind): string {
   const starts = (signature: number[], offset = 0) => signature.every((byte, index) => bytes[offset + index] === byte);
   if (bytes.length >= 3 && starts([0xff, 0xd8, 0xff])) return 'image/jpeg';
   if (bytes.length >= 8 && starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
@@ -235,7 +263,7 @@ function detectType(bytes: Uint8Array, scope: Scope): string {
   }
   fail(422, 'INVALID_MEDIA');
 }
-async function inspect(bytes: Uint8Array, ctx: Context, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<FileTuple> {
+async function inspect(bytes: Uint8Array, ctx: Context, crypto: Pick<Crypto, 'subtle'>, scope: MediaKind): Promise<FileTuple> {
   if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) fail(422, 'INVALID_MEDIA');
   const actual = { key: ctx.key, source_url: ctx.source_url, bytes: bytes.length, sha256: await digest(bytes, crypto), content_type: detectType(bytes, scope) };
   if (scope === 'archives' && !ARCHIVE_TYPES.has(actual.content_type)) fail(422, 'INVALID_MEDIA');
@@ -355,13 +383,16 @@ async function download(store: MediaStore, ctx: Context, requestSignal: AbortSig
     requestSignal.removeEventListener('abort', onRequestAbort);
   }
 }
-function receipt(file: FileTuple) {
-  return { success: true, key: file.key, bytes: file.bytes, sha256: file.sha256, content_type: file.content_type, full_site_complete: false };
+function receipt(file: FileTuple, scope: Scope) {
+  return { success: true, key: file.key, bytes: file.bytes, sha256: file.sha256, content_type: file.content_type, full_site_complete: false,
+    ...(scope === 'employee-safety' ? { complete_employee_backup: false, can_archive: false, can_replace: false } : {}) };
 }
-function validCommit(value: unknown, file: FileTuple): boolean {
-  return record(value) && exact(value, ['success', 'key', 'bytes', 'sha256', 'content_type', 'full_site_complete']) &&
+function validCommit(value: unknown, file: FileTuple, scope: Scope): boolean {
+  return record(value) && exact(value, ['success', 'key', 'bytes', 'sha256', 'content_type', 'full_site_complete',
+    ...(scope === 'employee-safety' ? ['complete_employee_backup', 'can_archive', 'can_replace'] : [])]) &&
     value.success === true && value.full_site_complete === false && value.key === file.key && value.bytes === file.bytes &&
-    value.sha256 === file.sha256 && value.content_type === file.content_type;
+    value.sha256 === file.sha256 && value.content_type === file.content_type &&
+    (scope !== 'employee-safety' || (value.complete_employee_backup === false && value.can_archive === false && value.can_replace === false));
 }
 
 export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencies): (request: Request) => Promise<Response> {
@@ -379,10 +410,11 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
       if (request.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       if (!origin || !crypto?.subtle) fail(500, 'TRANSFER_FAILED');
       const rawScope = request.headers.get('x-transfer-scope') ?? 'verification';
-      if (rawScope !== 'verification' && rawScope !== 'notifications' && rawScope !== 'chat' && rawScope !== 'archives') fail(400, 'INVALID_REQUEST');
+      if (rawScope !== 'verification' && rawScope !== 'notifications' && rawScope !== 'chat' && rawScope !== 'archives' && rawScope !== 'employee-safety') fail(400, 'INVALID_REQUEST');
       const scope: Scope = rawScope;
       const rpcs = RPCS[scope];
       const action = request.headers.get('x-transfer-action') ?? '';
+      if (scope === 'employee-safety' && action !== 'download' && action !== 'recheck-export') fail(400, 'INVALID_REQUEST');
       const admin = request.headers.get('x-admin-session-token') ?? '';
       if (scope === 'archives' && action === 'read') {
         if (!UUID_PATTERN.test(admin) || admin.length !== 36 || request.signal.aborted ||
@@ -423,6 +455,7 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
       const authorized = await deps.rpc(rpcs.authorize, args);
       if (authorized.error || authorized.data === null || authorized.data === undefined) fail(403, 'NOT_AUTHORIZED');
       const ctx = await context(authorized.data, action, key, origin, crypto, scope);
+      const kind = scope === 'employee-safety' ? ctx.kind! : scope;
       if (request.signal.aborted) fail(400, 'INVALID_REQUEST');
       let bytes: Uint8Array | undefined;
       let file: FileTuple;
@@ -430,7 +463,7 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
         const expected = ctx.file!;
         if (length !== null && length !== expected.bytes) fail(400, 'INVALID_REQUEST');
         bytes = await readBounded(request, expected.bytes, expected.bytes);
-        file = await inspect(bytes, ctx, crypto, scope);
+        file = await inspect(bytes, ctx, crypto, kind);
         if (request.signal.aborted) fail(400, 'INVALID_REQUEST');
         // The SDK cannot abort an upload; cancellation cannot promise a rollback.
         const uploaded = await deps.store.upload(ctx.bucket, ctx.path, bytes, { upsert: false, contentType: file.content_type });
@@ -439,19 +472,19 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
         if (request.signal.aborted) fail();
         // Readback may fail after storage wrote the object; never delete or fake rollback.
         const readback = await download(deps.store, ctx, request.signal);
-        const verified = await inspect(readback, ctx, crypto, scope);
+        const verified = await inspect(readback, ctx, crypto, kind);
         if (!sameFile(file, verified)) fail();
       } else {
         await readBounded(request, 0, 0);
         bytes = await download(deps.store, ctx, request.signal);
-        file = await inspect(bytes, ctx, crypto, scope);
+        file = await inspect(bytes, ctx, crypto, kind);
       }
       if (request.signal.aborted) fail();
       const committed = await deps.rpc(rpcs.commit, {
         ...args, p_bytes: file.bytes, p_sha256: file.sha256, p_content_type: file.content_type, p_storage_origin: origin,
         p_generation: ctx.generation, // Never reauthorize/refresh this after reading the object.
       });
-      if (committed.error || !validCommit(committed.data, file) || request.signal.aborted) fail();
+      if (committed.error || !validCommit(committed.data, file, scope) || request.signal.aborted) fail();
       if (action === 'download') {
         // A stream avoids Response(Uint8Array)'s additional full-size copy.
         const payload = bytes!;
@@ -459,7 +492,7 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
         return new Response(body, { headers: { ...CORS, 'Content-Type': 'application/octet-stream',
           'Content-Disposition': 'attachment', 'x-transfer-sha256': file.sha256, 'x-transfer-content-type': file.content_type } });
       }
-      return json(receipt(file));
+      return json(receipt(file, scope));
     } catch (error) {
       await cancelBody(request);
       const known = error instanceof Failure;
