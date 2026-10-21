@@ -12,6 +12,8 @@ BEGIN
   END IF;
   v_kind:=CASE p_kind WHEN 'shared-import' THEN 'import' WHEN 'products-import' THEN 'import'
     WHEN 'dispatch-import' THEN 'import' WHEN 'products-export' THEN 'export' WHEN 'dispatch-export' THEN 'export'
+    WHEN 'archives-export' THEN 'export' WHEN 'chat-export' THEN 'export' WHEN 'notifications-export' THEN 'export'
+    WHEN 'verification-export' THEN 'export' WHEN 'activity-export' THEN 'export' WHEN 'finance-export' THEN 'export'
     WHEN 'identity-export' THEN 'export' ELSE p_kind END;
   IF p_job_token IS NULL THEN RAISE EXCEPTION 'Employee transfer task is invalid or expired.';END IF;
   UPDATE private.employee_transfer_jobs SET last_activity_at=now()
@@ -28,6 +30,18 @@ BEGIN
     OR (p_kind='products-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'products-v1')
     OR (v_job.options->>'export_protocol'='dispatch-submission-v1' AND p_kind<>'dispatch-export')
     OR (p_kind='dispatch-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'dispatch-submission-v1')
+    OR (v_job.options->>'export_protocol'='site-archives-v1' AND p_kind<>'archives-export')
+    OR (p_kind='archives-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'site-archives-v1')
+    OR (v_job.options->>'export_protocol'='site-chat-v1' AND p_kind<>'chat-export')
+    OR (p_kind='chat-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'site-chat-v1')
+    OR (v_job.options->>'export_protocol'='site-notifications-v1' AND p_kind<>'notifications-export')
+    OR (p_kind='notifications-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'site-notifications-v1')
+    OR (v_job.options->>'export_protocol'='employee-verification-v1' AND p_kind<>'verification-export')
+    OR (p_kind='verification-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'employee-verification-v1')
+    OR (v_job.options->>'export_protocol'='employee-activity-v1' AND p_kind<>'activity-export')
+    OR (p_kind='activity-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'employee-activity-v1')
+    OR (v_job.options->>'export_protocol'='employee-finance-v1' AND p_kind<>'finance-export')
+    OR (p_kind='finance-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'employee-finance-v1')
     OR (v_job.options->>'export_protocol'='employee-identity-v1' AND p_kind<>'identity-export')
     OR (p_kind='identity-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'employee-identity-v1') THEN
     RAISE EXCEPTION 'The task protocol does not permit this operation.';
@@ -60,6 +74,8 @@ BEGIN
   END IF;
   v_prefix:=$q$WITH RECURSIVE selected_roles AS (
     SELECT id FROM public.simulated_customers WHERE target_employee_id=$1 OR $1=ANY(target_employee_ids)
+      OR (admin_id=(SELECT created_by FROM public.users WHERE id=$1) AND target_employee_id IS NULL
+        AND (target_employee_ids IS NULL OR cardinality(target_employee_ids)=0))
     UNION SELECT customer_id FROM public.customer_employee_conversations WHERE employee_id=$1
     UNION SELECT customer_id FROM public.customer_service_sessions WHERE employee_id=$1
     UNION SELECT customer_id FROM public.ccc_conversation_annotations WHERE employee_id=$1
@@ -128,7 +144,11 @@ BEGIN
       ELSE 'r.body->>''user_id''=$1::text' END;
   ELSIF p_key IN ('content_audit_events','content_audit_recipient_versions') THEN
     v_query:=private.employee_transfer_archives_query(p_key);
-    v_filter:=CASE p_key WHEN 'content_audit_events' THEN 'r.body->>''employee_id''=$1::text'
+    v_filter:=CASE p_key WHEN 'content_audit_events' THEN 'r.body->>''employee_id''=$1::text
+      OR (r.body->>''entity_type''=''notification'' AND (
+        r.body->>''entity_id'' IN (SELECT id::text FROM selected_messages)
+        OR r.body#>''{before_data,recipients}'' @> jsonb_build_array(jsonb_build_object(''recipient_id'',$1))
+        OR r.body#>''{after_data,recipients}'' @> jsonb_build_array(jsonb_build_object(''recipient_id'',$1))))'
       ELSE 'r.body->>''recipient_id''=$1::text' END;
   ELSIF p_key='orders_history' THEN
     v_query:='SELECT id,jsonb_build_object(''id'',id,''user_id'',user_id,''status'',status,''commission_amount'',commission_amount,
@@ -305,6 +325,28 @@ BEGIN
   RETURN jsonb_build_object('success',true,'scope','employee-safety-records','full_site_complete',false);
 END;
 $$;
+
+CREATE FUNCTION public.employee_safety_backup_stop_owned(p_admin_session_token uuid,p_admin_password text,
+  p_confirmation text,p_job_id uuid DEFAULT NULL)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp SET lock_timeout='2s' AS $$
+DECLARE v_admin uuid;v_username text;v_check jsonb;v_job private.employee_transfer_jobs%ROWTYPE;
+BEGIN
+  SELECT admin_id,admin_username INTO v_admin,v_username FROM private.employee_transfer_admin(p_admin_session_token);
+  IF p_confirmation IS DISTINCT FROM '確認停止員工備份任務' THEN RAISE EXCEPTION 'The employee safety stop confirmation is incorrect.';END IF;
+  v_check:=private.employee_transfer_verify_password(v_admin,v_username,p_admin_password);
+  IF v_check->'success' IS DISTINCT FROM 'true'::jsonb THEN RETURN v_check;END IF;
+  SELECT * INTO v_job FROM private.employee_transfer_jobs WHERE admin_id=v_admin AND kind='export' AND status='running'
+    AND options->>'export_protocol'='employee-safety-records-v1' AND (p_job_id IS NULL OR id=p_job_id) FOR UPDATE;
+  IF v_job.id IS NULL THEN RETURN jsonb_build_object('success',true,'cancelled',false,'job_id',NULL,
+    'scope','employee-safety-records','full_site_complete',false);END IF;
+  PERFORM private.employee_transfer_end_job(v_job,'cancelled',jsonb_build_object('scope','employee-safety-records',
+    'stopped_by_owner',true,'records_only',true,'complete_employee_backup',false,'can_archive',false,'can_replace',false));
+  RETURN jsonb_build_object('success',true,'cancelled',true,'job_id',v_job.id,'scope','employee-safety-records','full_site_complete',false);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.employee_safety_backup_stop_owned(uuid,text,text,uuid) FROM PUBLIC,anon,authenticated,service_role;
+GRANT EXECUTE ON FUNCTION public.employee_safety_backup_stop_owned(uuid,text,text,uuid) TO anon,authenticated;
 
 REVOKE ALL ON FUNCTION private.employee_safety_backup_keys(),private.employee_safety_backup_query(text),
   private.employee_safety_backup_catalog(uuid,uuid),private.employee_safety_backup_owner(uuid,uuid) FROM PUBLIC,anon,authenticated,service_role;

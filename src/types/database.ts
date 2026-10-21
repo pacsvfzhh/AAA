@@ -2512,6 +2512,10 @@ export interface Database {
         Args: { p_admin_session_token: string; p_source_site_id: string; p_package_id: string; p_snapshot_hash: string };
         Returns: import('../lib/employeeTransfer/archiveMedia').ArchiveMediaInventory;
       };
+      employee_safety_backup_stop_owned: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_confirmation: string; p_job_id?: string | null };
+        Returns: { success: true; cancelled: boolean; job_id: string | null; scope: 'employee-safety-records'; full_site_complete: false };
+      };
       employee_safety_backup_begin: {
         Args: { p_admin_session_token: string; p_admin_password: string; p_username: string };
         Returns: import('../lib/employeeTransfer/employeeSafetyBackup').EmployeeSafetyBackupBegin;
