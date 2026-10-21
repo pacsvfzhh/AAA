@@ -206,8 +206,10 @@ async function writeBundle(h, changes = {}) {
   await h.file.write(api.writeEncryptedVolume(entries(), metadata, PASS), new AbortController().signal);
 }
 
-// Keep this focused suite within 100 cases; grouped assertions do not inflate test counts.
 test('synthetic RPC bridge + REAL encrypted disk roundtrip preserves every one of the 48 raw tables', async t => {
+  assert.equal(Object.isFrozen(api.EMPLOYEE_BACKUP_PROJECTIONS), true);
+  for (const projection of Object.values(api.EMPLOYEE_BACKUP_PROJECTIONS)) assert.equal(Object.isFrozen(projection), true);
+  assert.throws(() => { api.EMPLOYEE_BACKUP_PROJECTIONS.accounts.password_hash = 'jsonb'; }, TypeError);
   const h = fixture(t, { pageSize: 2 }), result = await h.export();
   assert.equal(TABLES.length, 48); assert.equal(new Set(TABLES).size, 48);
   assert.deepEqual(TABLES, [...api.EMPLOYEE_BACKUP_TABLE_KEYS, ...api.CHAT_TABLE_KEYS, ...api.NOTIFICATIONS_TABLE_KEYS,
@@ -444,4 +446,49 @@ test('cancellation during final cleanup is not a successful saved backup and doe
 });
 test('workspace reuse cannot masquerade as independent authenticated readback', async t => {
   const h = fixture(t), source = await h.start(), w = h.createWorkspace(); await assert.rejects(api.exportEmployeeSafetyBackup(source, h.file, () => w, PASS, h.info)); cleaned(h);
+});
+function stopHarness(respond) {
+  const state = { session: SESSION, tokenReads: 0, calls: [], rpc(name, args) {
+    state.calls.push({ name, args });
+    const query = { abortSignal() { return query; }, then(resolve, reject) { return Promise.resolve().then(() => respond(name, args)).then(resolve, reject); } };
+    return query;
+  } };
+  api.setHarness(state); return state;
+}
+const stopReceipt = { success: true, cancelled: true, job_id: JOB, scope: 'employee-safety-records', full_site_complete: false };
+test('lost-token stop needs exact confirmation and password before dispatch', async () => {
+  const state = stopHarness(() => assert.fail('no dispatch'));
+  for (const [password, confirmation, job] of [['', '確認停止員工備份任務', null], [SECRET, 'wrong', null], [SECRET, '確認停止員工備份任務', 'not-an-id']]) {
+    await assert.rejects(api.stopOwnedEmployeeSafetyBackup(password, confirmation, job), e => redacted(e, 'stop'));
+  }
+  assert.equal(state.calls.length, 0);
+});
+test('explicit lost-token stop sends no job token and accepts only server-confirmed result', async () => {
+  const state = stopHarness(() => ({ data: stopReceipt, error: null }));
+  assert.deepEqual(await api.stopOwnedEmployeeSafetyBackup(SECRET, '確認停止員工備份任務'), { success: true, cancelled: true, jobId: JOB, fullSiteComplete: false });
+  assert.equal(state.calls.length, 1); assert.equal(state.calls[0].name, 'employee_safety_backup_stop_owned');
+  assert.deepEqual(state.calls[0].args, { p_admin_session_token: SESSION, p_admin_password: SECRET, p_confirmation: '確認停止員工備份任務', p_job_id: null });
+});
+test('owner stop does not reinterpret a false response as cancellation', async () => {
+  stopHarness(() => ({ data: { ...stopReceipt, cancelled: false, job_id: null }, error: null }));
+  assert.equal((await api.stopOwnedEmployeeSafetyBackup(SECRET, '確認停止員工備份任務', JOB)).cancelled, false);
+});
+test('owner stop rejects mismatched ids and malformed receipts without echoing sensitive errors', async () => {
+  for (const receipt of [{ ...stopReceipt, job_id: OTHER }, { ...stopReceipt, cancelled: false }, { ...stopReceipt, full_site_complete: true }, { ...stopReceipt, extra: SECRET }]) {
+    const state = stopHarness(() => ({ data: receipt, error: null }));
+    await assert.rejects(api.stopOwnedEmployeeSafetyBackup(SECRET, '確認停止員工備份任務', JOB), e => redacted(e, 'stop'));
+    assert.equal(state.calls.length, 1);
+  }
+});
+test('owner stop response loss or permission failure is uncertain and never automatically retried', async () => {
+  for (const respond of [() => { throw new Error(SECRET); }, () => ({ data: null, error: { message: SECRET } })]) {
+    const state = stopHarness(respond);
+    await assert.rejects(api.stopOwnedEmployeeSafetyBackup(SECRET, '確認停止員工備份任務'), e => { redacted(e, 'stop'); assert.equal(e.outcomeUnknown, true); return true; });
+    assert.equal(state.calls.length, 1);
+  }
+});
+test('already-cancelled owner stop performs no RPC', async () => {
+  const state = stopHarness(() => assert.fail('no dispatch')), controller = new AbortController(); controller.abort();
+  await assert.rejects(api.stopOwnedEmployeeSafetyBackup(SECRET, '確認停止員工備份任務', null, controller.signal), e => { redacted(e, 'stop'); assert.equal(e.cancelled, true); return true; });
+  assert.equal(state.calls.length, 0);
 });

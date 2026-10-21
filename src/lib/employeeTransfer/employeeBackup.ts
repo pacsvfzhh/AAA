@@ -44,6 +44,8 @@ export const EMPLOYEE_BACKUP_PROJECTIONS: Projection = {
   dispatch_group_members: { id: 'uuid!', group_id: 'uuid!', user_id: 'uuid!', assigned_by: 'uuid', assigned_at: 'timestamp with time zone' },
   employee_submit_time_settings: { id: 'uuid!', user_id: 'uuid!', group_id: 'uuid', min_seconds: 'integer', max_seconds: 'integer', created_at: 'timestamp with time zone' },
 };
+for (const projection of Object.values(EMPLOYEE_BACKUP_PROJECTIONS)) Object.freeze(projection);
+Object.freeze(EMPLOYEE_BACKUP_PROJECTIONS);
 export interface EmployeeBackupCatalog {
   version: 1; protocol: typeof EMPLOYEE_BACKUP_PROTOCOL; scope: 'employee-replacement-records';
   job_id: string; source_site_id: string; package_id: string; target_site_id: string;

@@ -15,8 +15,7 @@ import { Sha256 } from './sha256';
 export const EMPLOYEE_SAFETY_BACKUP_PROTOCOL = 'employee-safety-records-v1';
 export const EMPLOYEE_SAFETY_BACKUP_CATALOG_PATH = 'data/employee-safety-backup-catalog.ndjson';
 const DISPATCH_KEYS = ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders', 'valid_order_data', 'used_order_data'] as const;
-// orders_history has completed_at, not orders' commission_rate/processed_at.
-// Override only the validation projection; never synthesize or rewrite record fields.
+// History has completed_at, not the live order's rate/processed_at.
 const ORDERS_HISTORY_PROJECTIONS = {
   ...EMPLOYEE_BACKUP_PROJECTIONS,
   orders: { id: 'uuid!', user_id: 'uuid!', status: 'text!', commission_amount: 'numeric',
@@ -51,7 +50,6 @@ export interface EmployeeSafetyBackupBegin {
 export interface EmployeeSafetyBackupSession extends EmployeeSafetyBackupSource {
   begin(signal?: AbortSignal): Promise<EmployeeSafetyBackupBegin>;
   identity(): Readonly<EmployeeSafetyBackupIdentity> | null;
-  // Only after exportEmployeeSafetyBackup has saved, authenticated, rechecked and cleaned up.
   close(catalog: EmployeeSafetyBackupCatalog, signal?: AbortSignal): Promise<unknown>;
 }
 export type EmployeeSafetyBackupPhase = 'begin' | 'catalog' | 'page' | 'verify' | 'close' | 'stop' | 'records-export'
@@ -172,8 +170,6 @@ function cursor(key: EmployeeSafetyBackupTableKey, value: unknown): string {
 function ordered(key: EmployeeSafetyBackupTableKey, id: string, previous: string | null): boolean {
   return previous === null || (key === 'wallet_ledger_entries' || key === 'wallet_reconciliation_audit' ? BigInt(id) > BigInt(previous) : id > previous);
 }
-// Administrators have only six non-secret fields. Check duplicate/escaped-equivalent JSON keys
-// on original text; never stringify data rows, even for validation.
 function adminRow(line: string): string {
   const row = object(JSON.parse(line), ['id', 'username', 'role', 'parent_id', 'created_at', 'updated_at']);
   const seen = new Set<string>();
@@ -203,8 +199,7 @@ export function validateEmployeeSafetyBackupRow(line: string, key: EmployeeSafet
   else if (key === 'orders_history') id = validateEmployeeBackupRow(line, 'orders', { ...core, projections: ORDERS_HISTORY_PROJECTIONS });
   else id = adminRow(line);
   const row = JSON.parse(line) as Record<string, unknown>;
-  // accounts/employee_login_history.employee_id is the historical employee NUMBER,
-  // not its UUID. Login history still belongs to the employee through user_id.
+  // These two employee_id fields are employee numbers, not account UUIDs.
   for (const field of ['user_id', 'employee_id', 'recipient_id']) {
     if (field === 'employee_id' && (key === 'accounts' || key === 'employee_login_history')) continue;
     if (field === 'employee_id' && key === 'content_audit_events' && row.entity_type === 'notification' && row.employee_id === null) continue;
@@ -499,7 +494,6 @@ export async function exportEmployeeSafetyBackup(
 export interface AuthenticatedEmployeeSafetyBackup {
   readonly catalog: EmployeeSafetyBackupCatalog;
   readonly manifest: VolumeManifest;
-  // No append, DB recovery or media API. The handle and previously opened streams expire at callback end.
   open(path: string): TransferByteSource;
 }
 export async function withAuthenticatedEmployeeSafetyBackup<T>(
@@ -510,8 +504,7 @@ export async function withAuthenticatedEmployeeSafetyBackup<T>(
   const run = new Run(options, createWorkspace), signal = run.signal;
   return run.finish(async () => {
     const workspace = run.workspace();
-    // Header identity is untrusted until complete EOF authentication. Reopening with the
-    // same expected identity also rejects a file adapter swapping volumes between reads.
+    // Header identity is not trusted until complete ciphertext authentication.
     const expectedMetadata = options.expectedMetadata ?? await readTransferMetadata(read(file.open(), signal), signal);
     const scan = new CipherScan(), stream = scan.read(file.open(), signal);
     let manifest: VolumeManifest;

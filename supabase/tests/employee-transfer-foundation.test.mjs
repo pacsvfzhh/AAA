@@ -347,7 +347,7 @@ async function exerciseRealReplay() {
   try {
     const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql')).sort();
     assert.deepEqual(files, diskFiles, 'must replay every migration, including future additions');
-    assert.equal(files.length, 572, 'migration baseline changed: review all additions, never expand known failures');
+    assert.equal(files.length, 573, 'migration baseline changed: review all additions, never expand known failures');
     assert.deepEqual(failures, expectedFailures);
     assert.equal(validation.freshDatabaseVerified, false);
     for (const file of criticalMigrations) {
