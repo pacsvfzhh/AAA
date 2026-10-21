@@ -5,7 +5,7 @@ import { MAX_CONTAINER_INPUT_BYTES } from './container';
 
 export interface BrowserTransferDirectory {
   createFile(name: string): ReplacementBackupFile;
-  writeText(name: string, text: string): Promise<void>;
+  writeText(name: string, text: string, signal?: AbortSignal): Promise<void>;
   name: string;
 }
 
@@ -178,7 +178,7 @@ export async function pickTransferDirectory(): Promise<BrowserTransferDirectory>
   return {
     name,
     createFile,
-    async writeText(filename, text) {
+    async writeText(filename, text, signal) {
       const file = createFile(filename);
       if (typeof text !== 'string') throw new Error('Transfer text must be a string.');
       await file.write((async function* () {
@@ -188,7 +188,7 @@ export async function pickTransferDirectory(): Promise<BrowserTransferDirectory>
           yield encoder.encode(text.slice(offset, end));
           offset = end;
         }
-      })());
+      })(), signal);
     },
   };
 }

@@ -81,7 +81,7 @@ before(async () => {
       window.__h={calls:[],forbidden:[],reports:[],approvals:[],imports:0};const r=createRoot(document.getElementById('root'));window.__unmount=()=>r.unmount();r.render(<Page/>);`, resolveDir: root, loader: 'tsx' },
     bundle: true, write: false, platform: 'browser', format: 'esm', jsx: 'automatic',
     plugins: [{ name: 'isolated-ui-boundaries', setup(builder) {
-      builder.onResolve({ filter: /employeeTransfer\/(siteTransfer|siteImport|browserStorage)$/ }, () => ({ path: 'transfer-ui-mocks', namespace: 'mock' }));
+      builder.onResolve({ filter: /employeeTransfer\/(siteTransfer|siteImport|browserStorage|employeeSafetyBackup)$/ }, () => ({ path: 'transfer-ui-mocks', namespace: 'mock' }));
       builder.onLoad({ filter: /.*/, namespace: 'mock' }, () => ({ contents: mocks }));
     } }],
   });

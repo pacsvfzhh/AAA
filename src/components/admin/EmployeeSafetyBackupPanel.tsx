@@ -5,6 +5,7 @@ import {
   EmployeeSafetyBackupError, type EmployeeSafetyBackupPhase, type EmployeeSafetyBackupResult,
 } from '../../lib/employeeTransfer/employeeSafetyBackup';
 import { createBrowserWorkspaceFactory, pickTransferDirectory, type BrowserTransferDirectory } from '../../lib/employeeTransfer/browserStorage';
+import { dispatchTransferChecks } from '../../lib/employeeTransfer/dispatchTransfer';
 
 interface Props {
   disabled: boolean;
@@ -42,7 +43,7 @@ export default function EmployeeSafetyBackupPanel({ disabled, supported, onBusyC
   const [acknowledged, setAcknowledged] = useState(false);
   const [directory, setDirectory] = useState<BrowserTransferDirectory | null>(null);
   const [outputDirectory, setOutputDirectory] = useState<string | null>(null);
-  const [status, setStatus] = useState<'idle' | 'selecting' | 'running' | 'cancelling' | 'stopping'>('idle');
+  const [status, setStatus] = useState<'idle' | 'selecting' | 'running' | 'cancelling' | 'stopping' | 'reporting'>('idle');
   const [attempted, setAttempted] = useState(false);
   const [pending, setPending] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -55,19 +56,20 @@ export default function EmployeeSafetyBackupPanel({ disabled, supported, onBusyC
   const [stopConfirmation, setStopConfirmation] = useState('');
   const mounted = useRef(false);
   const operation = useRef<AbortController | null>(null);
+  const reportOperation = useRef<AbortController | null>(null);
   const busy = status !== 'idle';
   const validName = username.length > 0 && username === username.trim() && Array.from(username).length <= 256;
-  const ready = !disabled && supported && !busy && !attempted && directory !== null && validName && password.length > 0
+  const ready = !disabled && supported && !busy && !pending && !attempted && directory !== null && validName && password.length > 0
     && Array.from(passphrase).length >= 14 && passphrase === confirmation && acknowledged;
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; operation.current?.abort(); };
+    return () => { mounted.current = false; operation.current?.abort(); reportOperation.current?.abort(); };
   }, []);
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
   useEffect(() => { onPendingChange(pending); }, [pending, onPendingChange]);
 
   const chooseDirectory = async () => {
-    if (disabled || !supported || operation.current || attempted) return;
+    if (disabled || !supported || operation.current || pending || attempted) return;
     const controller = new AbortController(); operation.current = controller;
     setStatus('selecting'); setDirectory(null); setNotice(null);
     try {
@@ -128,16 +130,20 @@ export default function EmployeeSafetyBackupPanel({ disabled, supported, onBusyC
       if (mounted.current) setNotice(`本次員工記錄備份未能確認全部完成${saved ? '；加密記錄已核驗，但結束任務的結果未確認' : ''}。可能是接口尚未部署、驗證失敗、來源變動、檔案或連線問題。請先核對「紀錄」及下方本人停止入口，不要重跑代替續接。${retention}`);
     } finally {
       secret = ''; key = '';
+      const reporting = new AbortController(); reportOperation.current = reporting;
+      if (!mounted.current) reporting.abort();
+      else setStatus('reporting');
       try {
-        await selected.writeText('employee-records-report.json', JSON.stringify({
+        await dispatchTransferChecks.withSignal(() => selected.writeText('employee-records-report.json', JSON.stringify({
           version: 1, protocol: 'employee-safety-records-v1', startedAtUTC: startedAt, finishedAtUTC: new Date().toISOString(),
           status: closed ? 'verified-records-and-task-closed' : 'unconfirmed', jobId: knownJob,
           receipt: saved, lastProgress, encryptedFileState: fileState, temporaryPlaintextCleanupUnconfirmed: cleanupRequired,
           taskCloseConfirmed: closed, recordsOnly: true, mediaIncluded: false, completeEmployeeBackup: false,
           canArchive: false, canReplace: false, fullSiteComplete: false, rollbackConfirmed: false,
-        }, null, 2));
+        }, null, 2), reporting.signal), reporting.signal);
         if (mounted.current) setReport('saved');
       } catch { if (mounted.current) setReport('failed'); }
+      if (reportOperation.current === reporting) reportOperation.current = null;
       if (operation.current === controller) operation.current = null;
       if (mounted.current) setStatus('idle');
     }
@@ -179,7 +185,7 @@ export default function EmployeeSafetyBackupPanel({ disabled, supported, onBusyC
       {!supported && <p className="mt-2 text-sm text-amber-200">加密保存及回讀需要安全連線、目錄選擇與瀏覽器私有暫存，請使用桌面版 Chrome 或 Edge。</p>}
     </div>
     <form onSubmit={event => void start(event)}>
-      <fieldset disabled={disabled || busy || attempted || !supported} className="space-y-3 disabled:opacity-60">
+      <fieldset disabled={disabled || busy || pending || attempted || !supported} className="space-y-3 disabled:opacity-60">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block text-sm" htmlFor="employee-safety-username">新站員工完整用戶名<input id="employee-safety-username" value={username} autoComplete="off" spellCheck={false} onChange={event => { setUsername(event.target.value); setAcknowledged(false); }} required aria-describedby="employee-safety-name-help" aria-invalid={username.length > 0 && !validName} className={input} /></label>
           <label className="block text-sm" htmlFor="employee-safety-password">目前超級管理員密碼<input id="employee-safety-password" type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} className={input} /></label>
@@ -196,8 +202,9 @@ export default function EmployeeSafetyBackupPanel({ disabled, supported, onBusyC
       <button type="submit" disabled={!ready} className={`${button} mt-4 border-cyan-700 bg-cyan-950`}><Download className="h-4 w-4" aria-hidden="true" />開始獨立員工記錄備份</button>
     </form>
     {busy && <div role="status" className="rounded-lg border border-cyan-800 p-3 text-sm text-cyan-100">
-      <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />{status === 'selecting' ? '正在選擇保存目錄' : status === 'stopping' ? '正在確認本人任務停止結果' : status === 'cancelling' ? '正在停止本機處理，結果尚待核對' : '員工記錄備份執行中'}</p>
+      <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />{status === 'selecting' ? '正在選擇保存目錄' : status === 'stopping' ? '正在確認本人任務停止結果' : status === 'reporting' ? '正在保存結果報告（不改變備份或任務結果）' : status === 'cancelling' ? '正在停止本機處理，結果尚待核對' : '員工記錄備份執行中'}</p>
       <p className="mt-2 text-xs">切換後台頁籤不會中斷任務；請勿重新整理、登出、關閉或讓裝置休眠。不估算百分比或完成時間。</p>
+      {status === 'reporting' && <button type="button" className={`${button} mt-3`} onClick={() => reportOperation.current?.abort()}>停止等待報告保存</button>}
       {status === 'running' && <button type="button" className={`${button} mt-3`} onClick={() => { setStatus('cancelling'); operation.current?.abort(); }}><Square className="h-4 w-4" aria-hidden="true" />停止本機備份處理</button>}
     </div>}
     {progress && <dl aria-label="員工備份實際進度" className="grid gap-3 text-sm sm:grid-cols-3">{[['目前階段', phases[progress.phase] ?? '核對記錄'], ['已確認記錄', count(progress.rows)], ['已處理位元組', count(progress.bytes)]].map(([label, value]) => <div key={label} className="min-w-0 rounded-lg bg-slate-950 p-3"><dt className="text-xs text-slate-400">{label}</dt><dd className="mt-1 break-words text-cyan-100">{value}</dd></div>)}</dl>}
@@ -210,7 +217,7 @@ export default function EmployeeSafetyBackupPanel({ disabled, supported, onBusyC
       <p className="break-all font-mono text-xs">{result.filename}</p><p className="break-all font-mono text-xs">SHA-256：{result.cipherSha256}</p>
       <p className="text-amber-200">附件未備份 · 完整恢復未驗證 · 封存與覆蓋保持阻擋</p>
     </div>}
-    {report && <p role={report === 'failed' ? 'alert' : 'status'} className={`text-sm ${report === 'failed' ? 'text-amber-200' : 'text-slate-300'}`}>{report === 'saved' ? '白名單結果報告已保存：employee-records-report.json（時間為 UTC）。不含用戶名、密碼、口令、任務令牌或記錄原文。' : '結果報告保存失敗；不代表已保存的加密檔案失效、任務未結束或業務回滾。請記下頁面任務編號與檔案摘要並核對磁碟，不要因此重新備份。'}</p>}
+    {report && <p role={report === 'failed' ? 'alert' : 'status'} className={`text-sm ${report === 'failed' ? 'text-amber-200' : 'text-slate-300'}`}>{report === 'saved' ? '白名單結果報告已保存：employee-records-report.json（時間為 UTC）。不含用戶名、密碼、口令、任務令牌或記錄原文。' : '結果報告保存失敗或已停止等待，可能仍有未確認的報告檔案；不代表已保存的加密檔案失效、任務未結束或業務回滾。請記下頁面任務編號與檔案摘要並核對磁碟，不要因此重新備份。'}</p>}
     {pending && !busy && <p className="text-sm font-semibold text-amber-200">員工備份任務結果尚未確認，其他導出與導入已鎖定；請先查核紀錄，必要時使用下方本人停止入口。</p>}
     {attempted && !pending && !busy && <button type="button" className={button} disabled={disabled} onClick={reset}>核對原檔案後，準備另一份新備份</button>}
     <details className="rounded-lg border border-slate-700 p-3">
