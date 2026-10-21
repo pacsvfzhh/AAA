@@ -11,8 +11,7 @@ import { replayMigrations, EXPECTED_REPLAY_FAILURES } from './support/replay-mig
 import { adminLogin, rpc as baseRpc, rows, scalar } from './support/transfer-harness.mjs';
 import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 
-// Real historical PGlite replay + real password/begin and role-based SQL calls.
-// Service receipts below are synthetic byte attestations, NOT Storage/native PG acceptance.
+// Synthetic receipts cannot prove Storage/native PostgreSQL acceptance.
 const PREVIOUS = '20261102000046_backup_employee_before_restore.sql';
 const MIGRATION = '20261102000047_backup_employee_media.sql';
 const INVENTORY = 'get_employee_safety_backup_media', VERIFY = 'employee_safety_backup_media_verify';
@@ -53,7 +52,7 @@ async function rpc(name, args, role = 'anon') {
     await db.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); throw error;
   }
 }
-// Privileged local fixture edits restore exact trigger modes; NEVER forge jobs/tokens/begins.
+// Restore trigger modes so fixtures cannot weaken the guards.
 async function change(relation, sql, params = []) {
   const point = `media_fixture_${++sequence}`; await db.exec(`SAVEPOINT ${point}`);
   try {
@@ -81,7 +80,7 @@ const tables = () => rows(db, `SELECT c.oid::text AS oid,c.relname,c.relacl::tex
   WHERE c.relnamespace IN ('public'::regnamespace,'private'::regnamespace) AND c.relkind IN ('r','p') ORDER BY c.oid`);
 async function evidenceEdit(sql, params) { return change('private.content_audit_events', sql, params); }
 async function tamper(job, value) {
-  // Only this negative test writes a malformed sidecar, as privileged local corruption.
+  // Privileged corruption tests the read-side trust boundary.
   await db.query("UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{employee_safety_media}',$2::jsonb) WHERE id=$1", [job.job_id, JSON.stringify(value)]);
 }
 async function assertBadSidecar(job, value) {
@@ -99,7 +98,6 @@ before(async () => {
   }
   replay = await replayMigrations({ upTo: PREVIOUS, strict: true }); db = replay.db;
   beforeDefinitions = await definitions(); beforeTables = await tables();
-  // Execute actual SQL47 after the exact strict historical baseline; no foundation edits.
   await db.exec(await readFile(new URL(`../migrations/${MIGRATION}`, import.meta.url), 'utf8'));
   await db.exec('BEGIN');
   try {
@@ -182,19 +180,33 @@ test('SQL47: scoped inventory has exact public contract, four kinds and no forei
   assert.deepEqual([...new Set(result.files.map(f => f.kind))].sort(), ['archives', 'chat', 'notifications', 'verification']);
   for (const f of result.files) assert.deepEqual(Object.keys(f).sort(), ['key','source_url','bucket','path','kind','avatar','file'].sort());
   assert.ok(result.files.every(f => f.file === null)); assert.deepEqual(result.files.map(f => f.key), result.files.map(f => f.key).sort());
-  assert.doesNotMatch(JSON.stringify(result.files), /other-safety|foreign\/|foreign\.invalid|customer-avatar:|origin/);
+  assert.doesNotMatch(JSON.stringify(result.files), /https?:|other-safety|foreign\/|foreign\.invalid|customer-avatar:|origin/);
   assert.equal(result.files.filter(f => f.kind === 'archives').length, 2);
 }));
 
 test('SQL47: opaque per-row identity follows exact line/ref/bucket hash contract', () => transaction(async () => {
   const job = await begin(), result = await inventory(job);
-  const query = await scalar(db, 'SELECT private.employee_safety_backup_query($1)', ['content_audit_events']);
-  const row = (await rows(db, `SELECT id,body::text||E'\n' AS line FROM (${query}) r`, [TARGET]))[0];
-  const path = `events/${id(40)}/proof.png`;
-  const identity = `employee-safety-media-v1:${job.catalog.site_id}:${job.job_id}:${TARGET}:${job.catalog.fingerprint}:${sha(row.line)}:${sha(`content_audit_events:${row.id}:media_refs:${EVIDENCE_KEY}`)}:${sha(`content-audit-evidence/${path}`)}`;
-  assert.deepEqual(result.files.find(f => f.key === sha(identity)), { key: sha(identity), source_url: identity, bucket: 'content-audit-evidence', path, kind: 'archives', avatar: false, file: null });
-  // Same public object intentionally has different identities across row/field, not URL hashing.
-  assert.equal(result.files.filter(f => f.source_url === CHAT_URL).length, 12);
+  for (const [table, rowId, field, original, bucket, path, kind, avatar] of [
+    ['verification_requests', id(10), 'id_front_url', DOC, 'verification-documents', `id-front/${TARGET}-front.png`, 'verification', false],
+    ['simulated_customers', id(20), 'custom_avatar_url', AVATAR, 'super-customer-avatars', 'avatars/role.png', 'chat', true],
+    ['customer_employee_conversations', id(25), 'message_content', CHAT_URL, 'chat-images', 'shared/photo.png', 'chat', false],
+    ['messages', id(32), 'content', CHAT_URL, 'chat-images', 'shared/photo.png', 'notifications', false],
+    ['content_audit_events', id(40), 'media_refs', EVIDENCE_KEY, 'content-audit-evidence', `events/${id(40)}/proof.png`, 'archives', false],
+  ]) {
+    const query = await scalar(db, 'SELECT private.employee_safety_backup_query($1)', [table]);
+    const row = (await rows(db, `SELECT id,body::text||E'\n' AS line FROM (${query}) r WHERE id=$2`, [TARGET, rowId]))[0];
+    const identity = `employee-safety-media-v1:${job.catalog.site_id}:${job.job_id}:${TARGET}:${job.catalog.fingerprint}:${sha(row.line)}:${sha(`${table}:${row.id}:${field}:${original}`)}:${sha(`${bucket}/${path}`)}`;
+    assert.deepEqual(result.files.find(f => f.key === sha(identity)), { key: sha(identity), source_url: identity, bucket, path, kind, avatar, file: null });
+  }
+  for (const ref of result.files) {
+    const identity = ref.source_url.split(':');
+    assert.equal(identity.length, 8);
+    assert.deepEqual(identity.slice(0, 5), ['employee-safety-media-v1', job.catalog.site_id, job.job_id, TARGET, job.catalog.fingerprint]);
+    assert.match(identity[5], /^[0-9a-f]{64}$/); assert.match(identity[6], /^[0-9a-f]{64}$/);
+    assert.equal(identity[7], sha(`${ref.bucket}/${ref.path}`)); assert.equal(sha(ref.source_url), ref.key);
+  }
+  const shared = result.files.filter(f => f.bucket === 'chat-images' && f.path === 'shared/photo.png');
+  assert.equal(shared.length, 12); assert.equal(new Set(shared.map(f => f.source_url)).size, 12);
   assert.ok(!result.files.some(f => f.key === sha(CHAT_URL)));
 }));
 
@@ -250,8 +262,14 @@ test('SQL47: protocols cannot cross into old media, transfer finish or import', 
 }));
 
 test('SQL47: service context is exact and recheck refuses before download', () => transaction(async () => {
-  const job = await begin(), ref = (await inventory(job)).files.find(f => f.kind === 'archives');
-  assert.deepEqual(await authorize(job, ref), { direction: 'export', ...ref, generation: job.catalog.fingerprint });
+  const job = await begin(), refs = (await inventory(job)).files;
+  for (const kind of ['verification', 'chat', 'notifications', 'archives']) {
+    const ref = refs.find(f => f.kind === kind), context = await authorize(job, ref);
+    assert.deepEqual(context, { direction: 'export', ...ref, generation: job.catalog.fingerprint });
+    assert.equal(sha(context.source_url), context.key); assert.equal(context.generation, context.source_url.split(':')[4]);
+    assert.equal(sha(`${context.bucket}/${context.path}`), context.source_url.split(':')[7]);
+  }
+  const ref = refs.find(f => f.kind === 'archives');
   await assert.rejects(authorize(job, ref, 'recheck-export'), /before rechecking/);
   await assert.rejects(commit(job, ref, 'recheck-export'), /before rechecking/);
   for (const key of [null, 'x'.repeat(64), ref.path, '0'.repeat(64)]) await assert.rejects(authorize(job, { key }), /key|outside/);
@@ -267,7 +285,6 @@ test('SQL47: real service SQL download/recheck merges all receipts and keeps rec
   assert.deepEqual(row.summary.employee_safety_catalog, original.summary.employee_safety_catalog);
   assert.deepEqual(row.options, original.options); assert.equal(row.last_activity_at, original.last_activity_at);
   assert.ok(state.refs.every(f => f.origin === ORIGIN));
-  // Repeated download cannot downgrade an already checked, byte-identical receipt.
   await commit(job, refs[0]); assert.equal((await verify(job)).verified, true);
   const after = await jobRow(job); await db.exec('SET TRANSACTION READ ONLY');
   assert.deepEqual(await verify(job), await inventory(job)); assert.deepEqual(await jobRow(job), after);
@@ -285,7 +302,6 @@ test('SQL47: unchecked download is pending, repeated tuple is immutable, generat
 }));
 
 test('SQL47: private-only evidence acquires origin once and never exposes opaque original keys', () => transaction(async () => {
-  // Remove public attachment sources through real scoped fixture rows BEFORE real begin.
   for (const [relation, field, condition] of [
     ['public.verification_requests', 'id_front_url=NULL,id_back_url=NULL,selfie_url=NULL', 'true'],
     ['public.simulated_customers', 'custom_avatar_url=NULL', 'true'],
@@ -419,7 +435,7 @@ test('SQL47: archive manifests require object, safe private path and uncleared e
 
 test('SQL47: 3000 per-row references is a hard cap, without truncation or task writes', () => transaction(async () => {
   const refs = Object.fromEntries(Array.from({ length: 3001 }, (_, n) => [`opaque-${n}`, `proof/${n}.png`]));
-  // Distribute over small SQL46 rows (each source line <=64KiB), not one invalid giant row.
+  // Keep rows below 64KiB so this reaches the reference-count limit.
   await evidenceEdit("UPDATE private.content_audit_events SET media_refs='{}' WHERE id=$1", [id(40)]);
   for (let offset = 0; offset < 3001; offset += 300) {
     await db.query(`INSERT INTO private.content_audit_events(id,operation_id,entity_type,entity_id,action,owner_admin_id,

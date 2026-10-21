@@ -1,8 +1,6 @@
 BEGIN;
 SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
--- Additive, export-only sidecar in the SAME SQL46 task. No SQL46 catalog/close changes,
--- business writes, staging tables, Storage policy, maintenance permit or import authority.
 CREATE FUNCTION private.employee_safety_media_hash(p_text text)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
@@ -28,9 +26,7 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
     ELSE ARRAY[]::text[] END;
 $$;
 
--- Unreviewed fields are NOT another media container. Recursively fail closed, including
--- decoded JSON strings/keys. Audit before/after snapshots alone are exempt: their original
--- public URLs are historical text; only the event's private media_refs authorize evidence.
+-- Audit snapshots are historical; only media_refs authorize evidence.
 CREATE FUNCTION private.employee_safety_media_guard(p_value jsonb)
 RETURNS void LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
@@ -63,7 +59,7 @@ BEGIN
 END;
 $$;
 
--- Strict public Storage parser, not a fetch target. Edge uses its fixed origin + bucket/path.
+-- Downloads use configured Storage coordinates, never source URLs.
 CREATE FUNCTION private.employee_safety_media_public(p_url text,p_kind text,p_employee uuid,p_avatar boolean)
 RETURNS jsonb LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
@@ -110,8 +106,7 @@ BEGIN
 END;
 $$;
 
--- ONLY SQL46's fixed employee-scoped projections are queried. No domain/job-wide inventory.
--- One identity per row/field/original reference; duplicate tokens in the SAME field deduplicate.
+-- SQL46 projections prevent unrelated employees from entering the inventory.
 CREATE FUNCTION private.employee_safety_media_refs(p_job private.employee_transfer_jobs,p_private_origin text)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
@@ -140,7 +135,7 @@ BEGIN
             OR (v_ref.value#>>'{}') ~ '[[:cntrl:]]'
             OR (v_ref.value#>>'{}') !~ '^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$'
             OR strpos(v_ref.value#>>'{}','..')>0 THEN RAISE EXCEPTION 'Unsafe employee safety evidence path.';END IF;
-          -- The original event/ref key is opaque evidence, NEVER a URL destination or scanned.
+          -- Original evidence keys must never become download destinations.
           v_candidates:=v_candidates||jsonb_build_array(jsonb_build_object('field','media_refs','original',v_ref.key,
             'bucket','content-audit-evidence','path',v_ref.value,'kind','archives','avatar',false,'origin',p_private_origin));
         END LOOP;
@@ -163,7 +158,7 @@ BEGIN
             v_candidates:=v_candidates||jsonb_build_array(v_candidate||jsonb_build_object('field',v_field,'original',v_url));
             v_residual:=replace(v_residual,v_url,'');
           END LOOP;
-          -- The tokenizer handles attributes. Also reject unparsed/encoded/plain media tokens.
+          -- Fail closed when tokenization cannot account for a media reference.
           IF v_residual ~* '(storage|supabase|verification-documents|announcement-images|chat-images|template-images|super-customer-avatars|content-audit-evidence|base64)'
             OR v_residual ~* '(data|blob)[[:space:]]*:'
             OR v_residual ~* 'https?[^[:space:]<>"'']*[.](jpe?g|png|gif|webp|pdf|mp4|webm|svg|avif|heic|zip)($|[?#[:space:]<>"''])' THEN
@@ -178,8 +173,7 @@ BEGIN
           private.employee_safety_media_hash(v_table||':'||v_row.id||':'||(v_candidate->>'field')||':'||v_original)||':'||
           private.employee_safety_media_hash((v_candidate->>'bucket')||'/'||(v_candidate->>'path'));
         v_key:=private.employee_safety_media_hash(v_identity);
-        v_candidate:=(v_candidate-ARRAY['field','original'])||jsonb_build_object('key',v_key,
-          'source_url',CASE WHEN v_candidate->>'kind'='archives' THEN v_identity ELSE v_original END);
+        v_candidate:=(v_candidate-ARRAY['field','original'])||jsonb_build_object('key',v_key,'source_url',v_identity);
         IF v_candidate->>'kind'<>'archives' THEN
           IF v_origin IS NOT NULL AND v_origin IS DISTINCT FROM v_candidate->>'origin' THEN
             RAISE EXCEPTION 'Employee safety media spans different Storage origins.';
@@ -198,7 +192,7 @@ BEGIN
   IF p_private_origin IS NOT NULL AND v_origin IS NOT NULL AND p_private_origin IS DISTINCT FROM v_origin THEN
     RAISE EXCEPTION 'Employee safety Storage origin changed.';
   END IF;
-  -- Public URLs establish the common origin even before the first evidence receipt.
+  -- Evidence receipts must share the original public Storage origin.
   RETURN COALESCE((SELECT jsonb_agg(CASE WHEN value->>'kind'='archives' THEN
     jsonb_set(value,'{origin}',COALESCE(to_jsonb(COALESCE(v_origin,p_private_origin)),'null'::jsonb)) ELSE value END
     ORDER BY key COLLATE "C") FROM jsonb_each(v_refs)),'[]'::jsonb);
@@ -228,8 +222,7 @@ BEGIN
 END;
 $$;
 
--- Recompute refs and validate EVERY existing receipt, not just the requested object.
--- Missing/unchecked receipts mean pending, malformed or drifting receipts are errors.
+-- Validate all receipts so unrelated corruption cannot hide behind a valid object.
 CREATE FUNCTION private.employee_safety_media_state(p_job private.employee_transfer_jobs)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
@@ -325,7 +318,7 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_job private.employee_transfer_jobs%ROWTYPE;v_context jsonb;v_state jsonb;v_file jsonb;v_previous jsonb;v_origin text;v_refs jsonb;
 BEGIN
   v_job:=private.employee_safety_backup_owner(p_admin_session_token,p_job_token);
-  -- Serialize receipt merges, then reauthorize/source-check AFTER the actual read/row lock.
+  -- Lock before reauthorization to prevent lost receipts.
   PERFORM 1 FROM private.employee_transfer_jobs WHERE id=v_job.id FOR UPDATE;
   v_context:=public.employee_safety_backup_media_authorize(p_admin_session_token,p_job_token,p_action,p_object_key);
   v_job:=private.employee_safety_backup_owner(p_admin_session_token,p_job_token);
@@ -340,7 +333,7 @@ BEGIN
   PERFORM private.employee_safety_media_file(v_context,v_file);
   IF v_context->'file'<>'null'::jsonb AND v_context->'file' IS DISTINCT FROM v_file THEN RAISE EXCEPTION 'Employee safety media file changed.';END IF;
   v_previous:=v_state#>ARRAY['receipts',p_object_key];
-  -- Private-only evidence acquires the configured origin on the FIRST service receipt.
+  -- Private-only evidence has no origin until the first service receipt.
   v_refs:=private.employee_safety_media_refs(v_job,p_storage_origin);
   v_state:=jsonb_set(jsonb_set(v_state,'{refs}',v_refs),'{storage_origin}',to_jsonb(p_storage_origin));
   v_state:=jsonb_set(v_state,ARRAY['receipts',p_object_key],jsonb_build_object('file',v_file,'path',v_context->'path',
