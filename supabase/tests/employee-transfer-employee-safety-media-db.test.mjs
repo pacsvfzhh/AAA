@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { after, before, mock, test } from 'node:test';
-import { createHash, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { createHash, randomUUID, webcrypto } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { appendFile, mkdir, mkdtemp, open, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
@@ -11,7 +16,9 @@ import { replayMigrations, EXPECTED_REPLAY_FAILURES } from './support/replay-mig
 import { adminLogin, rpc as baseRpc, rows, scalar } from './support/transfer-harness.mjs';
 import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 
-// Synthetic receipts cannot prove Storage/native PostgreSQL acceptance.
+// The original SQL contracts use synthetic receipts. The LOCAL bridge below runs actual
+// SQL46/47 + clients + Edge + filesystem crypto, with only transport/Storage bytes adapted.
+// Neither proves real Supabase Storage, native PostgreSQL/PostgREST or full restore acceptance.
 const PREVIOUS = '20261102000046_backup_employee_before_restore.sql';
 const MIGRATION = '20261102000047_backup_employee_media.sql';
 const INVENTORY = 'get_employee_safety_backup_media', VERIFY = 'employee_safety_backup_media_verify';
@@ -31,7 +38,7 @@ const bound = (job, token) => ({ ...auth(job, token), p_catalog_fingerprint: job
 const flags = result => {
   for (const key of ['complete_employee_backup', 'can_archive', 'can_replace', 'full_site_complete']) assert.equal(result[key], false, key);
 };
-let db, replay, session, secondary, otherRoot, employeeToken, beforeDefinitions, beforeTables;
+let db, replay, session, secondary, otherRoot, employeeToken, beforeDefinitions, beforeTables, api, createMediaHandler;
 let sequence = 0, networkCalls = 0;
 async function transaction(fn, readOnly = false) {
   await db.exec(readOnly ? 'BEGIN; SET TRANSACTION READ ONLY' : 'BEGIN');
@@ -163,8 +170,27 @@ before(async () => {
     employeeToken = (await baseRpc(db, 'create_employee_financial_session', { p_username: 'media-target', p_password: PASSWORDS.employee, p_tab_id: 'local-media-tab' })).session_token;
     await db.exec('COMMIT');
   } catch (error) { await db.exec('ROLLBACK'); throw error; }
-});
-after(async () => { try { await db?.close(); } finally { mock.restoreAll(); } });
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const compiled = await build({ stdin: { resolveDir: root, contents: `export * from './src/lib/employeeTransfer/employeeSafetyBackup.ts';
+    export * from './src/lib/employeeTransfer/employeeSafetyMedia.ts'; export {setHarness} from 'safety-media-db:state';` },
+    bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', metafile: true,
+    define: { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(ORIGIN), 'import.meta.env.VITE_SUPABASE_ANON_KEY': '"local-only-anon-key"' },
+    plugins: [{ name: 'local-sql-transport-only', setup(builder) {
+      builder.onResolve({ filter: /^(?:safety-media-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'local-sql' }));
+      builder.onLoad({ filter: /.*/, namespace: 'local-sql' }, ({ path }) => ({ contents: path === 'safety-media-db:state'
+        ? 'let h;export const setHarness=v=>{h=v};export const current=()=>h;'
+        : path === '../auth' ? 'import{current}from"safety-media-db:state";export const getAdminFinancialSessionToken=()=>current().token;'
+          : 'import{current}from"safety-media-db:state";export const supabase={rpc(...args){if(this!==supabase)throw new Error("Unbound RPC");return current().rpc(...args)}};' }));
+    } }],
+  });
+  assert.ok(!Object.keys(compiled.metafile.inputs).some(path => /node_modules\/@supabase|src\/lib\/(?:auth|supabase)\.ts|functions\//.test(path)),
+    'Client bundle excludes live auth/Supabase and server modules');
+  api = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
+  const edge = await build({ entryPoints: [join(root, 'supabase/functions/employee-transfer-media/handler.ts')],
+    bundle: true, write: false, format: 'esm', platform: 'browser' });
+  ({ createEmployeeTransferMediaHandler: createMediaHandler } = await import(`data:text/javascript;base64,${Buffer.from(edge.outputFiles[0].text).toString('base64')}`));
+}, { timeout: 600000 });
+after(async () => { try { await db?.close(); assert.equal(networkCalls, 0); } finally { mock.restoreAll(); } });
 
 test('SQL47: strict replay preserves historical failures, old functions/ACL and all tables', async () => {
   assert.deepEqual(replay.failures, EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message })));
@@ -471,3 +497,225 @@ test('SQL47: closed/stopped/expired own tasks cannot attest or reuse previous op
   await assert.rejects(inventory(next), /invalid|expired/);
   assert.equal(networkCalls, 0);
 }));
+
+const LOCAL_PASSPHRASE = 'independent-local-sql47-records-and-media-passphrase';
+const PNG_BYTES = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, ...Buffer.from('local SQL47 synthetic image bytes')]);
+const PDF_BYTES = new TextEncoder().encode('%PDF-1.7\nlocal SQL47 synthetic document\n%%EOF\n');
+const clientFlags = result => {
+  for (const key of ['completeEmployeeBackup', 'canArchive', 'canReplace', 'fullSiteComplete']) assert.equal(result[key], false, key);
+};
+const volume = site => ({ exportId: randomUUID(), volumeId: randomUUID(), sourceSiteId: site, scope: 'replacement-backup',
+  volumeIndex: 1, volumeCount: 1, createdAt: '2026-10-22T00:00:00.000Z' });
+async function collectBytes(source) {
+  const chunks = []; for await (const raw of source) chunks.push(Buffer.from(raw)); return Buffer.concat(chunks);
+}
+async function assertWorkspacesClean(h) {
+  for (const w of h.spaces) {
+    assert.equal(w.cleaned, true); assert.equal(w.cleanups, 1);
+    await assert.rejects(stat(w.base), { code: 'ENOENT' });
+  }
+}
+async function localMediaBridge(t) {
+  const directory = await mkdtemp(join(tmpdir(), 'safety-media-real-sql47-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const h = { token: session, directory, calls: [], events: [], spaces: [], storageReads: [], responses: [], beforeServiceCommit: null };
+  const browserRPCs = ['employee_safety_backup_begin', 'get_employee_safety_backup_catalog', 'get_employee_safety_backup_page',
+    'employee_safety_backup_verify', 'employee_safety_backup_close', INVENTORY, VERIFY];
+  h.invoke = async (name, args, role, signal) => {
+    assert.ok((role === 'anon' ? browserRPCs : [AUTHORIZE, COMMIT]).includes(name), 'No stop/import/archive/maintenance/fallback RPC');
+    assert.equal(args.p_admin_session_token, session); assert.notEqual(signal?.aborted, true);
+    const call = { name, args: structuredClone(args), role }; h.calls.push(call); h.events.push(name);
+    if (name === 'employee_safety_backup_begin') {
+      assert.deepEqual(args, { p_admin_session_token: session, p_admin_password: PASSWORDS.root, p_username: 'media-target' });
+    } else assert.equal(args.p_job_token, h.job.job_token);
+    if (name === COMMIT && h.beforeServiceCommit) await h.beforeServiceCommit(args);
+    // Only adapt the transport envelope. Credentials, tasks, catalog, receipts and errors all come from real SQL.
+    try { const data = await rpc(name, args, role); call.result = structuredClone(data); return { data, error: null }; }
+    catch (error) { call.error = error; return { data: null, error }; }
+  };
+  h.rpc = (name, args) => {
+    let pending;
+    const query = { signal: undefined, abortSignal(signal) { query.signal = signal; return query; },
+      then(resolve, reject) { return (pending ??= Promise.resolve().then(() => h.invoke(name, args, 'anon', query.signal))).then(resolve, reject); } };
+    return query;
+  };
+  // Explicit scoped objects, not invented from returned receipts. Foreign bytes exist but must never be read.
+  h.objects = new Map([
+    [`verification-documents/id-front/${TARGET}-front.png`, PNG_BYTES],
+    [`verification-documents/id-back/${TARGET}-back.pdf`, PDF_BYTES],
+    [`verification-documents/selfie/${TARGET}-selfie.png`, PNG_BYTES],
+    ['super-customer-avatars/avatars/role.png', PNG_BYTES],
+    ['chat-images/shared/photo.png', PNG_BYTES],
+    ['announcement-images/broadcast/video.mp4', PNG_BYTES],
+    [`content-audit-evidence/events/${id(40)}/proof.png`, PNG_BYTES],
+  ]);
+  const permittedObjects = new Set(h.objects.keys());
+  for (const path of [`verification-documents/id-front/${FOREIGN}-front.png`, 'chat-images/foreign/private.png',
+    'chat-images/foreign/notification.png', 'super-customer-avatars/avatars/foreign.png', `content-audit-evidence/events/${id(41)}/proof.png`]) {
+    h.objects.set(path, Uint8Array.from([1, 2, 3]));
+  }
+  h.storageBefore = structuredClone([...h.objects]);
+  const handler = createMediaHandler({ supabaseUrl: ORIGIN, crypto: webcrypto,
+    rpc: (name, args) => h.invoke(name, args, 'service_role'), store: {
+      async download(bucket, path, signal) {
+        assert.ok(signal instanceof AbortSignal); assert.equal(signal.aborted, false);
+        const key = bucket + '/' + path; assert.ok(permittedObjects.has(key), 'Storage must not read foreign/unselected objects');
+        h.storageReads.push(key); h.events.push('storage-download');
+        // Wrong Storage header deliberately proves magic-byte/MIME/hash detection runs in the actual handler.
+        return { data: new Response(h.objects.get(key).slice(), { headers: { 'content-type': 'text/html' } }) };
+      },
+      upload() { assert.fail('Export cannot upload'); }, remove() { assert.fail('Export cannot delete'); },
+    } });
+  h.transport = async (endpoint, init) => {
+    assert.equal(endpoint, ORIGIN + '/functions/v1/employee-transfer-media'); assert.equal(init.method, 'POST');
+    assert.equal(init.redirect, 'error'); assert.equal(init.credentials, 'omit'); assert.equal(init.cache, 'no-store'); assert.equal(init.body, undefined);
+    assert.equal(init.headers.apikey, 'local-only-anon-key'); assert.equal(init.headers['x-transfer-scope'], 'employee-safety');
+    assert.equal(init.headers['x-admin-session-token'], session); assert.equal(init.headers['x-transfer-job-token'], h.job.job_token);
+    assert.ok(['download', 'recheck-export'].includes(init.headers['x-transfer-action']));
+    assert.ok(h.refs.some(ref => ref.key === init.headers['x-transfer-object-key']));
+    const response = await handler(new Request(endpoint, init)); h.responses.push(response.status); return response;
+  };
+  h.workspace = () => {
+    const w = { base: join(directory, `plaintext-${h.spaces.length}`), cleaned: false, cleanups: 0,
+      async append(path, raw, signal) {
+        assert.equal(w.cleaned, false); assert.equal(signal.aborted, false); assert.ok(raw.length <= 1024 * 1024);
+        assert.ok(!path.startsWith('/') && !path.includes('..') && !path.includes('\\'));
+        await mkdir(dirname(join(w.base, path)), { recursive: true }); await appendFile(join(w.base, path), raw);
+      },
+      open(path) { return { async *[Symbol.asyncIterator]() {
+        assert.equal(w.cleaned, false);
+        for await (const chunk of createReadStream(join(w.base, path), { highWaterMark: 4096 })) { assert.equal(w.cleaned, false); yield chunk; }
+      } }; },
+      async abort() { w.cleaned = true; w.cleanups++; h.events.push('plaintext-cleanup'); await rm(w.base, { recursive: true, force: true }); },
+    }; h.spaces.push(w); return w;
+  };
+  h.diskFile = name => {
+    const file = { path: join(directory, name), writes: 0,
+      async write(source, signal) {
+        file.writes++; h.events.push('write-' + name); const fd = await open(file.path, 'wx');
+        try { for await (const raw of source) { assert.equal(signal.aborted, false); await fd.writeFile(raw); } await fd.sync(); }
+        finally { await fd.close(); }
+        h.events.push('saved-' + name);
+      },
+      open() { return { async *[Symbol.asyncIterator]() {
+        for await (const raw of createReadStream(file.path, { highWaterMark: 4096 })) yield raw;
+        h.events.push('eof-' + name);
+      } }; },
+    }; return file;
+  };
+  h.records = h.diskFile('records.edx'); h.media = h.diskFile('attachments.edx');
+  api.setHarness(h);
+  // Supply the actual local fixture username AND real root password to the production source factory.
+  h.recordSession = api.createEmployeeSafetyBackupSession('media-target', PASSWORDS.root);
+  h.job = await h.recordSession.begin(); assert.equal(h.job.catalog.employee_id, TARGET);
+  h.recordInfo = volume(h.job.site_id); h.mediaInfo = volume(h.job.site_id);
+  h.recordsResult = await api.exportEmployeeSafetyBackup(h.recordSession, h.records, h.workspace, LOCAL_PASSPHRASE, h.recordInfo);
+  h.source = api.createEmployeeSafetyMediaSource(h.recordSession.identity(), h.recordsResult.catalog, h.transport);
+  h.refs = (await h.source.inventory()).files;
+  assert.ok(h.refs.every(ref => permittedObjects.has(ref.bucket + '/' + ref.path)));
+  assert.deepEqual([...new Set(h.refs.map(ref => ref.bucket + '/' + ref.path))].sort(), [...permittedObjects].sort());
+  assert.ok(h.refs.every(ref => ref.file === null)); assert.equal(await rawSidecar(h.job), null);
+  h.exportMedia = options => api.exportEmployeeSafetyMediaBackup(h.source, h.records, h.media, h.workspace, LOCAL_PASSPHRASE, h.mediaInfo, options);
+  return h;
+}
+
+test('SQL47 LOCAL integration: real SQL46 begin/records disk -> anon SQL47 + service-role Edge -> independent media disk -> paired authenticated reader -> explicit close',
+  { timeout: 240000 }, t => transaction(async () => {
+    const h = await localMediaBridge(t), recordCipher = await readFile(h.records.path), recordResult = h.recordsResult;
+    flags(recordResult); clientFlags(recordResult); assert.equal(recordResult.recordsVerified, true); assert.equal(recordResult.manifest.entries.length, 49);
+    assert.equal(recordResult.cipherBytes, recordCipher.length); assert.equal(recordResult.cipherSha256, sha(recordCipher));
+    assert.equal((await jobRow(h.job)).status, 'running'); assert.ok(!h.calls.some(c => c.name === 'employee_safety_backup_close'));
+    const result = await h.exportMedia(), mediaCipher = await readFile(h.media.path);
+    assert.equal(result.files, h.refs.length); assert.ok(result.files > h.objects.size - 5, 'Repeated per-row refs are kept, not deduplicated');
+    assert.equal(result.mediaVerified, true); clientFlags(result); flags(result.catalog.inventory); flags(result.catalog.inventory.records_catalog);
+    assert.equal(result.catalog.inventory.records_catalog.records_only, true); assert.equal(result.catalog.inventory.records_catalog.media_included, false);
+    assert.equal(result.cipherBytes, mediaCipher.length); assert.equal(result.cipherSha256, sha(mediaCipher));
+    assert.deepEqual(result.catalog.records_file, { export_id: h.recordInfo.exportId, volume_id: h.recordInfo.volumeId,
+      cipher_bytes: recordCipher.length, cipher_sha256: sha(recordCipher) });
+    assert.deepEqual(await readFile(h.records.path), recordCipher); assert.notEqual(h.records.path, h.media.path);
+    assert.equal(h.records.writes, 1); assert.equal(h.media.writes, 1);
+    assert.deepEqual([...new Set(result.catalog.inventory.files.map(ref => ref.kind))].sort(), ['archives', 'chat', 'notifications', 'verification']);
+    assert.doesNotMatch(JSON.stringify(result.catalog.inventory.files), /https?:|other-safety|foreign\/|foreign\.invalid/);
+    assert.equal(h.calls.filter(c => c.name === AUTHORIZE).length, h.refs.length * 3);
+    assert.equal(h.calls.filter(c => c.name === COMMIT).length, h.refs.length * 3);
+    assert.equal(h.calls.filter(c => c.name === VERIFY).length, 2); assert.equal(h.storageReads.length, h.refs.length * 3);
+    assert.equal(h.calls.filter(c => c.name === 'get_employee_safety_backup_page').length, 48);
+    assert.equal(h.calls.filter(c => c.name === 'employee_safety_backup_begin').length, 1);
+    assert.ok(h.calls.every(c => !c.error), h.calls.filter(c => c.error).map(c => `${c.name}: ${c.error.message}`).join('\n'));
+    const state = await rawSidecar(h.job); assert.equal(Object.keys(state.receipts).length, h.refs.length);
+    for (const ref of result.catalog.inventory.files) {
+      const bytes = h.objects.get(ref.bucket + '/' + ref.path), mime = ref.path.endsWith('.pdf') ? 'application/pdf' : 'image/png';
+      const file = { key: ref.key, source_url: ref.source_url, bytes: bytes.length, sha256: sha(bytes), content_type: mime };
+      assert.deepEqual(ref.file, file); assert.deepEqual(state.receipts[ref.key].file, file); assert.equal(state.receipts[ref.key].checked, true);
+      assert.notEqual(file.bytes, 128); assert.notEqual(file.sha256, sha(ref.key));
+      const commits = h.calls.filter(c => c.name === COMMIT && c.args.p_object_key === ref.key);
+      assert.deepEqual(commits.map(c => c.args.p_action), ['download', 'recheck-export', 'recheck-export']);
+      for (const call of commits) {
+        assert.equal(call.role, 'service_role'); flags(call.result);
+        assert.equal(call.args.p_bytes, bytes.length); assert.equal(call.args.p_sha256, sha(bytes)); assert.equal(call.args.p_content_type, mime);
+        assert.equal(call.args.p_generation, h.job.catalog.fingerprint); assert.equal(call.args.p_storage_origin, ORIGIN);
+      }
+    }
+    await assertWorkspacesClean(h);
+    assert.equal((await jobRow(h.job)).status, 'running'); assert.ok(!h.calls.some(c => c.name === 'employee_safety_backup_close'));
+    const calls = h.calls.length, storageReads = h.storageReads.length; let escaped, deferred; let readCount = 0;
+    await api.withAuthenticatedEmployeeSafetyMediaBackup(h.records, h.media, LOCAL_PASSPHRASE, h.workspace, async reader => {
+      escaped = reader; clientFlags(reader); assert.deepEqual(reader.inventory, result.catalog.inventory);
+      assert.equal(reader.manifest.entries.length, h.refs.length + 1);
+      for (const ref of reader.inventory.files) {
+        const path = api.employeeSafetyMediaEntryPath(ref);
+        assert.deepEqual(await collectBytes(reader.open(path)), Buffer.from(h.objects.get(ref.bucket + '/' + ref.path)));
+        readCount++; deferred = reader.open(path);
+      }
+      for (const path of [api.EMPLOYEE_SAFETY_MEDIA_CATALOG_PATH, api.employeeSafetyBackupEntryPath('accounts'), '../../credentials',
+        'media/chat-images/' + sha('foreign-unselected'), h.refs[0].path]) assert.throws(() => reader.open(path));
+    });
+    assert.equal(readCount, h.refs.length); assert.equal(h.calls.length, calls); assert.equal(h.storageReads.length, storageReads, 'Paired reader is offline');
+    assert.throws(() => escaped.inventory); await assert.rejects(collectBytes(deferred)); await assertWorkspacesClean(h);
+    assert.deepEqual([...h.objects], h.storageBefore); assert.ok(h.responses.every(status => status === 200));
+    assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), 0);
+    h.events.push('paired-reader-finished');
+    const closed = await h.recordSession.close(recordResult.catalog); assert.equal(closed.success, true); assert.equal(closed.full_site_complete, false);
+    assert.equal(h.calls.at(-1).name, 'employee_safety_backup_close'); assert.equal(h.calls.filter(c => c.name === 'employee_safety_backup_close').length, 1);
+    assert.ok(h.events.indexOf('paired-reader-finished') < h.events.indexOf('employee_safety_backup_close'));
+    assert.equal((await jobRow(h.job)).status, 'finished');
+    await assert.rejects(h.source.inventory(), api.EmployeeSafetyMediaError);
+    assert.deepEqual(await readFile(h.records.path), recordCipher); assert.deepEqual(await readFile(h.media.path), mediaCipher);
+    assert.equal(networkCalls, 0);
+  }));
+
+test('SQL47 LOCAL integration: source drift at the last final-recheck Edge service commit rejects without close/retry or media permission escalation',
+  { timeout: 240000 }, t => transaction(async () => {
+    const h = await localMediaBridge(t), originalRecordCipher = await readFile(h.records.path); let rechecks = 0, drifted = false, beforeReceipt;
+    h.beforeServiceCommit = async args => {
+      if (args.p_action !== 'recheck-export' || ++rechecks !== h.refs.length * 2) return;
+      assert.equal(h.media.writes, 1); assert.ok(h.events.includes('eof-attachments.edx')); await assertWorkspacesClean(h);
+      beforeReceipt = await rawSidecar(h.job);
+      assert.ok(Object.values(beforeReceipt.receipts).every(receipt => receipt.checked === true));
+      // Real same-count source mutation AFTER Edge read/authorization, immediately before actual service-role COMMIT.
+      await change('public.users', "UPDATE public.users SET remarks='local final service commit drift' WHERE id=$1", [TARGET]); drifted = true;
+    };
+    await assert.rejects(h.exportMedia(), error => {
+      assert.ok(error instanceof api.EmployeeSafetyMediaError); assert.equal(error.phase, 'final-recheck');
+      assert.equal(error.outcomeUnknown, true); assert.equal(error.encryptedFileState, 'verified'); assert.equal(error.cleanupRequired, false); return true;
+    });
+    assert.equal(drifted, true); assert.equal(rechecks, h.refs.length * 2);
+    const failed = h.calls.filter(c => c.error); assert.equal(failed.length, 1); assert.equal(failed[0].name, COMMIT);
+    assert.equal(failed[0].role, 'service_role'); assert.equal(failed[0].args.p_action, 'recheck-export'); assert.match(failed[0].error.message, /content changed/i);
+    assert.equal(h.calls.at(-1), failed[0]); assert.equal(h.calls.filter(c => c.name === COMMIT).length, h.refs.length * 3, 'No retry');
+    assert.equal(h.calls.filter(c => c.name === VERIFY).length, 1, 'Final verify never runs after rejected commit');
+    assert.equal(h.responses.at(-1), 502); assert.equal(h.responses.filter(status => status !== 200).length, 1);
+    assert.equal((await jobRow(h.job)).status, 'running'); assert.deepEqual(await rawSidecar(h.job), beforeReceipt, 'Rejected commit cannot refresh/replace a receipt');
+    assert.ok(!h.calls.some(c => c.name === 'employee_safety_backup_close')); await assert.rejects(inventory(h.job), /content changed/);
+    await assertWorkspacesClean(h); assert.deepEqual([...h.objects], h.storageBefore);
+    assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), 0);
+    assert.deepEqual(await readFile(h.records.path), originalRecordCipher); assert.equal(h.records.writes, 1); assert.equal(h.media.writes, 1);
+    // Retained encrypted files are authenticated evidence of the old snapshot, NOT permission to archive/replace it.
+    const calls = h.calls.length;
+    await api.withAuthenticatedEmployeeSafetyMediaBackup(h.records, h.media, LOCAL_PASSPHRASE, h.workspace, async reader => {
+      clientFlags(reader); flags(reader.inventory); flags(reader.inventory.records_catalog);
+      for (const ref of reader.inventory.files) assert.deepEqual(await collectBytes(reader.open(api.employeeSafetyMediaEntryPath(ref))),
+        Buffer.from(h.objects.get(ref.bucket + '/' + ref.path)));
+    });
+    assert.equal(h.calls.length, calls); await assertWorkspacesClean(h); assert.equal(networkCalls, 0);
+  }));
