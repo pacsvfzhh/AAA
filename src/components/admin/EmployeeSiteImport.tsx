@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, FolderOpen, Loader2, Pause, Play, ShieldAlert, Square } from 'lucide-react';
 import { getSiteImportPreflight, importSiteBundleSetToMaintenance, type SiteImportPreflight } from '../../lib/employeeTransfer/siteImport';
 import { createBrowserWorkspaceFactory, pickTransferDirectory, type BrowserTransferDirectory } from '../../lib/employeeTransfer/browserStorage';
@@ -59,7 +60,7 @@ function PlanSummary({ value }: { value: unknown }) {
     {Array.isArray(plan.retire_tasks) && <p>將停用目標多餘任務：{plan.retire_tasks.length}</p>}
     {rows.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left text-xs"><caption className="mb-2 text-left text-slate-400">服務端計畫對應（{rows.length} 筆）</caption><thead><tr>{['名稱／類別', '來源編號', '目標編號', '操作'].map(label => <th key={label} className="p-2" scope="col">{label}</th>)}</tr></thead><tbody>{rows.map((raw, index) => {
       const row = record(raw);
-      return <tr key={index} className="border-t border-slate-700"><td className="max-w-48 break-words p-2">{text(row.username ?? row.name ?? row.table_key ?? row.number)}</td><td className="max-w-48 break-all p-2 font-mono">{text(row.source_id)}</td><td className="max-w-48 break-all p-2 font-mono">{text(row.target_id)}</td><td className="p-2">{actionNames[text(row.action)] ?? text(row.action)}{row.multi_source_target === true && <p className="text-amber-200">多個來源合併到同一角色</p>}{row.allow_visibility === true && <p className="text-amber-200">允許追加員工可見性</p>}</td></tr>;
+      return <tr key={index} className="border-t border-slate-700"><td className="max-w-48 break-words p-2">{text(row.username ?? row.name ?? row.table_key ?? row.number)}</td><td className="max-w-48 break-all p-2 font-mono">{text(row.source_id)}</td><td className="max-w-48 break-all p-2 font-mono">{text(row.target_id)}</td><td className="p-2">{actionNames[text(row.action)] ?? text(row.action)}{row.multi_source_target === true && <p className="text-amber-200">多個來源合併到同一角色</p>}{Array.isArray(row.visibility_employee_ids) && <p className="text-amber-200">涉及可見性差集：{row.visibility_employee_ids.length} 名；{row.allow_visibility === true ? '允許追加' : '不追加'}</p>}</td></tr>;
     })}</tbody></table></div>}
     {['group_map', 'pool_map'].map(key => {
       const entries = Object.entries(record(plan[key]));
@@ -83,7 +84,7 @@ function ApprovalDialog({ approval, settle }: { approval: Approval; settle: (val
     element?.showModal();
     return () => { element?.close(); };
   }, []);
-  return <dialog ref={dialog} aria-labelledby="migration-approval-title" onCancel={event => { event.preventDefault(); settle(false); }} className="m-auto max-h-[90dvh] w-[calc(100%-1.5rem)] max-w-4xl overflow-y-auto rounded-xl border border-slate-600 bg-slate-900 p-4 text-slate-100 shadow-2xl backdrop:bg-black/75 sm:p-6">
+  return createPortal(<dialog ref={dialog} aria-labelledby="migration-approval-title" onCancel={event => { event.preventDefault(); settle(false); }} className="m-auto max-h-[90dvh] w-[calc(100%-1.5rem)] max-w-4xl overflow-y-auto rounded-xl border border-slate-600 bg-slate-900 p-4 text-slate-100 shadow-2xl backdrop:bg-black/75 sm:p-6">
     <h2 id="migration-approval-title" className="text-lg font-bold">{approval.kind === 'roles' ? '確認聊天角色對應' : `確認${domains[approval.domain]}計畫`}</h2>
     <p className="mt-2 text-sm text-amber-200">拒絕只會停止後續操作，不撤回已寫入的資料或已封存的備份，也不解除維護。按 Escape 與拒絕相同；請先核對本階段內容。</p>
     <div className="mt-4">
@@ -97,14 +98,14 @@ function ApprovalDialog({ approval, settle }: { approval: Approval; settle: (val
             <option value="" disabled>請明確選擇</option><option value="new">新建角色（不合併）</option>
             {role.candidates.map(candidate => <option key={candidate.id} value={candidate.id}>合併到 {candidate.name} · {candidate.number}</option>)}
           </select></label>
-          {role.visibility_employee_ids.length > 0 && selected(role) !== 'new' && <label className="mt-3 flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" className="mt-1 accent-cyan-400" checked={visibility[role.source_id] ?? true} onChange={event => { setAcknowledged(false); setVisibility(value => ({ ...value, [role.source_id]: event.target.checked })); }} /><span>讓 {role.visibility_employee_ids.length} 名匯入員工可見（加入指定員工）。不勾選可能看不到此角色。</span></label>}
+          {selected(role) !== '' && selected(role) !== 'new' && <label className="mt-3 flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0 appearance-auto accent-cyan-400 focus-visible:outline-cyan-400" checked={visibility[role.source_id] ?? true} onChange={event => { setAcknowledged(false); setVisibility(value => ({ ...value, [role.source_id]: event.target.checked })); }} /><span>允許把匯入員工加入此角色的指定員工，讓他們可見。{role.visibility_employee_ids.length > 0 ? `目前建議對應涉及 ${role.visibility_employee_ids.length} 名員工；` : ''}手選目標的實際人數以下一階段服務端計畫為準。不勾選可能看不到此角色。</span></label>}
         </fieldset>)}
         {duplicate && <p className="rounded border border-amber-700 p-3 text-sm text-amber-200">多個舊角色將合併到同一新站角色，請確認這是你的選擇；下一階段還會顯示服務端合併計畫。</p>}
       </div>}
     </div>
-    <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} className="mt-1 accent-cyan-400 focus-visible:outline-cyan-400" /><span>我已核對上述對應與影響，了解仍不可恢復營業，並同意繼續本階段{duplicate ? '（包括多個來源合併同一角色）' : ''}。</span></label>
+    <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 appearance-auto accent-cyan-400 focus-visible:outline-cyan-400" /><span>我已核對上述對應與影響，了解仍不可恢復營業，並同意繼續本階段{duplicate ? '（包括多個來源合併同一角色）' : ''}。</span></label>
     <div className="mt-4 flex flex-wrap justify-end gap-3"><button type="button" className={button} onClick={() => settle(false)}>拒絕並停止後續操作</button><button type="button" className={`${button} border-cyan-600 bg-cyan-950`} disabled={!valid} onClick={() => settle(approval.kind === 'plan' ? true : roles.map(role => ({ source_id: role.source_id, target_id: selected(role) === 'new' ? null : selected(role), allow_visibility: visibility[role.source_id] ?? true, confirmed: true })))}>確認本階段並繼續</button></div>
-  </dialog>;
+  </dialog>, document.body);
 }
 
 export default function EmployeeSiteImport({ files, inspection, disabled, supported, onBusyChange, onProgress }: Props) {
@@ -281,7 +282,7 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
         <button type="button" className={button} onClick={() => void chooseDirectory()}><FolderOpen className="h-4 w-4" aria-hidden="true" />選擇獨立備份保存目錄</button>
         <p className="break-all text-xs text-slate-400">{directory ? `本次新子目錄：${directory.name}` : '每次建立新子目錄，不覆寫舊檔。五份配置／紀錄備份沿用原導出口令；不是完整員工備份，也不包含目標全部舊媒體。'}</p>
         <label className="block text-sm" htmlFor="migration-import-confirmation">輸入「{confirmationText}」<input id="migration-import-confirmation" type="text" autoComplete="off" spellCheck={false} value={confirmation} onChange={event => setConfirmation(event.target.value)} required aria-invalid={confirmation.length > 0 && confirmation !== confirmationText} className={input} /></label>
-        <label className="flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" required checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} className="mt-1 accent-cyan-400 focus-visible:outline-cyan-400" /><span>我確認這是隔離、未營業的目標站，已另存來源檔及口令；了解會實際寫入且目前沒有完整回滾、同名員工替換或恢復營業功能。待處理提款之後只在單一站點處理。</span></label>
+        <label className="flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" required checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 appearance-auto accent-cyan-400 focus-visible:outline-cyan-400" /><span>我確認這是隔離、未營業的目標站，已另存來源檔及口令；了解會實際寫入且目前沒有完整回滾、同名員工替換或恢復營業功能。待處理提款之後只在單一站點處理。</span></label>
       </fieldset>
       <button type="submit" disabled={!ready} className={`${button} mt-4 border-amber-600 bg-amber-950 text-amber-100`}><AlertTriangle className="h-4 w-4" aria-hidden="true" />開始實際導入（保持維護）</button>
     </form>

@@ -529,14 +529,14 @@ export default function EmployeeDataMigration() {
                     setNotice({ error: false, text: '已產生隨機 24 字元口令。請顯示並安全另存，再親自輸入確認欄；頁面不會替你保存口令。' });
                   } catch { setNotice({ error: true, text: '瀏覽器無法安全產生口令，請自行設定至少 14 個字元的獨立口令。' }); }
                 }}><Wand2 className="h-4 w-4" aria-hidden="true" />產生隨機 24 字元口令</button>
-                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={showPassphrase} onChange={event => setShowPassphrase(event.target.checked)} className="h-4 w-4 accent-cyan-400 focus-visible:outline-cyan-400" />顯示加密口令</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={showPassphrase} onChange={event => setShowPassphrase(event.target.checked)} className="h-4 w-4 appearance-auto accent-cyan-400 focus-visible:outline-cyan-400" />顯示加密口令</label>
               </div>
               <p id="migration-passphrase-help" className="text-xs text-slate-400">口令不會存入本機儲存空間或紀錄；請使用與登入密碼不同的強口令。{confirmation && confirmation !== passphrase ? '兩次口令不一致。' : ''}</p>
               <div className="flex flex-wrap items-center gap-3">
                 <button type="button" className={buttonClass} onClick={() => void chooseDirectory()}><FolderOpen className="h-4 w-4" aria-hidden="true" />{selecting ? '正在選擇目錄' : '選擇保存目錄'}</button>
                 <span className="break-all text-xs text-slate-400">{directory ? `將保存至新子目錄 ${directory.name}` : '每次導出須直接點擊選擇目錄，建立獨立子目錄；不覆寫舊檔。'}</span>
               </div>
-              <label className="flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} required className="mt-1 h-4 w-4 shrink-0 accent-cyan-400 focus-visible:outline-cyan-400" /><span>我了解這是本地驗證版，已妥善另存口令並確認敏感資料保存位置；導出不代表可恢復或完成整站遷移。</span></label>
+              <label className="flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} required className="mt-1 h-4 w-4 shrink-0 appearance-auto accent-cyan-400 focus-visible:outline-cyan-400" /><span>我了解這是本地驗證版，已妥善另存口令並確認敏感資料保存位置；導出不代表可恢復或完成整站遷移。</span></label>
             </fieldset>
             <button type="submit" disabled={!exportReady} className={`${buttonClass} mt-4 border-cyan-700 bg-cyan-900/70 text-cyan-100 hover:bg-cyan-800`}><Download className="h-4 w-4" aria-hidden="true" />開始目前十個領域加密導出</button>
           </form>
