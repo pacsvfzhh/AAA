@@ -2601,6 +2601,15 @@ export interface Database {
         Args: { p_admin_session_token: string; p_source_site_id: string; p_package_id: string; p_event_id: string; p_ref_key: string };
         Returns: Record<string, unknown>;
       };
+      employee_import_identity_reservation_status: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string };
+        Returns: import('../lib/employeeTransfer/employeeIdentityReservation').EmployeeIdentityReservationStatus;
+      };
+      employee_import_identity_reserve: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string;
+          p_source_fingerprint: string; p_target_fingerprint: string };
+        Returns: import('../lib/employeeTransfer/employeeIdentityReservation').EmployeeIdentityReservationStatus;
+      };
       employee_import_replacement_plan: {
         Args: { p_admin_session_token: string; p_job_token: string; p_after?: string | null; p_limit?: number };
         Returns: import('../lib/employeeTransfer/employeeReplacement').EmployeeReplacementPlan;

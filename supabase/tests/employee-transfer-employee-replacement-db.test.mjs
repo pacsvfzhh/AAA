@@ -15,8 +15,11 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 
 // Strict historical replay + actual SQL14 bind/stage, real sealed settings/dispatch backups,
 // and actual existing archive RPC. No network, fabricated backup marker or employee deletion API.
-const MIGRATION = '20261102000037_plan_employee_replacement.sql';
+const MIGRATION = '20261102000048_reserve_employee_identities.sql';
 const PLAN = 'employee_import_replacement_plan', STATUS = 'employee_import_replacement_status';
+const RESERVATION_STATUS = 'employee_import_identity_reservation_status', RESERVE = 'employee_import_identity_reserve';
+const RESERVATION_KEY = 'identity-reservation-v1';
+const CLOSED_GATES = ['can_restore', 'complete_employee_backup', 'can_archive', 'can_replace', 'full_site_complete'];
 const KEYS = {
   shared: ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members', 'admin_configs', 'system_configs', 'history_cleanup_config'],
   dispatch: ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders', 'dispatch_group_members', 'valid_order_data', 'used_order_data'],
@@ -53,6 +56,41 @@ const checkpoint = p => ({ p_source_fingerprint: p.source_fingerprint, p_target_
 const status = (p, extra = {}) => rpc(STATUS, { ...auth(), ...checkpoint(p), ...extra });
 const rowFor = (p, sourceId) => p.rows.find(row => row.source_id === sourceId);
 const targetFor = (p, sourceId) => rowFor(p, sourceId).targets[0];
+const reservationStatus = (sourceId = S.same, extra = {}, role = 'anon') => rpc(RESERVATION_STATUS, { ...auth(), p_source_id: sourceId, ...extra }, role);
+const reserve = (observed, extra = {}, role = 'anon') => rpc(RESERVE, {
+  ...auth(), p_source_id: observed.source_id, p_source_fingerprint: observed.observed.source_fingerprint,
+  p_target_fingerprint: observed.observed.target_fingerprint, ...extra,
+}, role);
+const reservations = () => rows(db, 'SELECT * FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key=$2 ORDER BY employee_id', [task.job_id, RESERVATION_KEY]);
+const reservationEvents = () => rows(db, `SELECT * FROM private.employee_transfer_events WHERE job_id=$1 AND action='identity_candidate_reserved' ORDER BY id`, [task.job_id]);
+function closedGates(value) { for (const key of CLOSED_GATES) assert.equal(value[key], false, key); }
+function assertReservation(value, baseline) {
+  closedGates(value);
+  assert.equal(value.scope, 'employee-identity-reservation'); assert.equal(value.checked, true);
+  const binding = value.reservation;
+  assert.deepEqual(Object.keys(binding).sort(), ['version', 'job_id', 'site_id', 'source_site_id', 'package_id', 'source_id', 'target_id', 'source_fingerprint', 'target_fingerprint', 'binding_hash'].sort());
+  assert.equal(binding.version, 1);
+  for (const key of ['job_id', 'site_id', 'source_site_id', 'package_id', 'source_id']) assert.equal(binding[key], baseline[key], key);
+  for (const key of ['source_fingerprint', 'target_fingerprint']) assert.equal(binding[key], baseline.observed[key], key);
+  assert.match(binding.target_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.match(binding.binding_hash, /^[0-9a-f]{64}$/);
+  assert.equal(value.source_unchanged, true); assert.equal(value.target_unchanged, true); assert.equal(value.candidate_available, true);
+  return binding;
+}
+async function triggerSnapshot() {
+  return rows(db, `SELECT n.nspname,c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid) AS definition
+    FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname IN ('public','private') ORDER BY 1,2,3`);
+}
+async function replaceStagedAccounts() {
+  const text = identity.texts.accounts.replace('replacement-shared', 'replacement-change');
+  const lines = text.match(/[^\n]*\n/g), parsed = lines.map(line => JSON.parse(line)), rowHashes = lines.map(sha).join('');
+  await db.query(`UPDATE private.employee_transfer_staging SET payload=jsonb_build_object('ndjson',$2::text,'rows',$3::jsonb,
+    'bytes',octet_length($2::text),'row_hashes',$4::text,'last_id',$5::text) WHERE job_id=$1 AND table_key='identity-in:accounts'`,
+  [task.job_id, text, JSON.stringify(parsed), rowHashes, parsed.at(-1).id]);
+  await db.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(jsonb_set(summary,'{identity_catalog,tables,0,row_hashes_sha256}',to_jsonb($2::text)),
+    '{identity_catalog,tables,0,bytes}',to_jsonb($3::integer)) WHERE id=$1`, [task.job_id, sha(rowHashes), Buffer.byteLength(text)]);
+}
 async function employee(site, employeeId, username, number) {
   await site.query(`INSERT INTO public.users(id,username,employee_id,password_hash,created_by)
     VALUES($1,$2,$3,extensions.crypt($4,extensions.gen_salt('bf',4)),$5)`, [employeeId, username, number, PASSWORDS.employee, NEW.root]);
@@ -139,6 +177,11 @@ before(async () => {
   for (const [key, username, number] of [['same', 'replacement-shared', 'SOURCE-1'], ['uuid', 'replacement-uuid', 'SOURCE-2'],
     ['number', 'replacement-number', 'TAKEN'], ['admin', 'replacement-admin', 'SOURCE-4'], ['fresh', 'replacement-fresh', 'SOURCE-5'],
     ['case', 'CaseEmployee', 'SOURCE-6'], ['foreignUuid', 'replacement-foreign-id', 'SOURCE-7']]) await employee(source, S[key], username, number);
+  await source.query('INSERT INTO public.financial_employee_credentials(user_id,password_hash) SELECT id,password_hash FROM public.users');
+  await source.query("INSERT INTO public.product_types(id,name,is_active) VALUES($1,'Identity candidate source product',false)", [id(390)]);
+  await source.query('INSERT INTO public.dispatch_group_members(group_id,user_id,assigned_by) VALUES($1,$2,$3)', [NEW.groupA, S.fresh, NEW.root]);
+  await source.query(`INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,order_number,transaction_id,status,commission_amount)
+    VALUES($1,$2,'replacement-fresh',$3,1,'candidate-source-order','candidate-source-order','failure',NULL)`, [id(391), S.fresh, id(390)]);
   for (const [targetId, username, number] of [[T.same, 'replacement-shared', 'TARGET-1'], [S.uuid, 'replacement-uuid', 'TARGET-2'],
     [T.number, 'someone-else', 'TAKEN'], [T.case, 'caseemployee', 'TARGET-6'], [S.foreignUuid, 'other-uuid-owner', 'TARGET-7'],
     [T.unrelated, 'unrelated', 'UNRELATED']]) await employee(db, targetId, username, number);
@@ -296,3 +339,336 @@ test('source raw-byte and catalog drift, foreign owner, expiry, revocation, prot
   await transaction(async () => { await db.query('UPDATE public.admin_financial_sessions SET revoked_at=now() WHERE token_hash=private.hash_financial_token($1)', [session]); await assert.rejects(plan()); });
   await transaction(async () => { await assert.rejects(plan({ p_job_token: randomUUID() })); await assert.rejects(rpc(PLAN, auth(), 'service_role'), /permission denied/); });
 });
+
+test('SQL48 adds only the two exact public signatures with STABLE status, VOLATILE reserve and restricted execution', async () => transaction(async () => {
+  const functions = await rows(db, `SELECT proname,provolatile,prosecdef,proconfig,proargnames,pronargdefaults,
+    EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS public_execute
+    FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=ANY($1::text[]) ORDER BY proname`, [[RESERVATION_STATUS, RESERVE]]);
+  assert.deepEqual(functions.map(f => f.proname).sort(), [RESERVATION_STATUS, RESERVE].sort());
+  for (const fn of functions) {
+    assert.equal(fn.provolatile, fn.proname === RESERVATION_STATUS ? 's' : 'v');
+    assert.equal(fn.prosecdef, true); assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
+    assert.equal(fn.public_execute, false); assert.equal(fn.pronargdefaults, 0);
+    assert.deepEqual(fn.proargnames, ['p_admin_session_token', 'p_job_token', 'p_source_id',
+      ...fn.proname === RESERVE ? ['p_source_fingerprint', 'p_target_fingerprint'] : []]);
+    const signature = `public.${fn.proname}(uuid,uuid,uuid${fn.proname === RESERVE ? ',text,text' : ''})`;
+    for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, 'SELECT has_function_privilege($1,$2,\'EXECUTE\')', [role, signature]), role !== 'service_role');
+  }
+  const baseline = await reservationStatus();
+  await assert.rejects(reservationStatus(S.same, {}, 'service_role'), /permission denied/);
+  await assert.rejects(reserve(baseline, {}, 'service_role'), /permission denied/);
+}));
+
+for (const role of ['anon', 'authenticated']) {
+  test(`SQL48 ${role}: baseline is one exact SQL37 page for every source, all gates and pre-reserve observations false, truly read-only`, async () => transaction(async () => {
+    const before = await snapshot(), triggers = await triggerSnapshot();
+    await db.exec('SET TRANSACTION READ ONLY');
+    let after = null;
+    for (const sourceId of Object.values(S).sort()) {
+      const baseline = await reservationStatus(sourceId, {}, role);
+      assert.deepEqual(Object.keys(baseline).sort(), ['scope', 'checked', 'job_id', 'site_id', 'source_site_id', 'package_id', 'source_id', 'observed', 'reservation', 'source_unchanged', 'target_unchanged', 'candidate_available', ...CLOSED_GATES].sort());
+      assert.equal(baseline.scope, 'employee-identity-reservation'); assert.equal(baseline.checked, true);
+      assert.equal(baseline.job_id, task.job_id); assert.equal(baseline.package_id, pkg); assert.equal(baseline.source_id, sourceId);
+      assert.equal(baseline.site_id, await scalar(db, 'SELECT site_id FROM private.employee_transfer_site'));
+      assert.equal(baseline.source_site_id, identity.catalog.site_id);
+      assert.deepEqual(baseline.observed, await rpc(PLAN, { ...auth(), p_after: after, p_limit: 1 }, role));
+      assert.deepEqual(baseline.observed.rows.map(row => row.source_id), [sourceId]);
+      assert.equal(baseline.reservation, null); closedGates(baseline);
+      for (const key of ['source_unchanged', 'target_unchanged', 'candidate_available']) assert.equal(baseline[key], false);
+      assert.deepEqual(await reservationStatus(sourceId, {}, role), baseline);
+      assert.doesNotMatch(JSON.stringify(baseline), /password_hash|current_session_token|local archived evidence/);
+      after = sourceId;
+    }
+    assert.deepEqual(await snapshot(), before); assert.deepEqual(await triggerSnapshot(), triggers);
+  }));
+
+  test(`SQL48 ${role}: unknown or null source and missing, malformed or wrong-page checkpoints cannot create candidates`, async () => transaction(async () => {
+    const before = await snapshot(), baseline = await reservationStatus(), otherSource = await reservationStatus(S.fresh);
+    for (const sourceId of [null, randomUUID(), T.same]) {
+      await assert.rejects(reservationStatus(sourceId, {}, role));
+      await assert.rejects(reserve(baseline, { p_source_id: sourceId }, role));
+    }
+    for (const key of ['p_source_fingerprint', 'p_target_fingerprint']) {
+      for (const value of [null, '', '0'.repeat(63), 'A'.repeat(64), 'x'.repeat(64), '0'.repeat(64)]) await assert.rejects(reserve(baseline, { [key]: value }, role));
+    }
+    await assert.rejects(reserve(baseline, { p_source_id: S.fresh }, role));
+    await assert.rejects(reserve(baseline, { p_target_fingerprint: otherSource.observed.target_fingerprint }, role));
+    assert.deepEqual(await snapshot(), before);
+  }));
+
+  test(`SQL48 ${role}: every source including fresh and conflicted identities gets a new unique immutable server candidate, never a business identity`, async () => transaction(async () => {
+    const candidates = new Set(), forbidden = new Set([task.job_id, pkg, identity.catalog.site_id,
+      await scalar(db, 'SELECT site_id FROM private.employee_transfer_site')]);
+    for (const key of KEYS.identity) for (const line of identity.texts[key].split('\n').filter(Boolean)) {
+      const row = JSON.parse(line); for (const field of ['id', 'user_id', 'created_by']) if (row[field]) forbidden.add(row[field]);
+    }
+    for (const relation of ['public.users', 'public.admins']) for (const row of await rows(db, `SELECT id FROM ${relation}`)) forbidden.add(row.id);
+    for (const row of await rows(db, 'SELECT id,employee_id FROM private.deleted_employee_accounts')) { forbidden.add(row.id); forbidden.add(row.employee_id); }
+    for (const sourceId of Object.values(S)) {
+      const baseline = await reservationStatus(sourceId, {}, role), result = await reserve(baseline, {}, role), binding = assertReservation(result, baseline);
+      assert.equal(forbidden.has(binding.target_id), false); assert.equal(candidates.has(binding.target_id), false); candidates.add(binding.target_id);
+      assert.deepEqual(result.observed, baseline.observed); assert.deepEqual(await reservationStatus(sourceId, {}, role), result);
+      const saved = (await reservations()).find(row => row.employee_id === sourceId);
+      assert.ok(saved); assert.equal(saved.chunk_no, 0); assert.equal(saved.row_count, 1); assert.deepEqual(saved.payload, binding);
+      const frozen = await snapshot();
+      assert.deepEqual(await reserve(baseline, {}, role === 'anon' ? 'authenticated' : 'anon'), result);
+      assert.deepEqual(await snapshot(), frozen);
+    }
+    assert.equal((await reservations()).length, 7); assert.equal((await reservationEvents()).length, 7);
+    for (const candidate of candidates) assert.equal(await scalar(db, 'SELECT EXISTS(SELECT 1 FROM public.users WHERE id=$1 UNION ALL SELECT 1 FROM public.admins WHERE id=$1)', [candidate]), false);
+  }));
+
+  test(`SQL48 ${role}: accepts no client target UUID or backup claim even in an actual named-argument SQL call`, async () => transaction(async () => {
+    const baseline = await reservationStatus(), before = await snapshot();
+    for (const fn of [RESERVATION_STATUS, RESERVE]) for (const argument of ['p_target_id', 'p_target_uuid', 'p_backup_verified']) {
+      const point = `reservation_argument_${++savepoint}`;
+      await db.exec(`SAVEPOINT ${point}`);
+      try {
+        await db.exec(`SET LOCAL ROLE ${role}`);
+        const checkpointArgs = fn === RESERVE ? ',p_source_fingerprint=>$4::text,p_target_fingerprint=>$5::text' : '';
+        const params = [session, task.job_token, S.same, ...fn === RESERVE ? [baseline.observed.source_fingerprint, baseline.observed.target_fingerprint] : []];
+        await assert.rejects(db.query(`SELECT public.${fn}(p_admin_session_token=>$1::uuid,p_job_token=>$2::uuid,p_source_id=>$3::uuid${checkpointArgs},${argument}=>${argument === 'p_backup_verified' ? 'true' : `'${T.same}'::uuid`})`, params), { code: '42883' });
+      } finally { await db.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); }
+    }
+    assert.deepEqual(await snapshot(), before);
+  }));
+
+  test(`SQL48 ${role}: reservation changes exactly one technical staging row and one safe event, no heartbeat, permits, maintenance or trigger changes`, async () => transaction(async () => {
+    const baseline = await reservationStatus(), before = await snapshot(), triggers = await triggerSnapshot();
+    const stagedBefore = await rows(db, 'SELECT * FROM private.employee_transfer_staging ORDER BY job_id,employee_id,table_key,chunk_no');
+    const eventsBefore = await rows(db, 'SELECT * FROM private.employee_transfer_events ORDER BY id');
+    const result = await reserve(baseline, {}, role); assertReservation(result, baseline);
+    const after = await snapshot();
+    assert.deepEqual(after.filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i])).map(row => row.name), ['private.employee_transfer_events', 'private.employee_transfer_staging']);
+    assert.deepEqual(await triggerSnapshot(), triggers);
+    const saved = await reservations(); assert.equal(saved.length, 1);
+    assert.deepEqual(await rows(db, 'SELECT * FROM private.employee_transfer_staging WHERE table_key<>$1 ORDER BY job_id,employee_id,table_key,chunk_no', [RESERVATION_KEY]), stagedBefore);
+    const events = await reservationEvents(); assert.equal(events.length, 1);
+    assert.equal(events[0].job_id, task.job_id); assert.equal(events[0].admin_id, NEW.root); assert.equal(events[0].kind, 'import');
+    assert.deepEqual(await rows(db, `SELECT * FROM private.employee_transfer_events WHERE action<>'identity_candidate_reserved' ORDER BY id`), eventsBefore);
+    const serialized = JSON.stringify(events[0].details);
+    assert.doesNotMatch(serialized, /password|credential|session_token|job_token|token_hash|current_tab|\$2[aby]\$|local archived evidence/);
+    for (const secret of [session, sourceSession, task.job_token, ...Object.values(PASSWORDS)]) assert.equal(serialized.includes(secret), false);
+    const stable = await snapshot();
+    assert.deepEqual(await reserve(baseline, {}, role), result); assert.deepEqual(await reservationStatus(S.same, {}, role), result);
+    assert.deepEqual(await snapshot(), stable);
+  }));
+
+  test(`SQL48 ${role}: foreign owner, other-site, null and unknown session/job tokens cannot read or change a saved reservation`, async () => transaction(async () => {
+    const baseline = await reservationStatus(); await reserve(baseline);
+    const before = await snapshot();
+    for (const token of [null, randomUUID(), branch, other, sourceSession]) {
+      await assert.rejects(reservationStatus(S.same, { p_admin_session_token: token }, role));
+      await assert.rejects(reserve(baseline, { p_admin_session_token: token }, role));
+    }
+    for (const token of [null, randomUUID()]) {
+      await assert.rejects(reservationStatus(S.same, { p_job_token: token }, role));
+      await assert.rejects(reserve(baseline, { p_job_token: token }, role));
+    }
+    assert.deepEqual(await snapshot(), before);
+  }));
+
+  test(`SQL48 ${role}: expired or revoked sessions, inactive and downgraded administrators fail closed without touching a saved binding`, async () => {
+    for (const invalidate of [
+      () => db.query('UPDATE public.admin_financial_sessions SET expires_at=now()-interval \'1 second\' WHERE token_hash=private.hash_financial_token($1)', [session]),
+      () => db.query('UPDATE public.admin_financial_sessions SET revoked_at=now() WHERE token_hash=private.hash_financial_token($1)', [session]),
+      () => change('public.admins', 'UPDATE public.admins SET is_active=false WHERE id=$1', [NEW.root]),
+      ...['secondary_admin', 'emergency_admin'].map(adminRole => () => change('public.admins', 'UPDATE public.admins SET role=$2 WHERE id=$1', [NEW.root, adminRole])),
+    ]) await transaction(async () => {
+      const baseline = await reservationStatus(); await reserve(baseline); await invalidate();
+      const before = await snapshot();
+      await assert.rejects(reservationStatus(S.same, {}, role)); await assert.rejects(reserve(baseline, {}, role));
+      assert.deepEqual(await snapshot(), before);
+    });
+  });
+
+  test(`SQL48 ${role}: all genuine SQL37 owner prerequisites remain mandatory, no manufactured job or backup markers`, async () => {
+    const invalidations = [
+      ["UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1", [task.job_id]],
+      ["UPDATE private.employee_transfer_jobs SET started_at=now()-interval '13 hours' WHERE id=$1", [task.job_id]],
+      ["UPDATE private.employee_transfer_jobs SET options=jsonb_set(options,'{import_protocol}','\"shared-import-v1\"') WHERE id=$1", [task.job_id]],
+      ["UPDATE private.employee_transfer_jobs SET kind='export' WHERE id=$1", [task.job_id]],
+      ["UPDATE private.employee_transfer_jobs SET status='failed' WHERE id=$1", [task.job_id]],
+      ['DELETE FROM private.employee_transfer_maintenance WHERE job_id=$1', [task.job_id]],
+      ['UPDATE private.employee_transfer_maintenance SET dirty=false WHERE job_id=$1', [task.job_id]],
+      ['UPDATE private.employee_transfer_shared_backups SET sealed_at=NULL WHERE id=$1', [task.job_id]],
+      ["UPDATE private.employee_transfer_jobs SET summary=summary-'dispatch_configuration_applied' WHERE id=$1", [task.job_id]],
+      ["UPDATE private.employee_transfer_jobs SET summary=summary-'dispatch_configuration_receipt' WHERE id=$1", [task.job_id]],
+      ["UPDATE private.employee_transfer_jobs SET summary=summary-'identity_catalog' WHERE id=$1", [task.job_id]],
+      ["DELETE FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key='identity-in:accounts'", [task.job_id]],
+    ];
+    for (const [sql, args] of invalidations) await transaction(async () => {
+      const baseline = await reservationStatus(); await db.query(sql, args); const before = await snapshot();
+      await assert.rejects(reservationStatus(S.same, {}, role), undefined, sql);
+      await assert.rejects(reserve(baseline, {}, role), undefined, sql); assert.deepEqual(await snapshot(), before);
+    });
+  });
+
+  test(`SQL48 ${role}: stale target checkpoint is rejected before first reserve; same-count target drift never rebases an immutable binding`, async () => transaction(async () => {
+    const baseline = await reservationStatus(S.same, {}, role);
+    await change('public.withdrawals', "UPDATE public.withdrawals SET audit_remark='candidate drift before reserve' WHERE id=$1", [id(301)]);
+    const drifted = await reservationStatus(S.same, {}, role), before = await snapshot();
+    assert.notEqual(drifted.observed.target_fingerprint, baseline.observed.target_fingerprint);
+    await assert.rejects(reserve(baseline, {}, role)); assert.deepEqual(await snapshot(), before); assert.deepEqual(await reservations(), []);
+    const saved = await reserve(drifted, {}, role); assertReservation(saved, drifted);
+    await change('public.withdrawals', "UPDATE public.withdrawals SET audit_remark='candidate drift after reserve' WHERE id=$1", [id(301)]);
+    const changed = await reservationStatus(S.same, {}, role); closedGates(changed);
+    assert.equal(changed.source_unchanged, true); assert.equal(changed.target_unchanged, false); assert.equal(changed.candidate_available, true);
+    assert.deepEqual(changed.reservation, saved.reservation); const frozen = await snapshot();
+    await assert.rejects(reserve(drifted, {}, role)); await assert.rejects(reserve(changed, {}, role));
+    assert.deepEqual(await snapshot(), frozen); assert.deepEqual((await reservations())[0].payload, saved.reservation);
+    assert.equal((await reservationEvents()).length, 1);
+  }));
+
+  test(`SQL48 ${role}: coherent source/catalog drift rejects old checkpoints and cannot rebase an existing candidate`, async () => {
+    for (const alreadySaved of [false, true]) await transaction(async () => {
+      const baseline = await reservationStatus(S.same, {}, role);
+      const saved = alreadySaved ? await reserve(baseline, {}, role) : null;
+      await replaceStagedAccounts(); const changed = await reservationStatus(S.same, {}, role);
+      assert.notEqual(changed.observed.source_fingerprint, baseline.observed.source_fingerprint);
+      assert.equal(changed.source_unchanged, false); assert.equal(changed.target_unchanged, false);
+      closedGates(changed); const frozen = await snapshot();
+      await assert.rejects(reserve(baseline, {}, role));
+      if (alreadySaved) {
+        assert.deepEqual(changed.reservation, saved.reservation); await assert.rejects(reserve(changed, {}, role));
+        assert.deepEqual((await reservations())[0].payload, saved.reservation); assert.equal((await reservationEvents()).length, 1);
+      } else { assert.equal(changed.reservation, null); assert.deepEqual(await reservations(), []); }
+      assert.deepEqual(await snapshot(), frozen);
+    });
+  });
+
+  test(`SQL48 ${role}: parsed, raw-byte and bound-catalog corruption never yields an apparently unchanged reservation`, async () => {
+    for (const [sql, args] of [
+      ["UPDATE private.employee_transfer_staging SET payload=jsonb_set(payload,'{rows,0,username}','\"changed\"') WHERE job_id=$1 AND table_key='identity-in:accounts'", [task.job_id]],
+      ["UPDATE private.employee_transfer_staging SET payload=jsonb_set(payload,'{ndjson}',to_jsonb(replace(payload->>'ndjson','replacement-shared','replacement-change'))) WHERE job_id=$1 AND table_key='identity-in:accounts'", [task.job_id]],
+      ["UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{identity_catalog,site_id}',to_jsonb($2::text)) WHERE id=$1", [task.job_id, randomUUID()]],
+    ]) await transaction(async () => {
+      const baseline = await reservationStatus(); await reserve(baseline); await db.query(sql, args); const frozen = await snapshot();
+      await assert.rejects(reservationStatus(S.same, {}, role)); await assert.rejects(reserve(baseline, {}, role));
+      assert.deepEqual(await snapshot(), frozen); assert.equal((await reservations()).length, 1); assert.equal((await reservationEvents()).length, 1);
+    });
+  });
+
+  test(`SQL48 ${role}: unrelated target changes do not drift the page; wrong repeated fingerprints still cannot replace the candidate`, async () => transaction(async () => {
+    const baseline = await reservationStatus(), saved = await reserve(baseline, {}, role);
+    await change('public.users', "UPDATE public.users SET remarks='unrelated candidate observation' WHERE id=$1", [T.unrelated]);
+    assert.deepEqual(await reservationStatus(S.same, {}, role), saved);
+    for (const key of ['p_source_fingerprint', 'p_target_fingerprint']) await assert.rejects(reserve(baseline, { [key]: '0'.repeat(64) }, role));
+    assert.deepEqual(await reserve(baseline, {}, role), saved); assert.equal((await reservationEvents()).length, 1);
+  }));
+
+  test(`SQL48 ${role}: a subsequently occupied candidate is only observed unavailable, never a real UUID namespace lock or automatic replacement`, async () => {
+    for (const kind of ['user', 'admin']) await transaction(async () => {
+      const baseline = await reservationStatus(S.fresh), saved = await reserve(baseline, {}, role), candidate = saved.reservation.target_id;
+      // Keep all business triggers enabled: this candidate is NOT a DB-wide namespace reservation.
+      const maintenance = await scalar(db, 'SELECT to_jsonb(m) FROM private.employee_transfer_maintenance m');
+      await db.exec('DELETE FROM private.employee_transfer_maintenance');
+      if (kind === 'user') await employee(db, candidate, 'candidate-occupant', 'CANDIDATE-OCCUPANT');
+      else await db.query(`INSERT INTO public.admins(id,username,password_hash,role,is_active)
+        SELECT $1,'candidate-admin-occupant',password_hash,'secondary_admin',false FROM public.admins WHERE id=$2`, [candidate, NEW.root]);
+      await db.query('INSERT INTO private.employee_transfer_maintenance SELECT * FROM jsonb_populate_record(NULL::private.employee_transfer_maintenance,$1::jsonb)', [JSON.stringify(maintenance)]);
+      const changed = await reservationStatus(S.fresh, {}, role); closedGates(changed);
+      assert.equal(changed.source_unchanged, true); assert.equal(changed.target_unchanged, true); assert.equal(changed.candidate_available, false);
+      assert.deepEqual(changed.reservation, saved.reservation); const frozen = await snapshot();
+      await assert.rejects(reserve(baseline, {}, role)); await assert.rejects(reserve(changed, {}, role));
+      assert.deepEqual(await snapshot(), frozen); assert.equal((await reservationEvents()).length, 1);
+    });
+  });
+
+  test(`SQL48 ${role}: browser roles cannot rewrite or delete the immutable technical candidate directly`, async () => transaction(async () => {
+    const baseline = await reservationStatus(), saved = await reserve(baseline, {}, role), frozen = await snapshot();
+    for (const sql of [
+      "UPDATE private.employee_transfer_staging SET payload='{}'::jsonb WHERE table_key='identity-reservation-v1'",
+      "DELETE FROM private.employee_transfer_staging WHERE table_key='identity-reservation-v1'",
+      "INSERT INTO private.employee_transfer_staging(job_id,employee_id,table_key,chunk_no,row_count,payload) SELECT job_id,employee_id,'identity-reservation-v1',1,1,payload FROM private.employee_transfer_staging WHERE table_key='identity-reservation-v1'",
+    ]) {
+      const point = `reservation_private_${++savepoint}`; await db.exec(`SAVEPOINT ${point}`);
+      try { await db.exec(`SET LOCAL ROLE ${role}`); await assert.rejects(db.exec(sql), /permission denied/); }
+      finally { await db.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); }
+    }
+    assert.deepEqual(await reservationStatus(S.same, {}, role), saved); assert.deepEqual(await snapshot(), frozen);
+  }));
+
+  test(`SQL48 ${role}: real task cancellation invalidates both RPCs and never clears dirty maintenance or manufactures a new candidate`, async () => transaction(async () => {
+    const baseline = await reservationStatus(); await reserve(baseline, {}, role);
+    const maintenance = await scalar(db, 'SELECT to_jsonb(m) FROM private.employee_transfer_maintenance m');
+    assert.equal((await rpc('employee_transfer_cancel', auth(), role)).success, true);
+    assert.equal(await scalar(db, 'SELECT status FROM private.employee_transfer_jobs WHERE id=$1', [task.job_id]), 'cancelled');
+    assert.deepEqual(await scalar(db, 'SELECT to_jsonb(m) FROM private.employee_transfer_maintenance m'), maintenance);
+    const frozen = await snapshot(); await assert.rejects(reservationStatus(S.same, {}, role)); await assert.rejects(reserve(baseline, {}, role));
+    assert.deepEqual(await snapshot(), frozen);
+  }));
+}
+
+test('SQL48 actual archive retains the old UUID, drifts saved target evidence and leaves SQL37/SQL15 restore and archive gates closed', async () => transaction(async () => {
+  const baseline = await reservationStatus(S.uuid), saved = await reserve(baseline), candidate = saved.reservation.target_id;
+  const oldPlan = await plan();
+  await assert.rejects(rpc('archive_employee_without_media', { p_admin_session_token: session, p_user_id: S.uuid }), /paused/);
+  // Same genuine archive flow as the preserved SQL37 regression, with only a local fixture maintenance window.
+  const maintenance = await scalar(db, 'SELECT to_jsonb(m) FROM private.employee_transfer_maintenance m');
+  await db.exec('DELETE FROM private.employee_transfer_maintenance');
+  assert.equal((await rpc('archive_employee_without_media', { p_admin_session_token: session, p_user_id: S.uuid })).success, true);
+  await db.query('INSERT INTO private.employee_transfer_maintenance SELECT * FROM jsonb_populate_record(NULL::private.employee_transfer_maintenance,$1::jsonb)', [JSON.stringify(maintenance)]);
+  const changed = await reservationStatus(S.uuid); closedGates(changed);
+  assert.equal(changed.source_unchanged, true); assert.equal(changed.target_unchanged, false); assert.equal(changed.candidate_available, true);
+  assert.deepEqual(changed.reservation, saved.reservation); assert.notEqual(candidate, S.uuid);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.users WHERE id=$1 AND archived_at IS NOT NULL', [S.uuid]), 1);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.deleted_employee_accounts WHERE employee_id=$1 AND cleared_at IS NULL', [S.uuid]), 1);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.users WHERE id=$1', [candidate]), 0);
+  const legacyStatus = await status(oldPlan), replacement = rowFor(legacyStatus, S.uuid);
+  assert.equal(legacyStatus.target_unchanged, false); assert.equal(legacyStatus.can_archive, false); assert.equal(legacyStatus.can_replace, false);
+  assert.equal(legacyStatus.identity_mapping_missing, true); assert.equal(legacyStatus.complete_employee_backup_missing, true);
+  assert.ok(replacement.blockers.includes('source_uuid_occupied')); assert.ok(replacement.blockers.includes('complete_employee_backup_missing')); assert.ok(replacement.blockers.includes('identity_mapping_missing'));
+  const frozen = await snapshot(); await assert.rejects(reserve(baseline)); await assert.rejects(reserve(changed)); assert.deepEqual(await snapshot(), frozen);
+  const legacyPlan = await rpc('get_employee_import_identity_plan', auth());
+  assert.equal(legacyPlan.can_restore, false); assert.equal(legacyPlan.replacement_ready, false); assert.equal(legacyPlan.full_site_complete, false);
+  assert.ok(legacyPlan.conflicts.some(conflict => conflict.source_id === S.uuid && conflict.reason === 'employee_id_conflict'));
+  await assert.rejects(rpc('employee_import_identity_begin', { ...auth(), p_plan_hash: legacyPlan.plan_hash }), /conflicts|changed/);
+  await assert.rejects(rpc('employee_import_identity_chunk', { ...auth(), p_table_key: 'accounts', p_chunk_no: 0 }), /begin|restore/i);
+  assert.equal((await reservations()).length, 1); assert.equal((await reservationEvents()).length, 1);
+  assert.deepEqual(await scalar(db, 'SELECT to_jsonb(m) FROM private.employee_transfer_maintenance m'), maintenance);
+}));
+
+for (const role of ['anon', 'authenticated']) test(`SQL48 ${role}: server RNG skips every staged/source, site/job/package, live/archive/admin and saved-candidate UUID collision`, async () => transaction(async () => {
+  // Real archive evidence, not a fabricated deleted identity, owner row or backup marker.
+  const maintenance = await scalar(db, 'SELECT to_jsonb(m) FROM private.employee_transfer_maintenance m');
+  await db.exec('DELETE FROM private.employee_transfer_maintenance');
+  assert.equal((await rpc('archive_employee_without_media', { p_admin_session_token: session, p_user_id: T.unrelated })).success, true);
+  await db.query('INSERT INTO private.employee_transfer_maintenance SELECT * FROM jsonb_populate_record(NULL::private.employee_transfer_maintenance,$1::jsonb)', [JSON.stringify(maintenance)]);
+  const existing = await reserve(await reservationStatus(S.same), {}, role), baseline = await reservationStatus(S.fresh);
+  const forbidden = new Set([task.job_id, pkg, identity.catalog.site_id,
+    await scalar(db, 'SELECT site_id FROM private.employee_transfer_site'), existing.reservation.target_id]);
+  for (const key of KEYS.identity) {
+    assert.ok(identity.texts[key].length, `${key} must really be exported and staged`);
+    for (const line of identity.texts[key].split('\n').filter(Boolean)) {
+      const row = JSON.parse(line); for (const field of ['id', 'user_id', 'created_by']) if (row[field]) forbidden.add(row[field]);
+    }
+  }
+  for (const relation of ['public.users', 'public.admins']) for (const row of await rows(db, `SELECT id FROM ${relation}`)) forbidden.add(row.id);
+  const archived = await rows(db, 'SELECT id,employee_id FROM private.deleted_employee_accounts'); assert.equal(archived.length, 1);
+  for (const row of archived) { forbidden.add(row.id); forbidden.add(row.employee_id); }
+  const candidate = randomUUID(); assert.equal(forbidden.has(candidate), false);
+  // Only randomness is deterministic, in this rollback-only local database transaction.
+  // The actual SECURITY DEFINER RPC, SQL37 owner, sealed disk backups and namespace checks still run.
+  await db.exec('CREATE TEMP TABLE identity_candidate_rng(no integer PRIMARY KEY,value uuid NOT NULL)');
+  await db.exec(`CREATE OR REPLACE FUNCTION pg_catalog.gen_random_uuid() RETURNS uuid LANGUAGE plpgsql VOLATILE AS $rng$
+    DECLARE v_value uuid;
+    BEGIN
+      DELETE FROM pg_temp.identity_candidate_rng WHERE no=(SELECT min(no) FROM pg_temp.identity_candidate_rng) RETURNING value INTO v_value;
+      IF v_value IS NULL THEN RAISE EXCEPTION 'Local candidate RNG exhausted'; END IF;
+      RETURN v_value;
+    END;
+  $rng$`);
+  for (const collision of forbidden) {
+    const point = `candidate_collision_${++savepoint}`; await db.exec(`SAVEPOINT ${point}`);
+    try {
+      await db.query('INSERT INTO pg_temp.identity_candidate_rng(no,value) VALUES(1,$1),(2,$2)', [collision, candidate]);
+      const result = await reserve(baseline, {}, role); assertReservation(result, baseline);
+      assert.equal(result.reservation.target_id, candidate, `must skip ${collision}`);
+      assert.equal(await scalar(db, 'SELECT count(*)::int FROM pg_temp.identity_candidate_rng'), 0);
+      assert.equal((await reservationEvents()).length, 2); assert.equal((await reservations()).length, 2);
+      assert.deepEqual(await reserve(baseline, {}, role), result); // Repeating must not ask exhausted RNG for a new candidate.
+    } finally { await db.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); }
+  }
+  assert.equal((await reservationEvents()).length, 1); assert.equal((await reservations()).length, 1);
+}));
