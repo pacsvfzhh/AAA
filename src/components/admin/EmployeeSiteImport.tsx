@@ -58,7 +58,7 @@ function PlanSummary({ value }: { value: unknown }) {
     {plan.pending_withdrawals != null && <p className="rounded border border-amber-700 bg-amber-950/40 p-3 text-amber-100">待處理提款：{text(record(plan.pending_withdrawals).count)} 筆 · 金額：{text(record(plan.pending_withdrawals).amount)}。凍結資金一併保留；之後只在一個站點處理，避免重複打款。</p>}
     {typeof plan.members_removed === 'number' && <p>依來源精確恢復，將移出原方案成員：{text(plan.members_removed)}</p>}
     {Array.isArray(plan.retire_tasks) && <p>將停用目標多餘任務：{plan.retire_tasks.length}</p>}
-    {rows.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left text-xs"><caption className="mb-2 text-left text-slate-400">服務端計畫對應（{rows.length} 筆）</caption><thead><tr>{['名稱／類別', '來源編號', '目標編號', '操作'].map(label => <th key={label} className="p-2" scope="col">{label}</th>)}</tr></thead><tbody>{rows.map((raw, index) => {
+    {rows.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left text-xs text-slate-200"><caption className="mb-2 text-left text-slate-400">服務端計畫對應（{rows.length} 筆）</caption><thead><tr>{['名稱／類別', '來源編號', '目標編號', '操作'].map(label => <th key={label} className="p-2" scope="col">{label}</th>)}</tr></thead><tbody>{rows.map((raw, index) => {
       const row = record(raw);
       return <tr key={index} className="border-t border-slate-700"><td className="max-w-48 break-words p-2">{text(row.username ?? row.name ?? row.table_key ?? row.number)}</td><td className="max-w-48 break-all p-2 font-mono">{text(row.source_id)}</td><td className="max-w-48 break-all p-2 font-mono">{text(row.target_id)}</td><td className="p-2">{actionNames[text(row.action)] ?? text(row.action)}{row.multi_source_target === true && <p className="text-amber-200">多個來源合併到同一角色</p>}{Array.isArray(row.visibility_employee_ids) && <p className="text-amber-200">涉及可見性差集：{row.visibility_employee_ids.length} 名；{row.allow_visibility === true ? '允許追加' : '不追加'}</p>}</td></tr>;
     })}</tbody></table></div>}
@@ -84,7 +84,13 @@ function ApprovalDialog({ approval, settle }: { approval: Approval; settle: (val
     element?.showModal();
     return () => { element?.close(); };
   }, []);
-  return createPortal(<dialog ref={dialog} aria-labelledby="migration-approval-title" onCancel={event => { event.preventDefault(); settle(false); }} className="m-auto max-h-[90dvh] w-[calc(100%-1.5rem)] max-w-4xl overflow-y-auto rounded-xl border border-slate-600 bg-slate-900 p-4 text-slate-100 shadow-2xl backdrop:bg-black/75 sm:p-6">
+  return createPortal(<dialog ref={dialog} aria-labelledby="migration-approval-title" onKeyDown={event => {
+    if (event.key !== 'Tab') return;
+    const fields = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex="0"]')).filter(element => element.getClientRects().length > 0);
+    const first = fields[0], last = fields[fields.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }} onCancel={event => { event.preventDefault(); settle(false); }} className="m-auto max-h-[90dvh] w-[calc(100%-1.5rem)] max-w-4xl overflow-y-auto rounded-xl border border-slate-600 bg-slate-900 p-4 text-slate-100 shadow-2xl backdrop:bg-black/75 sm:p-6">
     <h2 id="migration-approval-title" className="text-lg font-bold">{approval.kind === 'roles' ? '確認聊天角色對應' : `確認${domains[approval.domain]}計畫`}</h2>
     <p className="mt-2 text-sm text-amber-200">拒絕只會停止後續操作，不撤回已寫入的資料或已封存的備份，也不解除維護。按 Escape 與拒絕相同；請先核對本階段內容。</p>
     <div className="mt-4">

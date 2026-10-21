@@ -161,7 +161,7 @@ test('STABLE SECURITY DEFINER jsonb RPC, exact two UUID parameters and fixed sea
   }
   assert.doesNotMatch(migration, /\bEXECUTE\s+(?:format|v_|')|FOR UPDATE|INSERT INTO|UPDATE private|DELETE FROM|pg_advisory|pg_current_xact_id\(/i);
 });
-test('reviewed signature set covers actual siteRestore import/backup/media clients, not legacy finish/export/release', async () => {
+test('SQL44 signature set plus SQL45 prerequisite covers actual restore clients, not legacy finish/export/release', async () => {
   const files = ['siteRestoreApi', 'api', 'identityApi', 'dependencyApi', 'financeApi', 'activityApi', 'verificationApi', 'verificationMedia',
     'notificationsApi', 'notificationsConfigurationApi', 'notificationsRestoreApi', 'notificationsMedia',
     'chatApi', 'chatMergeApi', 'chatRestoreApi', 'chatMedia', 'archiveApi', 'archiveMedia'];
@@ -179,7 +179,8 @@ test('reviewed signature set covers actual siteRestore import/backup/media clien
   for (const [, name] of handler.matchAll(/['"](employee_transfer_[a-z_]+_media_(?:authorize|commit|read_authorize))['"]/g)) names.add(`public.${name}`);
   const listed = whitelist.map(signature => signature.split('(')[0]);
   assert.equal(new Set(whitelist).size, whitelist.length); assert.equal(new Set(listed).size, listed.length);
-  assert.deepEqual([...listed].sort(), [...names].sort());
+  const v2Only = ['public.employee_import_site_verify_prerequisites'];
+  assert.deepEqual([...listed, ...v2Only].sort(), [...names].sort());
   for (const signature of whitelist) {
     assert.match(signature, /^public\.[a-z_]+\((?:uuid|text|jsonb|integer|bigint)(?:,(?:uuid|text|jsonb|integer|bigint))*\)$/);
     assert.doesNotMatch(signature, /employee_import_finish|employee_export_|leave_maintenance|release/);

@@ -208,6 +208,7 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.locator('#migration-import-password').inputValue(), '');
         assert.equal(await page.locator('#migration-import-passphrase').inputValue(), '');
         assert.equal(await page.evaluate(() => window.__xss === true), false);
+        assert.notEqual(await page.locator('section[aria-label="各卷核驗結果"] td').first().evaluate(element => getComputedStyle(element).color), 'rgb(0, 0, 0)', 'dark theme result table must remain readable');
         const state = await page.evaluate(() => ({ imports: window.__h.imports, decisions: window.__h.decisions, reports: window.__h.reports }));
         assert.equal(state.imports, 1); assert.equal(state.decisions[0].allow_visibility, false);
         const report = JSON.parse(state.reports[0].text);
@@ -255,6 +256,43 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.getByRole('dialog').count(), 0);
         assert.equal(await page.evaluate(() => window.__h.imports), 1);
       }, chromiumUA));
+      await t.test('changing authenticated inputs invalidates target admission and clears credentials', () => scenario(browser, async page => {
+        await prepare(page);
+        await page.locator('#migration-files').setInputFiles({ name: 'changed.edx', mimeType: 'application/octet-stream', buffer: Buffer.from('changed') });
+        assert.equal(await startButton(page).isDisabled(), true);
+        assert.equal(await page.locator('#migration-import-password').inputValue(), '');
+        assert.equal(await page.locator('#migration-import-passphrase').inputValue(), '');
+        assert.equal(await page.getByRole('button', { name: '查詢目標准入（只讀）', exact: true }).isDisabled(), true);
+        assert.equal(await page.evaluate(() => window.__h.imports), 0);
+      }, chromiumUA));
+      await t.test('picker denial and report failure never imply rollback or allow automatic rerun', () => scenario(browser, async page => {
+        await inspect(page);
+        await page.getByRole('button', { name: '查詢目標准入（只讀）', exact: true }).click();
+        await page.evaluate(() => { window.__h.pickerFail = true; });
+        await page.getByRole('button', { name: '選擇獨立備份保存目錄', exact: true }).click();
+        await page.getByText(/未取得備份目錄寫入權限/).waitFor();
+        assert.equal(await page.evaluate(() => window.__h.imports), 0);
+        await page.evaluate(() => { window.__h.pickerFail = false; });
+        await prepare(page);
+        await page.evaluate(() => { window.__h.reportFail = true; });
+        await startButton(page).click();
+        await page.getByRole('dialog').waitFor(); await page.keyboard.press('Escape');
+        await page.getByText(/本機報告未能確認保存/).waitFor();
+        assert.equal(await startButton(page).isDisabled(), true);
+        assert.equal(await page.evaluate(() => window.__h.imports), 1);
+      }, chromiumUA));
+      await t.test('375px approval stays within viewport and native dialog traps keyboard focus', () => scenario(browser, async page => {
+        await prepare(page); await startButton(page).click();
+        const dialog = page.getByRole('dialog'); await dialog.waitFor();
+        const box = await dialog.boundingBox();
+        assert.ok(box.width <= 375 && box.x >= 0 && box.y >= 0 && box.y + box.height <= 812);
+        for (let index = 0; index < 7; index++) {
+          await page.keyboard.press('Tab');
+          assert.equal(await page.evaluate(() => document.activeElement?.closest('dialog') !== null), true);
+        }
+        await page.keyboard.press('Escape');
+        await page.getByText(/本次導入未能確認完成/).waitFor();
+      }, { ...chromiumUA, viewport: { width: 375, height: 812 } }));
       await t.test('375px layout and native unsupported browser cannot begin real import', () => scenario(browser, async page => {
         await inspect(page);
         if (engine === 'webkit') {
