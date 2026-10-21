@@ -216,7 +216,7 @@ async function oracle() {
       query = await scalar(db, 'SELECT private.employee_transfer_replacement_backup_query($1)', [key]); filter = 'true';
     } else if (key === 'orders_history') {
       query = `SELECT id,jsonb_build_object('id',id,'user_id',user_id,'status',status,'commission_amount',commission_amount,
-        'commission_rate',commission_rate,'created_at',created_at,'processed_at',processed_at) AS body FROM public.orders_history WHERE user_id=$1 AND status IN ('success','failure')`; filter = 'true';
+        'created_at',created_at,'completed_at',completed_at) AS body FROM public.orders_history WHERE user_id=$1 AND status IN ('success','failure')`; filter = 'true';
     } else if (key === 'administrators') {
       query = `SELECT id,jsonb_build_object('id',id,'username',username,'role',role,'parent_id',parent_id,'created_at',created_at,'updated_at',updated_at) AS body FROM public.admins WHERE $1::uuid IS NOT NULL`; filter = 'true';
     } else {
@@ -304,7 +304,7 @@ async function clientDisk(t) {
   h.begin = await h.session.begin();
   await oracle();
   h.info = { scope: 'replacement-backup', sourceSiteId: h.begin.site_id, exportId: randomUUID(), volumeId: randomUUID(),
-    volumeIndex: 1, volumeCount: 1, createdAt: TIME };
+    volumeIndex: 1, volumeCount: 1, createdAt: new Date(TIME).toISOString() };
   h.export = options => modules.exportEmployeeSafetyBackup(h.session, h.file, h.workspace, PASSPHRASE, h.info, options);
   return h;
 }
@@ -362,7 +362,8 @@ test('all historical migrations through SQL46 replay with exactly the twelve kno
 test('SQL46 physical dependencies exist in the strict historical replay, without adding synthetic columns', () => transaction(async () => {
   const actual = await scalar(db, `SELECT jsonb_object_agg(attname,format_type(atttypid,atttypmod)) FROM pg_attribute
     WHERE attrelid='public.orders_history'::regclass AND attnum>0 AND NOT attisdropped`);
-  const spec = await scalar(db, "SELECT private.employee_transfer_identity_spec()->'orders'");
+  const spec = { id: 'uuid!', user_id: 'uuid!', status: 'text!', commission_amount: 'numeric',
+    created_at: 'timestamp with time zone', completed_at: 'timestamp with time zone' };
   const mismatches = Object.entries(spec).filter(([column, type]) => actual[column] !== type.replace(/!$/, ''))
     .map(([column, type]) => `${column}: expected ${type}, actual ${actual[column] ?? 'MISSING'}`);
   assert.deepEqual(mismatches, [], `SQL46 orders_history schema guard rejects real begin: ${mismatches.join('; ')}`);
@@ -396,9 +397,17 @@ test('all 48 exact keys return original SQL text, byte counts, row hashes and or
   const job = await begin(); await oracle(); assert.deepEqual(job.catalog.tables.map(t => t.key), TABLES);
   assert.deepEqual(modules.EMPLOYEE_SAFETY_BACKUP_TABLE_KEYS, TABLES);
   assert.deepEqual(modules.validateEmployeeSafetyBackupCatalog(job.catalog), job.catalog);
-  for (const key of TABLES) assert.equal(await collect(job, key), expected.get(key), key);
+  const clientErrors = [];
+  for (const key of TABLES) {
+    const text = await collect(job, key); assert.equal(text, expected.get(key), key);
+    for (const line of lines(text)) {
+      try { modules.validateEmployeeSafetyBackupRow(line, key, job.catalog); }
+      catch (error) { clientErrors.push({ key, error: error.message }); break; }
+    }
+  }
   const raw = await scalar(db, "SELECT ($1::jsonb-'fingerprint')::text", [JSON.stringify(job.catalog)]);
   assert.equal(job.catalog.fingerprint, sha(raw)); flags(await verify(job));
+  assert.deepEqual(clientErrors, [], 'Client must accept original SQL46 records from all 48 tables');
 }));
 test('shared role/template/task ancestors/group dependencies are selected without other employee chat, recipients or progress', () => transaction(async () => {
   const job = await begin(); await oracle();
@@ -417,7 +426,10 @@ test('precision/microseconds/SQL-null and JSON-null survive; administrator passw
   assert.doesNotMatch(login, /EXCLUDED-LIVE-SESSION/);
   for (const key of ['orders', 'orders_history']) {
     const text = await collect(job, key); assert.doesNotMatch(text, /EXCLUDED-|product_value|order_number|transaction_id|product_type_id/);
-    assert.deepEqual(Object.keys(JSON.parse(lines(text)[0])).sort(), ['id', 'user_id', 'status', 'commission_amount', 'commission_rate', 'created_at', 'processed_at'].sort());
+    const fields = key === 'orders_history'
+      ? ['id', 'user_id', 'status', 'commission_amount', 'created_at', 'completed_at']
+      : ['id', 'user_id', 'status', 'commission_amount', 'commission_rate', 'created_at', 'processed_at'];
+    assert.deepEqual(Object.keys(JSON.parse(lines(text)[0])).sort(), fields.sort());
   }
   const admins = await collect(job, 'administrators'); assert.doesNotMatch(admins, /password|token|\$2[aby]\$/i);
   for (const row of lines(admins).map(JSON.parse)) assert.deepEqual(Object.keys(row).sort(), ['id', 'username', 'role', 'parent_id', 'created_at', 'updated_at'].sort());
@@ -442,7 +454,7 @@ test('foreign private text changes do not invalidate this employee snapshot', ()
   assert.deepEqual(await catalog(job), job.catalog); assert.equal((await verify(job)).verified, true);
 }));
 test('a processing order rejects real begin atomically, with no task/event residue', () => transaction(async () => {
-  await change('public.orders', "UPDATE public.orders SET status='processing' WHERE id=$1", [id(1030)]);
+  await change('public.orders', "UPDATE public.orders SET status='processing',commission_amount=NULL,processed_at=NULL WHERE id=$1", [id(1030)]);
   const before = await snapshot(); await assert.rejects(begin(), /processing orders/i); assert.deepEqual(await snapshot(), before);
 }));
 test('wrong second password creates no task and records only a real failed authentication attempt', () => transaction(async () => {
