@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE FUNCTION private.employee_transfer_mapped_identity_source(p_job private.employee_transfer_jobs,p_source_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_status jsonb;v_key text;v_chunk record;v_line text;v_json json;v_rows jsonb;v_hashes text;
 BEGIN
   FOREACH v_key IN ARRAY ARRAY['credentials','orders'] LOOP
@@ -36,7 +36,7 @@ $$;
 
 CREATE FUNCTION private.employee_transfer_mapped_identity_saved(p_job private.employee_transfer_jobs,p_source_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_stage record;v_count bigint;
 BEGIN
   SELECT count(*) INTO v_count FROM private.employee_transfer_staging
@@ -56,7 +56,7 @@ $$;
 CREATE FUNCTION private.employee_transfer_mapped_identity_check_written(
   p_job private.employee_transfer_jobs,p_source_id uuid,p_state jsonb
 ) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_status jsonb;v_map jsonb;v_row jsonb;v_rows jsonb;v_plan jsonb;v_target uuid;v_local private.employee_transfer_jobs%ROWTYPE;
   v_count bigint;v_expected bigint;v_chunks bigint;v_next integer;v_chunk record;v_username text;v_number text;
 BEGIN
@@ -64,7 +64,23 @@ BEGIN
   v_status:=private.employee_transfer_mapped_identity_source(p_job,p_source_id);
   v_map:=private.employee_transfer_identity_admin_map(p_job);
   v_plan:=p_state->'plan';v_target:=(v_plan->>'target_id')::uuid;v_next:=(p_state->>'next_chunk')::integer;
-  IF v_status->'source_unchanged' IS DISTINCT FROM 'true'::jsonb
+  IF NOT private.employee_transfer_exact_object(v_plan,ARRAY['scope','job_id','site_id','source_site_id','package_id',
+      'source_id','target_id','source_fingerprint','binding_hash','plan_hash','can_begin','conflicts','totals','order_chunks',
+      'maintenance','dependencies_pending','can_restore','complete_employee_backup','can_archive','can_replace','full_site_complete'])
+    OR NOT private.employee_transfer_exact_object(p_state->'counts',ARRAY['accounts','credentials','orders'])
+    OR v_plan->'scope' IS DISTINCT FROM '"employee-mapped-identity"'::jsonb
+    OR v_plan->'conflicts' IS DISTINCT FROM '[]'::jsonb
+    OR v_plan->'maintenance' IS DISTINCT FROM 'true'::jsonb OR v_plan->'dependencies_pending' IS DISTINCT FROM 'true'::jsonb
+    OR v_plan->'can_restore' IS DISTINCT FROM 'false'::jsonb OR v_plan->'complete_employee_backup' IS DISTINCT FROM 'false'::jsonb
+    OR v_plan->'can_archive' IS DISTINCT FROM 'false'::jsonb OR v_plan->'can_replace' IS DISTINCT FROM 'false'::jsonb
+    OR v_plan->'full_site_complete' IS DISTINCT FROM 'false'::jsonb
+    OR v_plan->'site_id' IS DISTINCT FROM v_status->'site_id'
+    OR v_plan->'source_site_id' IS DISTINCT FROM v_status->'source_site_id'
+    OR v_plan->'package_id' IS DISTINCT FROM v_status->'package_id'
+    OR v_plan->'source_fingerprint' IS DISTINCT FROM v_status#>'{reservation,source_fingerprint}'
+    OR v_plan->'plan_hash' IS DISTINCT FROM to_jsonb(encode(extensions.digest(convert_to(jsonb_build_object(
+      'plan',v_plan-'plan_hash','admin_map',v_map,'observed_source',v_status#>'{observed,source_fingerprint}')::text,'UTF8'),'sha256'),'hex'))
+    OR v_status->'source_unchanged' IS DISTINCT FROM 'true'::jsonb
     OR p_state->'admin_map' IS DISTINCT FROM v_map
     OR v_plan->'binding_hash' IS DISTINCT FROM v_status#>'{reservation,binding_hash}'
     OR v_plan->'source_id' IS DISTINCT FROM to_jsonb(p_source_id)
@@ -90,7 +106,7 @@ BEGIN
     PERFORM private.employee_transfer_check_identity_written(p_job,'credentials',jsonb_build_array(v_row||jsonb_build_object('id',v_target)),v_map);
   END IF;
   SELECT count(*) INTO v_count FROM public.financial_employee_credentials WHERE user_id=v_target;
-  IF v_count IS DISTINCT FROM CASE WHEN v_row IS NULL THEN 0::bigint ELSE 1::bigint END
+  IF v_count IS DISTINCT FROM (CASE WHEN v_row IS NULL THEN 0::bigint ELSE 1::bigint END)
     OR p_state#>'{counts,accounts}' IS DISTINCT FROM '1'::jsonb
     OR (p_state#>>'{counts,credentials}')::bigint IS DISTINCT FROM v_count
     OR (v_plan#>>'{totals,credentials}')::bigint IS DISTINCT FROM v_count THEN
@@ -122,7 +138,7 @@ $$;
 
 CREATE FUNCTION private.employee_transfer_mapped_identity_plan(p_job private.employee_transfer_jobs,p_source_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_status jsonb;v_saved jsonb;v_binding jsonb;v_map jsonb;v_source jsonb;v_target uuid;
   v_conflicts jsonb:='[]';v_totals jsonb;v_chunks bigint;v_plan jsonb;
 BEGIN
@@ -167,14 +183,14 @@ $$;
 
 CREATE FUNCTION private.employee_transfer_mapped_identity_receipt(p_state jsonb)
 RETURNS jsonb LANGUAGE sql IMMUTABLE SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp AS $$
-  SELECT (p_state->'plan'-ARRAY['can_begin','conflicts'])||jsonb_build_object(
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
+  SELECT ((p_state->'plan')-ARRAY['can_begin','conflicts'])||jsonb_build_object(
     'counts',p_state->'counts','next_chunk',p_state->'next_chunk','verified',p_state->'verified');
 $$;
 
 CREATE FUNCTION public.employee_import_mapped_identity_plan(p_admin_session_token uuid,p_job_token uuid,p_source_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_job private.employee_transfer_jobs%ROWTYPE;
 BEGIN
   v_job:=private.employee_transfer_replacement_owner(p_admin_session_token,p_job_token);
@@ -184,7 +200,7 @@ $$;
 
 CREATE FUNCTION public.employee_import_mapped_identity_status(p_admin_session_token uuid,p_job_token uuid,p_source_id uuid)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_job private.employee_transfer_jobs%ROWTYPE;v_state jsonb;
 BEGIN
   v_job:=private.employee_transfer_replacement_owner(p_admin_session_token,p_job_token);
@@ -196,7 +212,7 @@ $$;
 
 CREATE FUNCTION public.employee_import_mapped_identity_core(p_admin_session_token uuid,p_job_token uuid,p_source_id uuid,p_plan_hash text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp SET lock_timeout='2s' AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' SET lock_timeout='2s' AS $$
 DECLARE v_job private.employee_transfer_jobs%ROWTYPE;v_plan jsonb;v_state jsonb;v_map jsonb;v_row jsonb;
   v_target uuid;v_product uuid;v_disabled jsonb;
 BEGIN
@@ -241,7 +257,7 @@ $$;
 
 CREATE FUNCTION public.employee_import_mapped_identity_orders(p_admin_session_token uuid,p_job_token uuid,p_source_id uuid,p_chunk_no integer)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp SET lock_timeout='2s' AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' SET lock_timeout='2s' AS $$
 DECLARE v_job private.employee_transfer_jobs%ROWTYPE;v_state jsonb;v_rows jsonb;v_target uuid;v_next integer;v_count integer;v_disabled jsonb;
 BEGIN
   PERFORM private.employee_transfer_lock_maintenance_tables();
@@ -283,7 +299,7 @@ $$;
 
 CREATE FUNCTION public.employee_import_mapped_identity_verify(p_admin_session_token uuid,p_job_token uuid,p_source_id uuid)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, public, private, pg_temp SET lock_timeout='2s' AS $$
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' SET lock_timeout='2s' AS $$
 DECLARE v_job private.employee_transfer_jobs%ROWTYPE;v_state jsonb;
 BEGIN
   PERFORM private.employee_transfer_lock_maintenance_tables();

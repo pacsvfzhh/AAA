@@ -247,12 +247,9 @@ before(async () => {
   await buildNewSite(source); await buildNewSite(db);
   await source.query('UPDATE private.employee_transfer_site SET site_id=$1', [randomUUID()]);
   // Different source administrator UUID proves SQL49 uses the actual same-package shared map.
-  await source.query(`INSERT INTO public.admins(id,username,password_hash,role,is_active)
-    SELECT $1,'mapped-source-manager',password_hash,'secondary_admin',true FROM public.admins WHERE id=$2`, [S.branch, NEW.root]);
+  await source.query('DELETE FROM public.financial_admin_credentials WHERE admin_id=$1', [NEW.branch]);
+  await source.query('UPDATE public.admins SET id=$1 WHERE id=$2', [S.branch, NEW.branch]);
   await source.query('INSERT INTO public.financial_admin_credentials(admin_id,password_hash) SELECT id,password_hash FROM public.admins WHERE id=$1', [S.branch]);
-  // Use the existing target branch name, but not its UUID; restore must not default to source/root.
-  await source.query("UPDATE public.admins SET username='mapped-unused-branch' WHERE id=$1", [NEW.branch]);
-  await source.query("UPDATE public.admins SET username='branch' WHERE id=$1", [S.branch]);
   for (const sourceId of EMPLOYEES) {
     await source.query(`INSERT INTO public.users(id,username,employee_id,password_hash,created_by,is_active,is_verified,total_income,
       first_success_order_date,remarks,tags,is_pinned,created_at,updated_at,current_session_token,session_created_at,last_heartbeat_at,current_tab_id)
@@ -279,8 +276,15 @@ before(async () => {
   session = await adminLogin(db, 'root', PASSWORDS.root); sourceSession = await adminLogin(source, 'root', PASSWORDS.root);
   branch = await adminLogin(db, 'branch', PASSWORDS.branch); other = await adminLogin(db, 'mapped-other-root', PASSWORDS.root); pkg = randomUUID();
   const compiled = await build({ stdin: { contents: `export {createReplacementBackup} from './src/lib/employeeTransfer/replacementBackup.ts';
-    export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
-  bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020' });
+    export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';
+    export * from './src/lib/employeeTransfer/employeeMappedIdentity.ts'; export {setHarness} from 'mapped-db:state';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
+  bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', plugins: [{ name: 'local-mapped-sql', setup(builder) {
+    builder.onResolve({ filter: /^(?:mapped-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'mapped-db' }));
+    builder.onLoad({ filter: /.*/, namespace: 'mapped-db' }, ({ path }) => ({ contents: path === 'mapped-db:state'
+      ? 'let h;export const setHarness=v=>{h=v};export const current=()=>h;'
+      : path === '../auth' ? 'import{current}from"mapped-db:state";export const getAdminFinancialSessionToken=()=>current().token;'
+        : 'import{current}from"mapped-db:state";export const supabase={rpc:(name,args)=>current().rpc(name,args)};' }));
+  } }] });
   modules = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
   await source.exec('BEGIN');
   const shared = await capture('shared'), dispatch = await capture('dispatch'); identity = await capture('identity'); expected = await sourceExpected();
@@ -648,3 +652,65 @@ test('SQL49 real archived same-name history remains blocked even when its old us
   assert.equal((await rpc('archive_employee_without_media', { p_admin_session_token: session, p_user_id: T.existing })).success, true);
   await db.query('INSERT INTO private.employee_transfer_maintenance SELECT * FROM jsonb_populate_record(NULL::private.employee_transfer_maintenance,$1::jsonb)', [JSON.stringify(maintenance)]);
 } }));
+
+for (const timezone of ['Asia/Taipei', 'America/New_York']) test(`SQL49 deterministic UTC core/orders/verify/status in ${timezone} session`, async () => scenario(async () => {
+  await db.query("SELECT set_config('TimeZone',$1,true)", [timezone]);
+  const p = await plan(); await complete(p);
+  const s = await status(); assert.equal(s.verified, true);
+  assert.deepEqual(await core(p), s);
+  assert.equal(await scalar(db, "SELECT current_setting('TimeZone')"), timezone);
+  await db.exec("SET LOCAL TimeZone='UTC'"); await assertAccount(S.one, p.target_id); await assertOrders(S.one, p.target_id);
+}));
+
+for (const [field, value] of [['scope', 'forged'], ['site_id', id(900)], ['source_site_id', id(901)], ['package_id', id(902)],
+  ['source_fingerprint', '0'.repeat(64)], ['binding_hash', '0'.repeat(64)], ['plan_hash', '0'.repeat(64)],
+  ['can_restore', true], ['complete_employee_backup', true], ['can_archive', true], ['can_replace', true],
+  ['full_site_complete', true], ['dependencies_pending', false]]) {
+  test(`SQL49 corrupted private plan ${field} never yields a verified status or write`, async () => scenario(async () => {
+    const p = await plan(); await core(p);
+    await db.query('UPDATE private.employee_transfer_staging SET payload=jsonb_set(payload,$3::text[],$4::jsonb) WHERE job_id=$1 AND employee_id=$2 AND table_key=$5',
+      [task.job_id, S.one, ['plan', field], JSON.stringify(value), STATE_KEY]);
+    const frozen = await snapshot();
+    await assert.rejects(status()); await assert.rejects(core(p)); await assert.rejects(orders(S.one, 0)); await assert.rejects(verify());
+    assert.deepEqual(await snapshot(), frozen); assert.equal(await permitCount(), 0);
+  }));
+}
+
+for (const phase of ['core', 'orders']) test(`SQL49 ${phase} constraint failure rolls back business rows, cursor, permits and trigger modes`, async () => scenario(async () => {
+  const p = await plan();
+  if (phase === 'orders') await core(p);
+  await db.exec(`ALTER TABLE public.${phase === 'core' ? 'financial_employee_credentials' : 'orders'}
+    ADD CONSTRAINT mapped_test_insert_failure CHECK(user_id<>'${p.target_id}'::uuid) NOT VALID`);
+  const frozen = await snapshot(), modes = await triggers();
+  await assert.rejects(phase === 'core' ? core(p) : orders(S.one, 0));
+  assert.deepEqual(await snapshot(), frozen); assert.deepEqual(await triggers(), modes); assert.equal(await permitCount(), 0);
+}));
+
+function clientTransport(loseCore = false) {
+  const calls = [];
+  modules.setHarness({ token: session, rpc(name, args) {
+    assert.ok(RPCS.includes(name)); calls.push(name);
+    const query = { abortSignal() { return query; }, then(resolve, reject) {
+      return rpc(name, args).then(data => {
+        if (loseCore && name === PREFIX + 'core') { loseCore = false; throw new Error('private lost-response canary'); }
+        return { data, error: null };
+      }).then(resolve, reject);
+    } };
+    return query;
+  } });
+  return calls;
+}
+
+test('SQL49 real client consumes actual RPC replies and explicitly reconciles a lost core response', async () => scenario(async bindings => {
+  const calls = clientTransport(true), client = modules.createEmployeeMappedIdentitySession(task.job_token);
+  const p = await client.plan(S.one); common(p, bindings[S.one]);
+  await assert.rejects(client.core(p), /unconfirmed/);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.users WHERE id=$1', [p.target_id]), 1);
+  assert.equal(calls.filter(name => name === PREFIX + 'core').length, 1);
+  const count = calls.length; await assert.rejects(client.orders(S.one, 0), /unconfirmed/); assert.equal(calls.length, count);
+  const s = await client.status(S.one); common(s, bindings[S.one]); assert.equal(s.next_chunk, 0);
+  for (let no = 0; no < p.order_chunks; no++) await client.orders(S.one, no);
+  const verified = await client.verify(S.one); assert.equal(verified.verified, true); closed(verified);
+  assert.deepEqual(await client.status(S.one), verified);
+  await assertAccount(S.one, p.target_id); await assertOrders(S.one, p.target_id); await noLegacyAuthorization();
+}));
