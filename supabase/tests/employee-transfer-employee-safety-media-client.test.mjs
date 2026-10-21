@@ -62,14 +62,81 @@ const identity = () => ({ job_id: JOB, job_token: TOKEN, site_id: SITE, employee
 const info = () => ({ exportId: randomUUID(), volumeId: randomUUID(), sourceSiteId: SITE, scope: 'replacement-backup', volumeIndex: 1, volumeCount: 1, createdAt: '2026-10-22T00:00:00.000Z' });
 const stream = raw => ({ async *[Symbol.asyncIterator]() { for (let i = 0; i < raw.length; i += 4096) yield raw.subarray(i, i + 4096); } });
 async function collect(source) { const chunks = []; for await (const raw of source) chunks.push(Buffer.from(raw)); return Buffer.concat(chunks); }
-function account() {
-  return Object.fromEntries(Object.keys(api.EMPLOYEE_BACKUP_PROJECTIONS.accounts).map(key => [key,
-    key === 'id' ? EMPLOYEE : key === 'username' ? NAME : key === 'password_hash' ? '$2a$private-record-hash' : key === 'employee_id' ? 'E-001' : null]));
+const lines = text => text.match(/[^\n]*\n/g) ?? [];
+async function spec(file, domain) {
+  const sql = await readFile(join(root, 'supabase/migrations', file), 'utf8');
+  const match = sql.match(new RegExp(`CREATE FUNCTION private.employee_transfer_${domain}_spec\\(\\)[\\s\\S]*?SELECT '([\\s\\S]*?)'::jsonb;`));
+  assert.ok(match); return JSON.parse(match[1]);
+}
+const projections = { ...api.EMPLOYEE_BACKUP_PROJECTIONS,
+  ...await spec('20261102000028_export_stage_site_chat.sql', 'chat'),
+  ...await spec('20261102000023_export_stage_site_notifications.sql', 'notifications'),
+  ...await spec('20261102000009_export_dispatch_submission_data.sql', 'dispatch'),
+  ...await spec('20261102000033_transfer_readonly_archives.sql', 'archives'),
+  orders_history: { id: 'uuid!', user_id: 'uuid!', status: 'text!', commission_amount: 'numeric', created_at: 'timestamp with time zone', completed_at: 'timestamp with time zone' },
+  administrators: { id: 'uuid!', username: 'text!', role: 'text!', parent_id: 'uuid', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone' } };
+const MEDIA_FIELDS = {
+  verification_requests: ['id_front_url', 'id_back_url', 'selfie_url'], simulated_customers: ['custom_avatar_url', 'customer_avatar'],
+  customer_employee_conversations: ['message_content', 'image_url', 'rating_data'], cs_message_templates: ['content'], customer_auto_messages: ['content'],
+  rich_card_contents: ['html_content'], messages: ['content'], message_templates: ['content'], notification_automation_tasks: ['content_template'],
+  notification_automation_executions: ['content_snapshot'], broadcast_messages: ['message_content', 'image_url'], content_audit_events: ['media_refs', 'before_data', 'after_data'],
+};
+const TIME = '2024-02-29T23:34:56.123456+00:00', PRECISE = '12345678901234567890.12345678901234567890';
+function rowObject(key, index = 0) {
+  const row = Object.fromEntries(Object.entries(projections[key]).map(([field, spec]) => {
+    const type = spec.replace(/!$/, '');
+    return [field, type === 'uuid' ? id(1000 + TABLES.indexOf(key) * 500 + index)
+      : type === 'text' ? '原始文字𠮷 é é' : type.startsWith('numeric') ? '__precise__' : type.startsWith('bigint') ? '9007199254740993'
+        : type === 'boolean' ? false : ['integer', 'smallint'].includes(type) ? 1 : type === 'timestamp with time zone' ? TIME
+          : type === 'text[]' ? ['標籤', null] : type === 'uuid[]' ? [EMPLOYEE, null] : null];
+  }));
+  if (['accounts', 'credentials', 'wallets', 'wallet_balance_baselines', 'work_stop_markers'].includes(key)) row.id = EMPLOYEE;
+  for (const field of ['user_id', 'employee_id', 'recipient_id']) if (Object.hasOwn(row, field) && key !== 'accounts') row[field] = EMPLOYEE;
+  if (key === 'accounts') Object.assign(row, { username: NAME, password_hash: '$2a$private-record-hash', updated_at: null, remarks: '原始備註\n𠮷', is_pinned: true });
+  if (key === 'credentials') row.password_hash = '$2a$hash-financial';
+  if (['orders', 'orders_history'].includes(key)) row.status = 'success';
+  if (['wallet_ledger_entries', 'wallet_reconciliation_audit'].includes(key)) row.id = '9007199254740993';
+  if (key === 'employee_login_history') Object.assign(row, { employee_id: 'LOCAL-1000', session_id: `history-${'a'.repeat(64)}`, device_info: null, device_info_is_sql_null: true });
+  if (key === 'work_sessions') Object.assign(row, { end_time: null, last_heartbeat_at: null, duration_minutes: null });
+  if (key === 'simulated_customers') Object.assign(row, { source_type: 'aaa_service', badge_type: null, target_employee_ids: [null], target_employee_id: OTHER });
+  if (key === 'cs_message_templates') Object.assign(row, { source_type: 'aaa_service', content_type: 'text' });
+  if (key === 'customer_auto_messages') Object.assign(row, { message_type: 'quick_send', content_type: 'text' });
+  if (key === 'customer_employee_conversations') Object.assign(row, { source_type: 'aaa_service', sender_type: 'employee', message_type: 'text', rating_data_sql_null: true });
+  if (key === 'customer_service_sessions') row.status = 'closed';
+  if (key === 'ccc_conversation_annotations') row.id = `${row.customer_id}:${row.employee_id}`;
+  if (key === 'rating_requests') row.status = 'completed';
+  if (key === 'service_ratings') row.rating = 5;
+  if (key === 'notification_automation_plans') row.status = 'active';
+  if (key === 'notification_automation_tasks') Object.assign(row, { status: 'active', trigger_type: 'total_orders', trigger_mode: 'reach_once', recipient_scope: 'selected' });
+  if (key === 'notification_automation_plan_members') row.id = row.user_id;
+  if (['notification_automation_task_recipients', 'notification_automation_progress', 'notification_automation_failures'].includes(key)) row.id = `${row.task_id}:${row.user_id}`;
+  if (key === 'notification_automation_progress') row.last_period_key = 'all';
+  if (key === 'notification_automation_executions') Object.assign(row, { status: 'succeeded', period_key: 'all', task_version: 1, error_message: null,
+    trigger_snapshot: { trigger_type: 'total_orders', trigger_mode: 'reach_once', threshold_value: '__precise__', minimum_daily_orders: null, minimum_daily_work_minutes: null } });
+  if (key === 'notification_automation_date_runs') Object.assign(row, { period_key: 'all', task_version: 1, id: `${row.task_id}:0000000001:all` });
+  if (key === 'notification_automation_failures') row.last_error = 'redacted migration error';
+  if (['messages', 'message_templates', 'notification_automation_tasks'].includes(key)) Object.assign(row, { message_type: 'realtime', priority: 'normal', delivery_mode: 'realtime_only' });
+  if (key === 'messages') Object.assign(row, { notification_category: 'standard', audit_origin: 'manual_admin' });
+  if (key === 'message_recipients') row.delivery_channel = 'realtime';
+  if (key === 'broadcast_messages') Object.assign(row, { message_type: 'text', target_type: 'specific_employees' });
+  if (key === 'content_audit_recipient_versions') row.id = `${row.message_id}:${row.recipient_id}`;
+  if (key === 'administrators') Object.assign(row, { role: 'secondary_admin', parent_id: OTHER, updated_at: null });
+  for (const field of MEDIA_FIELDS[key] ?? []) row[field] = projections[key][field] === 'text!' ? '' : null;
+  if (key === 'content_audit_events') Object.assign(row, { before_data_sql_null: true, after_data_sql_null: true, media_refs: {}, cleared_at: null });
+  return row;
+}
+function serialize(row) { return JSON.stringify(row).replaceAll('"__precise__"', PRECISE).replace('"id":', '"\\u0069d":') + ' \r\n'; }
+const publicUrl = (bucket, path, origin = ORIGIN) => `${origin}/storage/v1/object/public/${bucket}/${path}`;
+const html = url => `<p>原文</p><img src="${url}">`;
+function exactRef(c, table, line, field, original, kind, options) {
+  const r = ref(c, kind, options);
+  r.source_url = `employee-safety-media-v1:${c.site_id}:${c.job_id}:${c.employee_id}:${c.fingerprint}:${sha(line)}:${sha(`${table}:${JSON.parse(line).id}:${field}:${original}`)}:${sha(r.bucket + '/' + r.path)}`;
+  r.key = sha(r.source_url); return r;
 }
 function recordCatalog(texts) {
   return { version: 1, protocol: 'employee-safety-records-v1', scope: 'employee-safety-records', job_id: JOB, site_id: SITE,
     employee_id: EMPLOYEE, username: NAME,
-    tables: TABLES.map(key => ({ key, rows: texts[key] ? 1 : 0, bytes: Buffer.byteLength(texts[key]), row_hashes_sha256: sha(texts[key] ? sha(texts[key]) : '') })), fingerprint: FINGERPRINT, ...RECORD_FLAGS };
+    tables: TABLES.map(key => ({ key, rows: lines(texts[key]).length, bytes: Buffer.byteLength(texts[key]), row_hashes_sha256: sha(lines(texts[key]).map(sha).join('')) })), fingerprint: FINGERPRINT, ...RECORD_FLAGS };
 }
 function ref(c, kind = 'chat', options = {}) {
   const r = { key: '', source_url: '', kind, bucket: kind === 'verification' ? 'verification-documents' : kind === 'archives' ? 'content-audit-evidence' : 'chat-images',
@@ -79,9 +146,32 @@ function ref(c, kind = 'chat', options = {}) {
 }
 const fileTuple = (r, bytes = JPEG, type = 'image/jpeg') => ({ key: r.key, source_url: r.source_url, bytes: bytes.length, sha256: sha(bytes), content_type: type });
 const receipt = file => ({ success: true, key: file.key, bytes: file.bytes, sha256: file.sha256, content_type: file.content_type, ...FLAGS });
-function base() {
-  const texts = Object.fromEntries(TABLES.map(key => [key, key === 'accounts' ? JSON.stringify(account()) + '\n' : '']));
-  const catalog = recordCatalog(texts); return { texts, catalog };
+function base(empty = false) {
+  const rows = Object.fromEntries(TABLES.map(key => [key, empty && key !== 'accounts' ? [] : [rowObject(key)]])), expected = [];
+  const put = (table, index, field, kind, bucket, path, format = 'direct') => {
+    rows[table][index] ??= rowObject(table, index);
+    const original = publicUrl(bucket, path);
+    rows[table][index][field] = format === 'direct' ? original : html(original) + html(original);
+    expected.push({ table, index, field, original, kind, options: { bucket, path, avatar: table === 'simulated_customers' || bucket === 'super-customer-avatars' } });
+  };
+  if (!empty) {
+    for (const [field, dir] of [['id_front_url', 'id-front'], ['id_back_url', 'id-back'], ['selfie_url', 'selfie']]) put('verification_requests', 0, field, 'verification', 'verification-documents', `${dir}/${EMPLOYEE}-fixture.jpg`);
+    put('simulated_customers', 0, 'custom_avatar_url', 'chat', 'super-customer-avatars', 'avatars/fixture.png');
+    rows.simulated_customers[0].customer_avatar = 'customer-avatar:vip:123';
+    for (const index of [0, 1]) for (const field of ['message_content', 'image_url']) put('customer_employee_conversations', index, field, 'chat', 'chat-images', 'fixture.jpg', field === 'message_content' ? 'html' : 'direct');
+    rows.customer_employee_conversations[0].rating_data = { stars: 5, comment: 'ordinary punctuation: https://example.test/file.png' };
+    rows.customer_employee_conversations[0].rating_data_sql_null = false;
+    for (const [table, field] of [['cs_message_templates', 'content'], ['customer_auto_messages', 'content'], ['rich_card_contents', 'html_content']]) put(table, 0, field, 'chat', 'template-images', 'fixture.jpg', 'html');
+    for (const [table, field] of [['messages', 'content'], ['message_templates', 'content'], ['notification_automation_tasks', 'content_template'], ['notification_automation_executions', 'content_snapshot'], ['broadcast_messages', 'message_content'], ['broadcast_messages', 'image_url']]) put(table, 0, field, 'notifications', 'announcement-images', 'notification.pdf', field === 'image_url' ? 'direct' : 'html');
+    const evidence = rows.content_audit_events[0];
+    evidence.before_data = { original: 'https://historical.invalid/image.png', src: 'data:old-snapshot' }; evidence.before_data_sql_null = false;
+    evidence.after_data = { arbitrary: { media: 'blob:historical-only' } }; evidence.after_data_sql_null = false;
+    evidence.media_refs = { 'https://foreign.invalid/opaque?not=a-fetch-destination%2F': 'PRIVATE-evidence/shared/raw', 'second opaque key': 'PRIVATE-evidence/shared/raw' };
+    for (const original of Object.keys(evidence.media_refs)) expected.push({ table: 'content_audit_events', index: 0, field: 'media_refs', original, kind: 'archives', options: { path: evidence.media_refs[original] } });
+  }
+  const texts = Object.fromEntries(TABLES.map(key => [key, rows[key].map(serialize).join('')])), catalog = recordCatalog(texts);
+  const refs = expected.map(e => exactRef(catalog, e.table, lines(texts[e.table])[e.index], e.field, e.original, e.kind, e.options)).sort((a, b) => a.key.localeCompare(b.key));
+  return { texts, catalog, refs };
 }
 function inventory(c, files, verified = false) { return { version: 1, scope: 'employee-safety-media', records_catalog: c, files, verified, ...FLAGS }; }
 function redacted(error, phase) {
@@ -94,11 +184,11 @@ function cleaned(h) { for (const w of h.spaces) { assert.equal(w.cleaned, true);
 function noLifecycle(h) { assert.ok(h.calls.every(c => [INVENTORY, VERIFY, AUTHORIZE, COMMIT].includes(c.name))); }
 function harness(t, empty = false) {
   const directory = mkdtempSync(join(tmpdir(), 'safety-media-client-')); t.after(() => rm(directory, { recursive: true, force: true }));
-  const b = base(), h = { ...b, directory, spaces: [], events: [], calls: [], session: SESSION, bound: new Map(), checked: new Set(), objects: new Map(),
-    rpcHook: null, transform: null, transportHook: null, cleanupHook: null, appendHook: null, fileWriteHook: null, edgeCommitHook: null, transportCalls: 0, verifyCount: 0 };
-  h.refs = empty ? [] : [ref(h.catalog, 'verification'), ref(h.catalog, 'chat', { bucket: 'super-customer-avatars', path: 'avatars/fixture.png', avatar: true }),
-    ref(h.catalog, 'notifications', { path: 'notification.pdf' }), ref(h.catalog, 'archives')].sort((a, b) => a.key.localeCompare(b.key));
-  for (const r of h.refs) h.objects.set(r.key, { bytes: r.avatar ? PNG : r.kind === 'notifications' ? PDF : JPEG, type: r.avatar ? 'image/png' : r.kind === 'notifications' ? 'application/pdf' : 'image/jpeg' });
+  const b = base(empty), h = { ...b, directory, spaces: [], events: [], calls: [], session: SESSION, bound: new Map(), checked: new Set(), objects: new Map(),
+    rpcHook: null, transform: null, transportHook: null, cleanupHook: null, appendHook: null, openHook: null, fileWriteHook: null, edgeCommitHook: null, transportCalls: 0, verifyCount: 0 };
+  h.refresh = () => { h.catalog = recordCatalog(h.texts); };
+  h.seedObjects = () => { for (const r of h.refs) h.objects.set(r.key, { bytes: r.avatar ? PNG : r.kind === 'notifications' ? PDF : JPEG, type: r.avatar ? 'image/png' : r.kind === 'notifications' ? 'application/pdf' : 'image/jpeg' }); };
+  h.seedObjects();
   h.inventory = (verified = h.refs.every(r => h.checked.has(r.key))) => inventory(structuredClone(h.catalog), h.refs.map(r => ({ ...r, file: h.bound.get(r.key) ?? null })), verified);
   h.reply = async (name, args, signal) => {
     h.calls.push({ name, args: structuredClone(args) }); h.events.push(name); noLifecycle(h);
@@ -136,7 +226,7 @@ function harness(t, empty = false) {
     const response = await handler(new Request(url, init)); return h.transportHook ? h.transportHook(response, init) : response;
   };
   h.factory = () => {
-    const w = { base: join(directory, `workspace-${h.spaces.length}`), cleaned: false, cleanups: 0,
+    const w = { base: join(directory, `workspace-${h.spaces.length}`), cleaned: false, cleanups: 0, reads: new Map(),
       async append(path, raw, signal) {
         assert.equal(w.cleaned, false); assert.equal(signal.aborted, false); assert.ok(raw.length <= 1024 * 1024);
         if (h.appendHook) await h.appendHook(w, path, raw, signal);
@@ -144,7 +234,9 @@ function harness(t, empty = false) {
         await mkdir(dirname(join(w.base, path)), { recursive: true }); assert.equal(w.cleaned, false); await appendFile(join(w.base, path), raw);
       },
       open(path) { return { async *[Symbol.asyncIterator]() {
-        assert.equal(w.cleaned, false); for await (const chunk of createReadStream(join(w.base, path), { highWaterMark: 4096 })) { assert.equal(w.cleaned, false); yield chunk; }
+        assert.equal(w.cleaned, false); w.reads.set(path, (w.reads.get(path) ?? 0) + 1);
+        if (h.openHook) { const substitute = await h.openHook(w, path, w.reads.get(path)); if (substitute) { yield* substitute; return; } }
+        for await (const chunk of createReadStream(join(w.base, path), { highWaterMark: 137 })) { assert.equal(w.cleaned, false); yield chunk; }
       } }; },
       async abort() {
         w.cleaned = true; w.cleanups++; h.events.push('cleanup-' + h.spaces.indexOf(w)); await rm(w.base, { recursive: true, force: true });
@@ -179,6 +271,19 @@ function harness(t, empty = false) {
   h.read = (consume = async () => {}, options = {}, password = PASS) => api.withAuthenticatedEmployeeSafetyMediaBackup(h.records, h.media, password, h.factory, consume, options);
   return h;
 }
+function setMediaRows(h, entries) {
+  const rows = new Map();
+  for (const e of entries) {
+    const index = e.index ?? 0, key = `${e.table}:${index}`;
+    if (!rows.has(key)) rows.set(key, { table: e.table, index, row: rowObject(e.table, index) });
+    rows.get(key).row[e.field] = e.field === 'media_refs' ? { [e.original]: e.path }
+      : ['id_front_url', 'id_back_url', 'selfie_url', 'image_url', 'custom_avatar_url', 'customer_avatar'].includes(e.field) ? e.original : html(e.original);
+  }
+  for (const table of new Set(entries.map(e => e.table))) h.texts[table] = [...rows.values()].filter(e => e.table === table).sort((a, b) => a.index - b.index).map(e => serialize(e.row)).join('');
+  h.refresh();
+  h.refs = entries.map(e => exactRef(h.catalog, e.table, serialize(rows.get(`${e.table}:${e.index ?? 0}`).row), e.field, e.original, e.kind, { bucket: e.bucket, path: e.path, avatar: e.avatar ?? false })).sort((a, b) => a.key.localeCompare(b.key));
+  h.seedObjects();
+}
 async function prepared(t, empty = false) { const h = harness(t, empty); await h.writeRecords(); return h; }
 async function failedExport(h, options, check) {
   await assert.rejects(h.export(options), e => { redacted(e); check?.(e); return true; }); cleaned(h); noLifecycle(h);
@@ -194,7 +299,10 @@ async function rewriteMedia(h, transform = c => c, changeEntries = e => e) {
 for (const empty of [false, true]) test(`real filesystem AES/ZIP/SHA export + actual client RPC/Edge bridge + paired reader (${empty ? 'empty' : 'all four kinds'})`, async t => {
   const h = await prepared(t, empty), progress = [], beforeRecords = await readFile(h.records.path); h.result = await h.export({ onProgress: p => progress.push(p) });
   const r = h.result, disk = await readFile(h.media.path);
-  assert.equal(r.files, h.refs.length); assert.equal(r.mediaVerified, true); assert.equal(r.cipherSha256, sha(disk)); assert.equal(r.cipherBytes, disk.length);
+  assert.equal(r.files, h.refs.length); assert.equal(r.mediaVerified, true);
+  for (const key of TABLES) assert.equal(h.spaces[0].reads.get(api.employeeSafetyBackupEntryPath(key)), 2, `Authenticated rescan: ${key}`);
+  assert.equal(h.spaces[0].reads.get(api.EMPLOYEE_SAFETY_BACKUP_CATALOG_PATH), 2);
+  assert.deepEqual(r.catalog.inventory.files.map(r => ({ ...r, file: null })), h.refs); assert.equal(r.cipherSha256, sha(disk)); assert.equal(r.cipherBytes, disk.length);
   assert.deepEqual(await readFile(h.records.path), beforeRecords); assert.equal(h.verifyCount, 2); assert.equal(h.transportCalls, h.refs.length * 3);
   assert.ok(h.events.indexOf('eof-records.edx') < h.events.indexOf(INVENTORY)); assert.ok(h.events.indexOf('cleanup-0') < h.events.indexOf(INVENTORY));
   assert.ok(h.events.lastIndexOf('cleanup-2') < h.events.lastIndexOf(VERIFY));
@@ -447,9 +555,12 @@ for (const field of ['exportId', 'volumeId', 'sourceSiteId', 'scope', 'volumeInd
   await failedExport(h); assert.equal(h.calls.length, 0); assert.equal(h.media.writes, 0);
 });
 test('catalogue above 64KiB is supported as one bounded 4MiB metadata entry, with opaque portable destinations', async t => {
-  const h = await prepared(t, true);
-  h.refs = Array.from({ length: 80 }, (_, i) => ref(h.catalog, 'chat', { path: `con./${'a'.repeat(120)}/${i}.JPG` })).sort((a, b) => a.key.localeCompare(b.key));
-  for (const r of h.refs) h.objects.set(r.key, { bytes: JPEG, type: 'image/jpeg' });
+  const h = harness(t, true);
+  setMediaRows(h, Array.from({ length: 80 }, (_, index) => {
+    const path = `con./${'a'.repeat(120)}/${index}.JPG`;
+    return { table: 'customer_employee_conversations', index, field: 'image_url', original: publicUrl('chat-images', path), kind: 'chat', bucket: 'chat-images', path };
+  }));
+  await h.writeRecords();
   h.result = await h.export(); assert.ok(h.result.manifest.entries[0].bytes > 65536); assert.ok(h.result.manifest.entries[0].bytes < 4 * 1024 * 1024);
   await h.read(async reader => assert.equal(reader.inventory.files.length, 80)); cleaned(h);
 });
@@ -483,14 +594,145 @@ test('actual encrypted package with correct payload SHA still fails magic verifi
   await assert.rejects(h.read(), e => redacted(e, 'validate')); cleaned(h);
 });
 test('injected source cannot falsify file size or magic even without the API factory', async t => {
-  const h = await prepared(t, true), r = ref(h.catalog), inv = inventory(h.catalog, [r]);
+  const h = await prepared(t), r = h.refs[0], inv = inventory(h.catalog, h.refs);
   h.source = { inventory: async () => inv, download: async () => ({ file: { ...fileTuple(r), bytes: JPEG.length + 1 }, bytes: JPEG }),
     recheck: async () => assert.fail('Invalid bytes cannot reach recheck'), verify: async () => assert.fail('Invalid bytes cannot reach verify') };
   await failedExport(h, {}, e => assert.equal(e.encryptedFileState, 'not-written')); assert.equal(h.media.writes, 0);
 });
 test('local magic inspection covers PDF/MP4/WebM in their allowed media kinds', async t => {
-  const h = await prepared(t, true);
-  h.refs = [ref(h.catalog, 'notifications', { path: 'a.mp4' }), ref(h.catalog, 'chat', { path: 'b.webm' }), ref(h.catalog, 'verification', { path: `selfie/${EMPLOYEE}-a.pdf` })].sort((a, b) => a.key.localeCompare(b.key));
+  const h = harness(t, true);
+  setMediaRows(h, [
+    { table: 'messages', field: 'content', kind: 'notifications', bucket: 'chat-images', path: 'a.mp4' },
+    { table: 'customer_employee_conversations', field: 'image_url', kind: 'chat', bucket: 'chat-images', path: 'b.webm' },
+    { table: 'verification_requests', field: 'selfie_url', kind: 'verification', bucket: 'verification-documents', path: `selfie/${EMPLOYEE}-a.pdf` },
+  ].map(e => ({ ...e, original: publicUrl(e.bucket, e.path) })));
   for (const r of h.refs) h.objects.set(r.key, { bytes: r.path.endsWith('mp4') ? MP4 : r.path.endsWith('webm') ? WEBM : PDF });
+  await h.writeRecords();
   await h.export(); await h.read(); cleaned(h);
+});
+
+function reidentify(h, r, change) {
+  const originalKey = r.key, parts = r.source_url.split(':'); change(r, parts);
+  parts[7] = sha(r.bucket + '/' + r.path); r.source_url = parts.join(':'); r.key = sha(r.source_url);
+  if (r.file) Object.assign(r.file, { key: r.key, source_url: r.source_url });
+  h.objects.set(r.key, h.objects.get(originalKey));
+}
+for (const variant of ['remove-one', 'remove-all', 'wrong-row-sha', 'wrong-ref-sha', 'path', 'bucket', 'kind', 'avatar', 'extra']) test(`paired reader rejects self-consistent encrypted reference forgery: ${variant}`, async t => {
+  const h = await prepared(t); h.result = await h.export();
+  assert.ok(JSON.parse(lines(h.texts.verification_requests)[0]).id_front_url, 'Real SQL46 records still require documents');
+  const binding = structuredClone(h.result.catalog.records_file), recordCipher = await readFile(h.records.path);
+  await rewriteMedia(h, c => {
+    const r = c.inventory.files.find(r => r.kind === 'chat' && !r.avatar);
+    if (variant === 'remove-one') c.inventory.files.splice(c.inventory.files.findIndex(r => r.kind === 'verification'), 1);
+    else if (variant === 'remove-all') c.inventory.files = [];
+    else if (variant === 'extra') {
+      const extra = ref(h.catalog, 'chat', { path: 'extra.jpg' }); extra.file = fileTuple(extra); h.objects.set(extra.key, { bytes: JPEG }); c.inventory.files.push(extra);
+    } else reidentify(h, r, (r, parts) => {
+      if (variant === 'wrong-row-sha') parts[5] = sha('different row\n');
+      if (variant === 'wrong-ref-sha') parts[6] = sha('different table:id:field:original');
+      if (variant === 'path') r.path = 'different.jpg';
+      if (variant === 'bucket') r.bucket = 'announcement-images';
+      if (variant === 'kind') r.kind = 'notifications';
+      if (variant === 'avatar') r.avatar = true;
+    });
+    c.inventory.files.sort((a, b) => a.key.localeCompare(b.key));
+    assert.equal(c.inventory.verified, true); assert.deepEqual(c.records_file, binding);
+    api.validateEmployeeSafetyMediaInventory(c.inventory); // Shape, hashes and file identities are internally valid.
+    return c;
+  });
+  assert.deepEqual(await readFile(h.records.path), recordCipher);
+  const calls = h.calls.length; let consumed = false;
+  await assert.rejects(h.read(async () => { consumed = true; }), e => redacted(e, 'validate'));
+  assert.equal(consumed, false); assert.equal(h.calls.length, calls); cleaned(h);
+});
+for (const variant of ['remove-one', 'remove-all', 'extra']) test(`export rejects ${variant} inventory before ANY download`, async t => {
+  const h = await prepared(t);
+  h.transform = (name, v) => {
+    if (name === INVENTORY) {
+      if (variant === 'remove-one') v.files.pop();
+      if (variant === 'remove-all') { v.files = []; v.verified = true; }
+      if (variant === 'extra') { v.files.push(ref(h.catalog, 'chat', { path: 'extra.jpg' })); v.files.sort((a, b) => a.key.localeCompare(b.key)); }
+    }
+    return v;
+  };
+  await failedExport(h, {}, e => { assert.equal(e.phase, 'inventory'); assert.equal(e.outcomeUnknown, false); });
+  assert.equal(h.transportCalls, 0); assert.equal(h.media.writes, 0);
+});
+test('duplicate token dedups only within one row/field; shared objects retain separate authenticated identities', async t => {
+  const h = await prepared(t); h.result = await h.export();
+  const shared = h.result.catalog.inventory.files.filter(r => r.bucket === 'chat-images' && r.path === 'fixture.jpg');
+  assert.equal(shared.length, 4, 'Two rows times two fields, not one shared path and not duplicate HTML tokens');
+  assert.equal(new Set(shared.map(r => r.key)).size, 4);
+  assert.equal(new Set(shared.map(r => r.source_url.split(':')[5])).size, 2);
+  assert.equal(h.result.catalog.inventory.files.filter(r => r.kind === 'verification').length, 3);
+  assert.equal(h.result.catalog.inventory.files.filter(r => r.kind === 'notifications').length, 6);
+  assert.equal(h.result.catalog.inventory.files.filter(r => r.kind === 'archives').length, 2, 'Two opaque evidence keys sharing one path remain distinct');
+  assert.equal(h.result.catalog.inventory.files.filter(r => r.avatar).length, 1, 'Builtin customer-avatar identifier does not download');
+  assert.match(h.texts.accounts, new RegExp(PRECISE.replaceAll('.', '\\.')));
+  assert.notEqual(serialize(JSON.parse(lines(h.texts.accounts)[0])), lines(h.texts.accounts)[0], 'Raw numeric precision cannot survive reserialization');
+  await h.read(); cleaned(h);
+});
+test('URL customer_avatar is locally proven as avatar rather than a builtin identifier', async t => {
+  const h = harness(t, true), path = 'avatar.jpg';
+  setMediaRows(h, [{ table: 'simulated_customers', field: 'customer_avatar', kind: 'chat', bucket: 'chat-images', path, original: publicUrl('chat-images', path), avatar: true }]);
+  await h.writeRecords(); const result = await h.export(); assert.equal(result.files, 1); assert.equal(result.catalog.inventory.files[0].avatar, true);
+  await h.read(); cleaned(h);
+});
+const unsupportedRecords = [
+  ['unapproved text media', 'accounts', r => { r.remarks = 'https://external.invalid/photo.png'; }],
+  ['unapproved HTML', 'accounts', r => { r.remarks = '<video>'; }],
+  ['unapproved CSS', 'accounts', r => { r.remarks = 'url (x)'; }],
+  ['nested media key', 'employee_login_history', r => { r.device_info = { nested: [{ attachment: 'opaque reference' }] }; r.device_info_is_sql_null = false; }],
+  ['nested media text', 'employee_login_history', r => { r.device_info = { nested: ['data :unsupported'] }; r.device_info_is_sql_null = false; }],
+  ['nested key itself', 'employee_login_history', r => { r.device_info = { 'photo.png': null }; r.device_info_is_sql_null = false; }],
+  ['residual external image', 'messages', r => { r.content = 'https://external.invalid/photo.png'; }],
+  ['residual storage', 'messages', r => { r.content = 'unaccounted storage object'; }],
+  ['residual data', 'messages', r => { r.content = 'blob :opaque'; }],
+  ['unsupported HTML src', 'messages', r => { r.content = '<img src="https://external.invalid/a.png">'; }],
+  ['encoded URL', 'messages', r => { r.content = html(publicUrl('chat-images', 'a%2Fb.jpg')); }],
+  ['srcset', 'messages', r => { r.content = '<img srcset="a.jpg 2x">'; }],
+  ['rating media', 'customer_employee_conversations', r => { r.rating_data = { stars: 5, image: 'opaque' }; r.rating_data_sql_null = false; }],
+  ['rating nested text', 'customer_employee_conversations', r => { r.rating_data = ['photo.png']; r.rating_data_sql_null = false; }],
+  ['document owner', 'verification_requests', r => { r.id_front_url = publicUrl('verification-documents', `id-front/${OTHER}-front.jpg`); }],
+  ['document wrong bucket', 'verification_requests', r => { r.id_front_url = publicUrl('chat-images', 'front.jpg'); }],
+  ['notification avatar bucket', 'messages', r => { r.content = html(publicUrl('super-customer-avatars', 'avatars/a.jpg')); }],
+  ['mixed origins', 'messages', r => { r.content = html(publicUrl('chat-images', 'a.jpg', 'https://other-fixture.supabase.co')); }],
+  ['bad builtin avatar', 'simulated_customers', r => { r.customer_avatar = 'customer-avatar:vip:123\n'; }],
+  ['array evidence', 'content_audit_events', r => { r.media_refs = []; }],
+  ['cleared evidence', 'content_audit_events', r => { r.cleared_at = TIME; }],
+  ['evidence empty key', 'content_audit_events', r => { r.media_refs = { '': 'private/raw' }; }],
+  ['evidence key controls', 'content_audit_events', r => { r.media_refs = { 'opaque\nkey': 'private/raw' }; }],
+  ['evidence key bytes', 'content_audit_events', r => { r.media_refs = { ['é'.repeat(2049)]: 'private/raw' }; }],
+  ['evidence nonstring', 'content_audit_events', r => { r.media_refs = { opaque: { path: 'private/raw' } }; }],
+  ['evidence path bytes', 'content_audit_events', r => { r.media_refs = { opaque: 'a'.repeat(513) }; }],
+  ['evidence traversal', 'content_audit_events', r => { r.media_refs = { opaque: 'private/../raw' }; }],
+  ['evidence external', 'content_audit_events', r => { r.media_refs = { opaque: 'https://external.invalid/raw.jpg' }; }],
+];
+for (const [label, table, mutate] of unsupportedRecords) test(`fully authenticated records fail closed before media RPC: ${label}`, async t => {
+  const h = harness(t), rows = lines(h.texts[table]).map(JSON.parse); mutate(rows[0]); h.texts[table] = rows.map(serialize).join(''); h.refresh(); await h.writeRecords();
+  await api.withAuthenticatedEmployeeSafetyBackup(h.records, PASS, h.factory, async () => {}, {}); // Valid SQL46 rows, not a malformed container/row test.
+  await failedExport(h, {}, e => assert.equal(e.phase, 'records-authenticate'));
+  assert.equal(h.calls.length, 0); assert.equal(h.transportCalls, 0); assert.equal(h.media.writes, 0);
+});
+for (const variant of ['catalog', 'same-size-row', 'removed-row', 'extra-row', 'missing-lf', 'oversized-line', 'oversized-chunk']) test(`records workspace drift after authentication is rejected: ${variant}`, async t => {
+  const h = await prepared(t); let changed = false;
+  const path = variant === 'catalog' ? api.EMPLOYEE_SAFETY_BACKUP_CATALOG_PATH : api.employeeSafetyBackupEntryPath('accounts');
+  h.openHook = (w, current, count) => {
+    if (h.spaces.indexOf(w) !== 0 || current !== path || count !== 2) return;
+    changed = true;
+    const original = h.texts.accounts;
+    const raw = variant === 'catalog' ? enc((JSON.stringify(h.catalog) + '\n').replace(NAME, NAME.toLowerCase()))
+      : variant === 'same-size-row' ? enc(original.replace('原始', '修改')) : variant === 'removed-row' ? enc('')
+        : variant === 'extra-row' ? enc(original + original) : variant === 'missing-lf' ? enc(original.slice(0, -1))
+          : variant === 'oversized-line' ? enc(' '.repeat(65536) + '\n') : new Uint8Array(1024 * 1024 + 1);
+    return variant === 'oversized-chunk' ? { async *[Symbol.asyncIterator]() { yield raw; } } : stream(raw);
+  };
+  await failedExport(h, {}, e => assert.equal(e.phase, 'records-authenticate')); assert.equal(changed, true);
+  assert.equal(h.calls.length, 0); assert.equal(h.media.writes, 0);
+});
+test('more than 3000 authentic distinct references is rejected before inventory or download', async t => {
+  const h = harness(t, true);
+  setMediaRows(h, Array.from({ length: 3001 }, (_, index) => ({ table: 'messages', index, field: 'content', kind: 'notifications', bucket: 'chat-images', path: `${index}.jpg`, original: publicUrl('chat-images', `${index}.jpg`) })));
+  await h.writeRecords(); await failedExport(h, {}, e => assert.equal(e.phase, 'records-authenticate'));
+  assert.equal(h.calls.length, 0); assert.equal(h.transportCalls, 0); assert.equal(h.media.writes, 0);
 });

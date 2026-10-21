@@ -5,8 +5,11 @@ import { Sha256 } from './sha256';
 import { MAX_CONTAINER_INPUT_BYTES, verifyEncryptedVolume, writeEncryptedVolume, type ContainerLimits, type TransferEntry } from './container';
 import { readTransferMetadata, type TransferByteSource } from './crypto';
 import { validateVolumeInfo, type ManifestEntry, type VolumeInfo, type VolumeManifest } from './manifest';
-import { withAuthenticatedEmployeeSafetyBackup, validateEmployeeSafetyBackupCatalog,
-  EmployeeSafetyBackupError, type EmployeeSafetyBackupCatalog, type EmployeeSafetyBackupIdentity } from './employeeSafetyBackup';
+import { withAuthenticatedEmployeeSafetyBackup, validateEmployeeSafetyBackupCatalog, validateEmployeeSafetyBackupRow,
+  employeeSafetyBackupEntryPath, EMPLOYEE_SAFETY_BACKUP_CATALOG_PATH, EMPLOYEE_SAFETY_BACKUP_LIMITS,
+  EmployeeSafetyBackupError, type AuthenticatedEmployeeSafetyBackup, type EmployeeSafetyBackupTableKey,
+  type EmployeeSafetyBackupCatalog, type EmployeeSafetyBackupIdentity } from './employeeSafetyBackup';
+import { chatMediaUrls, chatRatingMediaGuard } from './chatMedia';
 import type { ArchiveBundleWorkspace, ArchiveBundleWorkspaceFactory } from './archiveBundle';
 import type { ReplacementBackupFile } from './replacementBackup';
 
@@ -244,7 +247,6 @@ async function deadline<T>(operation: (signal: AbortSignal) => Promise<T>, paren
   try { return await withSignal(() => operation(controller.signal), controller.signal); }
   finally { clearTimeout(timer); parent.removeEventListener('abort', abort); controller.abort(); }
 }
-type Query = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): Query };
 export function createEmployeeSafetyMediaSource(
   input: EmployeeSafetyBackupIdentity, catalog: EmployeeSafetyBackupCatalog, transport: typeof fetch = globalThis.fetch,
 ): EmployeeSafetyMediaSource {
@@ -273,9 +275,7 @@ export function createEmployeeSafetyMediaSource(
     finally { inputSignal?.removeEventListener('abort', abort); controller.abort(); busy = false; }
   };
   const readInventory = (verify: boolean, parent: AbortSignal) => deadline(async signal => {
-    // SQL47 is not in the hand-maintained RPC types yet. Keep the local boundary unknown and validate every field.
-    const rpc = supabase.rpc.bind(supabase) as unknown as (name: string, args: ReturnType<typeof params>) => Query;
-    const result = await withSignal(() => rpc(verify ? 'employee_safety_backup_media_verify' : 'get_employee_safety_backup_media', params()).abortSignal(signal), signal);
+    const result = await withSignal(() => supabase.rpc(verify ? 'employee_safety_backup_media_verify' : 'get_employee_safety_backup_media', params()).abortSignal(signal), signal);
     if (result.error) invalid(); const next = inventory(result.data); same(next.records_catalog, c);
     if (baseline) matches(next, baseline);
     for (const ref of next.files) if (observed.has(ref.key)) same(ref.file, observed.get(ref.key));
@@ -410,15 +410,138 @@ function containerLimits(run: Run): Partial<ContainerLimits> {
   return { maxEntries: limits.maxFiles + 1, maxEntryBytes: limits.maxFileBytes, maxTotalBytes: maximum,
     maxZipBytes: limits.maxZipBytes, maxManifestBytes: limits.maxManifestBytes, maxLineBytes: limits.maxCatalogBytes };
 }
-interface RecordsBinding { catalog: EmployeeSafetyBackupCatalog; manifest: VolumeManifest; file: EmployeeSafetyMediaCatalog['records_file'] }
+// SQL47's fixed projection allowlist. Everything else is recursively checked, including keys.
+const MEDIA_FIELDS: Partial<Record<EmployeeSafetyBackupTableKey, readonly string[]>> = {
+  verification_requests: ['id_front_url', 'id_back_url', 'selfie_url'],
+  simulated_customers: ['custom_avatar_url', 'customer_avatar'],
+  customer_employee_conversations: ['message_content', 'image_url', 'rating_data'],
+  cs_message_templates: ['content'], customer_auto_messages: ['content'], rich_card_contents: ['html_content'],
+  messages: ['content'], message_templates: ['content'], notification_automation_tasks: ['content_template'],
+  notification_automation_executions: ['content_snapshot'], broadcast_messages: ['message_content', 'image_url'],
+  content_audit_events: ['media_refs', 'before_data', 'after_data'],
+};
+const MEDIA_KEY = /(url|uri|src|href|poster|image|avatar|file|attachment|media|path|bucket|storage|base64)/i;
+const MEDIA_TOKEN = /(storage|supabase|verification-documents|announcement-images|chat-images|template-images|super-customer-avatars|content-audit-evidence|base64)|(data|blob)[ \t\n\r\f\v]*:/i;
+const MEDIA_EXTENSION = '[.](jpe?g|png|gif|webp|pdf|mp4|webm|svg|avif|heic|zip)($|[?# \\t\\n\\r\\f\\v<>"\'])';
+function hasControl(value: string): boolean {
+  for (const char of value) { const code = char.charCodeAt(0); if (code < 32 || (code >= 127 && code <= 159)) return true; }
+  return false;
+}
+function mediaGuard(value: unknown): void {
+  if (typeof value === 'string') {
+    if (MEDIA_TOKEN.test(value) || /(^|[^A-Za-z0-9_-])url[ \t\n\r\f\v]*\(/i.test(value)
+      || /<[ \t\n\r\f\v]*(img|video|audio|source|iframe|object|embed)([ \t\n\r\f\v/>]|$)/i.test(value)
+      || /(src|srcset|poster|href)[ \t\n\r\f\v]*=/i.test(value) || new RegExp(MEDIA_EXTENSION, 'i').test(value)) invalid();
+  } else if (Array.isArray(value)) value.forEach(mediaGuard);
+  else if (value !== null && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      const empty = item === null || item === '' || (Array.isArray(item) && !item.length)
+        || (item !== null && typeof item === 'object' && !Object.keys(item).length);
+      if (!empty && MEDIA_KEY.test(key)) invalid();
+      mediaGuard(key); mediaGuard(item);
+    }
+  }
+}
+function publicMedia(url: string, kind: EmployeeSafetyMediaReference['kind'], employee: string, avatar: boolean) {
+  const m = /^https:\/\/[a-z0-9-]+\.supabase\.co\/storage\/v1\/object\/public\/(verification-documents|announcement-images|chat-images|template-images|super-customer-avatars)\/([A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.[A-Za-z0-9]{1,8})$/.exec(url);
+  if (enc.encode(url).length > 1024 || hasControl(url) || !m || m[0] !== url) invalid();
+  const bucket = m[1], path = m[2], origin = url.slice(0, url.indexOf('/storage/'));
+  if (path.includes('..') || path.split('/').includes('.')) invalid();
+  if (kind === 'verification') {
+    if (bucket !== 'verification-documents' || !new RegExp(`^(id-front|id-back|selfie)/${employee}-[A-Za-z0-9._-]+\\.[A-Za-z0-9]{1,8}$`).test(path)
+      || path.split('/')[1].length > 128) invalid();
+  } else if (!['announcement-images', 'chat-images', 'template-images', ...(kind === 'chat' ? ['super-customer-avatars'] : [])].includes(bucket)) invalid();
+  if (bucket === 'super-customer-avatars' && !path.startsWith('avatars/')) invalid();
+  return { bucket, path, kind, avatar: avatar || bucket === 'super-customer-avatars', origin };
+}
+interface RecordsBinding {
+  catalog: EmployeeSafetyBackupCatalog; manifest: VolumeManifest; file: EmployeeSafetyMediaCatalog['records_file'];
+  refs: EmployeeSafetyMediaReference[];
+}
+async function recordReferences(reader: AuthenticatedEmployeeSafetyBackup, c: EmployeeSafetyBackupCatalog, manifest: VolumeManifest, run: Run): Promise<EmployeeSafetyMediaReference[]> {
+  const refs = new Map<string, EmployeeSafetyMediaReference>(); let origin: string | null = null;
+  const add = (key: EmployeeSafetyBackupTableKey, id: string, rowSha: string, field: string, original: string,
+    candidate: Omit<EmployeeSafetyMediaReference, 'key' | 'source_url' | 'file'>) => {
+    const source_url = `employee-safety-media-v1:${c.site_id}:${c.job_id}:${c.employee_id}:${c.fingerprint}:${rowSha}:${hashText(`${key}:${id}:${field}:${original}`)}:${hashText(candidate.bucket + '/' + candidate.path)}`;
+    const ref = reference({ ...candidate, key: hashText(source_url), source_url, file: null }, c);
+    const previous = refs.get(ref.key); if (previous) same(previous, ref); else refs.set(ref.key, ref);
+    if (refs.size > limits.maxFiles) invalid();
+  };
+  // The reader authenticated these files, but its workspace may have drifted since that pass.
+  const catalogEntry = manifest.entries[c.tables.length];
+  if (manifest.entries.length !== c.tables.length + 1 || catalogEntry?.path !== EMPLOYEE_SAFETY_BACKUP_CATALOG_PATH
+    || catalogEntry.kind !== 'ndjson' || !catalogEntry.bytes || catalogEntry.bytes > EMPLOYEE_SAFETY_BACKUP_LIMITS.maxCatalogBytes) invalid();
+  const catalogRaw = await bounded(reader.open(catalogEntry.path), catalogEntry.bytes, run);
+  if (catalogRaw.length !== catalogEntry.bytes || sha(catalogRaw) !== catalogEntry.sha256
+    || dec.decode(catalogRaw) !== JSON.stringify(c) + '\n') invalid();
+  for (const [index, table] of c.tables.entries()) {
+    const path = employeeSafetyBackupEntryPath(table.key), digest = new Sha256(), rowHashes = new Sha256();
+    const line = new Uint8Array(EMPLOYEE_SAFETY_BACKUP_LIMITS.maxLineBytes);
+    let used = 0, bytes = 0, rows = 0, last: string | null = null;
+    for await (const raw of read(reader.open(path), run.signal)) {
+      bytes += raw.length; if (bytes > table.bytes) invalid(); digest.update(raw);
+      let start = 0;
+      while (start < raw.length) {
+        checkAbort(run.signal); const lf = raw.indexOf(10, start), end = lf < 0 ? raw.length : lf + 1;
+        if (end - start > line.length - used) invalid();
+        line.set(raw.subarray(start, end), used); used += end - start; start = end;
+        if (lf < 0) continue;
+        const exact = line.subarray(0, used), text = dec.decode(exact);
+        const id = validateEmployeeSafetyBackupRow(text, table.key, c), rowSha = sha(exact);
+        const numericId = table.key === 'wallet_ledger_entries' || table.key === 'wallet_reconciliation_audit';
+        if ((last !== null && (numericId ? BigInt(id) <= BigInt(last) : id <= last)) || ++rows > table.rows) invalid();
+        last = id; rowHashes.update(enc.encode(rowSha)); used = 0;
+        // Parsed values are ONLY for extraction. Hashes above always use the exact SQL46 bytes, including LF.
+        const row = JSON.parse(text) as Record<string, unknown>, fields = MEDIA_FIELDS[table.key] ?? [];
+        mediaGuard(Object.fromEntries(Object.entries(row).filter(([key]) => !fields.includes(key))));
+        if (table.key === 'content_audit_events') {
+          const media = row.media_refs;
+          if (media === null || typeof media !== 'object' || Array.isArray(media)) invalid();
+          const entries = Object.entries(media);
+          if (row.cleared_at !== null && entries.length) invalid();
+          for (const [original, value] of entries) {
+            if (!original || enc.encode(original).length > 4096 || hasControl(original) || typeof value !== 'string'
+              || !value || enc.encode(value).length > 512 || hasControl(value) || value.includes('..')
+              || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/.test(value)) invalid();
+            add(table.key, id, rowSha, 'media_refs', original, { bucket: 'content-audit-evidence', path: value, kind: 'archives', avatar: false });
+          }
+        } else for (const field of fields) {
+          const content = row[field];
+          if (field === 'rating_data') { chatRatingMediaGuard(content); continue; }
+          if (content === null) continue;
+          if (typeof content !== 'string') invalid();
+          if (field === 'customer_avatar' && /^customer-avatar:(regular|vip):[0-9]+$/.exec(content)?.[0] === content && !hasControl(content)) continue;
+          const kind = table.key === 'verification_requests' ? 'verification'
+            : ['simulated_customers', 'customer_employee_conversations', 'cs_message_templates', 'customer_auto_messages', 'rich_card_contents'].includes(table.key) ? 'chat' : 'notifications';
+          let residual = content;
+          for (const url of chatMediaUrls(content, ['id_front_url', 'id_back_url', 'selfie_url', 'image_url', 'custom_avatar_url', 'customer_avatar'].includes(field))) {
+            const candidate = publicMedia(url, kind, c.employee_id, table.key === 'simulated_customers');
+            if (origin !== null && origin !== candidate.origin) invalid(); origin = candidate.origin;
+            const { bucket, path, avatar } = candidate;
+            add(table.key, id, rowSha, field, url, { bucket, path, kind, avatar });
+            residual = residual.split(url).join('');
+          }
+          if (MEDIA_TOKEN.test(residual) || new RegExp('https?[^ \\t\\n\\r\\f\\v<>"\']*' + MEDIA_EXTENSION, 'i').test(residual)) invalid();
+        }
+      }
+    }
+    if (used || rows !== table.rows || bytes !== table.bytes || rowHashes.digestHex() !== table.row_hashes_sha256) invalid();
+    same({ path, kind: 'ndjson', bytes, sha256: digest.digestHex() }, manifest.entries[index]);
+  }
+  return [...refs.values()].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+}
+function matchesRecords(files: readonly EmployeeSafetyMediaReference[], records: RecordsBinding): void {
+  same(files.map(ref => ({ ...ref, file: null })), records.refs);
+}
 async function authenticateRecords(file: Pick<ReplacementBackupFile, 'open'>, passphrase: string, run: Run): Promise<RecordsBinding> {
   run.phase = 'records-authenticate';
   // Hash the very stream consumed by SQL46's full authenticated reader, not a separate unauthenticated pass.
   const scans: CipherScan[] = [];
   const scannedFile = { open() { const scan = new CipherScan(); scans.push(scan); return scan.read(file.open(), run); } };
   return withAuthenticatedEmployeeSafetyBackup(scannedFile, passphrase, run.workspace, async reader => {
-    const scan = scans[scans.length - 1], digest = scan.digest(), manifest = reader.manifest;
-    return { catalog: reader.catalog, manifest, file: { export_id: manifest.exportId, volume_id: manifest.volumeId, cipher_bytes: scan.bytes, cipher_sha256: digest } };
+    const scan = scans[scans.length - 1], digest = scan.digest(), manifest = reader.manifest, catalog = reader.catalog;
+    const refs = await recordReferences(reader, catalog, manifest, run);
+    return { catalog, manifest, refs, file: { export_id: manifest.exportId, volume_id: manifest.volumeId, cipher_bytes: scan.bytes, cipher_sha256: digest } };
   }, { signal: run.signal });
 }
 function mediaVolume(input: VolumeInfo, records: RecordsBinding): void {
@@ -454,7 +577,8 @@ async function validateSaved(w: ArchiveBundleWorkspace, manifest: VolumeManifest
   if (first?.path !== EMPLOYEE_SAFETY_MEDIA_CATALOG_PATH || !first.bytes || first.bytes > limits.maxCatalogBytes) invalid();
   const raw = await bounded(w.open(first.path), first.bytes, run), text = dec.decode(raw), c = catalog(JSON.parse(text));
   if (text !== JSON.stringify(c) + '\n' || raw.length !== first.bytes || sha(raw) !== first.sha256) invalid();
-  same(c.records_file, records.file); same(c.inventory.records_catalog, records.catalog); same(manifest.entries, expectedEntries(c, raw));
+  same(c.records_file, records.file); same(c.inventory.records_catalog, records.catalog); matchesRecords(c.inventory.files, records);
+  same(manifest.entries, expectedEntries(c, raw));
   const total = manifest.entries.reduce((n, e) => n + e.bytes, 0) + records.manifest.entries.reduce((n, e) => n + e.bytes, 0);
   if (total > containerLimits(run).maxTotalBytes!) invalid();
   for (const ref of c.inventory.files) {
@@ -485,7 +609,8 @@ export async function exportEmployeeSafetyMediaBackup(
     containerLimits(run);
     if (recordsFile === outputFile || attemptedFiles.has(outputFile)) invalid();
     const records = await authenticateRecords(recordsFile, passphrase, run), info = validateVolumeInfo(volumeInfo); mediaVolume(info, records);
-    run.phase = 'inventory'; const baseline = inventory(await withSignal(() => source.inventory(run.signal), run.signal)); same(baseline.records_catalog, records.catalog);
+    run.phase = 'inventory'; const baseline = inventory(await withSignal(() => source.inventory(run.signal), run.signal));
+    same(baseline.records_catalog, records.catalog); matchesRecords(baseline.files, records);
     const snapshot = run.workspace(), files: EmployeeSafetyMediaFile[] = [];
     const recordBytes = records.manifest.entries.reduce((n, e) => n + e.bytes, 0); run.bytes = recordBytes;
     run.phase = 'download';

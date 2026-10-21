@@ -402,7 +402,7 @@ async function discard(files: Pick<ChatImportFiles, 'abort'>, mayExist: boolean,
   catch { throw new ChatMediaError(mayExist, signal?.aborted === true, true); }
 }
 // Mirror SQL26's conservative tokenizer; DOM recovery would silently omit malformed media.
-function mediaUrls(content: string, direct: boolean): string[] {
+export function chatMediaUrls(content: string, direct: boolean): string[] {
   if (direct) return [content];
   if (/(https?|storage|supabase)[^\s<>"'`]*[&%\\\\]/i.test(content)) invalid();
   if (/(^|[^A-Za-z0-9_-])url[ \t\n\r\f\v]*\(/i.test(content)) invalid();
@@ -464,18 +464,18 @@ const MEDIA_FIELDS: Partial<Record<ChatTableKey, readonly string[]>> = {
   cs_message_templates: ['content'], customer_auto_messages: ['content'], rich_card_contents: ['html_content'],
 };
 // SQL31 uses the same deliberately conservative rating-JSON rejection policy.
-function ratingMediaGuard(value: unknown): void {
+export function chatRatingMediaGuard(value: unknown): void {
   if (typeof value === 'string') {
     if (/[:/\\\\%&<>]/.test(value) || /(https?|data|blob|storage|supabase|base64)/i.test(value) ||
       /\.(jpe?g|png|gif|webp|pdf|mp4|webm|svg|avif|heic|zip)($|[?#\s])/i.test(value)) invalid();
   } else if (Array.isArray(value)) {
-    value.forEach(ratingMediaGuard);
+    value.forEach(chatRatingMediaGuard);
   } else if (value !== null && typeof value === 'object') {
     for (const [key, entry] of Object.entries(value)) {
       // Known React text field, never a media-loading container. Non-string comments recurse.
       if (key === 'comment' && typeof entry === 'string') continue;
       if (/(url|uri|src|href|poster|image|avatar|file|attachment|media|path|bucket|storage|base64)/i.test(key)) invalid();
-      ratingMediaGuard(entry);
+      chatRatingMediaGuard(entry);
     }
   }
 }
@@ -483,13 +483,13 @@ function refsFromRow(text: string, table: ChatTableKey, refs: Map<string, ChatMe
   const fields = MEDIA_FIELDS[table];
   if (!fields) return;
   const row = JSON.parse(text) as Record<string, unknown>;
-  if (table === 'customer_employee_conversations') ratingMediaGuard(row.rating_data);
+  if (table === 'customer_employee_conversations') chatRatingMediaGuard(row.rating_data);
   for (const field of fields) {
     const content = row[field];
     if (content === null) continue;
     if (typeof content !== 'string') invalid();
     if (field === 'customer_avatar' && /^customer-avatar:(regular|vip):[0-9]+$/.exec(content)?.[0] === content) continue;
-    for (const url of mediaUrls(content, ['image_url', 'custom_avatar_url', 'customer_avatar'].includes(field))) {
+    for (const url of chatMediaUrls(content, ['image_url', 'custom_avatar_url', 'customer_avatar'].includes(field))) {
       const ref = source(url), key = sha(encoder.encode(ref.url));
       const first = refs.values().next().value as ChatMediaReference | undefined;
       if (first && source(first.source_url).origin !== ref.origin) invalid();
