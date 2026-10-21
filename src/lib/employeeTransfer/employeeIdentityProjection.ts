@@ -245,6 +245,9 @@ export async function withEmployeeSafetyIdentityProjection<T>(
           if (bytes !== table.bytes || rows !== table.rows || hash.digestHex() !== table.sha256) invalid();
         }
         let active = true;
+        const readerLifetime = new AbortController(), stopReader = () => readerLifetime.abort();
+        signal.addEventListener('abort', stopReader, { once: true }); if (signal.aborted) stopReader();
+        const readerSignal = readerLifetime.signal;
         const projection: EmployeeIdentityProjection = Object.freeze({
           sourceSiteId: original.site_id, sourceJobId: original.job_id, sourceEmployeeId: original.employee_id, targetEmployeeId: target,
           sourceFingerprint: original.fingerprint, recordsCipherSha256, recordsCipherBytes,
@@ -256,25 +259,25 @@ export async function withEmployeeSafetyIdentityProjection<T>(
               const block = new Uint8Array(BLOCK_BYTES); let used = 0, index = 0;
               try {
                 if (!active) invalid(); const hash = new Sha256(); let bytes = 0;
-                for await (const raw of read(workspace.open(employeeSafetyBackupEntryPath(key)), signal)) {
+                for await (const raw of read(workspace.open(employeeSafetyBackupEntryPath(key)), readerSignal)) {
                   if (!active) invalid(); bytes += raw.length; if (bytes > expected.bytes) invalid(); hash.update(raw);
                 }
                 if (!active || bytes !== expected.bytes || hash.digestHex() !== expected.sha256) invalid();
                 const expectedBlocks = blocks.get(key)!;
-                for await (const raw of read(workspace.open(employeeSafetyBackupEntryPath(key)), signal)) {
+                for await (const raw of read(workspace.open(employeeSafetyBackupEntryPath(key)), readerSignal)) {
                   if (!active) invalid();
                   for (let offset = 0; offset < raw.length;) {
                     const size = Math.min(BLOCK_BYTES - used, raw.length - offset);
                     block.set(raw.subarray(offset, offset + size), used); used += size; offset += size;
                     if (used === BLOCK_BYTES) {
-                      if (new Sha256().update(block).digestHex() !== expectedBlocks[index++]) invalid();
-                      yield block.slice(); if (!active) invalid(); used = 0;
+                      if (!active || new Sha256().update(block).digestHex() !== expectedBlocks[index++]) invalid();
+                      checkAbort(readerSignal); yield block.slice(); if (!active) invalid(); used = 0;
                     }
                   }
                 }
                 if (used) {
-                  if (new Sha256().update(block.subarray(0, used)).digestHex() !== expectedBlocks[index++]) invalid();
-                  yield block.slice(0, used);
+                  if (!active || new Sha256().update(block.subarray(0, used)).digestHex() !== expectedBlocks[index++]) invalid();
+                  checkAbort(readerSignal); yield block.slice(0, used);
                 }
                 if (!active || index !== expectedBlocks.length) invalid();
               } catch { throw new EmployeeIdentityProjectionError(options.signal?.aborted === true, cleanupRequired); }
@@ -283,7 +286,7 @@ export async function withEmployeeSafetyIdentityProjection<T>(
           },
         });
         try { return await withSignal(() => consume(projection), signal); }
-        finally { active = false; }
+        finally { active = false; readerLifetime.abort(); signal.removeEventListener('abort', stopReader); }
       }, { signal });
     }, { signal });
     checkAbort(signal);
