@@ -95,7 +95,7 @@ BEGIN
       ELSE 'r.body->>''recipient_id''=$1::text' END;
   ELSIF p_key='orders_history' THEN
     v_query:='SELECT id,jsonb_build_object(''id'',id,''user_id'',user_id,''status'',status,''commission_amount'',commission_amount,
-      ''commission_rate'',commission_rate,''created_at'',created_at,''processed_at'',processed_at) AS body
+      ''created_at'',created_at,''completed_at'',completed_at) AS body
       FROM public.orders_history WHERE user_id=$1 AND status IN (''success'',''failure'')';
     v_filter:='true';
   ELSE
@@ -133,7 +133,7 @@ BEGIN
     FROM public.employee_login_history h WHERE h.user_id=p_employee_id;
   FOREACH v_key IN ARRAY ARRAY['employee_submit_time_settings','orders_history','administrators'] LOOP
     v_projection:=CASE v_key WHEN 'employee_submit_time_settings' THEN private.employee_transfer_replacement_backup_spec()->v_key
-      WHEN 'orders_history' THEN private.employee_transfer_identity_spec()->'orders'
+      WHEN 'orders_history' THEN '{"id":"uuid!","user_id":"uuid!","status":"text!","commission_amount":"numeric","created_at":"timestamp with time zone","completed_at":"timestamp with time zone"}'::jsonb
       ELSE '{"id":"uuid!","username":"text!","role":"text!","parent_id":"uuid","created_at":"timestamp with time zone","updated_at":"timestamp with time zone"}'::jsonb END;
     FOR v_column,v_type IN SELECT key,value#>>'{}' FROM jsonb_each(v_projection) LOOP
       IF NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('public.'||CASE WHEN v_key='administrators' THEN 'admins' ELSE v_key END)
