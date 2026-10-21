@@ -59,11 +59,11 @@ job 的两种状态：
 - SQL46/`employeeSafetyBackup.ts`可在任何导入配置变更前独立读取并加密员工核心及聊天、通知/自动化、派单依赖和员工相关稽核/通知收件证据，共48类固定投影。原SQL39必须依赖配置已恢复的导入任务，不能把它误当作覆盖前保护。
 - 通知稽核事件的employee_id通常为NULL，依消息和before/after收件快照精确关联；共享通知原始留证不会为了个人范围裁剪或改写，可能包含同一通知其他收件人的历史证据。不会混入其他员工个人聊天、收件、进度，不接受同名历史档案扩大员工UUID范围。
 - SQL46记录v1包含实际记录及附件引用，不包含实际证据/证件/聊天文件，`media_included:false`不变；**不是完整可恢复员工备份，没有封存证明或替换授权。** 独立本机reader认证48表后可逐表读取，不能写库、调用删除、解封账号或解除维护。任务停止需独立密码与确认语，只清本人技术任务，不删已保存加密文件。
-- 第43节已在「資料遷移 → 導入」接独立记录备份页：完整保存/认证/源复核/清理后显式close；未知结果互锁其他迁移但保留本人stop，报告IO可单独取消。**本轮无UI改动，EmployeeSafetyBackupPanel仍RECORDS ONLY，未接附件备份。** 此页面不调用`archive_employee_without_media`或`mutateAuditedContent`，也不把记录包当封存许可。
+- 第43节已接独立记录页，第45节改为「導入前：獨立員工記錄與附件備份」：同一SQL46任务内记录保存/认证后不立即close，继续SQL47附件独立保存/认证，再成对核对两份密文及清理，最后复核来源附件和记录才显式close。记录与附件两份.edx使用同一口令，必须一起保留，零附件也保存可核验的独立附件目录卷。未知结果互锁其他迁移但保留本人stop，报告IO可单独取消。此页面不调用`archive_employee_without_media`或`mutateAuditedContent`，不把文件核验当封存许可。
 - 第44节SQL47/`employeeSafetyMedia.ts`另加本人同一SQL46任务的独立附件库，先完整认证记录密文、重扫48类原文/摘要/精确引用并对照inventory才下载；附件.edx绑定精确记录密文SHA/大小/卷元数据与完整catalog，全部认证/字节魔数/清理后再实际源复核。成对本机reader也重扫原文，已修复“删文件及匹配manifest仍自洽”的遗漏并补合法重加密回归，伪造row/ref身份同样拒绝。
 - 附件作用域四kind固定桶，只下载/源复核；authorize/commit仅service_role，inventory/verify为STABLE会话鉴权。档案`media_refs`原键只作不透明历史身份，不当网络目的地；实际路径只取固定私有`content-audit-evidence`，不借外链或同名档案扩权。跨行/字段同路径保留不同引用，同一行同一字段重复URL去重；未知/编码/外部媒体阻断不漏项。头像5MiB、文件50MiB、3000引用、记录加媒体1GiB，非完整恢复或病毒扫描。
-- 附件库不自动stop/close，调用方须在附件完成后显式旧SQL46 session.close；当前页面尚未按此串联。Abort/响应丢失不重试/删除/回滚或假关闭，清理失败阻断成功。`completeEmployeeBackup/canArchive/canReplace/fullSiteComplete`恒false；跨域UUID/全部引用恢复、封存安全窗口及受控完整恢复仍缺，不得自动封存/覆盖或解除维护。
-- `archive_employee_without_media`、`content-audit`及既有删除/留证/清理流程未改，未调用封存或接通同名员工覆盖。无正式环境访问或SQL/Storage/config/Edge/前端部署调整；本轮无UI/浏览器功能测试，真实Storage等未验收，证据与后续见计划第44节。
+- 附件库不自动stop/close；第45节页面已按上述顺序显式调用旧SQL46 session.close，无新增服务授权。Abort/响应丢失不重试/删除/回滚或假关闭，清理失败阻断成功。报告employee-backup-report.json仅白名单技术字段及两个文件独立回执，不含记录原文、媒体路径或不透明身份。成对核验通过也不表示最后源检查或任务关闭已确认。`completeEmployeeBackup/canArchive/canReplace/fullSiteComplete`恒false；跨域UUID/全部引用恢复、封存安全窗口及受控完整恢复仍缺，不得自动封存/覆盖或解除维护。
+- `archive_employee_without_media`、`content-audit`及既有删除/留证/清理流程未改，未调用封存或接通同名员工覆盖。无正式环境访问或SQL/Storage/config/Edge/前端部署调整；第45节双浏览器合成RPC/fetch/IO搭配真实客户端/加密/成对reader，108个独立场景（含父组110项）通过；没有真实Storage、原生目录或PG并发验收，证据与后续见计划第44–45节。
 
 ## 现状（2026-10-09）
 - 超管已清空两个板块：稽核记录、已删员工档案与通知、私有证据文件、确认暂存、待重试任务均为 0。

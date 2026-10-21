@@ -27,6 +27,10 @@ export class EmployeeSafetyBackupError extends Error {}
 export const createEmployeeSafetyBackupSession=()=>{h().forbidden.push('employee-backup');throw Error('forbidden')};
 export const exportEmployeeSafetyBackup=async()=>{h().forbidden.push('employee-backup-export');throw Error('forbidden')};
 export const stopOwnedEmployeeSafetyBackup=async()=>{h().forbidden.push('employee-backup-stop');throw Error('forbidden')};
+export class EmployeeSafetyMediaError extends Error {}
+export const createEmployeeSafetyMediaSource=()=>{h().forbidden.push('employee-media-source');throw Error('forbidden')};
+export const exportEmployeeSafetyMediaBackup=async()=>{h().forbidden.push('employee-media-export');throw Error('forbidden')};
+export const withAuthenticatedEmployeeSafetyMediaBackup=async()=>{h().forbidden.push('employee-media-reader');throw Error('forbidden')};
 export const exportSiteBundleSet=async()=>{h().forbidden.push('export');throw Error('forbidden')};
 const bundle=()=>({packageId:id(2),sourceSiteId:id(3),volumes:SITE_DOMAINS.map((domain,i)=>({domain,filename:domain+'.edx',cipherBytes:128,cipherSha256:'a'.repeat(64),rows:i+1,files:0})),fullSiteComplete:false,importReady:false});
 export async function inspectSiteBundleSet(files,pass,factory,{onProgress}){
@@ -79,12 +83,13 @@ before(async () => {
   const compiled = await build({
     stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import Page from './src/components/admin/EmployeeDataMigration';
       window.__h={calls:[],forbidden:[],reports:[],approvals:[],imports:0};const r=createRoot(document.getElementById('root'));window.__unmount=()=>r.unmount();r.render(<Page/>);`, resolveDir: root, loader: 'tsx' },
-    bundle: true, write: false, platform: 'browser', format: 'esm', jsx: 'automatic',
+    bundle: true, write: false, platform: 'browser', format: 'esm', jsx: 'automatic', metafile: true,
     plugins: [{ name: 'isolated-ui-boundaries', setup(builder) {
-      builder.onResolve({ filter: /employeeTransfer\/(siteTransfer|siteImport|browserStorage|employeeSafetyBackup)$/ }, () => ({ path: 'transfer-ui-mocks', namespace: 'mock' }));
+      builder.onResolve({ filter: /employeeTransfer\/(siteTransfer|siteImport|browserStorage|employeeSafetyBackup|employeeSafetyMedia)$/ }, () => ({ path: 'transfer-ui-mocks', namespace: 'mock' }));
       builder.onLoad({ filter: /.*/, namespace: 'mock' }, () => ({ contents: mocks }));
     } }],
   });
+  assert.ok(!Object.keys(compiled.metafile.inputs).some(path => /node_modules\/@supabase|src\/lib\/(?:auth|supabase)\.ts|employeeTransfer\/employeeSafety(?:Backup|Media)\.ts/.test(path)), 'import UI must isolate employee backup and production access');
   script = compiled.outputFiles[0].text;
   try {
     const assets = await readdir(root + 'dist/assets');
@@ -149,7 +154,8 @@ async function approve(page) {
 
 for (const engine of ['chromium', 'webkit']) {
   test(`isolated ${engine} migration UI: approvals, failures, cancellation and maintenance-only result`, { skip: !playwright, timeout: 180000 }, async t => {
-    const browser = await playwright[engine].launch({ headless: true });
+    const executablePath = process.env[`EMPLOYEE_TRANSFER_${engine.toUpperCase()}_EXECUTABLE`];
+    const browser = await playwright[engine].launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
     try {
       await t.test('local input check never starts database restore; target conflicts fail closed', () => scenario(browser, async page => {
         assert.equal(await startButton(page).isDisabled(), true);

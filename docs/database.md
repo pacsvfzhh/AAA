@@ -38,7 +38,7 @@
 - 固定48类记录：原核心15表、聊天10表、通知/广播/自动化13表、派单6表、员工关联稽核事件/收件版本、精简orders_history及管理员六列无密码身份元数据。个人聊天/收件/进度严格按员工，相关共享角色/范本/任务祖先/组池配置作为依赖快照；同归属不限员工的空角色也纳入。通知留证可能employee_id=NULL，通过消息或before/after收件快照关联；共享通知原始收件证据不裁剪。历史订单只取id/user/status/commission/created_at/completed_at，不虚构不存在的rate/processed列，不搬真实交易详情。
 - 目录只含数量/字节/摘要，凭据及证件地址等仅进加密原文。任一相关记录或共享依赖变更均使页/verify/close拒绝；历史session不可逆脱敏，设备秘密键阻断，未结束工时保持备份原文，未伪造在线状态。
 - 追加私有任务校验器的独立协议隔离，保留SQL17–33动态追加的finance/activity/verification/notifications/chat/archives映射和双向保护；不关业务触发器，不增表。`stop_owned`需密码及「確認停止員工備份任務」，可不传ID以找回本人唯一running独立备份，过期亦可显式结束；不返回令牌、不停止别人的任务或其他协议、不自动开始新任务、不删文件或解除维护。
-- 客户端实际磁盘保存/重新认证/48表行摘要检查/最后源核对/清理后，才允许显式close；独立本机reader完整认证再开放只读回调，退出即失效。**SQL46记录包及页面仍为records_only，media_included:false；独立附件模块见下节SQL47，完整同站恢复、备份封存和跨域UUID替换仍未完成，complete_employee_backup/can_archive/can_replace始终false。** 第43节已接后台独立记录备份与本人停止入口，成功不会解锁原SQL45空站准入或员工覆盖；第43节本身没有新增/修改数据库接口。报告保存可独立取消，未知任务仍阻挡其他迁移。
+- 客户端实际磁盘保存/重新认证/48表行摘要检查/最后源核对/清理后，才允许显式close；独立本机reader完整认证再开放只读回调，退出即失效。**SQL46记录包仍为records_only、media_included:false；第45节页面另接SQL47独立附件包与成对回读，完整同站恢复、备份封存和跨域UUID替换仍未完成，complete_employee_backup/can_archive/can_replace始终false。** 第43节已接后台独立记录备份与本人停止入口，成功不会解锁原SQL45空站准入或员工覆盖；第43节本身没有新增/修改数据库接口。报告保存可独立取消，未知任务仍阻挡其他迁移。
 - 573份SQL回放精确保留12项历史失败，109根表/967列不变，非干净建库证明。未访问或部署正式库、Edge、Storage、cron或前端；详见计划第42节。
 
 ## 覆盖前独立员工附件备份（SQL47，2026-10-21，本地未部署）
@@ -46,9 +46,9 @@
 - 新`employee-safety` Edge作用域只接受SQL46 `employee-safety-records-v1`原任务令牌及`download/recheck-export`，不接受全站/其他协议令牌，无upload/import/read/delete能力。媒体身份绑定site/job/employee/recordFP/rawrowSHA/refSHA/bucketpathSHA；引用摘要含表/行ID/字段/原引用，跨行或字段共用路径保留独立引用，同一行同一字段重复URL才去重。档案原`media_refs`键只是历史身份，不作网络地址；只用已校验私有桶路径，服务仅向固定本站Storage读取。
 - verification固定`verification-documents`三目录及员工UUID；chat固定`announcement-images/chat-images/template-images/super-customer-avatars`；notifications为前三桶；archives仅`content-audit-evidence`。按实际引用而非桶全量备份，不扩大公告迁移；未知/编码/外部媒体或未识别引用阻断不省略。头像≤5MiB、文件≤50MiB、最多3000引用条目、记录加媒体≤1GiB；允许类型及魔数边界见计划第44节。
 - `employeeSafetyMedia`先完整认证现有SQL46记录.edx，重扫48类原始NDJSON及所有行/文件摘要，重建精确引用并匹配inventory才下载。独立附件.edx绑定精确记录密文SHA-256/大小/卷元数据及完整catalog，保存后全部认证/字节魔数核对/清理，再实际源文件recheck/verify；本机成对reader认证两卷并同样重扫引用，拒绝目录/manifest同时删项或伪造row/ref身份。该独立复审问题已修复并有合法重加密包回归，不是未解决阻断。
-- SQL46记录v1与`media_included:false`不变；**无UI改动，EmployeeSafetyBackupPanel仍仅备份记录，尚未接附件。** 附件库不自动stop/close，调用方须在附件完成后显式旧session.close；Abort/丢响应不重试、删除、回滚或假关闭，清理失败阻断成功。所有完整备份/封存/替换/全站完成标志仍false，不解锁SQL37/39/45或解除维护。
+- SQL46记录v1与`media_included:false`不变；**第45节EmployeeSafetyBackupPanel已接记录→附件独立保存/认证→成对回读/清理→源附件/记录最终复核→显式旧session.close，无新增或修改SQL/RPC。** 页面报告v2/pair协议与记录catalog分开，两个文件各有状态；零引用仍保存附件目录卷，附件/成对/清理/最终源失败不提前close。附件库不自动stop/close；Abort/丢响应不重试、删除、回滚或假关闭，清理失败阻断成功。所有完整备份/封存/替换/全站完成标志仍false，不解锁SQL37/39/45或解除维护。
 - 本地七媒体文件2225/2225、SQL47下全站维护态导入28/28、聊天6/稽核48及typecheck/lint/build/Edge语法/差异检查通过。SQL专用现26项（原24合成回执+2真实SQL46/47、handler、memoryStorage、磁盘成对读取/显式close和最终源漂移拒绝）；SQL47/基础/范围三文件最终完整117/117通过，已含上述26项，不重复累加。严格回放574份仍同12历史失败、109根表/967列不变，非干净建库。
-- 未访问正式环境，无SQL迁移、Storage/权限/config/cron调整或Edge/前端部署；本轮无UI/浏览器功能测试。真实Storage/CORS、原生picker、原生PG并发/PostgREST性能、完整迁移及UUID恢复未验证，后续页面串联/全部引用恢复/安全封存窗口仍缺；详见计划第44节。
+- 未访问正式环境，无SQL迁移、Storage/权限/config/cron调整或Edge/前端部署。第44节当时无UI测试；第45节页面接线后，双浏览器108独立场景（含父组110项）、旧向导24/24、客户端/Storage431/431及SQL47专项26/26重新通过。真实Storage/CORS、原生picker、原生PG并发/PostgREST性能、完整迁移及UUID恢复仍未验证，全部引用恢复/安全封存窗口仍缺；详见计划第44–45节。
 
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。

@@ -257,8 +257,7 @@ function installHarness(api, constants) {
             return { async *[Symbol.asyncIterator]() {
               if (h.fault.holdPairRead === kind && number === (kind === 'records' ? 5 : 4)) {
                 h.fault.holdPairRead = null;
-                // The stream's IO boundary has no signal; cancellation must return the iterator
-                // without waiting for its blocked next(), and late IO must not trigger close.
+                // Signal-less IO must not block cancellation or allow a late close.
                 await gate('pair-read:' + kind);
               }
               for (let offset = 0; offset < f.bytes.length; offset += 113) {
@@ -519,8 +518,7 @@ async function parentLocked(page) {
 
 for (const engine of ['chromium', 'webkit']) {
   test(`isolated ${engine} employee safety UI: real SQL46/47 clients/paired AES/ZIP, synthetic RPC/Edge/picker/workspace`, { skip: !playwright, timeout: 600000 }, async t => {
-    // Optional explicit paths let temporary runners use existing cached browsers without
-    // installing modules/binaries in the repository or silently skipping a launch failure.
+    // Cached browsers avoid installing binaries in the repository.
     const executablePath = process.env[`EMPLOYEE_TRANSFER_${engine.toUpperCase()}_EXECUTABLE`];
     const browser = await playwright[engine].launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
     try {
