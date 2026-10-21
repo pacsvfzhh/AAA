@@ -981,7 +981,7 @@ test('identity projection: reject invalid, source, site, job, export, volume and
   const ids = new Set();
   for (const [key, text] of Object.entries(h.texts)) for (const raw of lines(text)) {
     const value = JSON.parse(raw).id;
-    if (typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value) && value !== EMPLOYEE && !ids.has(value)) { ids.add(value); cases.push(['existing ' + key, value]); }
+    if (typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value) && value !== EMPLOYEE && !ids.has(value)) { ids.add(value); cases.push(['existing ' + key + ' ' + value, value]); }
   }
   for (const [label, target] of cases) await t.test(`identity projection: rejects target ${label}`, async () => {
     let consumed = false;

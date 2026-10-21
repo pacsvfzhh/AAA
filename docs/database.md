@@ -50,6 +50,12 @@
 - 本地七媒体文件2225/2225、SQL47下全站维护态导入28/28、聊天6/稽核48及typecheck/lint/build/Edge语法/差异检查通过。SQL专用现26项（原24合成回执+2真实SQL46/47、handler、memoryStorage、磁盘成对读取/显式close和最终源漂移拒绝）；SQL47/基础/范围三文件最终完整117/117通过，已含上述26项，不重复累加。严格回放574份仍同12历史失败、109根表/967列不变，非干净建库。
 - 未访问正式环境，无SQL迁移、Storage/权限/config/cron调整或Edge/前端部署。第44节当时无UI测试；第45节页面接线后，双浏览器108独立场景（含父组110项）、旧向导24/24、客户端/Storage431/431及SQL47专项26/26重新通过。真实Storage/CORS、原生picker、原生PG并发/PostgREST性能、完整迁移及UUID恢复仍未验证，全部引用恢复/安全封存窗口仍缺；详见计划第44–45节。
 
+## 员工身份转换准备（第46节，2026-10-22，本地未部署）
+- `employeeIdentityProjection.ts`仅在本机完整认证现有SQL46/47双包并重新绑定精确记录密文后，按固定48表顶层字段和复合键生成新员工UUID只读投影。没有新增SQL/RPC或服务端身份预留，不改既有apply/verify、维护permit或封存接口，不能把客户端给出的UUID视为服务器授权。
+- 只改明确的员工UUID字段、可见性列表内本员工及派生复合键；账号/登录历史的employee_id是员工号不改。其他业务主键、管理员引用、金额字面量、正文和媒体URL保持；audit事件/收件版本及管理员元数据原始字节不改，不能拿投影直接插入原生留证表。
+- `canRestore/completeEmployeeBackup/canArchive/canReplace/fullSiteComplete`恒false；服务器目标预留、其他实体ID与共享配置对应、账本游标、媒体迁址、档案命名空间、工时闭合及数据库恢复核验为固定待做项。SQL46未包含submit_time_groups，发现非空group_id另列缺依赖阻断；外部员工可见性引用保留并单列，不静默改到新员工。
+- 本轮没有改数据库、旧函数/触发器、Edge、Storage或cron，没有正式服务访问/部署。测试仅真实本机AES/ZIP/磁盘、合成记录及既有handler/内存Storage；不是原生PG或正式恢复证明。证据见计划第46节。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：

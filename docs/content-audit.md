@@ -65,5 +65,10 @@ job 的两种状态：
 - 附件库不自动stop/close；第45节页面已按上述顺序显式调用旧SQL46 session.close，无新增服务授权。Abort/响应丢失不重试/删除/回滚或假关闭，清理失败阻断成功。报告employee-backup-report.json仅白名单技术字段及两个文件独立回执，不含记录原文、媒体路径或不透明身份。成对核验通过也不表示最后源检查或任务关闭已确认。`completeEmployeeBackup/canArchive/canReplace/fullSiteComplete`恒false；跨域UUID/全部引用恢复、封存安全窗口及受控完整恢复仍缺，不得自动封存/覆盖或解除维护。
 - `archive_employee_without_media`、`content-audit`及既有删除/留证/清理流程未改，未调用封存或接通同名员工覆盖。无正式环境访问或SQL/Storage/config/Edge/前端部署调整；第45节双浏览器合成RPC/fetch/IO搭配真实客户端/加密/成对reader，108个独立场景（含父组110项）通过；没有真实Storage、原生目录或PG并发验收，证据与后续见计划第44–45节。
 
+## 员工新身份转换准备（第46节，2026-10-22，本地未部署）
+- `employeeIdentityProjection.ts`读取已认证的记录+附件双包，针对业务员工UUID及虚拟复合键生成本机只读投影；两个audit表和管理员身份元数据仍是完整原始字节，不把历史employee_id/实体快照/收件版本/media_refs改成新在职员工。
+- 未改变附件URL/原路径，也不把留证文件当成已搬迁。源文件不写入或删除，无数据库恢复/身份预留/封存能力，`canRestore/canArchive/canReplace`恒false；共享依赖、其他业务ID冲突及档案命名空间尚需恢复器处理。
+- 所有投影工作区只在回调期间可读，退出即撤销reader；清理超时或取消后未确认清理会拒绝成功。既有`archive_employee_without_media`、content-audit及维护拦截不变，未接入替换页面、未访问正式服务或部署。
+
 ## 现状（2026-10-09）
 - 超管已清空两个板块：稽核记录、已删员工档案与通知、私有证据文件、确认暂存、待重试任务均为 0。
