@@ -59,7 +59,7 @@ const projections = { ...api.EMPLOYEE_BACKUP_PROJECTIONS,
   ...await spec('20261102000023_export_stage_site_notifications.sql', 'notifications'),
   ...await spec('20261102000009_export_dispatch_submission_data.sql', 'dispatch'),
   ...await spec('20261102000033_transfer_readonly_archives.sql', 'archives'),
-  orders_history: api.EMPLOYEE_BACKUP_PROJECTIONS.orders,
+  orders_history: { id: 'uuid!', user_id: 'uuid!', status: 'text!', commission_amount: 'numeric', created_at: 'timestamp with time zone', completed_at: 'timestamp with time zone' },
   administrators: { id: 'uuid!', username: 'text!', role: 'text!', parent_id: 'uuid', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone' } };
 function rowObject(key, index = 0) {
   const row = Object.fromEntries(Object.entries(projections[key]).map(([field, spec]) => {
@@ -74,6 +74,7 @@ function rowObject(key, index = 0) {
   if (key === 'accounts') Object.assign(row, { username: NAME, password_hash: '$2a$hash-account', updated_at: null, remarks: '原始備註\n𠮷', is_pinned: true });
   if (key === 'credentials') row.password_hash = '$2a$hash-financial';
   if (['orders', 'orders_history'].includes(key)) row.status = index % 2 ? 'failure' : 'success';
+  if (key === 'orders_history' && index === 1) Object.assign(row, { commission_amount: null, created_at: null, completed_at: null });
   if (['wallet_ledger_entries', 'wallet_reconciliation_audit'].includes(key)) row.id = ['2', '10', '9007199254740993', '9223372036854775807'][index];
   if (key === 'employee_login_history') Object.assign(row, { session_id: `history-${'a'.repeat(64)}`, device_info: index < 2 ? null : { precise: '__precise__', tiny: '__tiny__', null: null }, device_info_is_sql_null: index === 0 });
   if (key === 'work_sessions') Object.assign(row, { end_time: null, last_heartbeat_at: null, duration_minutes: null });
@@ -177,7 +178,7 @@ function fixture(t, options = {}) {
       for await (const raw of createReadStream(h.filePath, { highWaterMark: 113 })) yield raw; h.events.push('file-eof');
     } }; },
   };
-  h.connect = () => { api.setHarness(h); return api.createEmployeeSafetyBackupSession(`  ${h.catalog.username}  `, SECRET); };
+  h.connect = () => { api.setHarness(h); return api.createEmployeeSafetyBackupSession(h.catalog.username, SECRET); };
   h.start = async () => { const session = h.connect(); await session.begin(); return session; };
   h.export = async (options = {}) => { const session = await h.start(); h.client = session; return api.exportEmployeeSafetyBackup(session, h.file, h.createWorkspace, PASS, h.info, options); };
   h.read = (consume, options = {}, pass = PASS) => api.withAuthenticatedEmployeeSafetyBackup(h.file, pass, h.createWorkspace, consume, options);
@@ -229,7 +230,12 @@ test('synthetic RPC bridge + REAL encrypted disk roundtrip preserves every one o
     assert.match(h.text.employee_login_history, /"device_info_is_sql_null":true/); assert.match(h.text.employee_login_history, /"device_info_is_sql_null":false/);
     assert.match(h.text.customer_employee_conversations, /"rating_data_sql_null":false/); assert.match(h.text.simulated_customers, /"target_employee_ids":\[null\]/);
     assert.match(h.text.content_audit_events, /"before_data_sql_null":true/); assert.match(h.text.content_audit_events, /"after_data_sql_null":false/);
-    assert.match(h.text.orders_history, /\.123456\+00:00/); assert.equal(Object.keys(JSON.parse(lines(h.text.orders_history)[0])).length, 7);
+    const history = lines((await collect(reader.open(api.employeeSafetyBackupEntryPath('orders_history')))).toString()).map(JSON.parse);
+    for (const row of history) assert.deepEqual(Object.keys(row), ['id', 'user_id', 'status', 'commission_amount', 'created_at', 'completed_at']);
+    assert.equal(history[0].completed_at, TIME); assert.equal(history[1].completed_at, null); assert.equal(history[1].created_at, null); assert.equal(history[1].commission_amount, null);
+    assert.match(h.text.orders_history, /"commission_amount":12345678901234567890\.12345678901234567890/);
+    assert.match(h.text.orders_history, /"completed_at":"2024-02-29T23:34:56\.123456\+00:00"/);
+    assert.deepEqual(Object.keys(JSON.parse(lines(h.text.orders)[0])), ['id', 'user_id', 'status', 'commission_amount', 'commission_rate', 'created_at', 'processed_at']);
     assert.deepEqual(Object.keys(JSON.parse(h.text.administrators)), ['id', 'username', 'role', 'parent_id', 'created_at', 'updated_at']);
     assert.throws(() => reader.open('media/any/file.png')); return 123;
   }, { expectedMetadata: { exportId: h.info.exportId, volumeId: h.info.volumeId } });
@@ -261,9 +267,12 @@ test('every API call reacquires the current admin token after re-login', async t
   const h = fixture(t), session = await h.start(); h.session = OTHER; await session.catalog(); await session.page(h.catalog, 'accounts', null); await session.verify(h.catalog);
   assert.equal(h.tokenReads, h.calls.length); assert.equal(h.calls[1].args.p_admin_session_token, OTHER);
 });
-test('username trim is explicit, case/Unicode retained; code-point length 1..256 and no silent rename', async t => {
+test('username rejects surrounding whitespace without trimming, retains case/Unicode and code-point length 1..256', async t => {
   const h = fixture(t);
-  for (const name of ['', '  ', 'x'.repeat(257), '\ud800', 'a\0b']) assert.throws(() => api.createEmployeeSafetyBackupSession(name, SECRET));
+  for (const name of ['', '  ', ` ${NAME}`, `${NAME} `, `  ${NAME}  `, `\t${NAME}`, `${NAME}\n`, `\u00a0${NAME}`, 'x'.repeat(257), '\ud800', 'a\0b']) {
+    assert.throws(() => api.createEmployeeSafetyBackupSession(name, SECRET));
+  }
+  assert.equal(h.calls.length, 0);
   for (const name of ['A', 'x'.repeat(256), '𠮷'.repeat(256)]) { h.catalog.username = name; const s = h.connect(); assert.equal((await s.begin()).catalog.username, name); }
   h.catalog = catalog(h.text); h.transform = (name, value) => { if (name === BEGIN) value.catalog.username = NAME.toLowerCase(); return value; };
   await assert.rejects(h.connect().begin(), e => redacted(e, 'begin'));
@@ -313,6 +322,16 @@ test('fixed rows reject unknown/password columns, duplicate keys, wrong core acc
     const value = rowObject(key); value.password = SECRET; assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(value), key, c));
     const line = serialize(rowObject(key)).replace('{', '{"id":"' + OTHER + '",'); assert.throws(() => api.validateEmployeeSafetyBackupRow(line, key, c));
   }
+  const history = rowObject('orders_history');
+  assert.equal(api.validateEmployeeSafetyBackupRow(serialize(history), 'orders_history', c), history.id);
+  for (const field of ['commission_rate', 'processed_at']) {
+    assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize({ ...history, [field]: null }), 'orders_history', c));
+  }
+  const missingCompleted = { ...history }; delete missingCompleted.completed_at;
+  assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(missingCompleted), 'orders_history', c));
+  assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize({ ...history, completed_at: false }), 'orders_history', c));
+  assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(rowObject('orders')), 'orders_history', c));
+  assert.deepEqual(Object.keys(api.EMPLOYEE_BACKUP_PROJECTIONS.orders), ['id', 'user_id', 'status', 'commission_amount', 'commission_rate', 'created_at', 'processed_at']);
   const account = rowObject('accounts'); account.username = NAME.toLowerCase(); assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(account), 'accounts', c));
   const login = rowObject('employee_login_history', 2); login.device_info = { nested: { accessToken: SECRET } }; assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(login), 'employee_login_history', c));
 });

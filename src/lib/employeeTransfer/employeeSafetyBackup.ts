@@ -15,6 +15,13 @@ import { Sha256 } from './sha256';
 export const EMPLOYEE_SAFETY_BACKUP_PROTOCOL = 'employee-safety-records-v1';
 export const EMPLOYEE_SAFETY_BACKUP_CATALOG_PATH = 'data/employee-safety-backup-catalog.ndjson';
 const DISPATCH_KEYS = ['dispatch_config', 'dispatch_groups', 'dispatch_order_pools', 'dispatch_group_orders', 'valid_order_data', 'used_order_data'] as const;
+// orders_history has completed_at, not orders' commission_rate/processed_at.
+// Override only the validation projection; never synthesize or rewrite record fields.
+const ORDERS_HISTORY_PROJECTIONS = {
+  ...EMPLOYEE_BACKUP_PROJECTIONS,
+  orders: { id: 'uuid!', user_id: 'uuid!', status: 'text!', commission_amount: 'numeric',
+    created_at: 'timestamp with time zone', completed_at: 'timestamp with time zone' },
+};
 export const EMPLOYEE_SAFETY_BACKUP_TABLE_KEYS = Object.freeze([
   ...EMPLOYEE_BACKUP_TABLE_KEYS, ...CHAT_TABLE_KEYS, ...NOTIFICATIONS_TABLE_KEYS, ...DISPATCH_KEYS,
   'content_audit_events', 'content_audit_recipient_versions', 'orders_history', 'administrators',
@@ -193,7 +200,7 @@ export function validateEmployeeSafetyBackupRow(line: string, key: EmployeeSafet
   else if ((NOTIFICATIONS_TABLE_KEYS as readonly string[]).includes(key)) id = validateNotificationsRow(line, key as NotificationsTableKey);
   else if ((DISPATCH_KEYS as readonly string[]).includes(key)) id = dispatchTransferChecks.rowIdentity(line, key as DispatchTableKey);
   else if (key === 'content_audit_events' || key === 'content_audit_recipient_versions') id = validateArchivesRow(line, key);
-  else if (key === 'orders_history') id = validateEmployeeBackupRow(line, 'orders', core);
+  else if (key === 'orders_history') id = validateEmployeeBackupRow(line, 'orders', { ...core, projections: ORDERS_HISTORY_PROJECTIONS });
   else id = adminRow(line);
   const row = JSON.parse(line) as Record<string, unknown>;
   // accounts.employee_id is the historical employee NUMBER, not its UUID.
@@ -238,7 +245,7 @@ type SafetyRpcArgs = {
 const safetyRpc = <K extends keyof SafetyRpcArgs>(name: K, args: SafetyRpcArgs[K]): Query =>
   (supabase as unknown as { rpc(name: K, args: SafetyRpcArgs[K]): Query }).rpc(name, args);
 export function createEmployeeSafetyBackupSession(inputUsername: string, password: string): EmployeeSafetyBackupSession {
-  const name = username(text(inputUsername, 4096).trim());
+  const name = username(inputUsername);
   if (typeof password !== 'string' || !password.length) invalid();
   let attempted = false, busy = false, closed = false, baseline: EmployeeSafetyBackupCatalog | null = null;
   let identity: Readonly<EmployeeSafetyBackupIdentity> | null = null;

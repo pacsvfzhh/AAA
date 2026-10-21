@@ -2512,6 +2512,27 @@ export interface Database {
         Args: { p_admin_session_token: string; p_source_site_id: string; p_package_id: string; p_snapshot_hash: string };
         Returns: import('../lib/employeeTransfer/archiveMedia').ArchiveMediaInventory;
       };
+      employee_safety_backup_begin: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_username: string };
+        Returns: import('../lib/employeeTransfer/employeeSafetyBackup').EmployeeSafetyBackupBegin;
+      };
+      get_employee_safety_backup_catalog: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeSafetyBackup').EmployeeSafetyBackupCatalog;
+      };
+      get_employee_safety_backup_page: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog_fingerprint: string;
+          p_table_key: string; p_after?: string | null; p_limit?: number };
+        Returns: Record<string, unknown>;
+      };
+      employee_safety_backup_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog_fingerprint: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_safety_backup_close: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog_fingerprint: string };
+        Returns: { success: true; scope: 'employee-safety-records'; full_site_complete: false };
+      };
       get_employee_import_replacement_backup: {
         Args: { p_admin_session_token: string; p_job_token: string; p_source_employee_id: string };
         Returns: import('../lib/employeeTransfer/employeeBackup').EmployeeBackupCatalog;
