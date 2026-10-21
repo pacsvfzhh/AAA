@@ -23,6 +23,10 @@ const h=()=>window.__h;
 export const getSiteTransferCapabilities=async()=>({version:1,site_id:id(1),can_export:true,can_import:false,missing_rpcs:[],import_blockers:[],export_protocol:'local'});
 export const getSiteTransferHistory=async()=>[];
 export const stopSiteExportTask=async()=>{h().forbidden.push('stop-export');throw Error('forbidden')};
+export class EmployeeSafetyBackupError extends Error {}
+export const createEmployeeSafetyBackupSession=()=>{h().forbidden.push('employee-backup');throw Error('forbidden')};
+export const exportEmployeeSafetyBackup=async()=>{h().forbidden.push('employee-backup-export');throw Error('forbidden')};
+export const stopOwnedEmployeeSafetyBackup=async()=>{h().forbidden.push('employee-backup-stop');throw Error('forbidden')};
 export const exportSiteBundleSet=async()=>{h().forbidden.push('export');throw Error('forbidden')};
 const bundle=()=>({packageId:id(2),sourceSiteId:id(3),volumes:SITE_DOMAINS.map((domain,i)=>({domain,filename:domain+'.edx',cipherBytes:128,cipherSha256:'a'.repeat(64),rows:i+1,files:0})),fullSiteComplete:false,importReady:false});
 export async function inspectSiteBundleSet(files,pass,factory,{onProgress}){
