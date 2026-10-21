@@ -76,7 +76,7 @@ function rowObject(key, index = 0) {
   if (['orders', 'orders_history'].includes(key)) row.status = index % 2 ? 'failure' : 'success';
   if (key === 'orders_history' && index === 1) Object.assign(row, { commission_amount: null, created_at: null, completed_at: null });
   if (['wallet_ledger_entries', 'wallet_reconciliation_audit'].includes(key)) row.id = ['2', '10', '9007199254740993', '9223372036854775807'][index];
-  if (key === 'employee_login_history') Object.assign(row, { session_id: `history-${'a'.repeat(64)}`, device_info: index < 2 ? null : { precise: '__precise__', tiny: '__tiny__', null: null }, device_info_is_sql_null: index === 0 });
+  if (key === 'employee_login_history') Object.assign(row, { employee_id: 'LOCAL-1000', session_id: `history-${'a'.repeat(64)}`, device_info: index < 2 ? null : { precise: '__precise__', tiny: '__tiny__', null: null }, device_info_is_sql_null: index === 0 });
   if (key === 'work_sessions') Object.assign(row, { end_time: null, last_heartbeat_at: null, duration_minutes: null });
   if (key === 'simulated_customers') Object.assign(row, { source_type: 'aaa_service', badge_type: null, target_employee_ids: [null], target_employee_id: OTHER });
   if (key === 'cs_message_templates') Object.assign(row, { source_type: 'aaa_service', content_type: 'text' });
@@ -228,6 +228,9 @@ test('synthetic RPC bridge + REAL encrypted disk roundtrip preserves every one o
     for (const key of TABLES) assert.equal((await collect(reader.open(api.employeeSafetyBackupEntryPath(key)))).toString(), h.text[key], key);
     assert.match(h.text.wallet_transactions, /12345678901234567890\.12345678901234567890/);
     assert.match(h.text.employee_login_history, /"device_info_is_sql_null":true/); assert.match(h.text.employee_login_history, /"device_info_is_sql_null":false/);
+    const loginRaw = (await collect(reader.open(api.employeeSafetyBackupEntryPath('employee_login_history')))).toString();
+    assert.equal(loginRaw, h.text.employee_login_history);
+    for (const row of lines(loginRaw).map(JSON.parse)) { assert.equal(row.employee_id, 'LOCAL-1000'); assert.equal(row.user_id, EMPLOYEE); }
     assert.match(h.text.customer_employee_conversations, /"rating_data_sql_null":false/); assert.match(h.text.simulated_customers, /"target_employee_ids":\[null\]/);
     assert.match(h.text.content_audit_events, /"before_data_sql_null":true/); assert.match(h.text.content_audit_events, /"after_data_sql_null":false/);
     const history = lines((await collect(reader.open(api.employeeSafetyBackupEntryPath('orders_history')))).toString()).map(JSON.parse);
@@ -333,7 +336,11 @@ test('fixed rows reject unknown/password columns, duplicate keys, wrong core acc
   assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(rowObject('orders')), 'orders_history', c));
   assert.deepEqual(Object.keys(api.EMPLOYEE_BACKUP_PROJECTIONS.orders), ['id', 'user_id', 'status', 'commission_amount', 'commission_rate', 'created_at', 'processed_at']);
   const account = rowObject('accounts'); account.username = NAME.toLowerCase(); assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(account), 'accounts', c));
-  const login = rowObject('employee_login_history', 2); login.device_info = { nested: { accessToken: SECRET } }; assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(login), 'employee_login_history', c));
+  const login = rowObject('employee_login_history', 2);
+  assert.equal(login.employee_id, 'LOCAL-1000');
+  assert.equal(api.validateEmployeeSafetyBackupRow(serialize(login), 'employee_login_history', c), login.id);
+  assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize({ ...login, user_id: OTHER }), 'employee_login_history', c));
+  login.device_info = { nested: { accessToken: SECRET } }; assert.throws(() => api.validateEmployeeSafetyBackupRow(serialize(login), 'employee_login_history', c));
 });
 test('shared definitions retain target visibility [null]/[UUID,null], no association expansion or normalization', () => {
   const c = catalog(texts()), role = rowObject('simulated_customers');

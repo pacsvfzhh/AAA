@@ -1,5 +1,42 @@
 BEGIN;
 
+CREATE OR REPLACE FUNCTION private.employee_transfer_job(p_session uuid,p_job_token uuid,p_kind text)
+RETURNS private.employee_transfer_jobs LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE v_admin uuid;v_job private.employee_transfer_jobs%ROWTYPE;v_kind text;
+BEGIN
+  SELECT admin.admin_id INTO v_admin FROM private.employee_transfer_admin(p_session) AS admin;
+  IF EXISTS(SELECT 1 FROM private.employee_transfer_jobs WHERE token_hash=private.hash_financial_token(p_job_token)
+    AND options->>'export_protocol'='employee-safety-records-v1') THEN
+    RAISE EXCEPTION 'The independent employee safety task cannot use another transfer protocol.';
+  END IF;
+  v_kind:=CASE p_kind WHEN 'shared-import' THEN 'import' WHEN 'products-import' THEN 'import'
+    WHEN 'dispatch-import' THEN 'import' WHEN 'products-export' THEN 'export' WHEN 'dispatch-export' THEN 'export'
+    WHEN 'identity-export' THEN 'export' ELSE p_kind END;
+  IF p_job_token IS NULL THEN RAISE EXCEPTION 'Employee transfer task is invalid or expired.';END IF;
+  UPDATE private.employee_transfer_jobs SET last_activity_at=now()
+    WHERE token_hash=private.hash_financial_token(p_job_token) AND kind=v_kind AND admin_id=v_admin AND status='running'
+      AND last_activity_at>now()-interval '3 hours' AND started_at>now()-interval '12 hours' RETURNING * INTO v_job;
+  IF v_job.id IS NULL THEN RAISE EXCEPTION 'Employee transfer task is invalid or expired.';END IF;
+  IF (v_job.options->>'import_protocol'='shared-import-v1' AND p_kind<>'shared-import')
+    OR (p_kind='shared-import' AND v_job.options->>'import_protocol' IS DISTINCT FROM 'shared-import-v1')
+    OR (v_job.options->>'import_protocol'='products-v1' AND p_kind<>'products-import')
+    OR (p_kind='products-import' AND v_job.options->>'import_protocol' IS DISTINCT FROM 'products-v1')
+    OR (v_job.options->>'import_protocol'='dispatch-submission-v1' AND p_kind<>'dispatch-import')
+    OR (p_kind='dispatch-import' AND v_job.options->>'import_protocol' IS DISTINCT FROM 'dispatch-submission-v1')
+    OR (v_job.options->>'export_protocol'='products-v1' AND p_kind<>'products-export')
+    OR (p_kind='products-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'products-v1')
+    OR (v_job.options->>'export_protocol'='dispatch-submission-v1' AND p_kind<>'dispatch-export')
+    OR (p_kind='dispatch-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'dispatch-submission-v1')
+    OR (v_job.options->>'export_protocol'='employee-identity-v1' AND p_kind<>'identity-export')
+    OR (p_kind='identity-export' AND v_job.options->>'export_protocol' IS DISTINCT FROM 'employee-identity-v1') THEN
+    RAISE EXCEPTION 'The task protocol does not permit this operation.';
+  END IF;
+  RETURN v_job;
+END;
+$$;
+REVOKE ALL ON FUNCTION private.employee_transfer_job(uuid,uuid,text) FROM PUBLIC,anon,authenticated,service_role;
+
 CREATE FUNCTION private.employee_safety_backup_keys()
 RETURNS text[] LANGUAGE sql IMMUTABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$

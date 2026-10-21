@@ -60,6 +60,7 @@ const criticalMigrations = [
   '20261102000043_preserve_transfer_announcements.sql',
   '20261102000044_preflight_site_restore.sql',
   '20261102000045_verify_site_prerequisites.sql',
+  '20261102000046_backup_employee_before_restore.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));

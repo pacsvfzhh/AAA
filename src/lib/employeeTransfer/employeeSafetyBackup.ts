@@ -203,9 +203,11 @@ export function validateEmployeeSafetyBackupRow(line: string, key: EmployeeSafet
   else if (key === 'orders_history') id = validateEmployeeBackupRow(line, 'orders', { ...core, projections: ORDERS_HISTORY_PROJECTIONS });
   else id = adminRow(line);
   const row = JSON.parse(line) as Record<string, unknown>;
-  // accounts.employee_id is the historical employee NUMBER, not its UUID.
+  // accounts/employee_login_history.employee_id is the historical employee NUMBER,
+  // not its UUID. Login history still belongs to the employee through user_id.
   for (const field of ['user_id', 'employee_id', 'recipient_id']) {
-    if (key !== 'accounts' && Object.prototype.hasOwnProperty.call(row, field) && row[field] !== c.employee_id) invalid();
+    if (field === 'employee_id' && (key === 'accounts' || key === 'employee_login_history')) continue;
+    if (Object.prototype.hasOwnProperty.call(row, field) && row[field] !== c.employee_id) invalid();
   }
   return id;
 }
@@ -231,19 +233,6 @@ export function validateEmployeeSafetyBackupVerification(input: unknown, c: Empl
 }
 
 type Query = PromiseLike<{ data: unknown; error: unknown }> & { abortSignal(signal: AbortSignal): Query };
-type SafetyAuth = { p_admin_session_token: string; p_job_token: string };
-type SafetyFingerprint = SafetyAuth & { p_catalog_fingerprint: string };
-type SafetyRpcArgs = {
-  employee_safety_backup_begin: { p_admin_session_token: string; p_admin_password: string; p_username: string };
-  get_employee_safety_backup_catalog: SafetyAuth;
-  get_employee_safety_backup_page: SafetyFingerprint & { p_table_key: EmployeeSafetyBackupTableKey; p_after: string | null; p_limit: 200 };
-  employee_safety_backup_verify: SafetyFingerprint;
-  employee_safety_backup_close: SafetyFingerprint;
-};
-// Keep this isolated SQL46 contract typed without editing the shared generated/manual DB types
-// owned by the SQL coordinator. Every response still goes through exact runtime validation.
-const safetyRpc = <K extends keyof SafetyRpcArgs>(name: K, args: SafetyRpcArgs[K]): Query =>
-  (supabase as unknown as { rpc(name: K, args: SafetyRpcArgs[K]): Query }).rpc(name, args);
 export function createEmployeeSafetyBackupSession(inputUsername: string, password: string): EmployeeSafetyBackupSession {
   const name = username(inputUsername);
   if (typeof password !== 'string' || !password.length) invalid();
@@ -270,7 +259,7 @@ export function createEmployeeSafetyBackupSession(inputUsername: string, passwor
       return request('begin', () => {
         if (attempted) invalid(); attempted = true;
         const secret = password; password = '';
-        return safetyRpc('employee_safety_backup_begin', { p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_admin_password: secret, p_username: name });
+        return supabase.rpc('employee_safety_backup_begin', { p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_admin_password: secret, p_username: name });
       }, value => {
         const r = object(value, ['success', 'job_id', 'job_token', 'site_id', 'catalog', 'scope', 'full_site_complete']);
         if (r.success !== true || r.scope !== 'employee-safety-records' || r.full_site_complete !== false) invalid();
@@ -283,7 +272,7 @@ export function createEmployeeSafetyBackupSession(inputUsername: string, passwor
     },
     identity: () => identity,
     catalog(signal) {
-      return request('catalog', () => safetyRpc('get_employee_safety_backup_catalog', args()), value => {
+      return request('catalog', () => supabase.rpc('get_employee_safety_backup_catalog', args()), value => {
         const c = validateEmployeeSafetyBackupCatalog(value); return bound(c);
       }, signal);
     },
@@ -291,12 +280,12 @@ export function createEmployeeSafetyBackupSession(inputUsername: string, passwor
       let c: EmployeeSafetyBackupCatalog;
       return request('page', () => {
         c = bound(input); tableKey(key); if (previous !== null) cursor(key, previous);
-        return safetyRpc('get_employee_safety_backup_page', { ...args(), p_catalog_fingerprint: c.fingerprint, p_table_key: key, p_after: previous, p_limit: 200 });
+        return supabase.rpc('get_employee_safety_backup_page', { ...args(), p_catalog_fingerprint: c.fingerprint, p_table_key: key, p_after: previous, p_limit: 200 });
       }, value => { validateEmployeeSafetyBackupPage(value, c, key, previous); return value; }, signal);
     },
     verify(input, signal) {
       let c: EmployeeSafetyBackupCatalog;
-      return request('verify', () => { c = bound(input); return safetyRpc('employee_safety_backup_verify', { ...args(), p_catalog_fingerprint: c.fingerprint }); },
+      return request('verify', () => { c = bound(input); return supabase.rpc('employee_safety_backup_verify', { ...args(), p_catalog_fingerprint: c.fingerprint }); },
         value => { validateEmployeeSafetyBackupVerification(value, c); return value; }, signal);
     },
     close(input, signal) {
@@ -304,7 +293,7 @@ export function createEmployeeSafetyBackupSession(inputUsername: string, passwor
         const c = bound(input); if (completedExports.get(session) !== c.fingerprint) invalid();
         // Once dispatched, even a lost close response must not be automatically repeated.
         const auth = args(); closed = true;
-        return safetyRpc('employee_safety_backup_close', { ...auth, p_catalog_fingerprint: c.fingerprint });
+        return supabase.rpc('employee_safety_backup_close', { ...auth, p_catalog_fingerprint: c.fingerprint });
       }, value => {
         const r = object(value, ['success', 'scope', 'full_site_complete']);
         if (r.success !== true || r.scope !== 'employee-safety-records' || r.full_site_complete !== false) invalid();
