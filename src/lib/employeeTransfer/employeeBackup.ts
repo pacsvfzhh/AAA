@@ -27,7 +27,7 @@ const EXCLUDED = ['active_sessions', 'account_locks', 'detailed_orders', 'financ
 const FLAGS = { records_only: true, media_included: false, can_archive: false, can_replace: false, full_site_complete: false } as const;
 const INCOMPLETE = { ...FLAGS, complete_employee_backup: false, backup_sealed: false } as const;
 type Projection = Record<EmployeeBackupTableKey, Record<string, string>>;
-const SPEC: Projection = {
+export const EMPLOYEE_BACKUP_PROJECTIONS: Projection = {
   accounts: { id: 'uuid!', username: 'text!', password_hash: 'text!', employee_id: 'text!', is_verified: 'boolean', is_active: 'boolean', total_income: 'numeric', first_success_order_date: 'timestamp with time zone', created_by: 'uuid', remarks: 'text', created_at: 'timestamp with time zone', updated_at: 'timestamp with time zone', tags: 'text[]', is_pinned: 'boolean' },
   credentials: { id: 'uuid!', password_hash: 'text!', created_at: 'timestamp with time zone!', updated_at: 'timestamp with time zone!' },
   orders: { id: 'uuid!', user_id: 'uuid!', status: 'text!', commission_amount: 'numeric', commission_rate: 'numeric', created_at: 'timestamp with time zone', processed_at: 'timestamp with time zone' },
@@ -151,9 +151,9 @@ export function validateEmployeeBackupCatalog(input: unknown): EmployeeBackupCat
   if (r.version !== 1 || r.scope !== 'employee-replacement-records') invalid();
   const projections = object(r.projections, EMPLOYEE_BACKUP_TABLE_KEYS), checked = {} as Projection;
   for (const key of EMPLOYEE_BACKUP_TABLE_KEYS) {
-    const fields = object(projections[key], Object.keys(SPEC[key]));
+    const fields = object(projections[key], Object.keys(EMPLOYEE_BACKUP_PROJECTIONS[key]));
     checked[key] = {};
-    for (const [field, type] of Object.entries(SPEC[key])) { if (fields[field] !== type) invalid(); checked[key][field] = type; }
+    for (const [field, type] of Object.entries(EMPLOYEE_BACKUP_PROJECTIONS[key])) { if (fields[field] !== type) invalid(); checked[key][field] = type; }
   }
   let total = 0;
   const raw = array(r.tables, 15);
@@ -178,7 +178,8 @@ export function validateEmployeeBackupCatalog(input: unknown): EmployeeBackupCat
   if (!result.username || enc.encode(JSON.stringify(result) + '\n').length > EMPLOYEE_BACKUP_LIMITS.maxCatalogBytes) invalid();
   return result;
 }
-function rowIdentity(line: string, key: EmployeeBackupTableKey, catalog: EmployeeBackupCatalog): string {
+export function validateEmployeeBackupRow(line: string, key: EmployeeBackupTableKey,
+  catalog: Pick<EmployeeBackupCatalog, 'projections' | 'target_employee_id' | 'username'>): string {
   const value: unknown = JSON.parse(line), row = object(value, Object.keys(catalog.projections[key]));
   const stack: (Set<string> | null)[] = [];
   for (let i = 0; i < line.length; i++) {
@@ -235,7 +236,7 @@ export function validateEmployeeBackupPage(input: unknown, catalog: EmployeeBack
   for (let i = 0; i < raw.length; i++) if (raw[i] === 10) {
     const line = raw.subarray(start, i + 1);
     if (line.length > 65536) invalid();
-    const id = rowIdentity(dec.decode(line), key, catalog);
+    const id = validateEmployeeBackupRow(dec.decode(line), key, catalog);
     if (!after(key, id, last) || ++rows > n) invalid();
     last = id; start = i + 1;
   }
