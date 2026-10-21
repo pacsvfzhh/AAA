@@ -56,6 +56,12 @@
 - `canRestore/completeEmployeeBackup/canArchive/canReplace/fullSiteComplete`恒false；服务器目标预留、其他实体ID与共享配置对应、账本游标、媒体迁址、档案命名空间、工时闭合及数据库恢复核验为固定待做项。SQL46未包含submit_time_groups，发现非空group_id另列缺依赖阻断；外部员工可见性引用保留并单列，不静默改到新员工。
 - 本轮没有改数据库、旧函数/触发器、Edge、Storage或cron，没有正式服务访问/部署。测试仅真实本机AES/ZIP/磁盘、合成记录及既有handler/内存Storage；不是原生PG或正式恢复证明。证据见计划第46节。
 
+## 员工候选身份服务端绑定（SQL48，2026-10-22，本地未部署）
+- `20261102000048_reserve_employee_identities.sql`只新增两个私有helper与两个公共RPC，无新表、旧函数/触发器/permit变更。公共`employee_import_identity_reservation_status`为STABLE观察，`employee_import_identity_reserve`只写技术候选；SECURITY DEFINER/固定search_path，撤销PUBLIC/service_role及所有私有helper直接权限，公共接口仅授予anon/authenticated并验证超管、本人原任务及SQL37全部前置。
+- 任务行锁后重新核对已绑定来源与单来源目标观察指纹，不接受客户端目标UUID；服务器排除源身份/订单及已知目标/历史身份后选候选。映射冻结在原staging的`identity-reservation-v1`，绑定站点/包/任务/来源员工/源与目标指纹；首次追加一条脱敏审计，不改业务、heartbeat、维护或触发器。重复请求只返回原候选；漂移或后来被占用则拒绝，不自动重置。
+- **不是users全局UUID占位，也不是完整备份或恢复授权。** 尚未绑定SQL46/47精确双密文、接入投影或各域apply/verify；所有can_restore/完整备份/封存/替换/全站完成恒false，SQL15/37/45旧阻断不变。真实封存保留旧UUID并改变目标指纹，不能靠此接口自动批准封存窗口。
+- 本地五专项392/392（含实际client→anon RPC）与SQL48整站维护态28/28、聊天6/稽核48及静态检查/构建通过；575份回放仍12旧失败、109表/967列不变。未访问或部署正式服务，无UI/本轮浏览器或真实Storage/原生PG并发验收；详见计划第47节。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：

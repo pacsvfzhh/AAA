@@ -159,9 +159,9 @@ async function snapshot() {
     WHERE n.nspname IN ('public','private') AND c.relkind IN ('r','p') ORDER BY 1`)).map(r => r.name);
   return rows(db, names.map(name => `SELECT '${name}' AS name,count(*)::int AS n,md5(COALESCE(string_agg(to_jsonb(r)::text,'' ORDER BY to_jsonb(r)::text),'')) AS digest FROM ${name} AS r`).join(' UNION ALL '));
 }
-function transport() {
+function transport(allowed = [PLAN, STATUS]) {
   modules.setHarness({ token: session, rpc(name, args) {
-    assert.ok([PLAN, STATUS].includes(name));
+    assert.ok(allowed.includes(name));
     const query = { abortSignal() { return query; }, then(resolve, reject) { return rpc(name, args).then(data => ({ data, error: null })).then(resolve, reject); } };
     return query;
   } });
@@ -193,7 +193,8 @@ before(async () => {
   branch = await adminLogin(db, 'replacement-secondary', PASSWORDS.branch); other = await adminLogin(db, 'replacement-admin', PASSWORDS.root); pkg = randomUUID();
   const compiled = await build({ stdin: { contents: `export {createReplacementBackup} from './src/lib/employeeTransfer/replacementBackup.ts';
     export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';
-    export * from './src/lib/employeeTransfer/employeeReplacement.ts'; export {setHarness} from 'replacement-db:state';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
+    export * from './src/lib/employeeTransfer/employeeReplacement.ts';
+    export * from './src/lib/employeeTransfer/employeeIdentityReservation.ts'; export {setHarness} from 'replacement-db:state';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
   bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', plugins: [{ name: 'local-sql-only', setup(builder) {
     builder.onResolve({ filter: /^(?:replacement-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'replacement-db' }));
     builder.onLoad({ filter: /.*/, namespace: 'replacement-db' }, ({ path }) => ({ contents: path === 'replacement-db:state'
@@ -228,7 +229,7 @@ before(async () => {
 after(async () => { await Promise.allSettled([source?.close(), db?.close()]); mock.restoreAll(); });
 
 test('SQL37 exposes exactly two STABLE read-only RPCs, no table/write/trigger/service permissions', async () => transaction(async () => {
-  const added = await rows(db, `SELECT proname,provolatile,prosecdef,proconfig FROM pg_proc WHERE proname LIKE '%replacement_%' AND pronamespace='public'::regnamespace ORDER BY proname`);
+  const added = await rows(db, `SELECT proname,provolatile,prosecdef,proconfig FROM pg_proc WHERE proname=ANY($1::text[]) AND pronamespace='public'::regnamespace ORDER BY proname`, [[PLAN, STATUS]]);
   assert.deepEqual(added.map(r => r.proname), [PLAN, STATUS]);
   for (const fn of added) { assert.equal(fn.provolatile, 's'); assert.equal(fn.prosecdef, true); assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp')); }
   for (const role of ['anon', 'authenticated', 'service_role']) {
@@ -648,17 +649,20 @@ for (const role of ['anon', 'authenticated']) test(`SQL48 ${role}: server RNG sk
   const archived = await rows(db, 'SELECT id,employee_id FROM private.deleted_employee_accounts'); assert.equal(archived.length, 1);
   for (const row of archived) { forbidden.add(row.id); forbidden.add(row.employee_id); }
   const candidate = randomUUID(); assert.equal(forbidden.has(candidate), false);
-  // Only randomness is deterministic, in this rollback-only local database transaction.
-  // The actual SECURITY DEFINER RPC, SQL37 owner, sealed disk backups and namespace checks still run.
+  // A new OID is needed: PGlite retains the internal RNG when CREATE OR REPLACE reuses its OID.
   await db.exec('CREATE TEMP TABLE identity_candidate_rng(no integer PRIMARY KEY,value uuid NOT NULL)');
-  await db.exec(`CREATE OR REPLACE FUNCTION pg_catalog.gen_random_uuid() RETURNS uuid LANGUAGE plpgsql VOLATILE AS $rng$
+  await db.exec(`ALTER FUNCTION pg_catalog.gen_random_uuid() RENAME TO identity_test_original_rng;
+    CREATE FUNCTION pg_catalog.gen_random_uuid() RETURNS uuid LANGUAGE plpgsql VOLATILE AS $rng$
     DECLARE v_value uuid;
     BEGIN
       DELETE FROM pg_temp.identity_candidate_rng WHERE no=(SELECT min(no) FROM pg_temp.identity_candidate_rng) RETURNING value INTO v_value;
       IF v_value IS NULL THEN RAISE EXCEPTION 'Local candidate RNG exhausted'; END IF;
       RETURN v_value;
     END;
-  $rng$`);
+  $rng$; DISCARD PLANS;`);
+  await db.query('INSERT INTO pg_temp.identity_candidate_rng(no,value) VALUES(0,$1)', [candidate]);
+  assert.equal(await scalar(db, 'SELECT pg_catalog.gen_random_uuid()'), candidate);
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM pg_temp.identity_candidate_rng'), 0);
   for (const collision of forbidden) {
     const point = `candidate_collision_${++savepoint}`; await db.exec(`SAVEPOINT ${point}`);
     try {
@@ -671,4 +675,26 @@ for (const role of ['anon', 'authenticated']) test(`SQL48 ${role}: server RNG sk
     } finally { await db.exec(`ROLLBACK TO SAVEPOINT ${point}; RELEASE SAVEPOINT ${point}`); }
   }
   assert.equal((await reservationEvents()).length, 1); assert.equal((await reservations()).length, 1);
+}));
+
+test('SQL48 actual client reads, reserves and rechecks real anon RPCs without accepting drift as permission', async () => transaction(async () => {
+  transport([RESERVATION_STATUS, RESERVE]);
+  const client = modules.createEmployeeIdentityReservationSession(task.job_token);
+  const baseline = await client.status(S.same);
+  assert.deepEqual(baseline, await reservationStatus());
+  const checkpoint = modules.employeeIdentityReservationCheckpoint(baseline);
+  assert.equal(Object.isFrozen(checkpoint), true);
+  const saved = await client.reserve(checkpoint);
+  assertReservation(saved, baseline);
+  assert.deepEqual(await client.status(S.same), saved);
+  assert.deepEqual(await client.reserve(checkpoint), saved);
+  assert.equal((await reservationEvents()).length, 1);
+  await change('public.withdrawals', "UPDATE public.withdrawals SET audit_remark='actual client checkpoint drift' WHERE id=$1", [id(301)]);
+  const drifted = await client.status(S.same);
+  assert.equal(drifted.target_unchanged, false); closedGates(drifted);
+  const frozen = await snapshot();
+  await assert.rejects(client.reserve(checkpoint), /unconfirmed/);
+  await assert.rejects(client.reserve(modules.employeeIdentityReservationCheckpoint(drifted)), /unconfirmed/);
+  assert.deepEqual(await snapshot(), frozen);
+  assert.equal((await reservationEvents()).length, 1);
 }));

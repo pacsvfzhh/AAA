@@ -70,5 +70,10 @@ job 的两种状态：
 - 未改变附件URL/原路径，也不把留证文件当成已搬迁。源文件不写入或删除，无数据库恢复/身份预留/封存能力，`canRestore/canArchive/canReplace`恒false；共享依赖、其他业务ID冲突及档案命名空间尚需恢复器处理。
 - 所有投影工作区只在回调期间可读，退出即撤销reader；清理超时或取消后未确认清理会拒绝成功。既有`archive_employee_without_media`、content-audit及维护拦截不变，未接入替换页面、未访问正式服务或部署。
 
+## 服务端候选身份与留证边界（第47节，2026-10-22，本地未部署）
+- SQL48/employeeIdentityReservation在真实原导入任务内固定服务器选出的候选员工UUID，只写私有技术暂存/审计；状态保留SQL37观察和全部旧封存阻断。候选不是users全局占位，也没有绑定SQL46/47完整密文，不构成覆盖前备份证明。
+- `can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete`恒false；既有archive_employee_without_media、content-audit、维护拦截与历史UUID/留证均不变。真实封存会改变目标指纹，当前只报告漂移，不自动批准或改写保存的映射。
+- 本地实际封存/原UUID保留/旧SQL15恢复拒绝回归已通过；封存窗口和所有域新身份实际恢复仍未完成，无正式服务访问/部署或UI/浏览器改动，详见计划第47节。
+
 ## 现状（2026-10-09）
 - 超管已清空两个板块：稽核记录、已删员工档案与通知、私有证据文件、确认暂存、待重试任务均为 0。

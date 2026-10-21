@@ -62,6 +62,7 @@ const criticalMigrations = [
   '20261102000045_verify_site_prerequisites.sql',
   '20261102000046_backup_employee_before_restore.sql',
   '20261102000047_backup_employee_media.sql',
+  '20261102000048_reserve_employee_identities.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -204,6 +205,8 @@ const publicFunctions = [
   'get_employee_chat_saved_backup_chunk(uuid,uuid,integer)', 'get_employee_transfer_chat_media(uuid,uuid,text)',
   'employee_import_chat_media_bind(uuid,uuid,jsonb)', 'employee_import_chat_begin(uuid,uuid,text)',
   'employee_import_chat_chunk(uuid,uuid,integer)', 'employee_import_chat_verify(uuid,uuid)', 'get_employee_import_chat_restore_status(uuid,uuid)',
+  'employee_import_identity_reservation_status(uuid,uuid,uuid)',
+  'employee_import_identity_reserve(uuid,uuid,uuid,text,text)',
   ...archivePublicFunctions,
 ];
 const serviceOnlyFunctions = [
@@ -235,10 +238,10 @@ async function checkCatalog(db) {
     assert.equal(functions[0].anon_execute, true, name);
     assert.equal(functions[0].authenticated_execute, true, name);
     assert.equal(functions[0].public_execute, false, name);
-    if (archivePublicFunctions.includes(name)) {
+    if (archivePublicFunctions.includes(name) || name.startsWith('employee_import_identity_reserv')) {
       assert.equal(functions[0].service_role_execute, false, name);
     }
-    if (archiveReadOnlyFunctions.has(name)) {
+    if (archiveReadOnlyFunctions.has(name) || name === 'employee_import_identity_reservation_status(uuid,uuid,uuid)') {
       assert.equal(functions[0].provolatile, 's', `${name} must be STABLE, not a heartbeat-writing read`);
     }
   }
@@ -348,7 +351,7 @@ async function exerciseRealReplay() {
   try {
     const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql')).sort();
     assert.deepEqual(files, diskFiles, 'must replay every migration, including future additions');
-    assert.equal(files.length, 574, 'migration baseline changed: review all additions, never expand known failures');
+    assert.equal(files.length, 575, 'migration baseline changed: review all additions, never expand known failures');
     assert.deepEqual(failures, expectedFailures);
     assert.equal(validation.freshDatabaseVerified, false);
     for (const file of criticalMigrations) {

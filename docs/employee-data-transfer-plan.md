@@ -1,6 +1,8 @@
 # 全站业务资料导出 / 导入实施计划（精简历史订单）
 
-最新补充：第46节新增employeeIdentityProjection本机转换层：先认证双包、再绑定精确记录密文，固定48表员工UUID/复合键无损转换，保留金额/员工号/正文/媒体/留证原文；只读回调及全部工作区限时清理，未预留服务器UUID、未写库/接UI。服务器预留、其他实体ID、共享配置/缺失submit_time_groups、账本游标、媒体/档案/工时及DB核对仍阻断，canRestore/canArchive/canReplace恒false。198项新增专项按100+98互斥分组最终通过，非完整374项或全套通过，详见第46节。第45节已将SQL46记录与SQL47附件串联至EmployeeSafetyBackupPanel：同一任务内记录保存/认证→实际附件独立加密保存/认证→两份.edx成对回读/全部清理→最后源附件与记录复核→显式close。零附件也保存独立可核验目录卷；各文件回执、成对状态与任务结束分别显示，失败/取消/丢响应保持互锁，不自动stop/close/retry/delete。记录v1及media_included:false不变，页面报告另为v2/employee-safety-pair-v1；完整员工恢复、统一UUID/全部引用映射和安全封存窗口仍缺，completeEmployeeBackup/canArchive/canReplace/fullSiteComplete恒false。双浏览器各54独立场景（含父组110项）、旧向导24、客户端/Storage431、SQL47专项26均本地通过；真实Storage/原生picker/PG未验。自动化续接/最终营业放行、统一迁入档案/共享媒体/容量多卷及跨会话续接仍待做，无正式服务访问或SQL/Edge/Storage/config/前端部署调整，不可正式迁移；页面证据见第45节；身份转换准备见第46节。
+最新补充：第47节新增SQL48/employeeIdentityReservation服务端候选身份绑定：复用真实导入任务及来源目录，服务器生成候选UUID，固定来源/目标指纹，重复请求返回同一候选，漂移或占用阻断。只写私有技术暂存/审计，不占用users全局身份空间、不消费SQL46/47备份证明、不接实际恢复/封存；全部完成/恢复/替换门禁仍false。五专项392项及整站维护态28项最终完整通过，正式环境未访问/部署。
+
+第46节新增employeeIdentityProjection本机转换层：先认证双包、再绑定精确记录密文，固定48表员工UUID/复合键无损转换，保留金额/员工号/正文/媒体/留证原文；只读回调及全部工作区限时清理，未预留服务器UUID、未写库/接UI。服务器预留、其他实体ID、共享配置/缺失submit_time_groups、账本游标、媒体/档案/工时及DB核对仍阻断，canRestore/canArchive/canReplace恒false。198项新增专项按100+98互斥分组最终通过，非完整374项或全套通过，详见第46节。第45节已将SQL46记录与SQL47附件串联至EmployeeSafetyBackupPanel：同一任务内记录保存/认证→实际附件独立加密保存/认证→两份.edx成对回读/全部清理→最后源附件与记录复核→显式close。零附件也保存独立可核验目录卷；各文件回执、成对状态与任务结束分别显示，失败/取消/丢响应保持互锁，不自动stop/close/retry/delete。记录v1及media_included:false不变，页面报告另为v2/employee-safety-pair-v1；完整员工恢复、统一UUID/全部引用映射和安全封存窗口仍缺，completeEmployeeBackup/canArchive/canReplace/fullSiteComplete恒false。双浏览器各54独立场景（含父组110项）、旧向导24、客户端/Storage431、SQL47专项26均本地通过；真实Storage/原生picker/PG未验。自动化续接/最终营业放行、统一迁入档案/共享媒体/容量多卷及跨会话续接仍待做，无正式服务访问或SQL/Edge/Storage/config/前端部署调整，不可正式迁移；页面证据见第45节；身份转换准备见第46节。
 
 状态：实施中。已完成加密 ZIP 单卷读写/完整性验证、正式/本地结构双基线、触发器提交门禁、管理员/共享设置七表导出和受控导入，以及七表同名来源覆盖、独立密文备份/回读校验、产品目录独立迁移（第 21 节）和派单/交单七表分页导出与未营业预检（第 22 节）、导入准备/独立加密目标备份（第 23 节）、持续数据库维护和派单四配置表实际恢复（第 24 节）及交单原文/使用计数分批恢复（第 25 节）、同包停用员工身份/凭据和精简订单实际恢复（第 26 节）及来源成员/已用交单防双计数分批恢复（第 27 节）与资金六表同包原文/逐员工事务恢复（第 28 节）及登录/工时/停工标记同包恢复（第 29 节），已补实名15列原文和受控实际证件媒体传输/映射的本地子阶段（第 30 节），通知/广播/范本/自动化13表原文传输与奖励关联只读预检（第31节）、配置对应与独立记录备份（第32节）和实际通知媒体/13表恢复（第33节）已本地实现；聊天十表原文导出、同包暂存与服务端角色合并只读预检（第34节）及独立备份、四桶媒体和实际十表合并恢复（第35节）、只读档案记录独立命名空间恢复（第36节）、私有附件/加密整包/只读界面及员工替换只读前置（第37节）已本地实现。仍保留dirty维护、账号停用及全部pending标记；十领域验证版导出、按领域分卷及迁移入口已接（第39节）；可营业的全站恢复放行、自动化续接、剩余媒体/档案、多卷容量调度和正式切站验收尚未完成；十域维护态实际导入及派单依赖协调已联通（第40节），维护态向导/独立48类记录页已接（第41–43节）；独立附件库及成对读取已补（第44节），记录+附件页面串联已接（第45节），员工UUID无损本机转换已接（第46节，非数据库恢复），完整恢复/员工替换和营业放行未完成。未部署，不可用于正式迁移。
 
@@ -1114,3 +1116,32 @@
 - 独立审查发现同handle包装绕过、先yield后完整hash、二次reader清理挂起和回调结束时迟到EOF的缺口，已修复并补正负回归。双遍读取的测试按实际两次workspace EOF精确校准，未删除坏包/提前退出断言。初版15条失败及一次22过/2失败不计最终通过，修正后以上198项全部重跑通过。
 - 记录备份client106/106、聊天6/6、稽核48/48及typecheck/lint/build/差异检查通过。完整客户端文件现374项，本轮最终没有整文件或总迁移套件通过证明；旧176在早期完整运行中通过，但最后分组重跑超时，不另计最终通过。一次负向name pattern未正确排除新测试、一次正向旧清单命令未完成，及Node20不支持的skip参数均不算通过；构建组合180秒超时后独立build已完整成功，保留既有警告。
 - 没有UI变化或本轮浏览器功能测试，没有新SQL/RPC/Edge、Storage/权限/config/cron或正式前端改动/部署，外网调用0。真实Storage/CORS、原生目录/PG并发、所有域新UUID实际恢复及正式封存演练未验；本机转换不代表完整员工恢复、可覆盖或已部署。
+
+## 47. 服务端员工候选身份绑定与冲突预检（2026-10-22，UTC+8，本地未部署）
+
+### 47.1 实现范围
+- 新增`20261102000048_reserve_employee_identities.sql`，仅追加两个私有helper和两个公共RPC，无新表，不改旧函数、触发器或业务写许可。`employee_import_identity_reservation_status`为STABLE，只读；`employee_import_identity_reserve`为技术写操作，不自动重试。均为SECURITY DEFINER/固定search_path，PUBLIC/service_role及私有helper撤权，仅公共RPC授予anon/authenticated并在内部校验超管与任务。
+- 复用SQL37真实运行中的派单导入任务、已封存配置备份、已恢复配置、dirty维护及完整身份暂存目录；不创建新任务/维护，不伪造备份或续heartbeat。按来源员工精确取一行SQL37观察页，保留同名目标、原封存证据、余额与pending提款的原精度及全部旧阻断。
+- `reserve`只接来源员工和观察指纹，不接受目标UUID/“已经备份”声明；加任务行锁后重新鉴权/核对，服务器生成候选并排除源accounts/credentials/orders的id/user_id/created_by、站点/包/任务/操作者、目标users/admins/历史员工以及已存候选。最多64次碰撞尝试，失败不写入。
+- 映射固定在原`private.employee_transfer_staging`的`identity-reservation-v1`键，每来源一行，包含job/目标站/来源站/包/来源员工/候选UUID、来源目录和目标观察指纹及绑定摘要。首次仅追加一行暂存和一条不含密码/令牌/原文的`identity_candidate_reserved`日志；显式重复调用返回同一结果，不重新生成编号或追加日志。状态每次重新核对绑定、来源/目标漂移及候选占用，漂移不自动重置或换号。
+
+### 47.2 候选不等于恢复授权
+- 这是**任务内冻结的技术候选**，不是对`public.users`的全局UUID占位；其他路径以后仍可能占用它，status会显示`candidate_available=false`，reserve拒绝继续，后续实际写入仍须事务级重新核验。PGlite验证了任务锁路径，未验证原生Postgres并发。
+- 不读取/认证SQL46记录与SQL47附件密文，不绑定其精确密文摘要；第46节本机投影与本接口尚未连通。不能把目录绑定或候选可用当成覆盖前双包备份证明，也不能移除投影中的`server_identity_reservation`完整恢复阻断。
+- 所有回复`can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false`。SQL15/37/45仍按原规则，候选未进入`verified_identity_map`或任何业务apply/verify；不封存、删除、改名、启用员工或解除维护。封存保留原UUID，真实封存会使保存的目标指纹变化，当前不能自动接续或批准该变化。
+- 剩余：备份密文与服务端映射的不可变认证、48类完整依赖（含submit_time_groups）、其他实体ID/管理员和角色对应、账本游标/媒体/档案/工时、各域使用同一映射实际恢复核对，以及既有封存流程的安全窗口。旧UUID、历史留证及原文不因候选准备而改写。
+
+### 47.3 客户端与本地证据
+- 新`employeeIdentityReservation.ts`提供严格字段/UUID/指纹/任务绑定校验、冻结检查点、单会话互斥与取消保护；每请求取当前会话，失败/丢响应不自动重试或乐观成功。仅允许status/reserve，未接UI/本机投影或整站导入协调器。同步RPC类型及120秒超时名称，不扩大读重试名单。
+- 五文件最终完整392/392：数据库44（旧SQL37九项+SQL48新增35项，含实际client→anon RPC）、新客户端179、旧客户端77、基础/范围92；另SQL48下真实两站/11密文/维护态整站回归完整28/28，总420项均零失败/取消/跳过。SQL测试验证真实anon/authenticated调用、外部/过期/撤权、源/目标漂移、每类强制RNG碰撞、候选占用、审计单次、只变技术表、取消保留dirty维护、实际封存保留UUID以及旧恢复器仍拒绝；未做完整employee-transfer总套件。
+- 独立审查未发现本体高置信问题；发现并修正测试的SQL37宽泛函数名断言和PGlite内置RNG替换未生效：精确筛选原接口，碰撞测试仅在回滚本地库为RNG换新OID并先验证队列确实消耗；没有删碰撞/旧权限断言。整站迁移尾部精确断言加SQL47/48后整文件重新28/28通过，不把早期40/43或418/419算最终成功。
+- 严格575份SQL回放仍精确保留12项已知历史失败，109根表/967列不变，不代表干净建库。typecheck/lint/build/聊天6/稽核48/差异检查通过，构建保留既有体积警告。无UI变更/本轮浏览器功能测试、正式服务访问、SQL部署、Edge/Storage/权限/config/cron或正式前端变更。真实Storage/CORS/原生目录/PG并发/PostgREST和完整覆盖恢复仍未验。
+
+### 47.4 SQL48回滚参考（未执行）
+- 正式执行前仍需单独确认；只移除本阶段接口，不删除旧员工、留证、审计或其他任务资料。技术暂存沿用原任务生命周期。
+```sql
+DROP FUNCTION public.employee_import_identity_reserve(uuid,uuid,uuid,text,text);
+DROP FUNCTION public.employee_import_identity_reservation_status(uuid,uuid,uuid);
+DROP FUNCTION private.employee_transfer_identity_reservation_status(private.employee_transfer_jobs,uuid);
+DROP FUNCTION private.employee_transfer_identity_candidate_free(private.employee_transfer_jobs,uuid,uuid);
+```
