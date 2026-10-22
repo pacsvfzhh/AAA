@@ -424,8 +424,16 @@ before(async () => {
   branch = await adminLogin(db, 'branch', PASSWORDS.branch); emergency = await adminLogin(db, 'emergency', PASSWORDS.emergency);
   other = await adminLogin(db, 'mapped-finance-other-root', PASSWORDS.root); pkg = randomUUID();
   const compiled = await build({ stdin: { contents: `export {createReplacementBackup} from './src/lib/employeeTransfer/replacementBackup.ts';
-    export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
-    bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020' });
+    export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';
+    export {createEmployeeMappedFinanceSession} from './src/lib/employeeTransfer/employeeMappedFinance.ts';
+    export {setHarness} from 'mapped-finance-db:state';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
+    bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', plugins: [{ name: 'local-mapped-finance-sql', setup(builder) {
+      builder.onResolve({ filter: /^(?:mapped-finance-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'mapped-finance-db' }));
+      builder.onLoad({ filter: /.*/, namespace: 'mapped-finance-db' }, ({ path }) => ({ contents: path === 'mapped-finance-db:state'
+        ? 'let h;export const setHarness=v=>{h=v};export const current=()=>h;'
+        : path === '../auth' ? 'import{current}from"mapped-finance-db:state";export const getAdminFinancialSessionToken=()=>current().token;'
+          : 'import{current}from"mapped-finance-db:state";export const supabase={rpc:(name,args)=>current().rpc(name,args)};' }));
+    } }] });
   modules = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
   await transaction(async () => { shared = await capture('shared'); dispatch = await capture('dispatch'); identity = await capture('identity'); finance = await capture('finance'); expected = await expectedFinance(); }, source, true);
   assert.deepEqual(finance.catalog.identity_catalog, identity.catalog); assert.deepEqual(identity.catalog.tables.map(t => t.rows), [2, 2, 4]);
@@ -698,8 +706,10 @@ for (const key of FINANCE) test(`SQL51 every unfinished candidate must have no $
     // Copy original PostgreSQL JSON text and only change ownership, never JS money.
     // For baseline/audit/ledger this remains a genuine target residual, not progress.
     const record = key === 'wallet_balance_baselines' ? "($1::jsonb-'id')||jsonb_build_object('user_id',$2::uuid)"
-      : "$1::jsonb||jsonb_build_object('user_id',$2::uuid)";
-    await change('public.' + key, `INSERT INTO public.${key} SELECT * FROM jsonb_populate_record(NULL::public.${key},${record})`, [input.body, target]);
+      : key === 'wallet_transactions' ? "$1::jsonb||jsonb_build_object('user_id',$2::uuid,'created_by',$3::uuid)"
+        : "$1::jsonb||jsonb_build_object('user_id',$2::uuid)";
+    await change('public.' + key, `INSERT INTO public.${key} SELECT * FROM jsonb_populate_record(NULL::public.${key},${record})`,
+      [input.body, target, ...key === 'wallet_transactions' ? [NEW.branch] : []]);
   }
   await denyAll(p); assert.equal(await scalar(db, "SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1 AND table_key='mapped-finance-done-v1'", [task.job_id]), 0);
 }));
@@ -811,9 +821,10 @@ for (const [key, path, value] of [
   ['wallet_ledger_entries', ['0', 'new_id'], 1], ['wallet_reconciliation_audit', ['0', 'old_id'], '1'], ['wallet_reconciliation_audit', ['0', 'new_id'], '0'],
 ]) test(`SQL51 actual bigint map ${key}.${path.join('.')}=${JSON.stringify(value)} cannot substitute a row`, () => transaction(async () => {
   const p = await stage(); await finish(p);
-  const keyName = 'mapped-finance-map:' + key;
-  assert.ok(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1 AND employee_id=$2 AND table_key=$3', [task.job_id, S.one, keyName]), 'required full-table-key map namespace absent');
-  await db.query('UPDATE private.employee_transfer_staging SET payload=jsonb_set(payload,$4::text[],$5::jsonb) WHERE job_id=$1 AND employee_id=$2 AND table_key=$3 AND chunk_no=0', [task.job_id, S.one, keyName, path, JSON.stringify(value)]);
+  const keyName = 'mapped-finance-map:' + (key === 'wallet_ledger_entries' ? 'ledger' : 'audit');
+  assert.ok(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1 AND employee_id=$2 AND table_key=$3', [task.job_id, S.one, keyName]), 'required map namespace absent');
+  const changed = await rows(db, 'UPDATE private.employee_transfer_staging SET payload=jsonb_set(payload,$4::text[],$5::jsonb) WHERE job_id=$1 AND employee_id=$2 AND table_key=$3 AND chunk_no=0 RETURNING employee_id', [task.job_id, S.one, keyName, path, JSON.stringify(value)]);
+  assert.equal(changed.length, 1);
   await denyAll(p);
 }));
 
@@ -880,5 +891,46 @@ test('SQL51 true COMMIT then dropped apply response resumes by status from a sep
     }, db, true));
   });
 });
+for (const lost of ['begin', 'apply', 'verify']) test(`SQL51 actual client to anon RPC reconciles lost ${lost} response after COMMIT without duplicating money`, async () => {
+  await withClone(readyDump, readyTask, async () => {
+    const calls = []; let drop = true;
+    modules.setHarness({ token: session, rpc(name, args) {
+      const query = transaction(async () => { calls.push({ name, args }); return on(db, name, args); }, db, true).then(data => {
+        if (drop && name === PREFIX + lost) { drop = false; throw new Error('response lost AFTER COMMIT'); }
+        return { data, error: null };
+      });
+      query.abortSignal = () => query; return query;
+    } });
+    const client = modules.createEmployeeMappedFinanceSession(task.job_token);
+    await client.bind(finance.catalog);
+    for (const key of FINANCE) for (const [no, text] of chunks(finance.texts[key], 2).entries()) await client.stage(key, no, text);
+    const p = await client.plan(); common(p); assert.equal(p.can_begin, true);
+    if (lost === 'begin') {
+      await assert.rejects(client.begin(p), /unconfirmed/); const n = calls.length;
+      await assert.rejects(client.begin(p), /unconfirmed/); assert.equal(calls.length, n);
+      await client.plan(); await assert.rejects(client.begin(p), /unconfirmed/);
+      assert.equal((await client.status()).started, true);
+    } else await client.begin(p);
+    if (lost === 'apply') {
+      await assert.rejects(client.apply(S.one), /unconfirmed/); const n = calls.length;
+      await assert.rejects(client.apply(S.two), /unconfirmed/); assert.equal(calls.length, n);
+      await client.status(S.two); await assert.rejects(client.apply(S.two), /unconfirmed/);
+      const s = await client.status(S.one); assert.equal(s.employee.applied, true); assert.equal(s.completed_employees, 1);
+    } else assert.equal((await client.apply(S.one)).employee.applied, true);
+    assert.equal((await client.apply(S.two)).employee.applied, true);
+    if (lost === 'verify') {
+      await assert.rejects(client.verify(), /unconfirmed/); const n = calls.length;
+      await assert.rejects(client.verify(), /unconfirmed/); assert.equal(calls.length, n);
+      assert.equal((await client.status()).verified, true);
+    } else assert.equal((await client.verify()).verified, true);
+    assert.equal(drop, false);
+    await transaction(async () => { await assertFinance(); await noLegacy(); });
+    assert.equal(calls.filter(c => c.name === PREFIX + 'begin').length, 1);
+    assert.equal(calls.filter(c => c.name === PREFIX + 'apply').length, 2);
+    assert.equal(calls.filter(c => c.name === PREFIX + 'verify').length, 1);
+    for (const c of calls) assert.equal(c.args.p_job_token, task.job_token);
+  });
+});
+console.log(`SQL51 registered ${caseNo} cases; executing ${selectedCases}.`);
 assert.ok(selectedCases > 0, 'The explicit test range selected no cases.');
 if (range) assert.ok(range[1] <= caseNo, `Range ends beyond the ${caseNo} available cases.`);

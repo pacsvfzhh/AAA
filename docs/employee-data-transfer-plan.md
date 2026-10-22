@@ -1,6 +1,8 @@
 # 全站业务资料导出 / 导入实施计划（精简历史订单）
 
-最新补充：第49节SQL50/employeeMappedDependency已将派单成员与已用交单接到SQL49服务器新员工UUID：全包身份/配置/valid实物重验、先成员后used分块写入、精确防止使用次数重复累计，独立状态不伪造旧verified map。新DB145/client207、旧身份client417及基础/范围94共863项，最新SQL50旧整站维护态28项通过；其余领域映射/双包证明/封存窗口和营业放行未完成，正式未访问/部署。
+最新补充：第50节SQL51/employeeMappedFinance已接新员工UUID的六表资金恢复：逐员工事务、账本/审计重编号与基准游标换算、全部提款含pending、冻结/收入公式及阶段化身份/派单/资金实物重验。保留旧49/50零钱包防护、不写旧verified map；数据库194项以四个互斥组最终通过，客户端/基础范围1034及最新SQL51旧整站28项通过，共1256项。其他领域映射/双包证明/封存窗口及营业放行未完成，无UI/本轮浏览器或正式访问部署。
+
+第49节SQL50/employeeMappedDependency已将派单成员与已用交单接到SQL49服务器新员工UUID：全包身份/配置/valid实物重验、先成员后used分块写入、精确防止使用次数重复累计，独立状态不伪造旧verified map。新DB145/client207、旧身份client417及基础/范围94共863项，最新SQL50旧整站维护态28项通过；其余领域映射/双包证明/封存窗口和营业放行未完成，正式未访问/部署。
 
 第48节SQL49/employeeMappedIdentity已接候选UUID的实际停用账号/凭据/精简订单恢复及逐字段核验，字段/原文/源与目标漂移、幂等、UTC与失败事务回滚已本地验证。只允许无同名活跃或封存历史的新身份，不消费完整备份证明、不开放覆盖；其他领域映射/封存窗口仍待做。七专项885/885及SQL49下整站维护态28/28通过，正式未访问/部署。
 
@@ -1211,3 +1213,31 @@ DROP FUNCTION private.employee_transfer_mapped_identity_source(private.employee_
 
 ### 49.4 回滚参考（未执行）
 只移除本阶段函数，不撤销已提交成员/used或解除维护；先停用调用方，再按迁移末尾的DROP清单删除五个公共接口及九个helper，不用CASCADE。SQL49/48的移除必须在本阶段之后进行；任何正式执行须另行确认。
+
+## 50. 新员工UUID的六表资金恢复与阶段化核验（2026-10-22，UTC+8，本地未部署）
+
+### 50.1 服务端路径
+- 新增`20261102000051_restore_mapped_employee_finance.sql`，仅追加18个私有helper和7个公共RPC，无新表，不改旧迁移、49/50或财务业务函数/触发器。固定SECURITY DEFINER/search_path/UTC/ISO，私有helper及PUBLIC/service_role撤权，公共接口只授予anon/authenticated并在内部检查超管、本人真实原任务、已封存配置备份和dirty维护。
+- 接口为`employee_import_mapped_finance_bind/stage/plan/begin/apply/status/verify`；plan/status为STABLE只读、不续心跳，其余显式写。每次写入先锁维护库存表→任务→重新鉴权/重验，所有恢复/备份/封存/替换/全站完成门禁false，不启用员工或解除维护。
+- 新阶段化身份guard完整保留来源/计划hash/候选绑定、账号/凭据/精简订单和停用/无会话核验；配置/valid/成员/used仍逐字段检查原SQL50已核验状态。财务分支按员工区别：未完成者必须只有零钱包且其他五表全空；已完成者重验六表全字段、编号映射/计数及钱包公式，任一员工漂移阻断后续写入。旧SQL49/50零钱包检查原样保留，资金写后旧接口继续拒绝，不伪装旧verified_identity_map。
+- 新namespace仅用既有staging：全零员工`mapped-finance-catalog-v1`、`mapped-finance-in:<key>`与`mapped-finance-v1`；来源员工`mapped-finance-done-v1`和`mapped-finance-map:ledger/audit`。不写旧summary.finance_catalog/finance_plan/finance_restore/identity_restore/dependency_restore。目录、完整源身份、实际依赖计划、映射和三种hash严格绑定；额外状态、孤立映射、篡改或混用旧路径拒绝。
+- 复用原finance导出协议及固定六表spec，原始NDJSON重解析与解析行/全局UUID或bigint数值顺序/连续块/逐行摘要/字节/完整目录比较，保留numeric精度、NULL及微秒。每块≤200行/256KiB、单行≤64KiB、单表≤50万行/256MiB、总量≤1GiB；未完整暂存不得plan/begin，不因同包ID就接受不同身份快照。
+- `apply`按员工一个事务更新已建立的钱包，复制基准、账本、账户变动、所有状态提款及对账审计。user_id和钱包/基准协议id改为服务器候选；created_by/audited_by仅用同包管理员对应，来源NULL保留。账本/审计按旧bigint数值顺序从目标序列取得新ID，保存严格完整/唯一/递增映射；基准游标换成旧id≤旧游标最后一条的新id，无则0；来源无基准保持无基准。
+- ledger.source_id是流水或提款UUID，不是员工UUID，保持原值。允许被删除原行留下的合法历史账本事件，但来源/目标仍存在的引用若跨员工则阻断。按真实部分唯一键核对UUID、operation/type、tip/bonus引用、逐员工佣金引用及ledger四元组；不虚构已删除的全局reference/type索引。
+- 冻结必须等于pending提款合计，有基准时可用+冻结及收入须与基准/游标后账本一致；不补账、不修平旧差异。写许可仅六张资金表，精确旁路原审核6项钱包/流水/提款副作用后恢复原模式，保留外键、删除保护和ALWAYS守卫；不写users/financial_operations/运行队列，不重复佣金/通知/奖金。
+- 每次重复apply及所有入口重验实物，已完成者原进度返回不多写行/成功事件；失败只回滚本员工当前事务，包括map/done/许可及触发器DDL，保留此前已提交员工。verify要求全员完成（含零员工显式六空表），仅标本资金子阶段verified，不表示完整员工备份或整站可营业。
+
+### 50.2 客户端与中断边界
+- 新`employeeMappedFinance.ts`七显式方法严格验证响应、目录/任务/计划/候选和每员工实际数量，深冻结、不倒退/不重用目标，pending金额始终是原精度十进制字符串。NDJSON只传原文，七RPC加入120秒等待、不自动重试；每次取当前管理员会话，单实例互斥，取消后底层请求未结束继续锁住。
+- 任意写入结果未知都暂停后续写；plan读不能解锁，只有显式status核对成功可续，未知apply必须查同来源员工，查其他员工不能解除不确定。**未完整暂存时status也会拒绝；bind/stage早期丢响应当前只安全暂停，尚无自动续传/重发或完整跨会话恢复入口。** 不将此限制冒称已解决，不丢弃服务器状态/自动取消或假称回滚。
+- 未接UI、SQL46/47双密文证明或整站协调器；活动/实名/通知/聊天/媒体/档案及共享缺依赖仍须消费同一新身份与阶段化实物核验。现有同名活账号、未清封存历史/源UUID占用的阻断不变，安全封存窗口和营业放行仍缺。
+
+### 50.3 测试、修正与部署
+- 新DB共194个唯一用例，以`EMPLOYEE_MAPPED_FINANCE_DB_RANGE=1-60 / 61-105 / 106-150 / 151-194`四组最终60+45+45+44全部通过，不称单次整文件执行。真实两站SQL回放、原文导出、磁盘AES/ZIP独立备份/封存、真实48→49→50前置；覆盖资金逐字段/高精度/NULL、pending所有状态、bigint>2^53/基准游标边界、无基准老账号、零员工/空表、编号重叠、历史删除引用与跨员工、权限/过期/取消、原文/目标/状态漂移、未知触发器、晚约束/审计失败及已提交其他员工保留。
+- 本地隔离许可内运行真实`reconcile_wallet_from_ledger`（写函数，不冒称只读）验证零金额修正；无基准员工首次建立基准也不改余额，该实验事务回滚。真实client→anon RPC分别在begin/apply/verify提交后丢响应，以status续接且每员工只写一次；独立dump跨真实COMMIT续接另测。
+- 新client315、旧映射派单client207、身份client417及基础/范围95，五文件完整1034/1034；合并DB共1228项，最新SQL51旧十域/11密文/真实两站维护态整站回归28/28另列，共1256项，最终无失败/取消/跳过。聊天6/稽核48、typecheck/lint/build和差异检查通过，保留既有构建体积警告；未跑完整employee-transfer总套件。
+- 独立SQL复审无高置信实现缺陷；发现测试map使用完整表名而非实际ledger/audit别名，已修正并确认UPDATE命中；另残留流水负向夹具带来源管理员UUID违反目标外键，改为真实目标管理员后完整61–105组复跑45/45，首次44/45不计最终成功。未放宽生产外键/门禁或扩大历史失败清单。
+- 严格回放578份SQL仍精确保留原12项历史失败，109根表/967列不变，非干净建库证明。无UI或本轮浏览器功能测试，无正式服务访问或SQL/Edge/Storage/权限/config/cron/前端部署；原生PG并发/锁升级/取消、PostgREST时限与大员工全量重扫性能、真实Storage/磁盘和完整切站未验，不可正式覆盖或恢复营业。
+
+### 50.4 回滚参考（未执行）
+迁移末尾列出7个公共RPC及18个私有helper的DROP顺序，只移除函数，不撤销已提交资金/历史、删除任务或解除dirty维护；先停用调用方，禁止CASCADE，SQL50/49/48须在本阶段之后移除。任何正式执行仍单独说明影响并确认。

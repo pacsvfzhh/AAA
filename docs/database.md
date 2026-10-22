@@ -77,6 +77,14 @@
 - 所有完整恢复/备份/封存/替换/全站完成标志false，账号停用且dirty维护持续；无UI/整站接线。后续资金真实恢复将改变零钱包，须另建阶段化验证后才能重核本链，不能删除现有防护冒充完成；其他领域映射/双包证明/封存窗口及营业放行仍缺。
 - 新DB145、新client207/旧身份client417/基础范围94共863项，最新SQL50旧维护态整站28项另列；577份SQL仍12旧失败/109表967列，非干净建库/原生PG并发或容量证明。无正式访问、SQL/Edge/Storage/config/cron/前端部署，也无本轮UI/浏览器测试；详见计划第49节及仅移除函数的回滚参考。
 
+## 新员工UUID资金六表恢复（SQL51，2026-10-22，本地未部署）
+- `20261102000051_restore_mapped_employee_finance.sql`仅新增18私有helper/7公共RPC，无新表或旧函数/触发器修改；`employee_import_mapped_finance_plan/status`为STABLE，其余bind/stage/begin/apply/verify显式写入。固定SECURITY DEFINER/search_path/UTC/ISO，公共仅anon/authenticated且验证本人超管任务，PUBLIC/service_role及私有helper无直调权。
+- 新阶段化身份/派单guard保留原49/50完整原文、候选/计划/账号/凭据/订单/停用会话、配置/valid/成员/used核验；财务未完成严格零钱包+五表空，已完成重验六表全字段/编号映射/钱包公式。旧49/50零钱包保护不动、资金后旧路径仍拒绝，不伪造旧verified map或summary.finance_*。
+- 独立staging键为mapped-finance-catalog-v1、mapped-finance-in:<六键>、mapped-finance-v1、逐源员工mapped-finance-done-v1及mapped-finance-map:ledger/audit；目录/原文/解析/行序/hash/字节、完整同包身份及SQL50依赖计划绑定，不接受客户端ID图。状态未完整时status拒绝，早期丢响应只安全暂停，没有自动重试或假续传。
+- apply每员工单事务：钱包/基准user_id改服务器候选，ledger/audit按源bigint顺序目标序列重编号，基准游标映射为旧游标内最后新ID或0，无基准保持缺失；流水/提款UUID及ledger.source_id保留，管理员取服务器对应。所有状态提款一起恢复，冻结=pending合计，基准/账本/收入公式须一致；历史被删原行的事件保留，仍存在却跨员工引用拒绝。
+- 仅六表精确permit及原审核6副作用trigger旁路/恢复，保留外键/删保护/ALWAYS守卫；不写users/队列/financial_operations或重复发佣金。全入口复查所有已完成员工，失败只回滚本事务，不撤销此前员工。所有完整恢复/备份/封存/替换/放行false，dirty维护不解除，其他域映射/双包证明/封存窗口仍缺，无UI/整站接线。
+- 新DB194以四互斥组最终全覆盖；新旧客户端/基础范围1034、最新SQL51旧整站28，共1256项，静态/构建/聊天6/稽核48通过。578份回放仍12旧失败、109表/967列，非干净建库；未跑完整总套件。无正式访问或SQL/Edge/Storage/config/cron/前端部署，无本轮UI/浏览器或原生PG并发/性能/真实Storage验收；见计划第50节及仅移除函数的回滚参考。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：
