@@ -330,6 +330,9 @@ export const stopSiteExportTask=async()=>forbidden('site-stop');
 export const importSiteBundleSetToMaintenance=async()=>forbidden('site-import');
 export const inspectSiteBundleSet=async()=>{h().siteCalls.push('inspect');return {packageId:'a8000000-0000-4000-8000-000000000008',sourceSiteId:'a8000000-0000-4000-8000-000000000009',volumes:[],fullSiteComplete:false,importReady:false}};
 export const getSiteImportPreflight=async source=>{h().siteCalls.push('preflight');return {version:1,protocol:'site-maintenance-restore-v2',site_id:'a8000000-0000-4000-8000-000000000001',source_site_id:source,can_restore_to_maintenance:true,blockers:[],missing_rpcs:[],full_site_complete:false,can_release:false}};
+export const getSourceCutoverStatus=async()=>({version:1,success:true,scope:'source-cutover',site_id:'a8000000-0000-4000-8000-000000000001',frozen:false,cutoff:null,blockers:[],counts:{pending_automation:0,failed_automation:0,processing_orders:0},full_site_complete:false});
+export const freezeSourceCutover=async()=>forbidden('source-freeze');
+export const resumeSourceCutover=async()=>forbidden('source-resume');
 export const createBrowserWorkspaceFactory=async()=>h().createWorkspace;
 export const pickTransferDirectory=()=>h().pickDirectory();
 `;
@@ -348,7 +351,7 @@ before(async () => {
     bundle: true, write: false, platform: 'browser', format: 'esm', jsx: 'automatic', metafile: true,
     define: { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(ORIGIN), 'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(API_KEY) },
     plugins: [{ name: 'isolated-safety-ui-boundaries', setup(builder) {
-      builder.onResolve({ filter: /^(?:\.\.\/(?:auth|supabase)|.*employeeTransfer\/(?:siteTransfer|siteImport|browserStorage))$/ }, () => ({ path: 'boundaries', namespace: 'synthetic' }));
+      builder.onResolve({ filter: /^(?:\.\.\/(?:auth|supabase)|.*employeeTransfer\/(?:siteTransfer|siteImport|browserStorage|sourceCutover))$/ }, () => ({ path: 'boundaries', namespace: 'synthetic' }));
       builder.onLoad({ filter: /.*/, namespace: 'synthetic' }, () => ({ contents: boundaries }));
     } }],
   });
@@ -506,13 +509,13 @@ async function prepareParent(page) {
   await page.locator('#migration-confirmation').fill(PASS);
   await page.getByRole('button', { name: '選擇保存目錄', exact: true }).click();
   await page.getByRole('checkbox', { name: /^我了解這是本地驗證版/ }).check();
-  assert.equal(await page.getByRole('button', { name: '開始目前十個領域加密導出', exact: true }).isEnabled(), true);
+  assert.equal(await page.locator('#migration-panel-export').getByRole('button', { name: '開始目前十個領域加密導出', exact: true, includeHidden: true }).isEnabled(), true);
   await page.getByRole('tab', { name: '導入', exact: true }).click();
 }
 async function parentLocked(page) {
   assert.equal(await importStart(page).isDisabled(), true);
   for (const selector of ['#migration-files', '#migration-inspect-passphrase', '#migration-import-password', '#migration-admin-password', '#migration-passphrase']) assert.equal(await page.locator(selector).isDisabled(), true, selector);
-  assert.equal(await page.locator('#migration-panel-export button[type="submit"]').isDisabled(), true);
+  assert.equal(await page.locator('#migration-panel-export').getByRole('button', { name: '開始目前十個領域加密導出', exact: true, includeHidden: true }).isDisabled(), true);
   assert.equal(await page.getByRole('button', { name: '重新檢查能力', exact: true }).isDisabled(), true);
 }
 
@@ -864,7 +867,7 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.locator('#employee-safety-stop-confirmation').inputValue(), '');
         await fault(page, { stopFail: false }); await fillStop(page); await stop(page).click();
         await panel(page).getByText(/^服務端已確認停止本人的員工記錄備份技術任務/).waitFor();
-        assert.equal(await importStart(page).isEnabled(), true); assert.equal(await page.locator('#migration-panel-export button[type="submit"]').isEnabled(), true);
+        assert.equal(await importStart(page).isEnabled(), true); assert.equal(await page.locator('#migration-panel-export').getByRole('button', { name: '開始目前十個領域加密導出', exact: true, includeHidden: true }).isEnabled(), true);
         const stops = (await rpcCalls(page)).filter(c => c.name === STOP);
         assert.deepEqual(stops.map(c => c.args.p_job_id), [id(2), id(2)]);
         assert.equal(await start(page).isDisabled(), true); assert.equal(await reset(page).isEnabled(), true);
@@ -913,7 +916,7 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await ack(page).isEnabled(), true); assert.equal(await choose.isEnabled(), true);
         assert.equal(await start(page).isEnabled(), true, 'original valid inputs are now available only for explicit submission');
         assert.equal(await importStart(page).isEnabled(), true);
-        assert.equal(await page.locator('#migration-panel-export button[type="submit"]').isEnabled(), true);
+        assert.equal(await page.locator('#migration-panel-export').getByRole('button', { name: '開始目前十個領域加密導出', exact: true, includeHidden: true }).isEnabled(), true);
         assert.deepEqual((await rpcCalls(page)).map(call => ({ name: call.name, job: call.args.p_job_id })), [{ name: STOP, job: null }, { name: STOP, job: null }]);
         assert.equal(await page.evaluate(() => window.__h.serverRunning), false);
         assert.equal(await page.evaluate(() => window.__h.reportAttempts.length), 0);
@@ -962,7 +965,7 @@ for (const engine of ['chromium', 'webkit']) {
         assert.ok((await receiptView.innerText()).includes(result.receipt.cipherSha256));
         assert.equal(await page.locator('#migration-files').isEnabled(), true);
         assert.equal(await importStart(page).isEnabled(), true);
-        assert.equal(await page.locator('#migration-panel-export button[type="submit"]').isEnabled(), true);
+        assert.equal(await page.locator('#migration-panel-export').getByRole('button', { name: '開始目前十個領域加密導出', exact: true, includeHidden: true }).isEnabled(), true);
         assert.equal(await page.getByRole('button', { name: '重新檢查能力', exact: true }).isEnabled(), true);
         assert.equal(await page.evaluate(() => window.__h.serverRunning), false);
         assert.deepEqual(await page.evaluate(() => window.__h.signals.map(signal => signal.aborted)), signalsBefore, 'report cancellation leaves completed media deadlines and backup controllers unchanged');
