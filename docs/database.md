@@ -32,6 +32,13 @@
 - 网络层全部 `get_employee_import_*` POST不自动重试，含固化备份/计划的dry-run；真正只读导出仍可重试。新写入RPC为120秒单次请求，失败需明确核对原任务。
 - 严格回放572份SQL，仍精确保留原12项历史失败，109根表/967列不变；不是干净建库或原生PG并发验收。没有正式库/Storage/Edge/cron/前端部署，完整切站仍禁止。
 
+## 空站十领域服务端总核对（SQL55，本地未部署）
+- `20261102000055_verify_site_restore.sql` 新增 `employee_import_site_verify(uuid,uuid)`：只接受超管本人原 `dispatch-import` 任务，全部既有领域已核验后，重新核对共享/产品检查点、身份/订单、派单、资金、活动、实名、通知、聊天、档案原文和最终媒体回执，并重新计算五份独立备份密文哈希；不信任浏览器领域计数或旧 verified 标志。新UUID链不能混入此空站协议。
+- 先以 NOWAIT 锁原任务行、try-lock 阻断自动化评估，再 NOWAIT 锁固定业务库存及 try-lock 维护屏障，最后 NOWAIT 锁维护行；遇竞争直接失败，不沿各域不同锁顺序等待，不自动重试。返回凭据绑定任务、来源站、包、各领域目录、配置检查点及备份哈希；反复显式核对仍检查实物，相同成功凭据不重复记成功审计。
+- 回执只含技术编号、摘要、员工数和待处理提款笔数/十进制金额字符串，保存于任务 `summary.site_verification`。这是上次成功核对记录，不是免复核的当前放行许可；资料变化时下一次重验拒绝。
+- 准入升级 `site-maintenance-restore-v3`，在首笔共享写入前要求总核对接口存在；SQL45 v2包装保存在private并撤销所有直接调用权限。新客户端拒绝v1/v2，避免写完才发现缺服务端总核对。
+- 仅写技术任务/审计，不发业务写许可、不改账号、自动化、钱包或触发器；`accounts_active/automation_resumed/can_release/full_site_complete=false`，dirty维护不解除。自动化截止点/积压续接及最终营业放行仍待实现。没有正式SQL/Edge/Storage/config/cron/前端部署；本地PGlite和媒体替身不代表原生PostgreSQL并发、真实Storage或容量验收。
+
 ## 覆盖前独立员工记录备份（SQL46，本地未部署）
 - `20261102000046_backup_employee_before_restore.sql`新增`employee_safety_backup_begin`及catalog/page/verify/close/stop_owned六个RPC，不依赖共享或派单配置恢复，不建立维护、不写业务资料。旧SQL39仍保留原协议及不完整门禁，不能作为配置改动前的独立备份。
 - begin须超管会话和当前密码，按完整用户名绑定本站未封存员工；已有running迁移（即使过期）或任何维护均阻断，不自动放弃原任务。处理中订单/未清封存证据阻断。任务、目录、员工、站点与全内容指纹绑定；每页≤200行/256KiB、每行64KiB、单表50万行/256MiB、合计1GiB，超限拒绝不截断。只读catalog/page/verify不续心跳，可在READ ONLY事务执行。

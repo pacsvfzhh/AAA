@@ -30,12 +30,14 @@
 - `src/lib/supabase.ts`：
   - typed client（类型来自 `src/types/database.ts`），读取 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`。
   - 普通请求超时 8 秒，稽核/归档及共享设置导入/导出 RPC 请求 120 秒（不改变数据库角色执行上限）；网络错误有 XHR 回退。
-  - 只对 GET 与白名单只读 RPC/稽核读取自动重试（最多 2 次），写操作不重试，避免重复执行。新增只读 RPC 如需重试，要加入白名单。`get_employee_import_*` POST一律不自动重试，不因get命名自动重发；SQL54四个显式RPC也不自动重试，含STABLE plan/status，客户端等待120秒不改变服务端上限。
+  - 只对 GET 与白名单只读 RPC/稽核读取自动重试（最多 2 次），写操作不重试，避免重复执行。新增只读 RPC 如需重试，要加入白名单。`get_employee_import_*` POST一律不自动重试，不因get命名自动重发；SQL54四个显式RPC也不自动重试，含STABLE plan/status，客户端等待120秒不改变服务端上限。SQL55 `employee_import_site_verify` 同样单次120秒、不自动重试，返回实物总核对回执而非营业许可。
   - `formatSupabaseError()`：统一把错误转成可显示的文字。
 - Realtime 一般只当作「有变化」的信号：收到后防抖、再重新查询。异步请求用请求序号或 AbortSignal，防止旧响应覆盖新结果。
 - 后台页面懒加载；打开过的 tab 保持挂载，用 `hidden` 切换（切换时状态不丢失）。
 - 工作区缓存 `src/lib/serviceWorkspaceCache.ts`：按管理员 + 工作区缓存，合并相同的并发请求，瞬时错误重试 2 次。
 - 品牌配置：`useCompanyName()`、`useCurrencyUnit()` 读 `admin_configs`（考虑 `branding_mode` 全局/自定义），默认 `AAA SERVICE`、`USDC`，带 localStorage 缓存与 Realtime 更新。
+
+空站十领域恢复在各域完成后，现由 `siteRestoreApi` 调用 SQL55 服务端原子总核对，再核实仍处于原任务dirty维护；客户端严格绑定任务/来源站/包/十域顺序和员工总数，金额保留原十进制字符串。总核对失败、丢响应、凭据错绑或清理未确认均不返回成功。SQL55 v3准入在首笔写入前要求总核对能力，不接受旧v1/v2。`EmployeeSiteImport` 结果页及安全报告保存 `serverVerification`，仍保持账号停用、自动化暂停、不可恢复营业；本轮未部署。
 
 ## src/lib 工具速查
 | 文件 | 用途 |
