@@ -2678,6 +2678,34 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: import('../lib/employeeTransfer/employeeMappedFinance').EmployeeMappedFinanceStatus;
       };
+      employee_import_mapped_activity_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog: Record<string, unknown> };
+        Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityBindReceipt;
+      };
+      employee_import_mapped_activity_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityStageReceipt;
+      };
+      employee_import_mapped_activity_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityPlan;
+      };
+      employee_import_mapped_activity_begin: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityStatus;
+      };
+      employee_import_mapped_activity_apply: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityStatus;
+      };
+      employee_import_mapped_activity_status: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string | null };
+        Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityStatus;
+      };
+      employee_import_mapped_activity_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityStatus;
+      };
       employee_import_replacement_plan: {
         Args: { p_admin_session_token: string; p_job_token: string; p_after?: string | null; p_limit?: number };
         Returns: import('../lib/employeeTransfer/employeeReplacement').EmployeeReplacementPlan;
