@@ -3,6 +3,8 @@ import { supabase } from '../supabase';
 import { dispatchTransferChecks } from './dispatchTransfer';
 import { validateIdentityCatalog } from './identityTransfer';
 import { runSiteRestore, type SiteRestoreOptions, type SiteRestoreVerification } from './siteRestoreApi';
+import type { SiteReleaseSession } from './siteRelease';
+import type { SourceCutoff } from './sourceCutover';
 import { withAuthenticatedSiteBundleSet, type SiteDomain, type SiteTransferProgress } from './siteTransfer';
 
 const { object, uuid, checkAbort, withSignal } = dispatchTransferChecks;
@@ -52,6 +54,7 @@ export async function getSiteImportPreflight(sourceSiteId: string, signal?: Abor
 export async function importSiteBundleSetToMaintenance(options: SiteImportOptions): Promise<{
   jobId: string; verifiedDomains: SiteDomain[]; maintenance: true; fullSiteComplete: false; importReady: false;
   serverVerification: SiteRestoreVerification;
+  sourceCutover: SourceCutoff | null; releaseSession: SiteReleaseSession | null;
 }> {
   const settings = { ...options, files: options.files.slice() };
   if (settings.confirmation !== '確認導入員工資料' || typeof settings.approvePlan !== 'function'

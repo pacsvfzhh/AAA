@@ -178,7 +178,8 @@ BEGIN
       'public.notification_automation_plans'::regclass,'public.notification_automation_tasks'::regclass,'public.notification_automation_queue'::regclass)
       AND t.tgisinternal AND t.tgenabled NOT IN ('O','A'))
     OR EXISTS(SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND (
-      (t.tgrelid='public.admins'::regclass AND t.tgname NOT IN ('zz_employee_transfer_maintenance','pause_notification_automation_plans_for_disabled_admin'))
+      (t.tgrelid='public.admins'::regclass AND (t.tgtype::integer & 16)<>0
+        AND t.tgname NOT IN ('zz_employee_transfer_maintenance','pause_notification_automation_plans_for_disabled_admin'))
       OR (t.tgrelid='public.notification_automation_queue'::regclass AND t.tgname<>'zz_employee_transfer_maintenance'))) THEN
     RAISE EXCEPTION 'Unreviewed site release triggers or disabled foreign key protection.';
   END IF;
@@ -315,11 +316,16 @@ BEGIN
     WHERE u.id=s.key::uuid AND u.is_active IS DISTINCT FROM (s.value#>>'{}')::boolean;
   UPDATE public.admins a SET is_active=(s.value#>>'{}')::boolean FROM jsonb_each(v_states) s
     WHERE a.id=s.key::uuid AND a.role<>'super_admin' AND a.is_active IS DISTINCT FROM (s.value#>>'{}')::boolean;
-  -- Plans first so the existing task/plan validation remains enabled and effective.
-  UPDATE public.notification_automation_plans p SET status=s.value#>>'{}'
-    FROM jsonb_each(v_expected_statuses->'notification_automation_plans') s WHERE p.id=s.key::uuid AND p.status IS DISTINCT FROM s.value#>>'{}';
+  -- Existing paused/archived plans can retain active tasks; evaluators are locked throughout this transaction.
+  UPDATE public.notification_automation_plans p SET status='active'
+    WHERE p.id::text IN (SELECT key FROM jsonb_each(v_expected_statuses->'notification_automation_plans'))
+      AND p.status<>'active' AND EXISTS(SELECT 1 FROM public.notification_automation_tasks t
+        JOIN jsonb_each(v_expected_statuses->'notification_automation_tasks') s ON s.key=t.id::text
+        WHERE t.plan_id=p.id AND s.value='"active"'::jsonb);
   UPDATE public.notification_automation_tasks t SET status=s.value#>>'{}'
     FROM jsonb_each(v_expected_statuses->'notification_automation_tasks') s WHERE t.id=s.key::uuid AND t.status IS DISTINCT FROM s.value#>>'{}';
+  UPDATE public.notification_automation_plans p SET status=s.value#>>'{}'
+    FROM jsonb_each(v_expected_statuses->'notification_automation_plans') s WHERE p.id=s.key::uuid AND p.status IS DISTINCT FROM s.value#>>'{}';
 
   -- This schema calls queue creation time requested_at, NOT created_at. All active
   -- imported employees get exactly one fresh request; no evaluation/send/bonus RPC.

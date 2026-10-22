@@ -37,6 +37,8 @@ import { stageSharedSettingsImport } from './sharedImport';
 import { Sha256 } from './sha256';
 import type { ManifestEntry } from './manifest';
 import { SITE_DOMAINS, type AuthenticatedSiteBundleSet, type AuthenticatedSiteDomain, type SiteDomain } from './siteTransfer';
+import { bindSiteReleaseCutoff, createSiteReleaseSession, type SiteReleaseSession } from './siteRelease';
+import { validateSourceCutoff, type SourceCutoff } from './sourceCutover';
 import { createVerificationImportSession } from './verificationApi';
 import { createVerificationMediaSession, stageVerificationBundle, type VerificationMediaFile } from './verificationMedia';
 
@@ -121,6 +123,7 @@ export async function runSiteRestore(
 ): Promise<{
   jobId: string; verifiedDomains: SiteDomain[]; maintenance: true; fullSiteComplete: false; importReady: false;
   serverVerification: SiteRestoreVerification;
+  sourceCutover: SourceCutoff | null; releaseSession: SiteReleaseSession | null;
 }> {
   const settings = { ...options };
   const signal = settings.signal;
@@ -130,6 +133,8 @@ export async function runSiteRestore(
   let domain: string = 'site', phase = 'prepare', jobId: string | null = null;
   const verified = new Set<SiteDomain>();
   let serverVerification: SiteRestoreVerification | null = null;
+  let sourceCutover: SourceCutoff | null = null;
+  let releaseSession: SiteReleaseSession | null = null;
   const inputSpaces = new Set<ArchiveBundleWorkspace>();
   const spaces: { original: ArchiveBundleWorkspace; workspace: ArchiveBundleWorkspace; discard: () => Promise<void> }[] = [];
   const files = new Set<ReplacementBackupFile>();
@@ -229,6 +234,8 @@ export async function runSiteRestore(
   try {
     checkAbort(signal);
     packageId = uuid(bundle.packageId); sourceSiteId = uuid(bundle.sourceSiteId);
+    sourceCutover = bundle.sourceCutover === null ? null : validateSourceCutoff(bundle.sourceCutover);
+    if (sourceCutover && sourceCutover.site_id !== sourceSiteId) blocked();
 
     await readDomain('shared', async input => {
       const catalog = validateSharedExportCatalog(input.catalog);
@@ -332,6 +339,10 @@ export async function runSiteRestore(
       return { jobToken: uuid(identity.jobToken), rows: staged.rows, bytes: staged.bytes };
     });
     const token = dispatch.jobToken;
+    if (sourceCutover) {
+      report('bind-source-cutoff');
+      await step(() => bindSiteReleaseCutoff(token, jobId!, sourceSiteId, packageId, sourceCutover!, signal));
+    }
 
     const employeeIds = await readDomain('identity', async input => {
       const catalog = validateIdentityCatalog(input.catalog);
@@ -535,6 +546,8 @@ export async function runSiteRestore(
     report('verify-maintenance');
     const maintenance = await step(() => getTransferMaintenance(signal));
     if (verified.size !== SITE_DOMAINS.length || !maintenance.active || !maintenance.dirty || maintenance.job_id !== jobId) blocked();
+    if (sourceCutover) releaseSession = createSiteReleaseSession({ jobId, jobToken: token, sourceSiteId, packageId,
+      verificationHash: serverVerification.verification_hash, cutoff: sourceCutover });
   } catch (error) { failed = true; errors.push(error); }
   finally {
     password = ''; passphrase = '';
@@ -550,7 +563,7 @@ export async function runSiteRestore(
   try { checkAbort(signal); report('maintenance'); }
   catch (error) { throw new SiteRestoreError(domain, phase, jobId, SITE_DOMAINS.filter(name => verified.has(name)), false, [error]); }
   return { jobId, verifiedDomains: SITE_DOMAINS.filter(name => verified.has(name)), maintenance: true,
-    fullSiteComplete: false, importReady: false, serverVerification };
+    fullSiteComplete: false, importReady: false, serverVerification, sourceCutover, releaseSession };
 }
 
 // Reopen the already authenticated, staged accounts verbatim. Parse ONLY each UUID, never rewrite numeric JSON.
