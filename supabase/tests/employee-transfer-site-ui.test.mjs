@@ -29,6 +29,9 @@ const id=n=>'72000000-0000-4000-8000-'+String(n).padStart(12,'0');
 const h=()=>window.__h;
 export const getSiteTransferCapabilities=async()=>({version:1,site_id:id(1),can_export:true,can_import:false,missing_rpcs:[],import_blockers:[],export_protocol:'local'});
 export const getSiteTransferHistory=async()=>[];
+export const getSourceCutoverStatus=async()=>({version:1,success:true,scope:'source-cutover',site_id:id(1),frozen:false,cutoff:null,blockers:[],counts:{pending_automation:0,failed_automation:0,processing_orders:0},full_site_complete:false});
+export const freezeSourceCutover=async()=>{h().forbidden.push('freeze-source');throw Error('forbidden')};
+export const resumeSourceCutover=async()=>{h().forbidden.push('resume-source');throw Error('forbidden')};
 export const stopSiteExportTask=async()=>{h().forbidden.push('stop-export');throw Error('forbidden')};
 export class EmployeeSafetyBackupError extends Error {}
 export const createEmployeeSafetyBackupSession=()=>{h().forbidden.push('employee-backup');throw Error('forbidden')};
@@ -95,7 +98,7 @@ before(async () => {
       window.__h={calls:[],forbidden:[],reports:[],approvals:[],imports:0};const r=createRoot(document.getElementById('root'));window.__unmount=()=>r.unmount();r.render(<Page/>);`, resolveDir: root, loader: 'tsx' },
     bundle: true, write: false, platform: 'browser', format: 'esm', jsx: 'automatic', metafile: true,
     plugins: [{ name: 'isolated-ui-boundaries', setup(builder) {
-      builder.onResolve({ filter: /employeeTransfer\/(siteTransfer|siteImport|browserStorage|employeeSafetyBackup|employeeSafetyMedia)$/ }, () => ({ path: 'transfer-ui-mocks', namespace: 'mock' }));
+      builder.onResolve({ filter: /employeeTransfer\/(siteTransfer|siteImport|browserStorage|employeeSafetyBackup|employeeSafetyMedia|sourceCutover)$/ }, () => ({ path: 'transfer-ui-mocks', namespace: 'mock' }));
       builder.onLoad({ filter: /.*/, namespace: 'mock' }, () => ({ contents: mocks }));
     } }],
   });
