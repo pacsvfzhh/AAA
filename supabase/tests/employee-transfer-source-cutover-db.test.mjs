@@ -17,6 +17,9 @@ const STATUS = 'get_employee_export_cutover_status';
 const FREEZE = 'employee_export_cutover_freeze';
 const RESUME = 'employee_export_cutover_resume';
 const SNAPSHOT = 'get_employee_export_site_snapshot';
+const LOG = 'get_employee_transfer_log';
+const LOG_EXCLUDED_PROTOCOLS = ['products-v1', 'dispatch-submission-v1', 'employee-identity-v1', 'employee-finance-v1',
+  'employee-activity-v1', 'employee-verification-v1', 'site-notifications-v1', 'site-chat-v1', 'site-archives-v1', 'source-cutover-v1'];
 const FREEZE_CONFIRM = '確認暫停舊站業務並導出';
 const RESUME_CONFIRM = '確認恢復舊站業務並放棄切站';
 const PAUSED = 'Business writes are paused for employee transfer maintenance.';
@@ -61,6 +64,21 @@ test('SQL56 source cutover: local real PGlite; static locks are not native PG co
     p_confirmation: RESUME_CONFIRM, p_cutoff_id: cutoff, ...extra });
   const snapshot = packageId => rpc(SNAPSHOT, { p_admin_session_token: session, p_package_id: packageId });
   const sharedBegin = () => rpc('employee_export_shared_begin', { p_admin_session_token: session, p_admin_password: PASSWORDS.root });
+  const log = (limit, role = 'anon') => rpc(LOG, { p_admin_session_token: session, ...(limit === undefined ? {} : { p_limit: limit }) }, role);
+  // Cutoff uses fixed six-digit UTC text; the old log uses PostgreSQL JSON timestamps.
+  // Normalize in PostgreSQL without losing microseconds through JavaScript Date.
+  const cutoffLogTime = cutoff => scalar(db, 'SELECT to_jsonb($1::timestamptz)', [cutoff.frozen_at]);
+  async function assertLogMatchesBaseline(limit, role) {
+    // Privileged LOCAL read of the actual pre-wrapper implementation, never a grant or
+    // replacement response. Only last_export_at may differ; keep all other fields exact.
+    const baseline = await scalar(db, 'SELECT private.employee_transfer_log_before_cutover($1,$2)', [session, limit === undefined ? 100 : limit]);
+    const last = await scalar(db, `SELECT to_jsonb(max(finished_at)) FROM private.employee_transfer_jobs
+      WHERE kind='export' AND status='finished' AND COALESCE(options->>'export_protocol','') <> ALL($1::text[])`, [LOG_EXCLUDED_PROTOCOLS]);
+    const current = await log(limit, role);
+    assert.deepEqual(Object.keys(current).sort(), ['events', 'last_export_at', 'running', 'site_id']);
+    assert.deepEqual(current, { ...baseline, last_export_at: last });
+    return { current, baseline };
+  }
   const cancel = (job, site = db, token = session) => on(site, 'employee_transfer_cancel', auth(job, token));
   const maintenance = site => scalar(site, 'SELECT to_jsonb(m)::text FROM private.employee_transfer_maintenance m');
   const frozenJob = cutoff => scalar(db, 'SELECT to_jsonb(j)::text FROM private.employee_transfer_jobs j WHERE id=$1', [cutoff]);
@@ -248,14 +266,14 @@ test('SQL56 source cutover: local real PGlite; static locks are not native PG co
     }
 
     await scenario('public RPC signatures, fixed search_path/SECURITY DEFINER and private helper ACLs', async () => {
-      const publicNames = [STATUS, FREEZE, RESUME, SNAPSHOT];
+      const publicNames = [STATUS, FREEZE, RESUME, SNAPSHOT, LOG];
       const functions = await rows(db, `SELECT oid,proname,prosecdef,proconfig,pg_get_function_identity_arguments(oid) AS args,
         EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS public_execute
         FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=ANY($1::text[]) ORDER BY proname`, [publicNames]);
-      assert.equal(functions.length, 4);
+      assert.equal(functions.length, 5);
       const argTypes = { [STATUS]: 'p_admin_session_token uuid', [FREEZE]: 'p_admin_session_token uuid, p_admin_password text, p_confirmation text',
         [RESUME]: 'p_admin_session_token uuid, p_admin_password text, p_confirmation text, p_cutoff_id uuid',
-        [SNAPSHOT]: 'p_admin_session_token uuid, p_package_id uuid' };
+        [SNAPSHOT]: 'p_admin_session_token uuid, p_package_id uuid', [LOG]: 'p_admin_session_token uuid, p_limit integer' };
       for (const fn of functions) {
         assert.equal(fn.args, argTypes[fn.proname]); assert.equal(fn.prosecdef, true);
         assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp')); assert.equal(fn.public_execute, false);
@@ -263,16 +281,92 @@ test('SQL56 source cutover: local real PGlite; static locks are not native PG co
           'SELECT has_function_privilege($1,$2::oid,\'EXECUTE\')', [role, fn.oid]), role !== 'service_role');
       }
       for (const signature of ['private.employee_transfer_cutover_lock()', 'private.employee_transfer_source_cutoff()',
-        'private.employee_transfer_site_snapshot_v1(uuid,uuid)']) {
+        'private.employee_transfer_site_snapshot_v1(uuid,uuid)', 'private.employee_transfer_log_before_cutover(uuid,integer)']) {
         for (const role of ['anon', 'authenticated', 'service_role']) {
           assert.equal(await scalar(db, 'SELECT has_function_privilege($1,$2,\'EXECUTE\')', [role, signature]), false);
-          const invocation = signature.includes('uuid') ? 'private.employee_transfer_site_snapshot_v1(NULL,NULL)' : signature;
+          const invocation = signature.replaceAll('uuid', 'NULL').replaceAll('integer', 'NULL');
           await assert.rejects(statement(db, () => db.exec(`SELECT ${invocation}`), role), /permission denied/);
         }
         assert.equal(await scalar(db, `SELECT EXISTS(SELECT 1 FROM pg_proc p,aclexplode(p.proacl) a
           WHERE p.oid=$1::regprocedure AND a.grantee=0 AND a.privilege_type='EXECUTE')`, [signature]), false);
       }
       assert.equal((await rpc(STATUS, { p_admin_session_token: session }, 'authenticated')).frozen, false);
+      const defaults = await scalar(db, `SELECT jsonb_build_object('count',pronargdefaults,'expression',pg_get_expr(proargdefaults,0))
+        FROM pg_proc WHERE oid='public.get_employee_transfer_log(uuid,integer)'::regprocedure`);
+      assert.deepEqual(defaults, { count: 1, expression: '100' });
+      const definition = await scalar(db, "SELECT pg_get_functiondef('public.get_employee_transfer_log(uuid,integer)'::regprocedure)");
+      assert.deepEqual((definition.match(/'[-a-z0-9]+-v1'/g) ?? []).map(value => value.slice(1, -1)).sort(), [...LOG_EXCLUDED_PROTOCOLS].sort());
+      assert.match(definition, /private\.employee_transfer_log_before_cutover\(p_admin_session_token, p_limit\)|private\.employee_transfer_log_before_cutover\(p_admin_session_token,p_limit\)/);
+    });
+
+    await scenario('freeze/resume never advance last_export_at when no successful employee export exists; other log fields match the private baseline', async () => {
+      const before = await assertLogMatchesBaseline();
+      assert.equal(before.current.last_export_at, null); assert.equal(before.current.running, null); assert.deepEqual(before.current.events, []);
+      const cutoff = await freezeReady();
+      const frozen = await assertLogMatchesBaseline();
+      assert.equal(frozen.current.last_export_at, before.current.last_export_at);
+      assert.equal(frozen.baseline.last_export_at, await cutoffLogTime(cutoff), 'old log really observes the finished cutoff task');
+      assert.equal(frozen.current.running, null);
+      assert.ok(frozen.current.events.some(event => event.job_id === cutoff.cutoff_id && event.action === 'source_cutover_frozen'));
+      await resume(cutoff.cutoff_id);
+      const resumed = await assertLogMatchesBaseline();
+      assert.equal(resumed.current.last_export_at, before.current.last_export_at);
+      assert.equal(resumed.baseline.last_export_at, await cutoffLogTime(cutoff));
+      assert.ok(resumed.current.events.some(event => event.job_id === cutoff.cutoff_id && event.action === 'source_cutover_resumed'));
+    });
+
+    await scenario('freeze preserves a non-null prior successful log timestamp without dropping its original export event', async () => {
+      // Use an existing real begin/verify/close protocol that the old log includes.
+      // This only establishes a non-null historical log baseline, not full-site completion.
+      const shared = await sharedBegin();
+      assert.equal((await rpc('employee_export_shared_verify', auth(shared))).verified, true);
+      assert.equal((await rpc('employee_export_shared_close', auth(shared))).success, true);
+      const before = await assertLogMatchesBaseline();
+      assert.ok(before.current.last_export_at);
+      assert.equal(before.current.last_export_at, await scalar(db, 'SELECT to_jsonb(finished_at) FROM private.employee_transfer_jobs WHERE id=$1', [shared.job_id]));
+      const cutoff = await freezeReady();
+      const after = await assertLogMatchesBaseline();
+      assert.equal(after.current.last_export_at, before.current.last_export_at);
+      assert.equal(after.baseline.last_export_at, await cutoffLogTime(cutoff));
+      assert.notEqual(after.baseline.last_export_at, after.current.last_export_at);
+      assert.deepEqual(after.current.events.filter(event => event.job_id === shared.job_id), before.current.events);
+      await resume(cutoff.cutoff_id);
+      assert.equal((await assertLogMatchesBaseline()).current.last_export_at, before.current.last_export_at);
+    });
+
+    await scenario('real products begin/verify/close are not successful employee exports; default limit 100 and running/events stay unchanged', async () => {
+      assert.equal((await assertLogMatchesBaseline()).current.last_export_at, null);
+      const cutoff = await freezeReady();
+      const job = await rpc('employee_export_products_begin', { p_admin_session_token: session, p_admin_password: PASSWORDS.root });
+      assert.equal(job.success, true); assert.equal(job.scope, 'product-catalog'); assert.equal(job.full_site_complete, false);
+      const begun = await assertLogMatchesBaseline();
+      assert.equal(begun.current.last_export_at, null); assert.equal(begun.current.running.id, job.job_id);
+      assert.ok(begun.current.events.some(event => event.job_id === job.job_id && event.action === 'export_begin'));
+      const page = await rpc('get_employee_export_products_page', { ...auth(job), p_limit: 200 });
+      assert.ok(page.count > 0); assert.equal(page.sha256, sha(page.ndjson));
+      // Explicit, successful re-verifications produce >100 genuine audit events for
+      // the default-limit boundary. No synthetic history rows or error retries.
+      for (let n = 0; n < 101; n++) assert.equal((await rpc('employee_export_products_verify', auth(job))).verified, true);
+      const beforeReads = await state();
+      assert.ok(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_events') > 100);
+      const defaultLog = (await assertLogMatchesBaseline()).current;
+      assert.equal(defaultLog.events.length, 100); assert.equal(defaultLog.running.id, job.job_id);
+      assert.deepEqual(await log(100), defaultLog, 'omitting p_limit must preserve the explicit 100-row result');
+      assert.deepEqual((await assertLogMatchesBaseline(undefined, 'authenticated')).current, defaultLog);
+      for (const [limit, expected] of [[1, 1], [2, 2], [0, 1], [-1, 1], [null, 100], [500, 103], [501, 103]]) {
+        const result = (await assertLogMatchesBaseline(limit)).current;
+        assert.equal(result.events.length, expected); assert.equal(result.running.id, job.job_id);
+        assert.equal(result.last_export_at, null);
+      }
+      assert.deepEqual(await state(), beforeReads, 'both log readers must leave jobs, audit and business data untouched');
+      const closed = await rpc('employee_products_close', auth(job));
+      assert.equal(closed.success, true); assert.equal(closed.full_site_complete, false);
+      assert.equal(await scalar(db, 'SELECT status FROM private.employee_transfer_jobs WHERE id=$1', [job.job_id]), 'finished');
+      const after = await assertLogMatchesBaseline(500);
+      assert.equal(after.current.last_export_at, null); assert.equal(after.current.running, null);
+      assert.ok(after.current.events.some(event => event.job_id === job.job_id && event.action === 'export_finished'));
+      assert.equal(after.baseline.last_export_at, await cutoffLogTime(cutoff));
+      assert.equal((await assertFrozen()).cutoff.cutoff_id, cutoff.cutoff_id);
     });
 
     await scenario('STATIC: every explicit SQL56 table/row lock is NOWAIT and every advisory acquisition is try-lock; not PG concurrency', async () => {
@@ -298,7 +392,7 @@ test('SQL56 source cutover: local real PGlite; static locks are not native PG co
     await scenario('all cutover RPCs reject secondary/emergency/employee/unknown sessions without changes', async () => {
       for (const token of [branch, emergency, employeeSession, randomUUID(), null]) {
         const before = await state();
-        for (const [name, args] of [[STATUS, {}], [FREEZE, { p_admin_password: PASSWORDS.root, p_confirmation: FREEZE_CONFIRM }],
+        for (const [name, args] of [[STATUS, {}], [LOG, {}], [FREEZE, { p_admin_password: PASSWORDS.root, p_confirmation: FREEZE_CONFIRM }],
           [RESUME, { p_admin_password: PASSWORDS.root, p_confirmation: RESUME_CONFIRM, p_cutoff_id: randomUUID() }]]) {
           await assert.rejects(rpc(name, { p_admin_session_token: token, ...args }), /administrator|session|expired/i);
         }
@@ -311,6 +405,7 @@ test('SQL56 source cutover: local real PGlite; static locks are not native PG co
         WHERE token_hash=private.hash_financial_token($1)`, [session]);
       const before = await state();
       await assert.rejects(status(), /invalid or expired/i);
+      await assert.rejects(log(), /invalid or expired/i);
       await assert.rejects(freeze(), /invalid or expired/i);
       await assert.rejects(resume(randomUUID()), /invalid or expired/i);
       assert.deepEqual(await state(), before);

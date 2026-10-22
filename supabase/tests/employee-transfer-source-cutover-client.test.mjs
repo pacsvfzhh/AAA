@@ -299,6 +299,61 @@ for (const op of ['freeze', 'resume']) test(`${op}: aborted status and its late 
   h.respond(validReply(op)); await invoke(op);
 });
 
+for (const outcome of ['lost', 'success']) for (const returnAt of ['after-write', 'during-write']) {
+  test(`interleaving: status starts first, freeze ${outcome}, valid false old status returns ${returnAt}`, async () => {
+    const h = harness(), oldGate = deferred(), writeGate = deferred(), stale = status(false);
+    let oldSettled = false, writeSettled = false;
+    h.replies.push({ wait: oldGate.promise });
+    const oldRead = api.getSourceCutoverStatus().then(value => { oldSettled = true; return { value }; }, error => { oldSettled = true; return { error }; });
+    await turn();
+    assert.deepEqual(h.calls.map(c => c.name), [STATUS_RPC]);
+    assert.equal(oldSettled, false, 'the genuine status request must be pending before the write begins');
+    h.replies.push({ wait: writeGate.promise });
+    const writing = api.freezeSourceCutover(PASSWORD, FREEZE).then(value => { writeSettled = true; return { value }; }, error => { writeSettled = true; return { error }; });
+    try {
+      await turn();
+      assert.deepEqual(h.calls.map(c => c.name), [STATUS_RPC, FREEZE_RPC]);
+      assert.equal(oldSettled, false); assert.equal(writeSettled, false);
+      if (returnAt === 'during-write') {
+        oldGate.resolve({ data: stale, error: null });
+        const old = await oldRead;
+        assert.ok(old.error, 'a valid stale read must be rejected while a write is still active'); safeError(old.error);
+        assert.equal(writeSettled, false, 'the stale read must finish before the underlying write settles');
+        await writesBlocked(h);
+        await assert.rejects(api.getSourceCutoverStatus(), safeError);
+        assert.equal(h.calls.length, 2, 'active write also blocks a new status before RPC');
+      }
+      if (outcome === 'lost') writeGate.reject(Error(PASSWORD + ' PRIVATE-BACKEND-ERROR'));
+      else writeGate.resolve({ data: status(true), error: null });
+      const written = await writing;
+      if (outcome === 'lost') { assert.ok(written.error); safeError(written.error); await writesBlocked(h); }
+      else { assert.equal('error' in written, false); assert.deepEqual(written.value, status(true)); }
+      if (returnAt === 'after-write') {
+        assert.equal(oldSettled, false);
+        oldGate.resolve({ data: stale, error: null });
+        const old = await oldRead;
+        assert.ok(old.error, 'old status must not be accepted after the write generation changes'); safeError(old.error);
+      }
+      await turn();
+      assert.deepEqual(h.calls.map(c => c.name), [STATUS_RPC, FREEZE_RPC], 'neither operation is retried or reconciled automatically');
+      assert.deepEqual(stale, status(false), 'the late server reply really is a well-formed unfrozen status, not a malformed rejection fixture');
+      if (outcome === 'lost') {
+        await writesBlocked(h); // The old read must not release uncertainWrite after the lost response.
+        await reconcile(h, status(true));
+      } else {
+        assert.deepEqual(written.value, status(true), 'rejected stale reads do not replace the confirmed frozen result');
+        // A rejected read must not poison an already confirmed successful write.
+      }
+      h.respond(status(false)); assert.deepEqual(await api.resumeSourceCutover(PASSWORD, RESUME, CUTOFF), status(false));
+      assert.deepEqual(h.calls.map(c => c.name), [STATUS_RPC, FREEZE_RPC, ...(outcome === 'lost' ? [STATUS_RPC] : []), RESUME_RPC]);
+      assert.equal(h.authReads, h.calls.length);
+    } finally {
+      oldGate.resolve({ data: stale, error: null }); writeGate.resolve({ data: status(true), error: null });
+      await Promise.all([oldRead, writing]);
+    }
+  });
+}
+
 test('real supabase transport: exact cutover RPC 120s list, POST failure/abort single attempt and lookalikes 8s', async t => {
   const output = await build({ entryPoints: [root + 'src/lib/supabase.ts'], bundle: true, write: false, platform: 'browser', format: 'esm', metafile: true,
     define: { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify('https://cutover.local.invalid'), 'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('local-synthetic-key') },

@@ -43,7 +43,7 @@ function installHarness(c) {
       frozen_at: FROZEN_AT, cutoff_hash: CUTOFF_HASH } : null,
     blockers: [], counts: { pending_automation: 0, failed_automation: 0, processing_orders: 0 }, full_site_complete: false });
   const h = window.__h = { state: fresh(initial === 'frozen'), calls: [], signals: [], events: [], busy: false, uncertain: false,
-    violations: [], forbidden: [], siteCalls: [], next: null, waiting: null, release: null, authReads: 0, fresh };
+    violations: [], forbidden: [], siteCalls: [], next: null, waiting: null, release: null, gates: Object.create(null), authReads: 0, fresh };
   if (initial === 'pending') { h.state.counts.pending_automation = 2; h.state.blockers = ['pending_automation']; }
   if (initial === 'unavailable') h.next = { name: STATUS_RPC, error: true };
   if (initial === 'hold-read') h.next = { name: STATUS_RPC, hold: true };
@@ -65,7 +65,12 @@ function installHarness(c) {
           if (name === FREEZE_RPC && !fault.error) h.state = fresh(true);
           if (name === RESUME_RPC && !fault.error) h.state = fresh(false);
           // Deliberately ignore AbortSignal while held: abort cannot undo server commit.
-          if (fault.hold) await new Promise(done => { h.waiting = name; h.release = () => { h.waiting = null; h.release = null; done(); }; });
+          if (fault.hold) await new Promise(done => {
+            if (fault.gate) {
+              check(!h.gates[fault.gate], 'duplicate held request gate');
+              h.gates[fault.gate] = { name, release: () => { delete h.gates[fault.gate]; done(); } };
+            } else { h.waiting = name; h.release = () => { h.waiting = null; h.release = null; done(); }; }
+          });
           if (fault.lost) throw Error(PASSWORD + AUTH + ' PRIVATE-BACKEND-ERROR');
           if (fault.error) return { data: null, error: { message: PASSWORD + ' PRIVATE-BACKEND-ERROR' } };
           return { data: Object.hasOwn(fault, 'data') ? fault.data : structuredClone(h.state), error: null };
@@ -294,6 +299,83 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.evaluate(() => window.__h.calls.length), 5);
         assert.equal(await passwordInput(page).inputValue(), '');
       }, op === 'resume' ? { query: 'state=frozen' } : {});
+      // The panel deliberately serializes its own operations. Use a second real API caller
+      // for the earlier read while submitting the write through the actually rendered panel.
+      for (const outcome of ['lost', 'success']) for (const returnAt of ['after-write', 'during-write']) {
+        await run('old-status-generation-' + outcome + '-' + returnAt, async page => {
+          await ready(page); await fill(page);
+          await page.evaluate(name => {
+            const h = window.__h; h.oldStatusPayload = h.fresh(false); h.oldReadOutcome = null;
+            h.next = { name, hold: true, gate: 'old-status', data: structuredClone(h.oldStatusPayload) };
+            h.oldRead = window.__cutoverApi.getSourceCutoverStatus().then(
+              value => { h.oldReadOutcome = { rejected: false, value }; },
+              error => { h.oldReadOutcome = { rejected: true, name: error.name, message: error.message }; },
+            );
+          }, STATUS_RPC);
+          await page.waitForFunction(() => Boolean(window.__h.gates['old-status']));
+          assert.deepEqual(await page.evaluate(() => window.__h.calls.map(c => c.name)), [STATUS_RPC, STATUS_RPC]);
+          await setFault(page, { name: FREEZE_RPC, hold: true, gate: 'freeze-write', lost: outcome === 'lost' });
+          await freezeButton(page).click();
+          await page.waitForFunction(() => Boolean(window.__h.gates['freeze-write']));
+          try {
+            assert.deepEqual(await page.evaluate(() => window.__h.calls.map(c => c.name)), [STATUS_RPC, STATUS_RPC, FREEZE_RPC]);
+            assert.equal(await page.evaluate(() => window.__h.oldReadOutcome), null);
+            assert.equal(await passwordInput(page).inputValue(), '');
+            assert.equal(await refreshButton(page).isDisabled(), true);
+            const rejectOldRead = async () => {
+              await page.evaluate(() => window.__h.gates['old-status'].release());
+              await page.waitForFunction(() => window.__h.oldReadOutcome !== null);
+              const result = await page.evaluate(() => window.__h.oldReadOutcome);
+              assert.equal(result.rejected, true, 'late valid false status must be rejected by the real generation guard');
+              assert.equal(result.name, 'Error', 'this is not an abort-based rejection');
+              assert.equal(result.message.includes(PASSWORD), false); assert.equal(result.message.includes(AUTH), false);
+              assert.deepEqual(await page.evaluate(() => window.__h.oldStatusPayload), {
+                version: 1, success: true, scope: 'source-cutover', site_id: SITE, frozen: false, cutoff: null,
+                blockers: [], counts: { pending_automation: 0, failed_automation: 0, processing_orders: 0 }, full_site_complete: false,
+              }, 'the old response must be genuinely valid and unfrozen');
+            };
+            if (returnAt === 'during-write') {
+              await rejectOldRead();
+              assert.equal(await page.evaluate(() => Boolean(window.__h.gates['freeze-write'])), true, 'old read settles before the underlying write');
+              assert.equal(await panel(page).getAttribute('aria-busy'), 'true');
+              await moduleWritesBlocked(page);
+            }
+            await page.evaluate(() => window.__h.gates['freeze-write'].release());
+            if (outcome === 'lost') {
+              await panel(page).getByText(/本次操作結果未知/).waitFor(); await moduleWritesBlocked(page);
+            } else {
+              await panel(page).getByText(/服務端已確認建立持久維護屏障/).waitFor();
+              await panel(page).getByText(CUTOFF_HASH, { exact: true }).waitFor();
+            }
+            if (returnAt === 'after-write') await rejectOldRead();
+            assert.deepEqual(await page.evaluate(() => window.__h.calls.map(c => c.name)), [STATUS_RPC, STATUS_RPC, FREEZE_RPC], 'no automatic retry or reconciliation');
+            if (outcome === 'lost') {
+              assert.equal(await page.evaluate(() => window.__h.uncertain), true);
+              assert.equal(await passwordInput(page).isDisabled(), true); await moduleWritesBlocked(page);
+              await screenshot(page, engine, 'old-status-' + outcome + '-' + returnAt);
+              await refreshButton(page).click(); await panel(page).getByText(/已重新讀取並核對服務端狀態/).waitFor();
+              assert.equal(await page.evaluate(() => window.__h.uncertain), false);
+            } else {
+              assert.equal(await page.evaluate(() => window.__h.uncertain), false);
+              await panel(page).getByText('舊站已暫停：持久維護屏障生效', { exact: true }).waitFor();
+              assert.equal(await panel(page).getByText('舊站未套用本切站屏障（不代表沒有其他維護限制）', { exact: true }).count(), 0);
+              await screenshot(page, engine, 'old-status-' + outcome + '-' + returnAt);
+            }
+            await panel(page).getByText(CUTOFF_HASH, { exact: true }).waitFor();
+            assert.equal(await passwordInput(page).isEnabled(), true);
+            await fill(page, RESUME); await resumeButton(page).click();
+            await panel(page).getByText(/服務端已確認恢復舊站業務並放棄本次切站/).waitFor();
+            assert.deepEqual(await page.evaluate(() => window.__h.calls.map(c => c.name)), [STATUS_RPC, STATUS_RPC, FREEZE_RPC, ...(outcome === 'lost' ? [STATUS_RPC] : []), RESUME_RPC]);
+            assert.equal(await passwordInput(page).inputValue(), ''); await noCredentialStorage(page);
+          } finally {
+            await page.evaluate(async () => {
+              const h = window.__h;
+              h.gates['old-status']?.release(); h.gates['freeze-write']?.release();
+              await h.oldRead;
+            });
+          }
+        });
+      }
       for (const change of ['hash', 'site', 'cutoff', 'microsecond']) await run('valid-format-cutoff-drift-rejected-' + change, async page => {
         await ready(page); await fill(page);
         await page.evaluate(({ change, name }) => {
