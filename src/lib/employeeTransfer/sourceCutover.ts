@@ -16,6 +16,7 @@ const { object, uuid, hash, count, checkAbort } = dispatchTransferChecks;
 const blockerKeys = ['pending_automation', 'failed_automation', 'processing_orders', 'transfer_running', 'other_maintenance'];
 let activeWrite = false;
 let uncertainWrite = false;
+let writeGeneration = 0;
 function invalid(): never { throw new Error('Source cutover state could not be confirmed. Refresh before any explicit recovery; no automatic retry or rollback was performed.'); }
 export function validateSourceCutoff(value: unknown): SourceCutoff {
   const r = object(value, ['version', 'policy', 'site_id', 'cutoff_id', 'frozen_at', 'cutoff_hash']);
@@ -51,7 +52,8 @@ async function request(name: Rpc, args: { p_admin_password?: string; p_confirmat
   checkAbort(signal);
   const write = name !== 'get_employee_export_cutover_status';
   if (activeWrite || (write && uncertainWrite)) invalid();
-  if (write) activeWrite = true;
+  const observedGeneration = writeGeneration;
+  if (write) { activeWrite = true; writeGeneration++; }
   try {
     const query = supabase.rpc(name, { p_admin_session_token: getAdminFinancialSessionToken(), ...args });
     const result = await (signal ? query.abortSignal(signal) : query);
@@ -60,7 +62,10 @@ async function request(name: Rpc, args: { p_admin_password?: string; p_confirmat
     const status = validateStatus(result.data);
     if ((name === 'employee_export_cutover_freeze' && !status.frozen)
       || (name === 'employee_export_cutover_resume' && status.frozen)) invalid();
-    if (!write) uncertainWrite = false;
+    if (!write) {
+      if (observedGeneration !== writeGeneration || activeWrite) invalid();
+      uncertainWrite = false;
+    }
     return status;
   } catch {
     if (write) uncertainWrite = true;

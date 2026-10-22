@@ -169,7 +169,9 @@ DECLARE v_result jsonb;
 BEGIN
   v_result := private.employee_transfer_log_before_cutover(p_admin_session_token,p_limit);
   RETURN v_result||jsonb_build_object('last_export_at',(SELECT max(finished_at) FROM private.employee_transfer_jobs
-    WHERE kind='export' AND status='finished' AND options->>'export_protocol' IS DISTINCT FROM 'source-cutover-v1'));
+    WHERE kind='export' AND status='finished' AND COALESCE(options->>'export_protocol','') <> ALL(ARRAY[
+      'products-v1','dispatch-submission-v1','employee-identity-v1','employee-finance-v1','employee-activity-v1',
+      'employee-verification-v1','site-notifications-v1','site-chat-v1','site-archives-v1','source-cutover-v1'])));
 END;
 $$;
 
