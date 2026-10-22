@@ -45,8 +45,8 @@
 - 客户端模块级`activeWrite/uncertainWrite`跨实例互锁，写结果未知时不自动重试/恢复/stop或假称回滚，状态读也不自动重试。`writeGeneration`绑定状态读发起时的写代次，新写入之后才到的旧status拒绝，不能错误解锁；只有写结束后新发起且严格核验成功的状态读可解除未知。父页所有导入/导出/本机核验/独立备份及停止入口双向互锁，仍保留显式「刷新狀態」核对通道。
 - SQL56 site snapshot在冻结时携`source_cutover`并复查三项零值，导出前后比较后进入加密index。reader严格校验固定字段/UTC微秒格式，重算去掉cutoff_hash后的PostgreSQL jsonb文本SHA-256并绑定索引来源站，认证整组回调传递元数据；合法重加密但摘要篡改亦拒绝。未冻结的日常备份不强制带cutoff。
 - 来源元数据不是远程签名、旧站当前仍冻结的远程证明或新站营业许可。恢复旧站后不能用旧切站文件启用新站，不能两站同时营业；本机认证不能自动撤销旧文件或代替跨站协调。source屏障只冻结受保护DB写，不代表停Storage/cron或原子跨DB文件快照；无新表、不改guard/cron/Storage/Edge。
-- 现有DB25/25、client74/74、Chromium/WebKit各25场景（含父组TAP52）、SQL56十域11磁文维护态整站61项五互斥组3+14+9+6+29已通过（原60+新frozen往返/合法重加密摘要篡改拒绝）；583份SQL仍12原历史失败、109表967列不变。实现agent的typecheck/lint/build已通过；主会话foundation/scope/UI/Golden最后复跑、再次复审待结果，不在此计为通过或宣称无问题。
-- 本轮仅文档更新，无正式访问或SQL/Edge/Storage/权限/config/cron/前端部署，前端仍待用户另行部署。最终自动化续接、账号启用/营业放行、同名彻底替换及其余原pending未完成；隔离浏览器/数据库替身不替代真实Storage、原生PG并发/容量和正式切站验收。
+- 现有DB25/25、client74/74、Chromium/WebKit各25场景（含父组TAP52）、SQL56十域11磁文维护态整站61项五互斥组3+14+9+6+29已通过（原60+新frozen往返/合法重加密摘要篡改拒绝）；583份SQL仍12原历史失败、109表967列不变。主会话最终foundation/scope100/100、client74/74加双浏览器合计TAP126/126、旧导入UI28/28、旧备份UI110/110、transport security13/13、typecheck/lint/build及聊天6/稽核48/工时6通过；整站61项为实现agent完整覆盖，主会话重叠复验不加总。两轮复审修补完成，最终独立复审无新增高置信问题；未跑整个employee-transfer总套件。
+- 本轮实际新增SQL56/source API/panel并修改父页/类型/网络/加密index（本文件同步说明），无正式访问或SQL/Edge/Storage/权限/config/cron/前端部署，前端仍待用户另行部署。最终自动化续接、账号启用/营业放行、同名彻底替换及其余原pending未完成；隔离浏览器/数据库替身不替代真实Storage、原生PG并发/容量和正式切站验收。
 
 ## src/lib 工具速查
 | 文件 | 用途 |
