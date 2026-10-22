@@ -235,7 +235,7 @@ for (const engine of ['chromium', 'webkit']) {
         const dialog = page.getByRole('dialog');
         await dialog.waitFor();
         assert.equal(await page.locator('#migration-files').isDisabled(), true);
-        assert.equal(await page.locator('#migration-panel-export button[type="submit"]').isDisabled(), true);
+        assert.equal(await page.getByRole('button', { name: '開始目前十個領域加密導出', exact: true, includeHidden: true }).isDisabled(), true);
         assert.equal((await page.locator('body').innerText()).includes('DO_NOT_RENDER_CANARY'), false);
         await page.getByRole('tab', { name: '紀錄', exact: true }).dispatchEvent('click');
         assert.equal(await dialog.isVisible(), true, 'navigation must not remount pending approval');
