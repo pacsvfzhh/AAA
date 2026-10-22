@@ -1,5 +1,7 @@
 # 全站业务资料导出 / 导入实施计划（精简历史订单）
 
+最新补充：用户已批准继续新编号通知/奖励/自动化阶段；第53节SQL54/employeeMappedNotifications仅完成独立准备子阶段：目录绑定、13表原文不可变暂存与只读映射/奖励关联预检。每入口要求SQL53实名verified并实物重验SQL48–53全链，只写私有staging，不发permit、不改summary，plan/status为STABLE且不续heartbeat。新DB72个唯一场景按20/20/32互斥范围最终通过，新client38通过，其余回归逐项见第53.3节、不加总。尚未完成候选UUID下通知配置对应/独立备份、媒体或13表实际恢复；完整恢复/备份/封存/替换/整站门禁false，员工停用、dirty维护保留，无UI/协调器或媒体Edge修改，无正式访问或部署。
+
 最新补充：第52节SQL53/employeeMappedVerification(+Media)已接新员工UUID的实名15列记录及实际证件媒体独立阶段：严格要求SQL52活动verified并实物重验此前各阶段，仅映射user_id/审阅人/非NULL证件URL，不改users.is_verified，只许可public.verification_requests、不旁路触发器；媒体仅mapped-verification的upload/recheck-import，service-only授权/提交、服务器候选路径、upsert=false、实际回读，全部apply后终检。新DB58项按五互斥组最终全覆盖；新旧客户端、既有Edge、基础范围和旧整站共4120项分层通过，详见第52.3节。独立阶段未接UI/整站协调器，完整员工备份/封存/替换/全站门禁false，员工停用、dirty维护不解除，无正式访问或部署。
 最新补充：第51节SQL52/employeeMappedActivity已接新员工UUID的登录历史、工时和停工标记：完整资金verified前置及身份/订单/派单/资金实物重验，逐员工三表事务、最后心跳收尾、设备精度/两种NULL与历史会话脱敏保留。新DB60项按三个互斥组最终全覆盖，新旧客户端/基础范围1342及最新SQL52旧整站28项通过，共1430项；不改旧49–51或旧verified map。实名/通知/聊天等其余映射、双包证明/封存窗口和营业放行未完成，无UI/本轮浏览器或正式访问部署。
 
@@ -1291,3 +1293,58 @@ DROP FUNCTION private.employee_transfer_mapped_identity_source(private.employee_
 
 ### 52.4 回滚参考（未执行）
 仅提供DROP FUNCTION参考：先停用调用方，再按依赖移除11个公共RPC与19个私有helper（准确签名见SQL53），不使用CASCADE。只移除函数，不撤销已写入的记录行、已上传文件或维护状态，不解除dirty维护；SQL52等前置仅在本阶段之后移除。任何正式执行仍须单独说明影响并确认。
+
+## 53. 新员工UUID的通知、奖励与自动化关联准备（2026-10-22，UTC+8，本地未部署）
+
+### 53.1 已批准范围与服务端流程
+- 用户已批准继续新编号通知/奖励/自动化阶段；**本轮只完成独立准备子阶段，不是通知实际恢复完成。** 新增`20261102000054_prepare_mapped_notifications.sql`，仅追加10个私有helper与4个公共RPC：`employee_import_mapped_notifications_bind/stage/plan/status`。无新表，不改任何旧迁移、函数或trigger；只写既有私有staging，不发业务permit、不改任务summary/旧verified map，不发送通知、重发奖金或操作运行队列。
+- 固定SECURITY DEFINER、`search_path = pg_catalog, public, private, pg_temp`及UTC/ISO；私有helper与PUBLIC/service_role撤权，公共RPC仅授予anon/authenticated并在函数内验证当前超管、本人原导入任务、真实独立配置备份及dirty维护。bind/stage先锁维护库存表和任务，再重新鉴权/核验；plan/status为STABLE，只读、不续heartbeat，可在READ ONLY事务执行，不固化计划或恢复许可。
+- **每个入口都要求SQL53实名阶段verified且全员完成，并实物重验SQL48–53全链**：候选与来源绑定、停用账号/凭据/精简订单、派单配置/valid/成员/used、资金六表及编号映射/公式、活动、实名记录及证件媒体回执。不能只看曾经verified，也不制造旧verified map；拒绝混用旧通知暂存、summary或备份路径。
+- 显式流程为同包目录`bind`→13表原文逐块`stage`→全部暂存后只读`plan`；可随时显式`status`核对目录及部分stage进度。目录须精确匹配identity目录、SQL51 mapped finance目录及来源站/包，独立键为全零员工的`mapped-notifications-catalog-v1`和`mapped-notifications-in:<table_key>`；目录不可变，同块原文完全一致才幂等，不覆盖或自动重置。
+- 沿用既有13表原文NDJSON，含方案、任务、方案成员、指定收件、进度、执行、年度标记、失败、消息、收件、范本、广播及广播收件。每次重解析原始字节，重验固定字段/重复JSON键、C顺序、连续块号、全局行序、行/表hash、字节和完整目录；numeric/NULL/微秒保真，不重序列化原文。每块≤200行/256KiB、单行≤64KiB、单表≤50万行/256MiB、总量≤1GiB；空表显式提交零号空块，不截断、不以缺块冒充空表。公告/分类及仅供公告素材仍排除。
+
+### 53.2 映射预检与未授权边界
+- 只检查服务器候选员工、同包管理员、父子引用、真实唯一键及执行—消息—收件—SQL51真实奖金关系；不接受客户端ID图，不新建配置对应、不改写任何业务引用。来源与目标资金实物须一致，手动/自动奖金核对员工、金额及收件reference；自动执行另核对operation_id、执行/消息/收件关系和奖励币种，不重复入账。
+- 执行`owner_admin_id=NULL`也须直接核对task/plan/employee归属，不能借NULL跳过管理员隔离；奖金`created_by`非NULL时须与消息sender按服务器管理员映射一致；**所有非空`execution.message_id`均须由消息反向回指该执行，不限成功状态。** 合法all-NULL历史关联原样保留，不强补owner/任务/员工/消息或把NULL当新关联。
+- 候选员工已有通知相关残留、非配置对象UUID碰撞均阻断。方案/任务/范本同UUID仅在管理员归属、名称及适用父级/共享标志相符时留给后续配置plan：方案名按既有大小写折叠规则，任务/范本名精确比较；任务父方案须同归属同名。不同名、错归属或错父报冲突，**允许留待检查不等于已建立对应、内容一致或允许覆盖**，其他历史/配置冲突仍须后续阶段处理。
+- plan的`checked=true`只表示原文及关联预检完成，连无冲突也不产生恢复许可。所有`can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false`，`configuration_pending/records_pending/media_pending/automation_pending=true`；员工停用、dirty维护保留，不开放同名覆盖、启用或营业。
+
+### 53.3 客户端、中断处理与本地证据
+- 新`employeeMappedNotifications.ts`仅提供bind/stage/plan/status四个显式方法；使用共享RPC类型，每请求读取当前管理员会话，严格验证任务/目录/映射/安全标志/真实计数、深冻结并防进度倒退。原文只传NDJSON；写不自动重试，plan不能解除未知写状态，取消后底层请求未结束仍互斥。
+- 未知bind须显式status核对固定目录；若未提交，只能在核对后显式重发同目录。未知stage须用**同table+chunk**的status核对原始块回执（行数、字节及原文SHA-256），查其他块或仅看累计进度不能解锁；部分stage也可查，确认未提交后才可显式重发原块。没有自动重试/重建任务/假回滚或完整跨会话自动续传承诺。四RPC客户端等待120秒，不改变服务端角色上限；无UI、整站协调器或媒体Edge修改。
+- 新DB72个唯一场景按`EMPLOYEE_MAPPED_NOTIFICATIONS_DB_RANGE=1-20 / 21-40 / 41-72`互斥范围最终20+20+32全覆盖，0失败/取消/跳过；不是单次整文件通过。使用真实来源13表、SQL48–53公共前置与独立磁盘加密配置备份，不制造任务/map/verified；覆盖真实205行200/5分块、manual+auto奖金、高精度/NULL/原文、权限/漂移/关联防护、READ ONLY、COMMIT丢响应及3个实际client→anon RPC联测。
+- 新client38/38通过，含真实`supabase.ts` transport四RPC的60种组合与24个伪前缀/后缀案例；这些是同一测试内的组合，不拆成额外用例虚增计数。基础/范围foundation/scope98/98通过；SQL54下旧十领域/11密文维护态往返28/28通过，两组分别列示，不合并为总套件成绩。
+- 既有回归逐文件记录、不加总：
+  - `employee-transfer-notifications-api.test.mjs`：74/74；已纠正一条错误期待`get_employee_import_*` POST自动重试的过时断言，符合既定禁止自动重发政策，修正后完整复验0失败/取消/跳过。本次文档核对另单独复跑该文件74/74。
+  - `employee-transfer-notifications-configuration-api.test.mjs`：306项完整通过。
+  - `employee-transfer-notifications-client.test.mjs`：636项完整通过。
+  - `employee-transfer-notifications-backup.test.mjs`：204项完整通过。
+  - `employee-transfer-notifications-media-client.test.mjs`：156项完整通过。
+  - `employee-transfer-notifications-restore-api.test.mjs`：40项完整通过。
+  - `employee-transfer-mapped-verification-client.test.mjs`：294项完整通过。
+- 专项与静态检查另逐项记录：聊天6项、稽核48项、工时6项通过；typecheck、lint、build通过，不与上组累计。581份SQL仍精确保留12项原历史失败，109表/967列不变；不是干净建库、完整迁移总套件或新编号通知恢复证明。
+- 初期DB因缺SQL未执行、早期测试失败及关联漏验均不计通过；补齐SQL与修复后全部互斥范围最终复跑。最新旧整站维护态回归首次600秒超时不计通过，随后相同命令整文件28/28通过。独立复审的三个关联缺口（NULL执行owner归属、非NULL奖金created_by与sender、所有非空执行message_id反向回指）已修补，再审无新增高置信问题；不扩大历史失败清单或放宽防护。
+
+### 53.4 部署边界与下一步
+- 本轮新增SQL54、通知映射客户端及两个专项测试，同步RPC类型/请求时限、迁移回归清单、旧通知网络断言与7份既有文档；没有访问或部署正式SQL/Edge/Storage/权限/config/cron/前端。前端正式生效仍待用户另行部署，不把继续实现的批准视为正式操作授权。无UI/浏览器测试；PGlite/注入传输不能代替真实Storage、原生PG并发/锁/取消、PostgREST时限或容量验收。
+- 下一步为候选UUID通知配置对应与独立备份、媒体及13表实际恢复；自动化截止点与队列续接、聊天映射、SQL46/47双密文完整证明、安全封存窗口、总协调与营业放行仍未完成。旧第32–33节的配置备份/实际恢复不等于已适配本轮新编号链，不可直接把旧接口当作SQL54的apply。
+
+### 53.5 函数移除参考（未执行，不是数据回滚）
+先停用调用方；下列仅按SQL54准确签名列出4个public和10个private函数的移除顺序，不使用CASCADE，**没有执行**。DROP只清函数，不清staging、业务、已恢复资金/实名、备份或维护状态，不启用员工、不解除dirty维护；SQL53等前置只能在本阶段之后移除。任何正式执行均须另行说明影响并取得明确确认。
+
+```sql
+DROP FUNCTION public.employee_import_mapped_notifications_status(uuid,uuid,text,integer);
+DROP FUNCTION public.employee_import_mapped_notifications_plan(uuid,uuid);
+DROP FUNCTION public.employee_import_mapped_notifications_stage(uuid,uuid,text,integer,text);
+DROP FUNCTION public.employee_import_mapped_notifications_bind(uuid,uuid,jsonb);
+DROP FUNCTION private.employee_transfer_mapped_notifications_status(private.employee_transfer_jobs,jsonb,text,integer);
+DROP FUNCTION private.employee_transfer_mapped_notifications_plan(private.employee_transfer_jobs,jsonb);
+DROP FUNCTION private.employee_transfer_mapped_notifications_common(private.employee_transfer_jobs,jsonb);
+DROP FUNCTION private.employee_transfer_mapped_notifications_target_issues(private.employee_transfer_jobs,jsonb);
+DROP FUNCTION private.employee_transfer_mapped_notifications_source_issues(private.employee_transfer_jobs,jsonb);
+DROP FUNCTION private.employee_transfer_mapped_notifications_context(private.employee_transfer_jobs,boolean);
+DROP FUNCTION private.employee_transfer_mapped_notifications_source(private.employee_transfer_jobs,boolean);
+DROP FUNCTION private.employee_transfer_mapped_notifications_parse(text,text);
+DROP FUNCTION private.employee_transfer_mapped_notifications_catalog(private.employee_transfer_jobs);
+DROP FUNCTION private.employee_transfer_mapped_notifications_input(uuid,text);
+```

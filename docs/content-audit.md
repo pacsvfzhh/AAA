@@ -102,3 +102,9 @@ job 的两种状态：
 - SQL53/employeeMappedVerification(+Media)仅在SQL52活动verified且此前各阶段实物重验通过后，按服务器候选UUID恢复实名15列记录和固定verification-documents实际证件；不修改`users.is_verified`、旧封存UUID、稽核/通知留证或档案，不旁路触发器，不新增替换能力。
 - 媒体只做upload/recheck-import，upsert=false、实际回读，不覆盖/删除旧文件；不确定须新会话显式对账。实名verified仅本子阶段，不是双密文完整恢复或安全封存证明；完整备份/封存/替换/放行false、dirty维护不解除。
 - 新DB58项按五互斥组最终全覆盖，相关客户端/媒体/基础范围/旧整站共4120项分层通过；不是完整员工恢复或真实Storage验收，详见计划第52节与仅DROP函数的回滚参考。
+
+## 新UUID通知关联准备与留证边界（第53节，2026-10-22，本地未部署）
+- SQL54/employeeMappedNotifications只在SQL53实名verified并实物重验SQL48–53全链后，绑定目录、暂存13表原文并只读检查员工/管理员/父子/唯一键与执行—消息—收件—真实SQL51奖金关系。只写私有staging、不发permit、不改summary；plan/status STABLE无heartbeat、不固化恢复许可，**没有实际恢复通知或新增留证/封存/替换能力**。
+- NULL执行owner不豁免task/plan/employee归属检查，非NULL奖金created_by须匹配sender，所有非空execution.message_id均须消息反向回指；合法all-NULL历史保留。候选员工残留和非配置UUID碰撞阻断，配置同UUID同归属同名同父仅待后续配置plan，不表示允许覆盖。不改旧员工/封存UUID、稽核事件、通知收件版本、档案或媒体，不调用archive_employee_without_media/content-audit，不清证据迁就导入。
+- 所有can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete为false，configuration_pending/records_pending/media_pending/automation_pending为true；员工停用、dirty维护保留。预检或前置实名verified不等于SQL46/47双密文完整证明或安全封存窗口，新编号配置对应/独立备份、媒体及13表实际恢复仍缺，自动化续接/聊天映射/总协调与放行未完成。
+- 新DB72按20/20/32互斥范围最终全覆盖、client38通过；foundation/scope98及SQL54旧维护态整站28分别通过，其他回归逐文件见第53.3节，不加总。无UI/浏览器或正式服务访问，无SQL/Edge/Storage/权限/config/cron/前端部署；真实Storage/PG并发/容量未验。第53.5节未执行DROP仅清14个函数，不清staging/业务/维护，不撤销历史或解除dirty维护。

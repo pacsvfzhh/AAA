@@ -67,6 +67,15 @@
 - 恢复消息/收件/广播、执行唯一标记/进度/年度记录/失败记录，循环外键分先建执行→消息→补执行链接处理；投递编号重新分配且顺序保持，租约清空。奖励金额/引用来自既有资金恢复，不调用发送或入账函数，不复制财务幂等请求原文。人工通知收件留证由现有触发器生成并逐行核对，旧证据冲突阻断，避免后续编辑/封存员工丢收件快照。
 - 四客户端/服务文件902项、8项新增真实SQL恢复、foundation/scope70项及聊天/稽核专项通过；SQL使用合成Edge回执，服务使用fakeStorage，不能替代真实Storage或整站验收。无UI/导航、无线上部署，账号停用及dirty维护仍保留；跨站截止点、队列重建、恢复自动任务和最终全站放行仍待完成。详见计划第33节。
 
+## 新员工UUID通知、奖励与自动化准备（第53节，2026-10-22，UTC+8，本地未部署）
+
+- 用户已批准继续新编号通知/奖励/自动化阶段；SQL54 `20261102000054_prepare_mapped_notifications.sql`与`employeeMappedNotifications.ts`仅完成独立准备子阶段，**未完成候选UUID下的实际通知恢复**。10私有helper/4公共RPC为`employee_import_mapped_notifications_bind/stage/plan/status`，只写既有私有staging；无新表、不改旧迁移/函数/trigger，不发permit、不改summary、不发送或发奖，plan/status为STABLE无heartbeat且不固化恢复许可。
+- 每入口要求SQL53实名verified，并实物重验SQL48–53完整前置；通知目录精确匹配identity和mapped finance。固定13表原文NDJSON按C顺序、连续块、字节/字段/hash重扫，目录和原文不可变、同块幂等。这里只检查员工/管理员/父子/唯一键及执行—消息—收件—真实SQL51奖金关系，不建立配置对应或改写业务行。
+- 执行owner为NULL也直接检查task/plan/employee归属；奖金created_by非NULL时须与sender映射一致；所有非空execution.message_id均须消息反向回指，不限成功执行。合法all-NULL历史保留，不猜关联或补发奖金。候选员工残留及非配置UUID碰撞阻断；配置同UUID同归属同名同父仅留待后续配置plan，不同名/错归属/错父报冲突，不表示已对应或允许覆盖。
+- 客户端四显式方法使用当前会话和共享RPC类型，严格深冻结/不倒退。未知bind须显式status核对目录；未知stage须同table+chunk status核对原文SHA-256/行数/字节回执，部分stage亦可查；plan或其他块状态不能解锁。写不自动重试，取消后底层没结束仍互斥；120秒等待不提高服务端上限，无UI/协调器或媒体Edge修改。
+- `can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false`，`configuration_pending/records_pending/media_pending/automation_pending=true`；员工停用、dirty维护保留，未开放同名覆盖或营业。上文第32–33节旧配置备份/实际恢复能力不能直接当作本轮新编号链已完成，下一步仍须通知配置对应+独立备份、媒体及13表实际候选UUID恢复；自动化截止点/队列续接、聊天映射、双密文完整证明/安全封存/总协调与放行仍缺。
+- 新DB72唯一场景按20/20/32互斥范围最终通过，新client38（含真实transport四RPC60组合及24伪前缀/后缀检查，不另拆计数）通过。foundation/scope98、SQL54下旧十域11密文维护态28分别通过；旧通知六文件与mapped verification逐项列于计划第53.3节，不加总。无正式访问或SQL/Edge/Storage/权限/config/cron/前端部署，无UI/浏览器测试，真实Storage/PG并发/容量未验；不作为实际通知恢复、干净建库或总套件证明。
+
 ## 公告 `AnnouncementManagement.tsx` + `TiptapEditor.tsx`
 - 表 `announcements`，直接表操作（不经稽核）。二级只管理自己的公告；超管可管理全部，并设置全局公告与轮播。支持发布时间、隐藏、置顶排序；正文上限 500KB。
 - 媒体存储桶：编辑器插入的图片/视频/封面 → `announcement-images`；正文里的 base64 图片经 `processContentImages` → `template-images`；Word 导入的图片 → `chat-images`。删除公告时会尝试清理正文图片（`src/lib/storageCleanup.ts`）。

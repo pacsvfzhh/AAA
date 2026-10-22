@@ -17,6 +17,17 @@
 
 ---
 
+## 2026-10-22 · 接通新员工UUID通知、奖励与自动化关联预检（未部署）
+- 需求：用户已批准继续新编号通知/奖励/自动化阶段；准确记录独立准备成果，不把预检写成实际通知恢复完成。
+- 改动：SQL54 `20261102000054_prepare_mapped_notifications.sql`新增10私有helper/4公共RPC bind/stage/plan/status，只写既有私有staging；无新表、不改旧迁移/函数/trigger，不发permit、不改summary。plan/status STABLE无heartbeat、不固化恢复许可；每入口要求SQL53实名verified并实物重验SQL48–53全链，目录精确匹配identity与mapped finance，13表NDJSON按C顺序/字节/字段/hash重扫。
+- 关联边界：检查员工/管理员/父子/唯一键及执行—消息—收件—真实SQL51奖金；补齐NULL执行owner的task/plan/employee归属、非NULL奖金created_by与sender、所有非空execution.message_id反向回指，合法all-NULL历史保留。候选员工残留/非配置UUID碰撞阻断；配置同UUID同归属同名同父仅留待后续plan，不代表已对应或允许覆盖。
+- 客户端：employeeMappedNotifications四显式方法使用当前会话/共享RPC类型、严格深冻结/不倒退；未知bind显式status核对目录，未知stage须同table+chunk status核对原文块回执，部分stage可查。写不自动重试，取消后底层未结束仍互斥；120秒等待不改服务端上限，无UI/协调器或媒体Edge修改。
+- 文件：新增SQL54、employeeMappedNotifications.ts及客户端/数据库两专项；同步RPC类型、请求时限、严格迁移回归清单和旧通知网络断言，并更新7份既有文档，保留第52节历史。计划另列未执行的4公共+10私有逐签名DROP，不使用CASCADE，只清函数不清staging/业务/维护。
+- 数据库/服务端：上述实现仅本地，**未访问或部署正式SQL/Edge/Storage/权限/config/cron/前端**；前端仍待用户另行部署。can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false，configuration_pending/records_pending/media_pending/automation_pending=true，员工停用、dirty维护保留，不开放同名覆盖或营业。
+- 验证：新DB72唯一场景按1–20/21–40/41–72互斥范围最终20+20+32通过，0失败/取消/跳过，含真实来源13表/SQL48–53前置/独立磁盘加密配置备份、205行200/5分块、手动+自动奖金/高精度/NULL/READ ONLY/COMMIT丢响应与3个实际client→anon RPC联测，不制造任务/map/verified。新client38通过（真实共享transport四RPC60组合+24伪前缀/后缀，不拆项虚增）。foundation/scope98、SQL54下旧十域11密文维护态28分别通过，不加总。
+- 既有回归逐项：通知API74、配置API306、原文client636、备份204、媒体client156、恢复API40、mapped verification client294完整通过，不加总；旧通知API一条误期待get_employee_import_*自动重试的断言已按既定政策修正，本次文档核对单独复跑74/74，0失败/取消/跳过。聊天6、稽核48、工时6分别通过；typecheck/lint/build通过。581份SQL仍12原历史失败、109表/967列，不是干净建库或完整总套件证明。
+- 修正与限制：初期缺SQL未执行/测试失败/关联漏验不计通过，修复后全部DB互斥范围最终复跑；最新旧整站回归首轮600秒超时不计通过，随后同命令完整28/28复跑；独立复审三缺口已补，再审无新增高置信问题。无UI/浏览器测试，真实Storage/PG并发/容量未验；下一步为新编号通知配置对应+独立备份、媒体及13表实际恢复，自动化截止点/队列续接、聊天映射、双密文完整证明/安全封存/总协调与放行仍缺。
+
 ## 2026-10-22 · 接通新员工UUID的实名记录与实际证件媒体（未部署）
 - 需求：继续关联资料的新员工编号恢复，把实名15列记录及实际证件文件迁到新UUID下，不改认证状态、不旁路触发器。
 - 改动：新增SQL53（11公共RPC/19私有helper）、employeeMappedVerification与employeeMappedVerificationMedia及handler的mapped-verification作用域。严格要求SQL52活动verified并实物重验此前阶段；仅映射user_id/审阅人/非NULL证件URL，不改users.is_verified，仅许可public.verification_requests。媒体仅upload/recheck-import，service-only授权/提交、服务器候选路径、upsert=false、实际回读、generation绑定读前完成计数且提交不刷新，全部apply后终检；50MiB/3000文件/记录加媒体1GiB。

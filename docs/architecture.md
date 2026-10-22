@@ -30,7 +30,7 @@
 - `src/lib/supabase.ts`：
   - typed client（类型来自 `src/types/database.ts`），读取 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`。
   - 普通请求超时 8 秒，稽核/归档及共享设置导入/导出 RPC 请求 120 秒（不改变数据库角色执行上限）；网络错误有 XHR 回退。
-  - 只对 GET 与白名单只读 RPC/稽核读取自动重试（最多 2 次），写操作不重试，避免重复执行。新增只读 RPC 如需重试，要加入白名单。
+  - 只对 GET 与白名单只读 RPC/稽核读取自动重试（最多 2 次），写操作不重试，避免重复执行。新增只读 RPC 如需重试，要加入白名单。`get_employee_import_*` POST一律不自动重试，不因get命名自动重发；SQL54四个显式RPC也不自动重试，含STABLE plan/status，客户端等待120秒不改变服务端上限。
   - `formatSupabaseError()`：统一把错误转成可显示的文字。
 - Realtime 一般只当作「有变化」的信号：收到后防抖、再重新查询。异步请求用请求序号或 AbortSignal，防止旧响应覆盖新结果。
 - 后台页面懒加载；打开过的 tab 保持挂载，用 `hidden` 切换（切换时状态不丢失）。
@@ -75,6 +75,7 @@
 | `employeeTransfer/employeeMappedFinance.ts` | 第50节SQL51七显式RPC：新员工UUID资金六表原文bind/stage→只读plan/status→begin→逐员工事务apply→verify，阶段化身份/派单/资金实物重验、不改旧零钱包防护。严格深冻结/候选/计数/金额字符串/不倒退，未知写入只status可续，未知apply须同来源、取消后底层未结束仍互斥；未全stage的status会拒绝并保持安全暂停，早期丢响应/跨会话完整续传未解。账本/审计重编号、基准游标及pending冻结均核验，旧summary/verified map不写；完整恢复/封存/替换/放行false，其他域/双包证明/封存窗口未接，无UI/部署 |
 | `employeeTransfer/employeeMappedActivity.ts` | 第51节SQL52七显式RPC：候选UUID下登录/工时/停工三表原文恢复，资金完整verified前置及身份/订单/派单/资金实物重验、逐员工事务与真实计数。历史员工号/会话散列/设备JSON精度与两种NULL保留，未结束严格按最后心跳收尾；不发信号/通知或改钱包。深冻结/不倒退/互斥，未知apply仅同来源status可续，未全stage的早期丢响应安全暂停、不自动重试。旧summary/verified map不写，完整恢复/封存/替换/放行false；未接UI/整站协调器/双包证明，未部署，详见计划第51节 |
 | `employeeTransfer/employeeMappedVerification.ts`、`employeeMappedVerificationMedia.ts` | 第52节SQL53：新UUID实名15列记录七显式RPC（严格要求SQL52 verified并实物重验，仅映射user/审阅人/非NULL URL，不改is_verified，仅verification_requests许可、不旁路触发器）及实际证件媒体inventory/bind/upload/recheckImport（mapped-verification作用域，service-only授权/提交、服务器候选路径、upsert=false、回读、全部apply后终检；50MiB/3000/1GiB）。原文NDJSON、严格冻结、不自动重试，未知apply同来源status，早期未完整暂存失败关闭，媒体不确定须新会话显式对账、不自动修复/删除；独立阶段，未接UI/协调器，完整备份/封存/替换/整站false，未部署 |
+| `employeeTransfer/employeeMappedNotifications.ts` | 第53节SQL54四显式方法bind/stage/plan/status，仅目录绑定/13表原文暂存与只读映射和SQL51奖金关联预检，非实际通知恢复。每入口SQL53实名verified及SQL48–53实物重验；只写私有staging，不发permit/改summary，plan/status STABLE无heartbeat。共享RPC类型、当前会话、深冻结/不倒退；未知bind须status核对目录，未知stage须同table+chunk的原文回执（部分stage亦可查），plan不能解锁；无自动重试，取消后底层未结束仍互斥。四RPC120秒等待不改服务端上限，完整恢复/备份/封存/替换/整站false、配置/记录/媒体/自动化pending为true，员工停用/dirty维护不变；新编号配置对应/独立备份/媒体/13表apply仍缺，无UI/协调器或媒体Edge修改，未部署 |
 | `employeeTransfer/siteTransfer.ts`、`siteExportApi.ts` | 十领域真实导出适配与串行协调；SQL41同一MVCC目录基线、每领域catalog绑定、独立密文保存/认证/明文清理后close，最终源目录及全部密文复核后写加密index。11文件本机检查核对同包/域/卷/行摘要；媒体调用各领域只读inspect，反向验证记录引用与附件及魔数。新增withAuthenticatedSiteBundleSet先全组认证，之后每域重新认证同索引摘要及目录才给恢复器，callback后真实清理、结束后不能再读；档案额外重读绑定原catalog/密文哈希/字节数。失败无自动写重试/取消，不启用业务；当前始终importReady/fullSiteComplete=false。不是完整站点可恢复协议，见计划第39–40节 |
 | `employeeTransfer/siteImport.ts`、`siteRestoreApi.ts` | 认证全部11文件后才作目标准入；仅接受SQL45 v2，拒同站/业务残留/任务与维护。串联五份独立加密备份及十域实际恢复、身份后再恢复派单依赖、最终媒体回读/核验；SQL45进入维护后与末尾重验前置配置。所有账号停用/自动化暂停/dirty维护持续，结果不明不自动重跑、不是全站营业放行或完整同名员工替换；已由EmployeeSiteImport接维护态向导，见计划第40–41节 |
 | `components/admin/EmployeeSiteImport.tsx` | 维护态写入向导：本机配套核验后独立只读准入，密码/确认语/独立备份目录，逐计划显式批准、聊天手选与可见性控制；body portal原生模态焦点循环，边界暂停/停止、不自动重试或假续接，首次开始后锁定重跑。非敏感JSON报告保存失败另提示，不改变已写入事实；无员工封存/启用/维护解除入口。浏览器/API替身回归见第41节，未部署 |

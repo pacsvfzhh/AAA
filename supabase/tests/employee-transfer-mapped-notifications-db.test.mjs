@@ -18,16 +18,7 @@ import { createSites, adminLogin, rpc as baseRpc, rows, scalar } from './support
 import { EXPECTED_REPLAY_FAILURES } from './support/replay-migrations.mjs';
 import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 
-// SQL54 contract tests: the first 59 cases are independent of the mapped-notifications client.
-// Appended client integration cases use the actual client and anon RPCs; only response delivery is simulated.
-// Real source exports, independent disk AES/ZIP shared/dispatch backups and public SQL48–53 RPCs
-// establish positive prerequisites. Never insert jobs, identity maps, verified flags or backup proof.
-// Direct postgres DML is only local source business fixtures or explicitly rollback-only corruption.
-// Routine notifications have 1–3 rows/table; ONLY the dedicated date-runs case exceeds 200 rows.
-// No HTTP/production services, real Storage, native PostgreSQL concurrency or performance claim.
-// Missing SQL54 is a hard error, NOT a skip or a fallback implementation.
-// Run disjoint numbered groups with EMPLOYEE_MAPPED_NOTIFICATIONS_DB_RANGE=1-20, etc.
-// Excluded cases are not registered, not counted as passes; each group replays all migrations.
+// Positive prerequisites use real exports, disk backups and public RPCs; direct DML is fixture/corruption only.
 const MIGRATION = '20261102000054_prepare_mapped_notifications.sql';
 const PREFIX = 'employee_import_mapped_notifications_';
 const OPERATIONS = ['bind', 'stage', 'plan', 'status'];

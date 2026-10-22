@@ -98,6 +98,13 @@
 - 严格要求SQL52活动verified并实物重验此前各阶段；实名15列仅映射user_id/审阅人/非NULL证件URL，`users.is_verified`不改，仅许可`public.verification_requests`、不旁路触发器。媒体仅upload/recheck-import，服务器候选路径、upsert=false、实际回读、generation绑定读前完成计数且提交不刷新，全部apply后终检；50MiB/3000文件/记录加媒体1GiB。
 - 完整员工备份/封存/替换/整站门禁false，员工停用、dirty维护不变；独立阶段未接UI/协调器。新DB58项按五互斥组最终全覆盖；新旧客户端/Edge/基础范围与旧整站共17文件分层4120项通过，非完整总套件。580份回放仍12旧失败、109表/967列，非干净建库；媒体联测为真实handler/SQL与memoryStorage，不是实际Storage验收。无正式访问/部署，回滚参考仅DROP函数、不撤销行/文件/维护，见计划第52节。
 
+## 新员工UUID通知/奖励/自动化准备（SQL54，2026-10-22，本地未部署）
+- `20261102000054_prepare_mapped_notifications.sql`仅新增10私有helper/4公共RPC：`employee_import_mapped_notifications_bind/stage/plan/status`。无新表，不改旧迁移/函数/trigger；bind/stage只写既有私有staging的`mapped-notifications-catalog-v1`、`mapped-notifications-in:<table_key>`，不发permit、不改summary。plan/status为STABLE、不续heartbeat，不固化计划或恢复许可；不是通知实际恢复入口。
+- 全部SECURITY DEFINER/固定search_path；私有及PUBLIC/service_role撤权，公共仅anon/authenticated且验证本人超管原任务/真实独立配置备份/dirty维护。每入口要求SQL53实名verified并实物重验SQL48–53全链；目录须精确匹配identity及mapped finance，拒混用旧通知路径。13表原文NDJSON按C顺序、连续块、字节/字段/hash重扫；目录/原文不可变、同块幂等，部分stage可status查同table+chunk原始回执。
+- 仅检查员工/管理员/父子/唯一键及执行—消息—收件—真实SQL51奖金关系：NULL执行owner仍检查task/plan/employee归属，非NULL奖金created_by须匹配sender，所有非空execution.message_id均须消息反向回指，合法all-NULL历史保留。候选员工残留/非配置UUID碰撞阻断；配置同UUID同归属同名同父才可留待后续配置plan，不同名/错归属/错父冲突，不表示已对应或可覆盖。
+- `can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false`；`configuration_pending/records_pending/media_pending/automation_pending=true`，员工停用、dirty维护不解除。未知写结果只显式status核对，不自动重试；120秒客户端等待不提高数据库角色上限，无UI/协调器或媒体Edge修改。
+- DB72按20/20/32互斥范围最终全覆盖、client38通过；foundation/scope98、SQL54下旧十域11密文维护态28分别通过，既有通知/实名回归逐文件见计划第53.3节，不加总。581份SQL仍12原历史失败、109表/967列，非干净建库或总套件证明；无正式访问/SQL/Edge/Storage/权限/config/cron/前端部署，无UI/浏览器测试，真实Storage/PG并发/容量未验。下一步为新编号通知配置对应/独立备份、媒体及13表实际恢复；未执行的4公共+10私有逐签名DROP见第53.5节，只清函数不清staging/业务/维护。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：
