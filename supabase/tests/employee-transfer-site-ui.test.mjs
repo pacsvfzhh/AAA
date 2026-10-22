@@ -16,6 +16,13 @@ const id = n => `72000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const PASS = 'local-only-long-passphrase';
 const PASSWORD = 'local-password-canary';
 const planHash = 'a'.repeat(64);
+const pendingAmount = '9007199254740993.1234567890123456789000';
+const serverVerification = {
+  version: 1, success: true, scope: 'site-restore-verification', job_id: id(6), source_site_id: id(3), package_id: id(2),
+  verification_hash: 'c'.repeat(64), verified_domains: domains,
+  counts: { employees: 7, pending_withdrawals: 3, pending_withdrawal_amount: pendingAmount },
+  maintenance: true, accounts_active: false, automation_resumed: false, can_release: false, full_site_complete: false,
+};
 const mocks = `
 export const SITE_DOMAINS=${JSON.stringify(domains)};
 const id=n=>'72000000-0000-4000-8000-'+String(n).padStart(12,'0');
@@ -46,7 +53,7 @@ export const pickTransferDirectory=async()=>{
 };
 export async function getSiteImportPreflight(source){
  h().calls.push('preflight');if(h().preflightFail)throw Error('expired');
- return {version:1,protocol:'site-maintenance-restore-v2',site_id:id(1),source_site_id:source,can_restore_to_maintenance:!h().blocker,blockers:h().blocker?[h().blocker]:[],missing_rpcs:[],full_site_complete:false,can_release:false};
+ return {version:1,protocol:'site-maintenance-restore-v3',site_id:id(1),source_site_id:source,can_restore_to_maintenance:!h().blocker,blockers:h().blocker?[h().blocker]:[],missing_rpcs:[],full_site_complete:false,can_release:false};
 }
 const role=(n,match,target)=>({source_id:id(n),source_name:n===20?'<img src=x onerror=window.__xss=true>':'角色'+n,source_number:'CUS-'+n,target_admin_id:id(4),source_type:'aaa_service',match,target_id:target,candidates:[{id:id(30),name:'現有角色',number:'CUS-30'},{id:id(31),name:'另一角色',number:'CUS-31'}],needs_confirmation:match==='ambiguous',number_occupied:false,visibility_employee_ids:[],multi_source_target:false});
 export async function importSiteBundleSetToMaintenance(o){
@@ -74,7 +81,10 @@ export async function importSiteBundleSetToMaintenance(o){
    o.onProgress({domain,phase:'verified',completedDomains:verified.length,totalDomains:10,rows:19,files:2,bytes:512});
  }
  o.signal.throwIfAborted();
- return {jobId:id(6),verifiedDomains:verified,maintenance:true,fullSiteComplete:false,importReady:false};
+ const serverVerification=${JSON.stringify(serverVerification)};
+ if(h().emptySite)serverVerification.counts={employees:0,pending_withdrawals:0,pending_withdrawal_amount:'0.0000'};
+ if(h().pendingAmount!==undefined)serverVerification.counts.pending_withdrawal_amount=h().pendingAmount;
+ return {jobId:id(6),verifiedDomains:verified,maintenance:true,fullSiteComplete:false,importReady:false,serverVerification};
 }
 `;
 let server, base, script, css = '';
@@ -152,6 +162,41 @@ async function approve(page) {
   await dialog.getByRole('button', { name: '確認本階段並繼續', exact: true }).click();
 }
 
+async function completeImport(page) {
+  await startButton(page).click();
+  for (let i = 0; i < 9; i++) await approve(page);
+  const roles = page.getByRole('dialog', { name: '確認聊天角色對應', exact: true });
+  await roles.getByRole('combobox').first().selectOption('new');
+  await approve(page);
+  await approve(page);
+  await approve(page);
+  await page.getByRole('heading', { name: '十領域維護態核驗已通過，仍不可恢復營業', exact: true }).waitFor();
+}
+async function assertServerSummary(page, counts = serverVerification.counts) {
+  const summary = page.getByRole('region', { name: '服務端總核對摘要', exact: true });
+  await summary.getByRole('heading', { name: '服務端總核對已通過', exact: true }).waitFor();
+  assert.deepEqual(await summary.locator('dt').allTextContents(), ['員工數', '待處理提款筆數', '待處理提款金額']);
+  assert.deepEqual(await summary.locator('dd').allTextContents(), [String(counts.employees), String(counts.pending_withdrawals), counts.pending_withdrawal_amount]);
+  await summary.getByText(/同一次原子核對中重新驗證實際資料；此回執不是營業放行/).waitFor();
+  await summary.getByText(serverVerification.verification_hash, { exact: true }).waitFor();
+  await page.getByText(/帳號仍停用、自動化仍暫停、維護保護仍持續，尚未放行/).waitFor();
+  return summary;
+}
+function assertReportReceipt(saved, expected = serverVerification) {
+  assert.equal(saved.name, 'site-import-report.json');
+  const report = JSON.parse(saved.text);
+  assert.equal(report.status, 'verified-to-maintenance-only');
+  assert.deepEqual(report.serverVerification, expected, 'save the complete redacted server receipt without rounding or dropping fields');
+  assert.equal(report.jobId, report.serverVerification.job_id);
+  assert.equal(report.sourceSiteId, report.serverVerification.source_site_id);
+  assert.equal(report.packageId, report.serverVerification.package_id);
+  assert.equal(report.targetSiteId, id(1));
+  assert.deepEqual(report.verifiedDomains, domains);
+  assert.equal(report.maintenance, true);
+  for (const key of ['canRelease', 'fullSiteComplete', 'accountActivationPerformed', 'automationResumed', 'rollbackConfirmed']) assert.equal(report[key], false);
+  for (const secret of [PASSWORD, PASS, 'DO_NOT_RENDER_CANARY', '<img', 'password_hash', 'job_token', 'session_token']) assert.equal(saved.text.includes(secret), false, 'report must not include secrets or raw plan content');
+}
+
 for (const engine of ['chromium', 'webkit']) {
   test(`isolated ${engine} migration UI: approvals, failures, cancellation and maintenance-only result`, { skip: !playwright, timeout: 180000 }, async t => {
     const executablePath = process.env[`EMPLOYEE_TRANSFER_${engine.toUpperCase()}_EXECUTABLE`];
@@ -173,7 +218,7 @@ for (const engine of ['chromium', 'webkit']) {
         await inspect(page);
         await page.evaluate(() => { window.__h.preflightFail = true; });
         await page.getByRole('button', { name: '查詢目標准入（只讀）', exact: true }).click();
-        await page.getByText(/無法確認目標是否支援 SQL45/).waitFor();
+        await page.getByText(/無法確認目標是否支援維護態導入第 3 版協議/).waitFor();
         assert.equal(await startButton(page).isDisabled(), true);
         assert.equal(await page.evaluate(() => window.__h.imports), 0);
       }));
@@ -214,6 +259,7 @@ for (const engine of ['chromium', 'webkit']) {
         await approve(page);
         await approve(page);
         await page.getByText('十領域維護態核驗已通過，仍不可恢復營業', { exact: true }).waitFor();
+        await assertServerSummary(page);
         assert.equal(await startButton(page).isDisabled(), true);
         assert.equal(await page.locator('#migration-import-password').inputValue(), '');
         assert.equal(await page.locator('#migration-import-passphrase').inputValue(), '');
@@ -221,11 +267,39 @@ for (const engine of ['chromium', 'webkit']) {
         assert.notEqual(await page.locator('section[aria-label="各卷核驗結果"] td').first().evaluate(element => getComputedStyle(element).color), 'rgb(0, 0, 0)', 'dark theme result table must remain readable');
         const state = await page.evaluate(() => ({ imports: window.__h.imports, decisions: window.__h.decisions, reports: window.__h.reports }));
         assert.equal(state.imports, 1); assert.equal(state.decisions[0].allow_visibility, false);
-        const report = JSON.parse(state.reports[0].text);
-        assert.equal(report.status, 'verified-to-maintenance-only'); assert.equal(report.canRelease, false); assert.equal(report.verifiedDomains.length, 10);
-        assert.equal(state.reports[0].text.includes(PASSWORD), false); assert.equal(state.reports[0].text.includes(PASS), false);
+        assert.equal(state.reports.length, 1);
+        assertReportReceipt(state.reports[0]);
         if (process.env.EMPLOYEE_TRANSFER_UI_SCREENSHOT && engine === 'chromium') await page.screenshot({ path: process.env.EMPLOYEE_TRANSFER_UI_SCREENSHOT, fullPage: true });
       }, chromiumUA));
+      await t.test('zero employees and pending withdrawals keep the original zero amount and full receipt', () => scenario(browser, async page => {
+        await prepare(page);
+        await page.evaluate(() => { window.__h.emptySite = true; });
+        await completeImport(page);
+        const expected = { ...serverVerification, counts: { employees: 0, pending_withdrawals: 0, pending_withdrawal_amount: '0.0000' } };
+        await assertServerSummary(page, expected.counts);
+        const saved = await page.evaluate(() => window.__h.reports);
+        assert.equal(saved.length, 1);
+        assertReportReceipt(saved[0], expected);
+        assert.equal(await startButton(page).isDisabled(), true);
+      }, chromiumUA));
+      await t.test('375px successful server summary wraps long exact money and hash without horizontal overflow', () => scenario(browser, async page => {
+        const amount = '123456789012345678901234567890123456789012345678901234567890.1234567890123456789000';
+        await prepare(page);
+        await page.evaluate(value => { window.__h.pendingAmount = value; }, amount);
+        await completeImport(page);
+        const expected = { ...serverVerification, counts: { ...serverVerification.counts, pending_withdrawal_amount: amount } };
+        const summary = await assertServerSummary(page, expected.counts);
+        await summary.scrollIntoViewIfNeeded();
+        const bounds = await summary.boundingBox();
+        assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 375, 'server summary stays inside the narrow viewport');
+        assert.ok(await summary.evaluate(element => element.scrollWidth <= element.clientWidth), 'server summary content does not overflow its box');
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'success result has no document-level horizontal overflow');
+        const saved = await page.evaluate(() => window.__h.reports);
+        assert.equal(saved.length, 1);
+        assertReportReceipt(saved[0], expected);
+        assert.equal(await startButton(page).isDisabled(), true);
+        if (process.env.EMPLOYEE_TRANSFER_UI_SCREENSHOT && engine === 'chromium') await page.screenshot({ path: process.env.EMPLOYEE_TRANSFER_UI_SCREENSHOT + '.narrow.png', fullPage: true });
+      }, { ...chromiumUA, viewport: { width: 375, height: 812 } }));
       await t.test('Escape rejects approval; uncertain outcome locks rerun and saves only safe report', () => scenario(browser, async page => {
         await prepare(page); await startButton(page).click(); await page.getByRole('dialog').waitFor();
         await page.keyboard.press('Escape');
@@ -235,6 +309,8 @@ for (const engine of ['chromium', 'webkit']) {
         assert.equal(await page.evaluate(() => window.__h.imports), 1);
         const report = await page.evaluate(() => JSON.parse(window.__h.reports[0].text));
         assert.equal(report.status, 'unconfirmed'); assert.equal(report.maintenance, 'unconfirmed');
+        assert.equal(report.serverVerification, null, 'a cancelled import must not manufacture a server receipt');
+        assert.equal(await page.getByRole('region', { name: '服務端總核對摘要', exact: true }).count(), 0);
         assert.equal(await page.locator('#migration-import-password').inputValue(), '');
       }, chromiumUA));
       await t.test('domain-boundary pause, resume and explicit stop preserve pending outcome', () => scenario(browser, async page => {

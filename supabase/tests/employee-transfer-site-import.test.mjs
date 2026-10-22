@@ -576,6 +576,102 @@ test('cleanup failure cannot report successful import or advance later domains',
   assert.equal(c.progress.some(p => p.phase === 'maintenance'), false); allDead(w);
 }));
 
+test('SQL55 admission requires the total verifier before any shared write and keeps the private wrapper uncallable', { timeout: 120000 }, async () => isolated(target, targetSession, async () => {
+  const preflight = await execAs('anon', 'get_employee_import_site_preflight', { p_admin_session_token: targetSession, p_source_site_id: sourceId });
+  assert.equal(preflight.error, null); assert.equal(preflight.data.protocol, 'site-maintenance-restore-v3');
+  assert.equal(preflight.data.can_restore_to_maintenance, true);
+  for (const role of ['anon', 'authenticated', 'service_role']) {
+    assert.equal(await scalar(target, "SELECT has_function_privilege($1,'private.employee_transfer_site_preflight_v2(uuid,uuid)','execute')", [role]), false);
+  }
+  await target.exec('ALTER FUNCTION public.employee_import_site_verify(uuid,uuid) RENAME TO unavailable_site_verify');
+  const c = startImport(); await assert.rejects(c.promise);
+  assert.deepEqual(names(), ['get_employee_import_site_preflight']);
+  assert.deepEqual(callsOf('get_employee_import_site_preflight')[0].result.missing_rpcs, ['public.employee_import_site_verify(uuid,uuid)']);
+  assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_jobs'), 0);
+  allDead(c.w);
+}));
+
+for (const mode of ['lost response', 'wrong task binding']) test(`site-wide verifier ${mode}: no retry or completion despite actual server verification`, { timeout: 300000 }, async t => isolated(target, targetSession, async () => {
+  state.afterSql = (call, actual) => {
+    if (call.name === 'employee_import_site_verify' && !actual.error) {
+      return mode === 'lost response' ? { data: null, error: { message: 'Synthetic response loss after commit' } }
+        : { data: { ...actual.data, job_id: id(994) }, error: null };
+    }
+  };
+  const c = startImport();
+  await assert.rejects(c.promise, error => {
+    t.diagnostic(JSON.stringify(explain(error)));
+    assert.equal(error.domain, 'site'); assert.equal(error.phase, 'verify-site'); return true;
+  });
+  const call = callsOf('employee_import_site_verify')[0];
+  assert.equal(callsOf('employee_import_site_verify').length, 1);
+  assert.equal(call.result.success, true, 'the SQL really ran before the transport outcome changed');
+  assert.equal(c.progress.some(value => value.phase === 'maintenance'), false);
+  assert.deepEqual(await scalar(target, "SELECT summary->'site_verification' FROM private.employee_transfer_jobs WHERE id=$1", [call.result.job_id]), call.result);
+  await assertMaintenance({ jobId: call.result.job_id }); allDead(c.w);
+}));
+
+test('site-wide verifier rechecks actual restored contents, seals, media and permissions instead of accepting cached success', { timeout: 600000 }, async t => isolated(target, targetSession, async () => {
+  const c = startImport(), result = await mustComplete(c, t);
+  const token = callsOf('employee_import_site_verify')[0].args.p_job_token;
+  const auth = { p_admin_session_token: targetSession, p_job_token: token };
+  const check = (args = auth, role = 'anon') => execAs(role, 'employee_import_site_verify', args);
+  const eventCount = () => scalar(target, "SELECT count(*)::int FROM private.employee_transfer_events WHERE job_id=$1 AND action='site_restore_verified'", [result.jobId]);
+  await t.test('explicit repeat physically rechecks, returns the same binding and emits no duplicate success audit', async () => {
+    const before = await eventCount(), actual = await check();
+    assert.equal(actual.error, null); assert.deepEqual(actual.data, result.serverVerification);
+    assert.equal(await eventCount(), before);
+    assert.deepEqual(await scalar(target, 'SELECT summary->\'site_verification\' FROM private.employee_transfer_jobs WHERE id=$1', [result.jobId]), result.serverVerification);
+  });
+  const rejectMutation = async (name, sql, args = [], relation = null) => t.test(name, async () => {
+    await target.exec('SAVEPOINT site_verify_corruption');
+    const before = await eventCount();
+    try {
+      if (relation) {
+        const modes = await rows(target, 'SELECT tgname,tgenabled FROM pg_trigger WHERE tgrelid=$1::regclass AND NOT tgisinternal', [relation]);
+        for (const mode of modes) await target.exec(`ALTER TABLE ${relation} DISABLE TRIGGER ${quote(mode.tgname)}`);
+        await target.query(sql, args);
+        for (const mode of modes) await target.exec(`ALTER TABLE ${relation} ${mode.tgenabled === 'A' ? 'ENABLE ALWAYS' : mode.tgenabled === 'R' ? 'ENABLE REPLICA' : mode.tgenabled === 'D' ? 'DISABLE' : 'ENABLE'} TRIGGER ${quote(mode.tgname)}`);
+      } else await target.query(sql, args);
+      const response = await check();
+      assert.ok(response.error, 'a historical verification must not authorize changed data');
+      assert.equal(response.data, null); assert.equal(await eventCount(), before);
+      assert.equal(await scalar(target, 'SELECT dirty FROM private.employee_transfer_maintenance WHERE job_id=$1', [result.jobId]), true);
+    } finally { await target.exec('ROLLBACK TO SAVEPOINT site_verify_corruption; RELEASE SAVEPOINT site_verify_corruption'); }
+  });
+  for (const key of ['identity_restore', 'dependency_restore', 'finance_restore', 'activity_restore', 'verification_restore', 'notification_restore', 'chat_restore']) {
+    await rejectMutation(`missing ${key} completion is not repaired by total verification`, 'UPDATE private.employee_transfer_jobs SET summary=summary #- $2::text[] WHERE id=$1', [result.jobId, [key, 'verified']]);
+  }
+  await rejectMutation('archive completion cannot be omitted', "UPDATE private.employee_transfer_jobs SET summary=summary #- '{archives_restore,records_verified}' WHERE id=$1", [result.jobId]);
+  await rejectMutation('archive media verification cannot be omitted', "UPDATE private.employee_transfer_jobs SET summary=summary #- '{archives_media,verified}' WHERE id=$1", [result.jobId]);
+  for (const [name, relation, sql, args] of [
+    ['employee fields', 'public.users', "UPDATE public.users SET remarks='corrupted' WHERE id=$1", [I.employee]],
+    ['order commission', 'public.orders', 'UPDATE public.orders SET commission_amount=11 WHERE id=$1', [I.success]],
+    ['wallet balance', 'public.wallets', 'UPDATE public.wallets SET available_balance=8 WHERE user_id=$1', [I.employee]],
+    ['pending withdrawal', 'public.withdrawals', 'UPDATE public.withdrawals SET amount=4 WHERE id=$1', [I.withdrawal]],
+    ['work session', 'public.work_sessions', 'UPDATE public.work_sessions SET duration_minutes=61 WHERE id=$1', [I.work]],
+    ['verification content', 'public.verification_requests', "UPDATE public.verification_requests SET real_name='changed' WHERE id=$1", [I.verification]],
+    ['notification content', 'public.messages', "UPDATE public.messages SET title='changed' WHERE id=$1", [I.message]],
+    ['chat content', 'public.customer_employee_conversations', "UPDATE public.customer_employee_conversations SET message_content='changed' WHERE id=$1", [I.chat]],
+    ['product checkpoint', 'public.product_types', "UPDATE public.product_types SET name='changed' WHERE name='Import product'", []],
+  ]) await rejectMutation(`late ${name} drift is rejected despite all verified flags`, sql, args, relation);
+  await rejectMutation('archive raw bytes cannot drift behind a cached namespace hash', "UPDATE private.employee_transfer_archive_records SET source_line=source_line||' ' WHERE source_site_id=$1 AND source_id=$2", [sourceId, I.archive], 'private.employee_transfer_archive_records');
+  await rejectMutation('sealed backup ciphertext cannot change', "UPDATE private.employee_transfer_notification_backups SET chunks=ARRAY[decode('00','hex')] WHERE job_id=$1", [result.jobId]);
+  await rejectMutation('sealed backup cannot disappear', 'DELETE FROM private.employee_transfer_chat_backups WHERE job_id=$1', [result.jobId]);
+  await rejectMutation('new-UUID preparation is not misreported as empty-site completion', `INSERT INTO private.employee_transfer_staging(job_id,employee_id,table_key,chunk_no,row_count,payload)
+    VALUES($1,$2,'identity-reservation-v1',0,0,'{}')`, [result.jobId, I.employee]);
+  for (const [name, args, role] of [
+    ['wrong task token', { ...auth, p_job_token: id(997) }, 'anon'],
+    ['employee/lookalike session', { ...auth, p_admin_session_token: id(998) }, 'anon'],
+    ['service role has no public permission', auth, 'service_role'],
+  ]) await t.test(name, async () => { const response = await check(args, role); assert.ok(response.error); assert.equal(response.data, null); });
+  await rejectMutation('expired admin session is denied', "UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 minute' WHERE token_hash=private.hash_financial_token($1)", [targetSession]);
+  await t.test('valid data still pass after all isolated corruptions; accounts and all financial totals remain unchanged', async () => {
+    const actual = await check(); assert.equal(actual.error, null); assert.deepEqual(actual.data, result.serverVerification);
+    await assertMaintenance(result); await assertBusiness(); assertProgress(c); allDead(c.w);
+  });
+}));
+
 // Synthetic file branch: REAL Edge handler + REAL SQL service-only authorize/commit;
 // fakeStorage is strictly in memory and never Supabase Storage acceptance.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');

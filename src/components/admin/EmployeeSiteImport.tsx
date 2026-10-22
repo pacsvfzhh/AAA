@@ -192,7 +192,7 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
       const value = await getSiteImportPreflight(inspection.sourceSiteId, controller.signal);
       if (mounted.current && !controller.signal.aborted) setPreflight(value);
     } catch {
-      if (mounted.current) setNotice('無法確認目標是否支援 SQL45 第 2 版維護態導入，可能是尚未部署、登入已過期或連線問題。未開始導入；不會自動重試。');
+      if (mounted.current) setNotice('無法確認目標是否支援維護態導入第 3 版協議，可能是尚未部署、登入已過期或連線問題。未開始導入；不會自動重試。');
     } finally {
       if (operation.current === controller) operation.current = null;
       if (mounted.current) setStatus('idle');
@@ -223,7 +223,8 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
           version: 1, packageId: inspection!.packageId, sourceSiteId: inspection!.sourceSiteId, targetSiteId: preflight!.site_id,
           startedAtUTC: startedAt, finishedAtUTC: new Date().toISOString(),
           status: result ? 'verified-to-maintenance-only' : 'unconfirmed', jobId: result?.jobId ?? null,
-          verifiedDomains: result?.verifiedDomains ?? [], lastProgress: currentProgress.current,
+          verifiedDomains: result?.verifiedDomains ?? [], serverVerification: result?.serverVerification ?? null,
+          lastProgress: currentProgress.current,
           fullSiteComplete: false, canRelease: false, rollbackConfirmed: false,
           maintenance: result ? true : 'unconfirmed', accountActivationPerformed: false, automationResumed: false,
           note: 'Keep all input and backup files. Unknown requests may have committed. Do not rerun as resumption.',
@@ -297,8 +298,24 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
     {notice && <p role="alert" className="rounded-lg border border-rose-700 bg-rose-950/40 p-3 text-sm text-rose-100">{notice}</p>}
     {stoppedAt && <p className="text-sm text-amber-200">停止前最後確認的領域：{domains[stoppedAt.domain] ?? '整組核驗'} · 已核驗領域 {stoppedAt.completedDomains} / {stoppedAt.totalDomains}。此為最後回報，不保證後續請求未提交。</p>}
     {savedDirectory && <p className="break-all text-sm text-slate-300">請保留本次備份子目錄：{savedDirectory}（失敗時可能只有部分檔案，不能視為完整備份）。</p>}
-    {reportStatus && <p className={`text-sm ${reportStatus === 'failed' ? 'text-amber-200' : 'text-slate-300'}`}>{reportStatus === 'saved' ? '已將不含密碼或明文資料的 site-import-report.json 保存至本次目錄，列出包、站點、任務與維護態核驗結果；報告不是完整備份。' : '本機報告未能確認保存；不影響既有服務端寫入，也不表示已回滾。請保留本頁任務資訊及全部檔案，不要因報告失敗重跑導入。'}</p>}
-    {outcome && <div role="status" className="space-y-2 rounded-lg border-2 border-amber-500 bg-amber-950/40 p-4"><h3 className="font-bold text-amber-100">十領域維護態核驗已通過，仍不可恢復營業</h3><p className="break-all text-sm">任務：{outcome.jobId}</p><ul className="grid gap-1 text-sm sm:grid-cols-2">{SITE_DOMAINS.map(domain => <li key={domain}>{domains[domain]}：{outcome.verifiedDomains.includes(domain) ? '已核驗' : '未核驗'}</li>)}</ul><p className="text-sm text-amber-100">帳號仍停用、自動化仍暫停、維護保護仍持續。這不是完整整站遷移成功；請保留來源、口令、五份備份及任務資訊，等候完整終驗與安全放行流程。</p></div>}
+    {reportStatus && <p className={`text-sm ${reportStatus === 'failed' ? 'text-amber-200' : 'text-slate-300'}`}>{reportStatus === 'saved' ? '已將不含密碼或明文資料的 site-import-report.json 保存至本次目錄，列出包、站點、任務與維護態核驗結果；成功時包含綁定本次任務的完整服務端總核對回執。報告不是完整備份，也不是營業放行憑據。' : '本機報告未能確認保存；不影響既有服務端寫入，也不表示已回滾。請保留本頁任務資訊及全部檔案，不要因報告失敗重跑導入。'}</p>}
+    {outcome && <div role="status" className="min-w-0 space-y-3 rounded-lg border-2 border-amber-500 bg-amber-950/40 p-4">
+      <h3 className="font-bold text-amber-100">十領域維護態核驗已通過，仍不可恢復營業</h3>
+      <p className="break-all text-sm">任務：{outcome.jobId}</p>
+      <section aria-label="服務端總核對摘要" className="min-w-0 space-y-2 rounded-lg border border-amber-700 p-3 text-sm text-amber-100">
+        <h4 className="font-semibold">服務端總核對已通過</h4>
+        <p>十領域完成後，服務端已在同一次原子核對中重新驗證實際資料；此回執不是營業放行。</p>
+        <dl className="grid gap-3 sm:grid-cols-3">
+          <div className="min-w-0"><dt className="text-xs text-amber-200">員工數</dt><dd>{outcome.serverVerification.counts.employees}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-amber-200">待處理提款筆數</dt><dd>{outcome.serverVerification.counts.pending_withdrawals}</dd></div>
+          <div className="min-w-0"><dt className="text-xs text-amber-200">待處理提款金額</dt><dd className="break-all font-mono">{outcome.serverVerification.counts.pending_withdrawal_amount}</dd></div>
+        </dl>
+        <p className="break-all text-xs">核對摘要：<span className="font-mono">{outcome.serverVerification.verification_hash}</span></p>
+        <p>待處理提款與凍結資金仍保留；之後只在單一站點處理，避免重複打款。</p>
+      </section>
+      <ul className="grid gap-1 text-sm sm:grid-cols-2">{SITE_DOMAINS.map(domain => <li key={domain}>{domains[domain]}：{outcome.verifiedDomains.includes(domain) ? '已核驗' : '未核驗'}</li>)}</ul>
+      <p className="text-sm text-amber-100">帳號仍停用、自動化仍暫停、維護保護仍持續，尚未放行。這不是完整整站遷移成功；請保留來源、口令、五份備份及任務資訊，等候完整終驗與安全放行流程。</p>
+    </div>}
     {attempted && !busy && <p className="text-sm text-amber-200">本頁已鎖定再次開始，避免把重跑當續接。請先核對服務端任務與檔案；重新整理不代表已回滾，也不會解除服務端維護。</p>}
     {approval && <ApprovalDialog key={approval.kind === 'plan' ? `${approval.domain}-${text(record(approval.plan).plan_hash)}` : 'chat-roles'} approval={approval} settle={settle} />}
   </section>;
