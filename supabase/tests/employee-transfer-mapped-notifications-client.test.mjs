@@ -459,3 +459,88 @@ test('noncancelled concurrent operations are rejected locally, and settled read 
   h.replies.push({ reject: Error(SECRET) }); await assert.rejects(s.status('messages', 0), redacted); await writesBlocked(s, h);
   h.respond(status()); await s.status('messages', 0);
 });
+test('actual shared fetch transport: four RPCs use 120s for string/URL/Request without POST retry or XHR replay, lookalikes use 8s', async t => {
+  // Keep supabase.ts and all transport policy real; replace only SDK construction, env and native network/timers.
+  const output = await build({ entryPoints: [`${root}src/lib/supabase.ts`], bundle: true, write: false,
+    platform: 'browser', format: 'esm', metafile: true,
+    define: { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify('https://local.invalid'),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('isolated-notifications-key') },
+    plugins: [{ name: 'capture-notifications-fetch-no-sdk', setup(builder) {
+      builder.onResolve({ filter: /^@supabase\/supabase-js$/ }, () => ({ path: 'local-client', namespace: 'capture-notifications' }));
+      builder.onLoad({ filter: /.*/, namespace: 'capture-notifications' }, () => ({ contents:
+        'export const createClient=(url,key,options)=>({testFetch:options.global.fetch,testUrl:url,testKey:key});' }));
+    } }],
+  });
+  const inputs = Object.keys(output.metafile.inputs);
+  assert.ok(inputs.some(path => path.endsWith('src/lib/supabase.ts')));
+  assert.equal(inputs.some(path => path.includes('node_modules')), false);
+  let mode, expectedInput, expectedCallerSignal, expectedTimeout, nativeSignal, calls, xhrCalls = 0, timerId = 0;
+  const timers = [], cleared = [];
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    calls++;
+    assert.equal(input, expectedInput);
+    const url = input instanceof Request ? input.url : input.toString();
+    assert.equal(new URL(url).origin, 'https://local.invalid');
+    assert.equal(init?.method || (input instanceof Request ? input.method : 'GET'), 'POST');
+    nativeSignal = init.signal;
+    assert.ok(nativeSignal instanceof AbortSignal); assert.notEqual(nativeSignal, expectedCallerSignal);
+    assert.equal(nativeSignal.aborted, false);
+    if (mode === 'network') throw new TypeError('Failed to fetch');
+    if (mode === 'timeout' || mode === 'abort') return new Promise((_, reject) => {
+      nativeSignal.addEventListener('abort', () => reject(nativeSignal.reason), { once: true });
+      if (mode === 'timeout') queueMicrotask(timers[0].callback);
+    });
+    return new Response('{}', { status: mode === 'http503' ? 503 : 200 });
+  });
+  // supabase.ts captures nativeFetch at module evaluation, after the local-only fake is installed.
+  const transport = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
+  assert.equal(transport.supabase.testUrl, 'https://local.invalid');
+  assert.equal(transport.supabase.testKey, 'isolated-notifications-key');
+  t.mock.method(globalThis, 'setTimeout', (callback, delay) => {
+    const timer = { id: ++timerId, callback, delay }; timers.push(timer);
+    // A retry-delay timer must fail immediately rather than leave a false-positive/hanging test.
+    assert.equal(delay, expectedTimeout, 'only one request timeout, never a retry delay');
+    return timer.id;
+  });
+  t.mock.method(globalThis, 'clearTimeout', id => { cleared.push(id); });
+  const xhr = Object.getOwnPropertyDescriptor(globalThis, 'XMLHttpRequest');
+  Object.defineProperty(globalThis, 'XMLHttpRequest', { configurable: true, value: function () {
+    xhrCalls++; assert.fail('XHR replay forbidden for every mapped notifications POST, including plan/status');
+  } });
+  t.after(() => { if (xhr) Object.defineProperty(globalThis, 'XMLHttpRequest', xhr); else delete globalThis.XMLHttpRequest; });
+  const forms = ['string', 'URL', 'Request'], names = ['bind', 'stage', 'plan', 'status'].map(rpcName);
+  const failures = ['success', 'http503', 'network', 'timeout', 'abort'];
+  let exactCases = 0, lookalikeCases = 0;
+  const run = async (name, form, failureMode, timeout) => {
+    calls = 0; nativeSignal = undefined; timers.length = 0; cleared.length = 0; mode = failureMode; expectedTimeout = timeout;
+    const url = `https://local.invalid/rest/v1/rpc/${name}`, controller = new AbortController();
+    const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: controller.signal };
+    expectedInput = form === 'Request' ? new Request(url, init) : form === 'URL' ? new URL(url) : url;
+    expectedCallerSignal = form === 'Request' ? expectedInput.signal : controller.signal;
+    const pending = transport.supabase.testFetch(expectedInput, form === 'Request' ? undefined : init);
+    if (mode === 'abort') controller.abort(SECRET);
+    if (mode === 'success' || mode === 'http503') {
+      const response = await pending;
+      assert.equal(response.status, mode === 'http503' ? 503 : 200); assert.equal(await response.text(), '{}');
+    } else {
+      const expectedName = mode === 'network' ? 'SupabaseNetworkError' : mode === 'timeout' ? 'SupabaseTimeoutError' : 'AbortError';
+      await assert.rejects(pending, error => redacted(error) && error.name === expectedName);
+    }
+    const label = `${name}/${form}/${failureMode}`;
+    assert.equal(calls, 1, `${label}: exactly one native POST`);
+    assert.equal(xhrCalls, 0, `${label}: no XHR replay`);
+    assert.deepEqual(timers.map(timer => timer.delay), [timeout], `${label}: exact timeout, no retry timers`);
+    assert.deepEqual(cleared, [timers[0].id], `${label}: request timeout cleaned up`);
+    assert.equal(nativeSignal.aborted, mode === 'timeout' || mode === 'abort', `${label}: native signal outcome`);
+    assert.equal(controller.signal.aborted, mode === 'abort', `${label}: timeout does not abort caller`);
+  };
+  // STABLE plan/status remain explicit POSTs, not automatic retry candidates.
+  for (const name of names) for (const form of forms) for (const failureMode of failures) {
+    await run(name, form, failureMode, 120000); exactCases++;
+  }
+  for (const name of names) for (const lookalike of [`prefix_${name}`, `${name}_not_a_contract`]) for (const form of forms) {
+    await run(lookalike, form, 'success', 8000); lookalikeCases++;
+  }
+  assert.equal(exactCases, 4 * 3 * 5); assert.equal(lookalikeCases, 4 * 2 * 3);
+  assert.equal(xhrCalls, 0); assert.equal(networkCalls, 0);
+});

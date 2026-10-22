@@ -206,7 +206,7 @@ test('real transfer orchestration plus API validates thirteen server page/stage 
 
 // Exercise the actual existing Supabase fetch policy with an injected createClient transport.
 // Only the native fetch is mocked; no database, real network or environment key is used.
-test('notification RPCs use120s; explicit restore/media writes never retry and read-only status retains get_ policy', async () => {
+test('notification RPCs use120s; import POSTs never retry while only whitelisted export/media reads retry', async () => {
   const transport = await build({ entryPoints: [`${root}src/lib/supabase.ts`], bundle: true, write: false, platform: 'browser', format: 'esm',
     define: { 'import.meta.env.VITE_SUPABASE_URL': '"https://unit-test.invalid"', 'import.meta.env.VITE_SUPABASE_ANON_KEY': '"unit-test"' },
     plugins: [{ name: 'capture-fetch', setup(builder) { builder.onResolve({ filter: /^@supabase\/supabase-js$/ }, () => ({ path: 'client', namespace: 'mock' }));
@@ -217,10 +217,11 @@ test('notification RPCs use120s; explicit restore/media writes never retry and r
   try {
     const { supabase } = await import(`data:text/javascript;base64,${Buffer.from(transport.outputFiles[0].text).toString('base64')}`);
     for (const name of [...WRITES, 'employee_import_notification_media_bind', 'employee_transfer_notification_media_authorize',
-      'employee_transfer_notification_media_commit', 'employee_import_notifications_begin', 'employee_import_notifications_chunk', 'employee_import_notifications_verify']) {
+      'employee_transfer_notification_media_commit', 'employee_import_notifications_begin', 'employee_import_notifications_chunk', 'employee_import_notifications_verify',
+      ...READS.filter(name => name.startsWith('get_employee_import_')), 'get_employee_import_notifications_restore_status']) {
       hits = 0; timers.length = 0; const res = await supabase.request(`https://unit-test.invalid/rest/v1/rpc/${name}`, { method: 'POST', body: '{}' });
       assert.equal(res.status, 503); assert.equal(hits, 1, name); assert.deepEqual(timers, [120000], name); }
-    for (const name of [...READS, 'get_employee_transfer_notification_media', 'get_employee_import_notifications_restore_status']) {
+    for (const name of [...READS.filter(name => !name.startsWith('get_employee_import_')), 'get_employee_transfer_notification_media']) {
       hits = 0; timers.length = 0; const res = await supabase.request(`https://unit-test.invalid/rest/v1/rpc/${name}`, { method: 'POST', body: '{}' });
       assert.equal(res.status, 503); assert.equal(hits, 3, name); assert.deepEqual(timers, [120000, 250, 120000, 250, 120000], name); }
     fail = false; timers.length = 0; await supabase.request('https://unit-test.invalid/rest/v1/rpc/unrelated_write', { method: 'POST' }); assert.deepEqual(timers, [8000]);
