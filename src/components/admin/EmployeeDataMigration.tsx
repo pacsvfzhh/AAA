@@ -482,6 +482,10 @@ export default function EmployeeDataMigration() {
           <p>{employeeBackupBusy ? '獨立員工記錄備份正在處理，其他導出與導入暫不可操作。' : '獨立員工備份任務結果尚未確認，其他導出與導入仍鎖定；請先核對紀錄及本人任務停止入口。'}</p>
           {tab !== 'inspect' && <button type="button" className={`${buttonClass} mt-2`} onClick={() => setTab('inspect')}>查看員工備份狀態</button>}
         </div>}
+        {(sourceBusy || sourceUncertain) && tab !== 'export' && <div role="status" className="rounded-xl border border-amber-700 bg-amber-950/30 p-3 text-sm text-amber-100">
+          <p>{sourceBusy ? '舊站切換操作正在處理，其他遷移暫不可操作。' : '舊站暫停／恢復結果未確認，請先刷新來源狀態，不能啟動其他遷移。'}</p>
+          <button type="button" className={`${buttonClass} mt-2`} onClick={() => setTab('export')}>查看舊站切換狀態</button>
+        </div>}
         {notice && <div role={notice.error ? 'alert' : 'status'} className={`break-words rounded-xl border p-4 text-sm leading-relaxed ${notice.error ? 'border-rose-500/50 bg-rose-950/40 text-rose-100' : 'border-cyan-800 bg-cyan-950/40 text-cyan-100'}`}>{notice.text}</div>}
 
         {run && <section aria-label="執行中的任務" className="rounded-xl border border-cyan-700 bg-slate-900/90 p-4">
@@ -578,10 +582,10 @@ export default function EmployeeDataMigration() {
             {!support.workspace && <p className="mt-3 text-sm text-amber-200">本機核驗需要安全連線及瀏覽器私有臨時工作區，本瀏覽器不支援，無法開始。</p>}
             <button type="submit" disabled={busy || selecting || !support.workspace || !inspectFiles.length || Array.from(inspectPassphrase).length < 14} className={`${buttonClass} mt-4`}><FileCheck2 className="h-4 w-4" aria-hidden="true" />僅解密與核驗，不導入</button>
           </form>
-          <EmployeeSafetyBackupPanel disabled={run !== null || stopping || selecting || importBusy} supported={support.export}
+          <EmployeeSafetyBackupPanel disabled={run !== null || stopping || selecting || importBusy || sourceBusy || sourceUncertain} supported={support.export}
             onBusyChange={setEmployeeBackupBusy} onPendingChange={setEmployeeBackupPending} />
           <EmployeeSiteImport files={inspectFiles} inspection={result?.kind === 'inspect' ? result.data : null}
-            disabled={run !== null || stopping || selecting || employeeBackupBusy || employeeBackupPending} supported={support.export} onBusyChange={setImportBusy} onProgress={setProgress} />
+            disabled={run !== null || stopping || selecting || employeeBackupBusy || employeeBackupPending || sourceBusy || sourceUncertain} supported={support.export} onBusyChange={setImportBusy} onProgress={setProgress} />
         </div>
 
         <div role="tabpanel" id="migration-panel-history" aria-labelledby="migration-tab-history" hidden={tab !== 'history'} tabIndex={0} className="rounded-xl border border-slate-700 bg-slate-900/80 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
