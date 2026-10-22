@@ -95,8 +95,8 @@
 
 ## 新员工UUID实名记录与证件媒体恢复（SQL53，2026-10-22，本地未部署）
 - `20261102000053_restore_mapped_employee_verification.sql`仅新增19私有helper/11公共RPC，无新表或旧函数/触发器修改：记录`employee_import_mapped_verification_bind/stage/plan/begin/apply/status/verify`，媒体`get_employee_transfer_mapped_verification_media`、`employee_import_mapped_verification_media_bind`及仅service_role的`employee_transfer_mapped_verification_media_authorize/commit`。
-- 严格要求SQL52活动verified并实物重验此前各阶段；实名15列仅映射user_id/审阅人/非NULL证件URL，`users.is_verified`不改，仅许可`public.verification_requests`、不旁路触发器。媒体仅upload/recheck-import，服务器候选路径、upsert=false、实际回读、完成计数generation不可变，全部apply后终检；50MiB/3000文件/记录加媒体1GiB。
-- 完整员工备份/封存/替换/整站门禁false，员工停用、dirty维护不变；独立阶段未接UI/协调器。DB1–20组最终20/20，其余数据库分组仍在运行、尚未计入；580份回放仍12旧失败、109表/967列。无正式访问/部署，回滚参考仅DROP函数、不撤销行/文件/维护，见计划第52节。
+- 严格要求SQL52活动verified并实物重验此前各阶段；实名15列仅映射user_id/审阅人/非NULL证件URL，`users.is_verified`不改，仅许可`public.verification_requests`、不旁路触发器。媒体仅upload/recheck-import，服务器候选路径、upsert=false、实际回读、generation绑定读前完成计数且提交不刷新，全部apply后终检；50MiB/3000文件/记录加媒体1GiB。
+- 完整员工备份/封存/替换/整站门禁false，员工停用、dirty维护不变；独立阶段未接UI/协调器。新DB58项按五互斥组最终全覆盖；新旧客户端/Edge/基础范围与旧整站共17文件分层4120项通过，非完整总套件。580份回放仍12旧失败、109表/967列，非干净建库；媒体联测为真实handler/SQL与memoryStorage，不是实际Storage验收。无正式访问/部署，回滚参考仅DROP函数、不撤销行/文件/维护，见计划第52节。
 
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。

@@ -19,11 +19,12 @@
 
 ## 2026-10-22 · 接通新员工UUID的实名记录与实际证件媒体（未部署）
 - 需求：继续关联资料的新员工编号恢复，把实名15列记录及实际证件文件迁到新UUID下，不改认证状态、不旁路触发器。
-- 改动：新增SQL53（11公共RPC/19私有helper）、employeeMappedVerification与employeeMappedVerificationMedia及handler的mapped-verification作用域。严格要求SQL52活动verified并实物重验此前阶段；仅映射user_id/审阅人/非NULL证件URL，不改users.is_verified，仅许可public.verification_requests。媒体仅upload/recheck-import，service-only授权/提交、服务器候选路径、upsert=false、实际回读、完成计数generation不可变，全部apply后终检；50MiB/3000文件/记录加媒体1GiB。
+- 改动：新增SQL53（11公共RPC/19私有helper）、employeeMappedVerification与employeeMappedVerificationMedia及handler的mapped-verification作用域。严格要求SQL52活动verified并实物重验此前阶段；仅映射user_id/审阅人/非NULL证件URL，不改users.is_verified，仅许可public.verification_requests。媒体仅upload/recheck-import，service-only授权/提交、服务器候选路径、upsert=false、实际回读、generation绑定读前完成计数且提交不刷新，全部apply后终检；50MiB/3000文件/记录加媒体1GiB。
 - 客户端：原文NDJSON、严格冻结、写不自动重试；未知apply仅同来源status核对，早期未完整暂存status失败关闭；媒体结果不确定须新会话显式对账，不自动修复/删除。独立阶段，无UI/协调器接线。
 - 文件：新增SQL53、两个客户端模块及专项测试；更新handler、计划第52节与顶部摘要、数据库/架构/留证文档、AGENTS，无依赖变更。
 - 数据库/服务端：仅新增30函数，无新表或旧函数/触发器变化；**未访问正式服务，未执行正式SQL或部署Edge/Storage/权限/config/前端。** 员工仍停用、dirty维护持续，完整员工备份/封存/替换/整站门禁false。
-- 验证（截至当前）：DB1–20组最终20/20，其余数据库分组仍在运行、尚未计入，完成后由主线更新；新core/media客户端464/464，旧实名API/客户端与映射活动/资金/派单/身份六文件1499/1499，foundation/scope 97/97，旧整站28/28，聊天6/稽核48/工时6，typecheck/lint/build/格式及Edge语法通过。580份SQL仍12旧失败、109表/967列，非干净建库，未跑总套件；初始600秒命令不计通过，已将期望媒体引用每次调用预取一次且保留全部检查，常规8行加真实205200/5边界覆盖不变。无UI/浏览器测试。
+- 验证：新DB58项按1–20/21–30/31–40/41–50/51–58五互斥组最终全覆盖；新core/media客户端464，旧实名及映射六文件1499，既有五Edge文件1974，foundation/scope最终97，SQL53下旧十域11密文维护态整站28，共17相关迁移文件分层4120项通过、最终零失败/取消/跳过。聊天6/稽核48/工时6另列，typecheck/lint/build/格式及Edge语法通过。580份SQL仍12旧失败、109表/967列，非干净建库或总套件证明；无UI/浏览器测试，真实Storage/原生PG/封存切站未验。
+- 修正：初始600秒命令不计通过；每次调用预取媒体引用/回执与管理员映射，保持全部原文/重复键校验，常规8行加真实205行跨200/5分块覆盖。约束回滚测试改为仅约束目标UUID并先验证plan通过，41–50整组10/10复验；不放宽业务防护。真实handler/service SQL配memoryStorage联测，不冒充真实Storage；独立两次实现审阅无高置信问题。
 
 ## 2026-10-22 · 接通新员工UUID的登录历史、工时与停工标记（未部署）
 - 需求：继续关联资料的新员工编号恢复，保留登录设备/历史员工号与原工时口径，不产生有效旧会话或重复自动化副作用。
