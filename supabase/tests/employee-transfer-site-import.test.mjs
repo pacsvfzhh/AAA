@@ -18,7 +18,7 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // are real disk files; temporary plaintext workspaces and Edge Storage are in memory.
 // Source fixture trigger changes finish BEFORE import; no importer error is bypassed.
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const LAST = '20261102000051_restore_mapped_employee_finance.sql';
+const LAST = '20261102000052_restore_mapped_employee_activity.sql';
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';

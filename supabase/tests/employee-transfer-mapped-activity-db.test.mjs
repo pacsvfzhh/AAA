@@ -501,7 +501,7 @@ test('SQL52 exact seven RPC signatures, browser-only grants, private helpers and
     for (const role of ['anon', 'authenticated', 'service_role']) assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2,'EXECUTE')", [role, fn.signature]), role !== 'service_role');
     await assert.rejects(call(op, argsFor(op, { plan_hash: '0'.repeat(64) }), 'service_role'), /permission denied/);
   }
-  const helpers = ['context', 'input', 'source', 'parse', 'catalog', 'saved', 'expected', 'check_written', 'phase', 'plan', 'conflicts', 'check_counts'];
+  const helpers = ['context', 'input', 'source', 'parse', 'catalog', 'saved', 'empty', 'expected', 'check_written', 'phase', 'plan', 'conflicts', 'check_counts', 'receipt'];
   const privateFns = await rows(db, `SELECT proname,oid::regprocedure::text AS signature FROM pg_proc
     WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_mapped_activity_%'`);
   assert.deepEqual(privateFns.map(f => f.proname).sort(), helpers.map(k => 'employee_transfer_mapped_activity_' + k).sort());
@@ -602,13 +602,17 @@ test('SQL52 historical employee_id is an employee number, session hash is not re
   await assertActivity();
 }));
 
-test('SQL52 catalog/chunks repeat only before begin; frozen mismatches and further bind/stage after begin reject', () => transaction(async () => {
+test('SQL52 frozen catalog/chunks permit identical no-op repeats but reject changed or additional input', () => transaction(async () => {
   const p = await stage(); const frozen = await snapshot(); await bind();
   for (const key of ACTIVITY) for (const [no, text] of chunks(activity.texts[key], 2).entries()) await stageChunk(key, no, text);
   assert.deepEqual(await snapshot(), frozen);
-  await assert.rejects(stageChunk('employee_login_history', 0, chunks(activity.texts.employee_login_history, 2)[0].replace('歷史名稱', 'changed')));
-  await begin(p); const begun = await snapshot(); await assert.rejects(bind());
-  await assert.rejects(stageChunk('employee_login_history', 0, chunks(activity.texts.employee_login_history, 2)[0]));
+  const original = chunks(activity.texts.employee_login_history, 2)[0];
+  await assert.rejects(stageChunk('employee_login_history', 0, original.replace('歷史名稱', 'changed')));
+  await begin(p); const begun = await snapshot(); await bind();
+  await stageChunk('employee_login_history', 0, original);
+  await assert.rejects(bind({ catalog: { ...activity.catalog, tables: activity.catalog.tables.map((t, n) => n ? t : { ...t, rows: t.rows + 1 }) } }));
+  await assert.rejects(stageChunk('employee_login_history', 0, original.replace('歷史名稱', 'changed')));
+  await assert.rejects(stageChunk('employee_login_history', chunks(activity.texts.employee_login_history, 2).length, original));
   assert.deepEqual(await snapshot(), begun); await finish(p);
 }));
 
