@@ -85,6 +85,14 @@
 - 仅六表精确permit及原审核6副作用trigger旁路/恢复，保留外键/删保护/ALWAYS守卫；不写users/队列/financial_operations或重复发佣金。全入口复查所有已完成员工，失败只回滚本事务，不撤销此前员工。所有完整恢复/备份/封存/替换/放行false，dirty维护不解除，其他域映射/双包证明/封存窗口仍缺，无UI/整站接线。
 - 新DB194以四互斥组最终全覆盖；新旧客户端/基础范围1034、最新SQL51旧整站28，共1256项，静态/构建/聊天6/稽核48通过。578份回放仍12旧失败、109表/967列，非干净建库；未跑完整总套件。无正式访问或SQL/Edge/Storage/config/cron/前端部署，无本轮UI/浏览器或原生PG并发/性能/真实Storage验收；见计划第50节及仅移除函数的回滚参考。
 
+## 新员工UUID登录与工时恢复（SQL52，2026-10-22，本地未部署）
+- `20261102000052_restore_mapped_employee_activity.sql`仅新增14私有helper/7公共RPC：`employee_import_mapped_activity_bind/stage/plan/begin/apply/status/verify`；plan/status为STABLE，其余显式写，公共仅anon/authenticated且超管本人任务鉴权，私有及PUBLIC/service_role无直调权。无新表或旧函数/触发器修改。
+- 每次调用SQL51重验身份/订单/配置/valid/派单/六表资金实物，显式要求资金verified且全员完成；三张活动表另做未完成全空/已完成全字段核验。独立mapped-activity-catalog-v1、mapped-activity-in:<三键>、mapped-activity-v1与逐源员工mapped-activity-done-v1，不填旧summary/verified map；来源目录和完整身份/资金计划/服务器映射固定绑定。
+- 原始NDJSON重解析/摘要/字节/顺序与目录核对，拒未知表列、重复JSON键或秘密设备字段。user_id/停工虚拟id改候选UUID，登录employee_id保留历史员工号；设备JSON精度、SQL NULL/JSON null、微秒和已脱敏session_id保留，不二次散列。未闭合工时严格按最后心跳结束，无/早心跳为开始/0分钟，已闭合原值不改，分钟超int32阻断。
+- 每员工三表事务，精确permit及七项已审核副作用触发器旁路/恢复，外键/唯一键/CHECK/ALWAYS守卫及提交恢复门禁保留；不写钱包/员工/队列或发通知/实时信号。已绑定相同目录/块可无写幂等，新/变更输入在begin后拒绝；每次重验已完成数据，失败仅回滚本请求。
+- 客户端深冻结/实际计数/候选与进度校验；未知apply仅同来源status解锁，取消后底层未结束仍互斥，120秒等待且写不自动重试。早期未完整stage的status拒绝，只安全暂停；完整备份/封存/替换/放行false、员工停用/dirty维护不变，无UI或整站接线。
+- 新DB60按三互斥组最终全覆盖、新旧客户端/基础范围1342、最新旧整站28，共1430项；聊天6/稽核48/工时6及静态/构建通过。579份回放仍12旧失败、109表/967列，非干净建库或总套件证明；无正式访问/部署或本轮UI/浏览器验证。原生PG并发/容量/Storage与完整封存未验，见计划第51节及回滚参考。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：

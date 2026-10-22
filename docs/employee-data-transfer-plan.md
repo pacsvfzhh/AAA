@@ -1,6 +1,6 @@
 # 全站业务资料导出 / 导入实施计划（精简历史订单）
 
-最新补充：第50节SQL51/employeeMappedFinance已接新员工UUID的六表资金恢复：逐员工事务、账本/审计重编号与基准游标换算、全部提款含pending、冻结/收入公式及阶段化身份/派单/资金实物重验。保留旧49/50零钱包防护、不写旧verified map；数据库194项以四个互斥组最终通过，客户端/基础范围1034及最新SQL51旧整站28项通过，共1256项。其他领域映射/双包证明/封存窗口及营业放行未完成，无UI/本轮浏览器或正式访问部署。
+最新补充：第51节SQL52/employeeMappedActivity已接新员工UUID的登录历史、工时和停工标记：完整资金verified前置及身份/订单/派单/资金实物重验，逐员工三表事务、最后心跳收尾、设备精度/两种NULL与历史会话脱敏保留。新DB60项按三个互斥组最终全覆盖，新旧客户端/基础范围1342及最新SQL52旧整站28项通过，共1430项；不改旧49–51或旧verified map。实名/通知/聊天等其余映射、双包证明/封存窗口和营业放行未完成，无UI/本轮浏览器或正式访问部署。
 
 第49节SQL50/employeeMappedDependency已将派单成员与已用交单接到SQL49服务器新员工UUID：全包身份/配置/valid实物重验、先成员后used分块写入、精确防止使用次数重复累计，独立状态不伪造旧verified map。新DB145/client207、旧身份client417及基础/范围94共863项，最新SQL50旧整站维护态28项通过；其余领域映射/双包证明/封存窗口和营业放行未完成，正式未访问/部署。
 
@@ -1241,3 +1241,28 @@ DROP FUNCTION private.employee_transfer_mapped_identity_source(private.employee_
 
 ### 50.4 回滚参考（未执行）
 迁移末尾列出7个公共RPC及18个私有helper的DROP顺序，只移除函数，不撤销已提交资金/历史、删除任务或解除dirty维护；先停用调用方，禁止CASCADE，SQL50/49/48须在本阶段之后移除。任何正式执行仍单独说明影响并确认。
+
+## 51. 新员工UUID的登录、工时与停工标记恢复（2026-10-22，UTC+8，本地未部署）
+
+### 51.1 服务端与数据口径
+- 新增`20261102000052_restore_mapped_employee_activity.sql`，仅追加14个私有helper和7个公共RPC：`employee_import_mapped_activity_bind/stage/plan/begin/apply/status/verify`；无新表，不改旧迁移、49–51或业务函数/触发器。固定SECURITY DEFINER/search_path/UTC/ISO，私有及PUBLIC/service_role撤权，公共仅anon/authenticated且核验本人超管原任务、独立封存配置备份与dirty维护。
+- 每次入口调用SQL51完整context，重新核对账号/凭据/精简订单、候选及来源绑定、派单配置/valid/成员/used和资金六表/账本映射/钱包公式；额外要求资金阶段`verified=true`且全员完成，只有完整但未verify不能继续。活动恢复不会改变这些前置表，后续核验仍有效。
+- 独立staging命名空间：全零员工`mapped-activity-catalog-v1`、`mapped-activity-in:<三表键>`和`mapped-activity-v1`；来源员工`mapped-activity-done-v1`。不写旧summary.activity_catalog/activity_plan/activity_restore或旧verified map，不混用旧活动暂存。计划绑定完整同包identity目录、已核验资金计划、服务器员工/管理员映射与本站/来源/包/任务指纹。
+- 沿用employee-activity-v1固定三表原文导出；每次从NDJSON重新解析，比较解析行/摘要/字节/递增UUID及连续块、完整目录；重复键/秘密设备字段/未知列或表拒绝。每块≤200行/256KiB、单行≤64KiB、单表≤50万行/256MiB、总量≤1GiB，不截断。begin后新块/变化目录或内容拒绝；已绑定相同目录和完全相同块只返回无写入的幂等回执。
+- 每名员工一个事务，`user_id`及停工标记虚拟`id`使用服务器候选UUID；登录`employee_id`是历史员工号，不改成UUID。历史用户名、设备/IP/UA、微秒及SQL NULL/JSON null原值保留，设备JSON不经JS数值重序列化。非空session_id已由来源按站/员工散列，写入时不再次散列，也不能作为有效会话。
+- 仅未结束工时按`GREATEST(start_time,COALESCE(last_heartbeat_at,start_time))`结束，分钟非负四舍五入；无心跳或过早心跳为开始时间/0分钟，不按迁入时间延长、不加一分钟宽限。已闭合原结束/时长/NULL/心跳不变；计算分钟超int32则计划阻断。停工标记原时间保留。
+- 只许可三张活动表，精确审核并事务内旁路七项登录/工时副作用后恢复原模式，保留外键、CHECK、唯一键、ALWAYS维护与延迟触发器恢复门禁；不发通知/实时信号、不写钱包、员工或运行队列。未完成候选活动必须全空，已完成者逐字段/数量/完成绑定重新核对，重复apply不多写或重复记成功事件；失败仅回滚当前请求，之前已提交员工保留。
+
+### 51.2 客户端、中断与未完成范围
+- `employeeMappedActivity.ts`提供七个显式方法，严格冻结目录/计划、校验响应安全标志/真实计数与不倒退、一对一候选。每次取当前会话，七RPC等候120秒，不自动重试或启用员工；取消后底层请求未结束仍保持互斥。
+- 写结果未知时后续写暂停，plan不能解锁，未知apply必须显式status核对同来源员工。未完整暂存时status拒绝，早期bind/stage丢响应只安全暂停，不宣称自动续传/完整跨会话续接；完整暂存后的实际提交和重新建客户端续接已测。
+- 全部完整恢复/备份/封存/替换/放行标志仍false，员工停用、dirty维护不解除。未接UI、整站协调器或SQL46/47精确双包证明；实名与实际证件媒体、通知/聊天/自动化、档案等其余引用仍需使用同一映射，安全封存窗口、完整备份证明及营业放行尚缺。
+
+### 51.3 本地验证与限制
+- SQL52数据库60个唯一场景按`EMPLOYEE_MAPPED_ACTIVITY_DB_RANGE=1-20 / 21-40 / 41-60`三个互斥组最终20+20+20全覆盖，不称单次全文件通过。真实两站回放/来源导出/独立磁盘AES/ZIP备份封存及SQL48→49→50→51前置；独立逐字段比较、设备高精度/两种NULL、微秒/非UTC、各类工时收尾/闭合原值、空员工历史/零员工、权限、来源/状态/目标漂移、UUID冲突、未知触发器与晚失败隔离均测；真实client丢apply响应→同员工status及dump跨COMMIT续接已测。
+- 新client307、旧资金315/派单207/身份417及基础范围96，六文件完整1342/1342；加新DB60及最新SQL52旧十域/11密文维护态整站28/28，共1430项最终零失败/取消/跳过。聊天6/稽核48/工时6、typecheck/lint/build/差异检查通过；未跑完整employee-transfer总套件。
+- 首轮DB两处测试口径修正后完整1–20复跑：私有helper精确清单补实际empty/receipt；冻结后相同bind/stage按原设计验证无写幂等，增加变化目录/变化块/新块拒绝及全库快照不变，不放宽业务约束。旧整站首轮27/28仅因尾部精确清单未加SQL51，补齐43–52十文件后整文件28/28复跑；初次失败不算通过。
+- 独立实现复审无高置信缺陷。严格回放579份SQL仍精确保留原12项历史失败、109根表/967列不变，不是干净建库证明。无UI/本轮浏览器、正式服务访问或SQL/Edge/Storage/权限/config/cron/前端部署；原生PG并发/锁/取消/PostgREST时限、全量重扫容量、真实Storage/磁盘与切站验收未做。
+
+### 51.4 回滚参考（未执行）
+先停用调用方，按依赖从公共`verify/status/apply/begin/plan/stage/bind`七接口移除，再移除私有`receipt/context/plan/conflicts/phase/check_written/expected/empty/saved/check_counts/source/parse/catalog/input`十四helper（前缀分别为`employee_import_mapped_activity_`和`employee_transfer_mapped_activity_`，准确签名见SQL52），不使用CASCADE。只移除本阶段函数，不撤销已提交活动历史、资金或任务，不删除员工或解除dirty维护；SQL51等前置仅在本阶段之后移除。任何正式执行仍须单独说明影响并确认。

@@ -280,12 +280,12 @@ after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   const foreign = edge.foreign.slice(); mock.restoreAll(); assert.deepEqual(foreign, []);
 });
-test('strict latest 43/44/45/46/47/48/49/50/51 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
-  assert.deepEqual(replay.files.slice(-9), ['20261102000043_preserve_transfer_announcements.sql',
+test('strict latest 43/44/45/46/47/48/49/50/51/52 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
+  assert.deepEqual(replay.files.slice(-10), ['20261102000043_preserve_transfer_announcements.sql',
     '20261102000044_preflight_site_restore.sql', '20261102000045_verify_site_prerequisites.sql',
     '20261102000046_backup_employee_before_restore.sql', '20261102000047_backup_employee_media.sql',
     '20261102000048_reserve_employee_identities.sql', '20261102000049_restore_mapped_employee_identities.sql',
-    '20261102000050_restore_mapped_dispatch_dependencies.sql', LAST]);
+    '20261102000050_restore_mapped_dispatch_dependencies.sql', '20261102000051_restore_mapped_employee_finance.sql', LAST]);
   assert.equal(replay.failures.length, 12);
   const paths = Object.keys(compiled.metafile.inputs);
   for (const module of ['siteTransfer', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
