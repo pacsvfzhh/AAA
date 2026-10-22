@@ -140,7 +140,8 @@ async function withClone(dump, fn) {
   await site.waitReady; db = site;
   try { return await fn(); } finally { db = previous; await site.close(); }
 }
-// Negative local corruption only. Preserve all original trigger modes, including ALWAYS/REPLICA.
+// Rollback-only target business fixtures / negative corruption. Never manufacture transfer state.
+// Preserve all original trigger modes, including ALWAYS/REPLICA, before calling any real RPC.
 async function change(relation, sql, params = []) {
   const modes = await rows(db, 'SELECT tgname,tgenabled FROM pg_trigger WHERE tgrelid=$1::regclass AND NOT tgisinternal', [relation]);
   for (const t of modes) await db.exec(`ALTER TABLE ${relation} DISABLE TRIGGER "${t.tgname}"`);
@@ -1018,6 +1019,71 @@ test('real client cancellation keeps mutex until the actual pending stage commit
   assert.equal(calls.filter(c => c.name === PREFIX + 'stage').length, 1);
   for (const key of KEYS.filter(k => k !== 'messages')) await client.stage(key, 0, notifications.texts[key]);
   const p = await client.plan(); checkPlan(p); assert.deepEqual(p.conflicts, []); await transaction(noLegacy);
+}));
+
+// Configuration UUIDs are not unconditional conflicts: exact old SQL25 correspondence is deferred
+// to the future configuration plan. These are pre-existing TARGET business fixtures only, installed
+// inside a rollback transaction; all guards are restored before any public SQL54 RPC is invoked.
+// Source exports, the real SQL48–53 chain, server mappings and backup proof are never rewritten.
+async function targetConfiguration(kind, variant = 'matching') {
+  const owner = variant === 'other-admin' ? (kind === 'message_templates' ? NEW.branch : NEW.root)
+    : kind === 'message_templates' ? NEW.root : NEW.branch;
+  if (kind === 'notification_automation_plans') {
+    await change('public.notification_automation_plans', `INSERT INTO public.notification_automation_plans(id,owner_admin_id,name,description,status,activated_at)
+      VALUES($1,$2,'來源方案 ALPHA','target-only description must survive','paused',NULL)`, [N.plan, owner]);
+  } else if (kind === 'message_templates') {
+    await change('public.message_templates', `INSERT INTO public.message_templates(id,admin_id,name,title,content,message_type,priority,delivery_mode)
+      VALUES($1,$2,'無收件人的範本','target-only title','<p>target-only content must survive</p>','realtime','normal','realtime_only')`, [N.template, owner]);
+  } else {
+    assert.equal(kind, 'notification_automation_tasks');
+    // Same parent UUID for the positive case. For the other-admin case the parent is a separate,
+    // same-named plan owned by that admin, keeping the fixture's real parent/owner relationship valid.
+    // The wrong-parent case preserves the correct admin/name/shared flag and changes only the parent.
+    const parent = variant === 'matching' ? N.plan : id(350);
+    const parentName = variant === 'other-parent' ? 'target unrelated parent' : '來源方案 ALPHA';
+    await change('public.notification_automation_plans', `INSERT INTO public.notification_automation_plans(id,owner_admin_id,name,description,status,activated_at)
+      VALUES($1,$2,$3,'target-only parent must survive','paused',NULL)`, [parent, owner, parentName]);
+    await change('public.notification_automation_tasks', `INSERT INTO public.notification_automation_tasks(id,owner_admin_id,name,plan_id,is_shared_template,
+        status,trigger_type,trigger_mode,threshold_value,recipient_scope,title_template,content_template,reward_enabled,reward_amount,delivery_mode)
+      VALUES($1,$2,'循環獎勵',$3,false,'paused','total_orders','recurring',99,'selected',
+        'target-only title','<p>target-only task content must survive</p>',false,NULL,'realtime_only')`, [N.task, owner, parent]);
+  }
+}
+for (const kind of ['notification_automation_plans', 'notification_automation_tasks', 'message_templates'])
+  test(`${kind}: same UUID, mapped admin and old-rule name/parent/shared match remain pending, never applied`, () => transaction(async () => {
+    await stage(); await targetConfiguration(kind);
+    const wantedId = kind === 'notification_automation_plans' ? N.plan : kind === 'notification_automation_tasks' ? N.task : N.template;
+    const original = await scalar(db, `SELECT to_jsonb(r) FROM public.${kind} r WHERE id=$1`, [wantedId]);
+    assert.ok(original);
+    if (kind === 'message_templates') assert.equal(original.admin_id, NEW.root);
+    else assert.equal(original.owner_admin_id, NEW.branch, 'Use the real mapped target admin, not source branch UUID.');
+    if (kind === 'notification_automation_tasks') { assert.equal(original.plan_id, N.plan); assert.equal(original.is_shared_template, false); }
+    await unchanged(async () => {
+      const p = await plan(); checkPlan(p); assert.deepEqual(p.conflicts, []);
+      assert.equal(p.configuration_pending, true); assert.equal(p.records_pending, true);
+      assert.deepEqual((await status()).plan, p);
+      assert.equal((await bind()).success, true);
+      assert.deepEqual(await stageChunk(kind, 0, notifications.texts[kind]), receipt(kind, 0, notifications.texts[kind]));
+    });
+    assert.deepEqual(await scalar(db, `SELECT to_jsonb(r) FROM public.${kind} r WHERE id=$1`, [wantedId]), original);
+    await noLegacy();
+  }));
+for (const [kind, variant] of [
+  ['notification_automation_plans', 'other-admin'],
+  ['notification_automation_tasks', 'other-parent'],
+  ['notification_automation_tasks', 'other-admin'],
+]) test(`${kind}: same UUID/name but ${variant} is a collision, never an allowed overwrite`, () => transaction(async () => {
+  await stage(); await targetConfiguration(kind, variant);
+  await unchanged(async () => {
+    const p = await plan(); checkPlan(p); assert.deepEqual(p.conflicts, ['notification_uuid_collision']);
+    const s = checkStatus(await status()); assert.deepEqual(s.plan, p);
+    assert.equal(p.configuration_pending, true);
+    // Conflicted raw staging is allowed, but must neither mutate business nor erase the conflict.
+    assert.equal((await bind()).success, true);
+    assert.deepEqual(await stageChunk(kind, 0, notifications.texts[kind]), receipt(kind, 0, notifications.texts[kind]));
+    assert.deepEqual(await plan(), p);
+  });
+  await noLegacy();
 }));
 
 console.log(`SQL54 registered ${caseNo} unique cases; executing ${selectedCases}. No excluded case is a pass.`);
