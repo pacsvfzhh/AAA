@@ -3367,6 +3367,18 @@ export interface Database {
           maintenance: true; accounts_active: false; automation_resumed: false; can_release: false; full_site_complete: false;
         };
       };
+      employee_import_site_bind_cutoff: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_cutoff: import('../lib/employeeTransfer/sourceCutover').SourceCutoff };
+        Returns: import('../lib/employeeTransfer/siteRelease').SiteReleaseCutoffReceipt;
+      };
+      get_employee_import_site_release_status: {
+        Args: { p_admin_session_token: string; p_job_id: string };
+        Returns: import('../lib/employeeTransfer/siteRelease').SiteReleaseStatus;
+      };
+      employee_import_site_release: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_admin_password: string; p_confirmation: string; p_verification_hash: string };
+        Returns: import('../lib/employeeTransfer/siteRelease').SiteReleaseReceipt;
+      };
       get_employee_import_site_preflight: {
         Args: { p_admin_session_token: string; p_source_site_id: string };
         Returns: import('../lib/employeeTransfer/siteImport').SiteImportPreflight;

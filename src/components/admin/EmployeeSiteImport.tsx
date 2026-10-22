@@ -6,6 +6,9 @@ import { createBrowserWorkspaceFactory, pickTransferDirectory, type BrowserTrans
 import type { ChatMergeDecision } from '../../lib/employeeTransfer/chatMergeApi';
 import type { ChatPlan } from '../../lib/employeeTransfer/chatTransfer';
 import { SITE_DOMAINS, type SiteDomain, type SiteTransferProgress } from '../../lib/employeeTransfer/siteTransfer';
+import type { SiteReleaseReceipt, SiteReleaseSession } from '../../lib/employeeTransfer/siteRelease';
+import type { SourceCutoff } from '../../lib/employeeTransfer/sourceCutover';
+import SiteReleasePanel from './SiteReleasePanel';
 
 interface Inspection {
   packageId: string;
@@ -20,7 +23,11 @@ interface Props {
   onProgress: (progress: SiteTransferProgress | null) => void;
 }
 type Approval = { kind: 'plan'; domain: SiteDomain; plan: unknown } | { kind: 'roles'; plan: ChatPlan };
-type Outcome = Awaited<ReturnType<typeof importSiteBundleSetToMaintenance>>;
+// Optional at this UI boundary for legacy isolated-browser outcomes; production returns both fields.
+type Outcome = Awaited<ReturnType<typeof importSiteBundleSetToMaintenance>> & {
+  releaseSession?: SiteReleaseSession | null;
+  sourceCutover?: SourceCutoff | null;
+};
 const confirmationText = '確認導入員工資料';
 const button = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:cursor-not-allowed disabled:opacity-40';
 const input = 'mt-1 w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400';
@@ -128,6 +135,10 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
   const [notice, setNotice] = useState<string | null>(null);
   const [savedDirectory, setSavedDirectory] = useState<string | null>(null);
   const [reportStatus, setReportStatus] = useState<'saved' | 'failed' | null>(null);
+  const [releaseBusy, setReleaseBusy] = useState(false);
+  const [releaseReceipt, setReleaseReceipt] = useState<SiteReleaseReceipt | null>(null);
+  const [releaseReportStatus, setReleaseReportStatus] = useState<'saving' | 'saved' | 'failed' | null>(null);
+  const reportDirectory = useRef<BrowserTransferDirectory | null>(null);
   const operation = useRef<AbortController | null>(null);
   const pending = useRef<((value: boolean | ChatMergeDecision[]) => void) | null>(null);
   const pauseRequested = useRef(false);
@@ -135,7 +146,7 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
   const mounted = useRef(false);
   const currentProgress = useRef<SiteTransferProgress | null>(null);
   const [stoppedAt, setStoppedAt] = useState<SiteTransferProgress | null>(null);
-  const busy = status !== 'idle';
+  const busy = status !== 'idle' || releaseBusy;
   const running = ['running', 'pause-requested', 'paused', 'stopping'].includes(status);
   const ready = !disabled && !busy && !attempted && supported && inspection !== null && preflight?.can_restore_to_maintenance === true && directory !== null
     && Array.from(passphrase).length >= 14 && password.length > 0 && confirmation === confirmationText && acknowledged;
@@ -216,6 +227,7 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
     if (!ready || operation.current || !directory) return;
     const controller = new AbortController(); operation.current = controller;
     const selectedDirectory = directory;
+    reportDirectory.current = selectedDirectory;
     const startedAt = new Date().toISOString();
     const saveReport = async (result: Outcome | null) => {
       try {
@@ -269,6 +281,34 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
       if (mounted.current) { setApproval(null); setStatus('idle'); setPassword(''); setPassphrase(''); setConfirmation(''); setAcknowledged(false); }
     }
   };
+  const saveReleaseReceipt = async (value: SiteReleaseReceipt) => {
+    setReleaseReceipt(value);
+    setReleaseReportStatus('saving');
+    // Explicit allow-list: never serialize the outcome, live session, tokens or passwords.
+    const receipt: SiteReleaseReceipt = {
+      version: 1, success: true, scope: 'site-release', job_id: value.job_id,
+      source_site_id: value.source_site_id, package_id: value.package_id,
+      cutoff_id: value.cutoff_id, cutoff_hash: value.cutoff_hash, verification_hash: value.verification_hash,
+      released_at: value.released_at,
+      counts: {
+        employees: value.counts.employees, active_employees: value.counts.active_employees,
+        active_admins: value.counts.active_admins, active_plans: value.counts.active_plans,
+        active_tasks: value.counts.active_tasks, queued_employees: value.counts.queued_employees,
+      },
+      released: true, maintenance: false, accounts_restored: true, automation_resumed: true,
+      source_shutdown: 'operator-managed', full_site_complete: false,
+    };
+    try {
+      if (!reportDirectory.current) throw new Error('Missing report directory.');
+      await reportDirectory.current.writeText('site-release-report.json', JSON.stringify({
+        version: 1, receipt, fullSiteComplete: false,
+        note: 'Server-confirmed new-site release. Source shutdown is operator-managed. The import report is the earlier maintenance-only receipt.',
+      }, null, 2));
+      if (mounted.current) setReleaseReportStatus('saved');
+    } catch {
+      if (mounted.current) setReleaseReportStatus('failed');
+    }
+  };
   const stop = () => {
     setStatus('stopping'); operation.current?.abort(); pauseRequested.current = false; resume.current?.();
   };
@@ -278,7 +318,7 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
   };
   return <section aria-label="維護態資料庫導入" className="space-y-4 rounded-xl border border-amber-700/60 bg-slate-900/80 p-4">
     <h2 className="flex items-center gap-2 font-semibold text-amber-100"><ShieldAlert className="h-5 w-5 shrink-0" aria-hidden="true" />空站演練：實際導入至維護狀態</h2>
-    <p className="text-sm text-amber-100">此操作會寫入目標資料庫及檔案、以來源替換部分配置，並建立持續維護保護。只供隔離新站演練，不可在正式營業資料上使用；沒有安全恢復營業入口，完成後帳號仍停用、自動化仍暫停，維護不會解除。</p>
+    <p className="text-sm text-amber-100">此操作會寫入目標資料庫及檔案、以來源替換部分配置，並建立持續維護保護。僅用於未營業的新站，不可在正式營業資料上演練；導入完成預設仍是帳號停用、自動化暫停、維護持續。帶切站憑據的包可在結果下方另行查詢條件，以新站超管密碼及確認語明確啟用；不會自動放行。</p>
     <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-300"><li>先在上方完成本機 11 檔配套核驗，再查詢目標。</li><li>選獨立備份目錄、重新輸入口令、超管密碼及確認語。</li><li>開始後逐階段核對服務端計畫；五份配置／紀錄備份保存、回讀並封存後才繼續。</li><li>聊天歧義需手選；同名員工／身份衝突一律阻擋，不會自動封存替換。</li></ol>
     {!inspection && <p className="text-sm text-slate-400">尚未取得本機整組核驗結果，目標查詢及實際導入均鎖定。</p>}
     <button type="button" className={button} disabled={disabled || busy || !inspection || attempted} onClick={() => void checkTarget()}>{status === 'preflight' && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}查詢目標准入（只讀）</button>
@@ -289,7 +329,7 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
         <button type="button" className={button} onClick={() => void chooseDirectory()}><FolderOpen className="h-4 w-4" aria-hidden="true" />選擇獨立備份保存目錄</button>
         <p className="break-all text-xs text-slate-400">{directory ? `本次新子目錄：${directory.name}` : '每次建立新子目錄，不覆寫舊檔。五份配置／紀錄備份沿用原導出口令；不是完整員工備份，也不包含目標全部舊媒體。'}</p>
         <label className="block text-sm" htmlFor="migration-import-confirmation">輸入「{confirmationText}」<input id="migration-import-confirmation" type="text" autoComplete="off" spellCheck={false} value={confirmation} onChange={event => setConfirmation(event.target.value)} required aria-invalid={confirmation.length > 0 && confirmation !== confirmationText} className={input} /></label>
-        <label className="flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" required checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 appearance-auto accent-cyan-400 focus-visible:outline-cyan-400" /><span>我確認這是隔離、未營業的目標站，已另存來源檔及口令；了解會實際寫入且目前沒有完整回滾、同名員工替換或恢復營業功能。待處理提款之後只在單一站點處理。</span></label>
+        <label className="flex items-start gap-2 text-sm text-amber-100"><input type="checkbox" required checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 appearance-auto accent-cyan-400 focus-visible:outline-cyan-400" /><span>我確認這是隔離、未營業的目標站，已另存來源檔及口令；了解會實際寫入且目前沒有完整回滾或同名員工替換；導入本身不啟用新站，須完成後另行明確核對與啟用。待處理提款之後只在單一站點處理。</span></label>
       </fieldset>
       <button type="submit" disabled={!ready} className={`${button} mt-4 border-amber-600 bg-amber-950 text-amber-100`}><AlertTriangle className="h-4 w-4" aria-hidden="true" />開始實際導入（保持維護）</button>
     </form>
@@ -300,11 +340,11 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
     {savedDirectory && <p className="break-all text-sm text-slate-300">請保留本次備份子目錄：{savedDirectory}（失敗時可能只有部分檔案，不能視為完整備份）。</p>}
     {reportStatus && <p className={`text-sm ${reportStatus === 'failed' ? 'text-amber-200' : 'text-slate-300'}`}>{reportStatus === 'saved' ? '已將不含密碼或明文資料的 site-import-report.json 保存至本次目錄，列出包、站點、任務與維護態核驗結果；成功時包含綁定本次任務的完整服務端總核對回執。報告不是完整備份，也不是營業放行憑據。' : '本機報告未能確認保存；不影響既有服務端寫入，也不表示已回滾。請保留本頁任務資訊及全部檔案，不要因報告失敗重跑導入。'}</p>}
     {outcome && <div role="status" className="min-w-0 space-y-3 rounded-lg border-2 border-amber-500 bg-amber-950/40 p-4">
-      <h3 className="font-bold text-amber-100">十領域維護態核驗已通過，仍不可恢復營業</h3>
+      <h3 className="font-bold text-amber-100">{releaseReceipt ? '先前導入至維護態的核驗紀錄（新站已另行啟用）' : '十領域維護態核驗已通過，仍不可恢復營業'}</h3>
       <p className="break-all text-sm">任務：{outcome.jobId}</p>
       <section aria-label="服務端總核對摘要" className="min-w-0 space-y-2 rounded-lg border border-amber-700 p-3 text-sm text-amber-100">
         <h4 className="font-semibold">服務端總核對已通過</h4>
-        <p>十領域完成後，服務端已在同一次原子核對中重新驗證實際資料；此回執不是營業放行。</p>
+        <p>十領域完成後，服務端已在同一次原子核對中重新驗證實際資料；此回執不是營業放行。這是導入當時的紀錄，最新啟用結果以下方獨立回執為準。</p>
         <dl className="grid gap-3 sm:grid-cols-3">
           <div className="min-w-0"><dt className="text-xs text-amber-200">員工數</dt><dd>{outcome.serverVerification.counts.employees}</dd></div>
           <div className="min-w-0"><dt className="text-xs text-amber-200">待處理提款筆數</dt><dd>{outcome.serverVerification.counts.pending_withdrawals}</dd></div>
@@ -314,8 +354,12 @@ export default function EmployeeSiteImport({ files, inspection, disabled, suppor
         <p>待處理提款與凍結資金仍保留；之後只在單一站點處理，避免重複打款。</p>
       </section>
       <ul className="grid gap-1 text-sm sm:grid-cols-2">{SITE_DOMAINS.map(domain => <li key={domain}>{domains[domain]}：{outcome.verifiedDomains.includes(domain) ? '已核驗' : '未核驗'}</li>)}</ul>
-      <p className="text-sm text-amber-100">帳號仍停用、自動化仍暫停、維護保護仍持續，尚未放行。這不是完整整站遷移成功；請保留來源、口令、五份備份及任務資訊，等候完整終驗與安全放行流程。</p>
+      <p className="text-sm text-amber-100">{releaseReceipt ? '新站已另行取得啟用回執，記錄本次啟用時已恢復來源帳號啟停與自動化原狀態、解除新站維護；上方為先前維護態核驗紀錄，目前狀態以下方最新查詢為準。仍不宣稱完整整站遷移無缺，請保留來源、口令、五份備份及任務資訊。' : '以下為導入完成時的維護態回執：帳號仍停用、自動化仍暫停、維護保護仍持續，尚未放行。這不是完整整站遷移成功；若已提交啟用，請以下方最新查詢與獨立啟用回執為準，不能把此歷史紀錄當作目前狀態。請保留來源、口令、五份備份及任務資訊。'}</p>
     </div>}
+    {outcome?.releaseSession && <SiteReleasePanel session={outcome.releaseSession} jobId={outcome.jobId} cutoff={outcome.sourceCutover ?? null}
+      disabled={disabled || status !== 'idle'} onBusyChange={setReleaseBusy} onReceipt={saveReleaseReceipt} />}
+    {outcome?.releaseSession === null && <p className="text-sm text-amber-200">僅有日常備份包，無切站憑據，不能啟用新站；導入結果維持維護態。</p>}
+    {releaseReportStatus && <p role="status" className="break-words text-sm text-amber-100">{releaseReportStatus === 'saving' ? '正在另存 site-release-report.json，請保留本頁。' : releaseReportStatus === 'saved' ? '已另存不含密碼或會話令牌的 site-release-report.json；原 site-import-report.json 保留導入當時的維護態紀錄，不代表目前仍在維護。啟用回執仍不代表所有遷移缺項已完成。' : '新站已獲服務端確認啟用，但 site-release-report.json 未能確認保存；不會重試啟用，也不代表回滾或維護仍在。請保留本頁回執與本次目錄。'}</p>}
     {attempted && !busy && <p className="text-sm text-amber-200">本頁已鎖定再次開始，避免把重跑當續接。請先核對服務端任務與檔案；重新整理不代表已回滾，也不會解除服務端維護。</p>}
     {approval && <ApprovalDialog key={approval.kind === 'plan' ? `${approval.domain}-${text(record(approval.plan).plan_hash)}` : 'chat-roles'} approval={approval} settle={settle} />}
   </section>;
