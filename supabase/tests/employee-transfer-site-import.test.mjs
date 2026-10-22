@@ -580,6 +580,11 @@ test('SQL55 admission requires the total verifier before any shared write and ke
   const preflight = await execAs('anon', 'get_employee_import_site_preflight', { p_admin_session_token: targetSession, p_source_site_id: sourceId });
   assert.equal(preflight.error, null); assert.equal(preflight.data.protocol, 'site-maintenance-restore-v3');
   assert.equal(preflight.data.can_restore_to_maintenance, true);
+  const definition = await scalar(target, "SELECT pg_get_functiondef('public.employee_import_site_verify(uuid,uuid)'::regprocedure)");
+  assert.match(definition, /FOR UPDATE NOWAIT/);
+  assert.match(definition, /ACCESS EXCLUSIVE MODE NOWAIT/);
+  assert.equal((definition.match(/pg_try_advisory_xact_lock/g) ?? []).length, 2);
+  assert.ok(definition.indexOf("pg_try_advisory_xact_lock(hashtextextended('notification_automation_queue'") < definition.indexOf('ACCESS EXCLUSIVE MODE NOWAIT'));
   for (const role of ['anon', 'authenticated', 'service_role']) {
     assert.equal(await scalar(target, "SELECT has_function_privilege($1,'private.employee_transfer_site_preflight_v2(uuid,uuid)','execute')", [role]), false);
   }

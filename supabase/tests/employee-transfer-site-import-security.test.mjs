@@ -252,7 +252,7 @@ const importQueries = ['get_employee_import_shared_replace_dry_run', 'get_employ
   'get_employee_import_notifications_restore_status', 'get_employee_import_chat_merge_plan', 'get_employee_import_chat_restore_status'];
 for (const mode of ['503', 'network']) {
   test(`real transport: import queries and non-get writes have ONE attempt on ${mode}`, async () => {
-    for (const name of [...importQueries, 'employee_import_site_verify_prerequisites', 'employee_import_shared_replace_apply']) {
+    for (const name of [...importQueries, 'employee_import_site_verify_prerequisites', 'employee_import_site_verify', 'employee_import_shared_replace_apply']) {
       const attempts = [];
       http = async kind => { attempts.push(kind); if (mode === 'network') throw new TypeError('Failed to fetch'); return unavailable(); };
       try {
@@ -304,8 +304,11 @@ test('real transport: import POST timeout never falls back or retries', async t 
     });
   };
   try {
-    await assert.rejects(request(`${ORIGIN}/rest/v1/rpc/get_employee_import_shared_replace_dry_run`, { method: 'POST' }), { name: 'SupabaseTimeoutError' });
-    assert.deepEqual(attempts, ['fetch']);
+    for (const name of ['get_employee_import_shared_replace_dry_run', 'employee_import_site_verify']) {
+      attempts.length = 0;
+      await assert.rejects(request(`${ORIGIN}/rest/v1/rpc/${name}`, { method: 'POST' }), { name: 'SupabaseTimeoutError' });
+      assert.deepEqual(attempts, ['fetch']);
+    }
   } finally { http = undefined; }
 });
 
@@ -351,9 +354,9 @@ test('real admission rejects SQL44-only v1 success before reading domains or sen
   await assert.rejects(h.run(), /prerequisites could not be confirmed/);
   assert.deepEqual(h.calls, ['get_employee_import_site_preflight']); assert.deepEqual(h.domains, []);
 });
-test('real admission rejects malformed/inconsistent v2 flags and preserves valid blockers without shared writes', async () => {
+test('real admission rejects malformed/inconsistent v3 flags and preserves valid blockers without shared writes', async () => {
   for (const patch of [
-    { version: 2 }, { full_site_complete: true }, { can_release: true }, { can_restore_to_maintenance: 'true' },
+    { version: 2 }, { protocol: 'site-maintenance-restore-v2' }, { full_site_complete: true }, { can_release: true }, { can_restore_to_maintenance: 'true' },
     { can_restore_to_maintenance: true, blockers: ['target_has_business'] },
     { site_id: SITE }, { source_site_id: id(99) },
     { missing_rpcs: ['public.employee_import_site_verify_prerequisites(uuid,uuid)'] },
@@ -365,7 +368,7 @@ test('real admission rejects malformed/inconsistent v2 flags and preserves valid
   const h = admissionHarness(eligible(), { message: 'synthetic RPC error' });
   await assert.rejects(h.run()); assert.deepEqual(h.calls, ['get_employee_import_site_preflight']);
 });
-test('real v2 client accepts eligible response and reaches the actual shared-begin driver (controlled stop)', async () => {
+test('real v3 client accepts eligible response and reaches the actual shared-begin driver (controlled stop)', async () => {
   const h = admissionHarness(eligible());
   assert.deepEqual(await admission.getSiteImportPreflight(SITE), eligible()); h.calls.length = 0;
   await assert.rejects(h.run(), error => { assert.equal(error.domain, 'shared'); return true; });

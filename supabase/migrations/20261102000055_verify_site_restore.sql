@@ -8,19 +8,35 @@ SET timezone = 'UTC' SET datestyle = 'ISO, YMD' SET lock_timeout = '2s' AS $$
 DECLARE
   v_job private.employee_transfer_jobs%ROWTYPE;
   v_prior private.employee_transfer_jobs%ROWTYPE;
-  v_receipt jsonb; v_key text; v_expected integer; v_count integer;
+  v_receipt jsonb; v_key text; v_table text; v_admin uuid; v_expected integer; v_count integer;
   v_pending integer; v_amount numeric; v_backups jsonb := '[]'; v_backup record; v_prerequisites jsonb := '{}';
   v_binding jsonb; v_result jsonb;
   v_domains constant jsonb := '["shared","products","dispatch","identity","finance","activity","verification","notifications","chat","archives"]';
 BEGIN
-  PERFORM private.employee_transfer_admin(p_admin_session_token);
-  PERFORM private.employee_transfer_lock_maintenance_tables();
+  SELECT a.admin_id INTO v_admin FROM private.employee_transfer_admin(p_admin_session_token) a;
+  IF current_setting('transaction_isolation')<>'read committed' THEN
+    RAISE EXCEPTION 'Site verification requires read committed isolation.';
+  END IF;
+  SELECT * INTO v_job FROM private.employee_transfer_jobs WHERE admin_id=v_admin
+    AND token_hash=private.hash_financial_token(p_job_token) FOR UPDATE NOWAIT;
+  IF v_job.id IS NULL THEN RAISE EXCEPTION 'Employee transfer task is invalid or expired.'; END IF;
+  -- Fail immediately on contention; domain restorers acquire their locks in different orders.
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('notification_automation_queue',0)) THEN
+    RAISE EXCEPTION 'Site verification is busy; reconcile the original task before explicitly retrying.' USING ERRCODE='55P03';
+  END IF;
+  FOR v_table IN SELECT name FROM unnest(private.employee_transfer_guarded_tables()) item(name) ORDER BY name COLLATE "C" LOOP
+    EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE NOWAIT',split_part(v_table,'.',1),split_part(v_table,'.',2));
+  END LOOP;
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('employee-transfer-maintenance',0)) THEN
+    RAISE EXCEPTION 'Site verification is busy; reconcile the original task before explicitly retrying.' USING ERRCODE='55P03';
+  END IF;
   v_job := private.employee_transfer_job(p_admin_session_token,p_job_token,'dispatch-import');
   PERFORM private.employee_transfer_assert_maintenance_guards();
   IF NOT EXISTS(SELECT 1 FROM private.employee_transfer_maintenance m WHERE m.singleton AND m.dirty
     AND m.job_id=v_job.id AND m.admin_id=v_job.admin_id AND m.plan_hash=v_job.summary->>'dispatch_plan_hash') THEN
     RAISE EXCEPTION 'Site verification requires the original dirty maintenance task.';
   END IF;
+  PERFORM 1 FROM private.employee_transfer_maintenance WHERE singleton AND job_id=v_job.id FOR UPDATE NOWAIT;
   FOREACH v_key IN ARRAY ARRAY['identity_restore','dependency_restore','finance_restore','activity_restore',
     'verification_restore','notification_restore','chat_restore'] LOOP
     IF v_job.summary#>ARRAY[v_key,'verified'] IS DISTINCT FROM 'true'::jsonb THEN
