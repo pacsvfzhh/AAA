@@ -68,6 +68,7 @@ const criticalMigrations = [
   '20261102000051_restore_mapped_employee_finance.sql',
   '20261102000052_restore_mapped_employee_activity.sql',
   '20261102000053_restore_mapped_employee_verification.sql',
+  '20261102000054_prepare_mapped_notifications.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -126,6 +127,28 @@ const archivePrivateFunctions = [
   'employee_transfer_archives_namespace_hash(uuid,uuid)', 'employee_transfer_archives_conflicts(private.employee_transfer_jobs)',
   'employee_transfer_archives_plan(private.employee_transfer_jobs)', 'employee_transfer_archives_status(private.employee_transfer_jobs)',
   'employee_transfer_archives_persisted(private.employee_transfer_jobs)',
+];
+const mappedNotificationsPublicFunctions = [
+  'employee_import_mapped_notifications_bind(uuid,uuid,jsonb)',
+  'employee_import_mapped_notifications_stage(uuid,uuid,text,integer,text)',
+  'employee_import_mapped_notifications_plan(uuid,uuid)',
+  'employee_import_mapped_notifications_status(uuid,uuid,text,integer)',
+];
+const mappedNotificationsReadOnlyFunctions = new Set([
+  'employee_import_mapped_notifications_plan(uuid,uuid)',
+  'employee_import_mapped_notifications_status(uuid,uuid,text,integer)',
+]);
+const mappedNotificationsPrivateFunctions = [
+  'employee_transfer_mapped_notifications_input(uuid,text)',
+  'employee_transfer_mapped_notifications_catalog(private.employee_transfer_jobs)',
+  'employee_transfer_mapped_notifications_parse(text,text)',
+  'employee_transfer_mapped_notifications_source(private.employee_transfer_jobs,boolean)',
+  'employee_transfer_mapped_notifications_context(private.employee_transfer_jobs,boolean)',
+  'employee_transfer_mapped_notifications_source_issues(private.employee_transfer_jobs,jsonb)',
+  'employee_transfer_mapped_notifications_target_issues(private.employee_transfer_jobs,jsonb)',
+  'employee_transfer_mapped_notifications_common(private.employee_transfer_jobs,jsonb)',
+  'employee_transfer_mapped_notifications_plan(private.employee_transfer_jobs,jsonb)',
+  'employee_transfer_mapped_notifications_status(private.employee_transfer_jobs,jsonb,text,integer)',
 ];
 const publicFunctions = [
   'employee_transfer_cancel(uuid,uuid)', 'get_employee_transfer_log(uuid,integer)',
@@ -231,6 +254,7 @@ const publicFunctions = [
   'employee_import_mapped_verification_apply(uuid,uuid,uuid,text)', 'employee_import_mapped_verification_status(uuid,uuid,uuid)',
   'employee_import_mapped_verification_verify(uuid,uuid)',
   'get_employee_transfer_mapped_verification_media(uuid,uuid)', 'employee_import_mapped_verification_media_bind(uuid,uuid,jsonb)',
+  ...mappedNotificationsPublicFunctions,
   ...archivePublicFunctions,
 ];
 const serviceOnlyFunctions = [
@@ -264,10 +288,10 @@ async function checkCatalog(db) {
     assert.equal(functions[0].anon_execute, true, name);
     assert.equal(functions[0].authenticated_execute, true, name);
     assert.equal(functions[0].public_execute, false, name);
-    if (archivePublicFunctions.includes(name) || name.startsWith('employee_import_identity_reserv') || name.startsWith('employee_import_mapped_identity_') || name.startsWith('employee_import_mapped_dependency_') || name.startsWith('employee_import_mapped_finance_') || name.startsWith('employee_import_mapped_activity_') || name.startsWith('employee_import_mapped_verification_') || name === 'get_employee_transfer_mapped_verification_media(uuid,uuid)') {
+    if (archivePublicFunctions.includes(name) || mappedNotificationsPublicFunctions.includes(name) || name.startsWith('employee_import_identity_reserv') || name.startsWith('employee_import_mapped_identity_') || name.startsWith('employee_import_mapped_dependency_') || name.startsWith('employee_import_mapped_finance_') || name.startsWith('employee_import_mapped_activity_') || name.startsWith('employee_import_mapped_verification_') || name === 'get_employee_transfer_mapped_verification_media(uuid,uuid)') {
       assert.equal(functions[0].service_role_execute, false, name);
     }
-    if (archiveReadOnlyFunctions.has(name) || ['employee_import_identity_reservation_status(uuid,uuid,uuid)',
+    if (archiveReadOnlyFunctions.has(name) || mappedNotificationsReadOnlyFunctions.has(name) || ['employee_import_identity_reservation_status(uuid,uuid,uuid)',
       'employee_import_mapped_identity_plan(uuid,uuid,uuid)', 'employee_import_mapped_identity_status(uuid,uuid,uuid)',
       'employee_import_mapped_dependency_plan(uuid,uuid)', 'employee_import_mapped_dependency_status(uuid,uuid)',
       'employee_import_mapped_finance_plan(uuid,uuid)', 'employee_import_mapped_finance_status(uuid,uuid,uuid)',
@@ -276,6 +300,19 @@ async function checkCatalog(db) {
       'get_employee_transfer_mapped_verification_media(uuid,uuid)'].includes(name)) {
       assert.equal(functions[0].provolatile, 's', `${name} must be STABLE, not a heartbeat-writing read`);
     }
+    if (mappedNotificationsPublicFunctions.includes(name) && !mappedNotificationsReadOnlyFunctions.has(name)) {
+      assert.equal(functions[0].provolatile, 'v', `${name} is an explicit technical staging write`);
+    }
+  }
+  for (const [schema, prefix, expected] of [
+    ['public', 'employee_import_mapped_notifications_', mappedNotificationsPublicFunctions],
+    ['private', 'employee_transfer_mapped_notifications_', mappedNotificationsPrivateFunctions],
+  ]) {
+    const actual = await rows(db, `SELECT oid::regprocedure::text AS signature FROM pg_proc
+      WHERE pronamespace = $1::regnamespace AND starts_with(proname, $2)`, [schema, prefix]);
+    assert.deepEqual(actual.map(item => item.signature).sort(),
+      expected.map(name => schema === 'private' ? `private.${name}` : name).sort(),
+      `all SQL54 ${schema} functions, including overloads, require explicit security review`);
   }
   const archiveRpcs = await rows(db, `SELECT oid::regprocedure::text AS signature FROM pg_proc
     WHERE pronamespace = 'public'::regnamespace
@@ -283,14 +320,18 @@ async function checkCatalog(db) {
   assert.equal(archivePublicFunctions.length, 12);
   assert.deepEqual(archiveRpcs.map(item => item.signature).sort(), [...archivePublicFunctions].sort(),
     'all actual archive RPCs, including overloads, require explicit security review');
-  for (const name of archivePrivateFunctions) {
+  for (const name of [...archivePrivateFunctions, ...mappedNotificationsPrivateFunctions]) {
     const helpers = await rows(db, `SELECT oid, prosecdef, proconfig, provolatile,
       has_function_privilege('service_role', oid, 'EXECUTE') AS service_role_execute
       FROM pg_proc WHERE oid = to_regprocedure($1)`, [`private.${name}`]);
     assert.equal(helpers.length, 1, `missing private.${name}`);
     assert.equal(helpers[0].prosecdef, true, name);
     assert.ok(helpers[0].proconfig.includes('search_path=pg_catalog, public, private, pg_temp'), name);
-    assert.ok(['s', 'i'].includes(helpers[0].provolatile), `${name} must not write from read-only archive RPCs`);
+    if (mappedNotificationsPrivateFunctions.includes(name)) {
+      assert.equal(helpers[0].provolatile, 's', `${name} must be STABLE`);
+    } else {
+      assert.ok(['s', 'i'].includes(helpers[0].provolatile), `${name} must not write from read-only archive RPCs`);
+    }
     assert.equal(helpers[0].service_role_execute, false, `service_role private.${name}`);
   }
   const archiveHelpers = await rows(db, `SELECT oid::regprocedure::text AS signature FROM pg_proc
@@ -386,7 +427,7 @@ async function exerciseRealReplay() {
   try {
     const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql')).sort();
     assert.deepEqual(files, diskFiles, 'must replay every migration, including future additions');
-    assert.equal(files.length, 580, 'migration baseline changed: review all additions, never expand known failures');
+    assert.equal(files.length, 581, 'migration baseline changed: review all additions, never expand known failures');
     assert.deepEqual(failures, expectedFailures);
     assert.equal(validation.freshDatabaseVerified, false);
     for (const file of criticalMigrations) {

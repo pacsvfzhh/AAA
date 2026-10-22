@@ -205,7 +205,13 @@ BEGIN
     UNION ALL SELECT 1 FROM executions e JOIN plans p ON p.id=e.body->>'plan_id'
       WHERE e.body->>'owner_admin_id' IS NOT NULL AND e.body->'owner_admin_id' IS DISTINCT FROM p.body->'owner_admin_id'
     UNION ALL SELECT 1 FROM executions e JOIN accounts a ON a.id::text=e.body->>'user_id'
-      WHERE e.body->>'owner_admin_id' IS NOT NULL AND p_map->>(e.body->>'owner_admin_id') IS DISTINCT FROM p_map->>(a.body->>'created_by')) THEN
+      WHERE e.body->>'owner_admin_id' IS NOT NULL AND p_map->>(e.body->>'owner_admin_id') IS DISTINCT FROM p_map->>(a.body->>'created_by')
+    UNION ALL SELECT 1 FROM executions e JOIN tasks t ON t.id=e.body->>'task_id' JOIN accounts a ON a.id::text=e.body->>'user_id'
+      WHERE p_map->>(t.body->>'owner_admin_id') IS DISTINCT FROM p_map->>(a.body->>'created_by')
+    UNION ALL SELECT 1 FROM executions e JOIN plans p ON p.id=e.body->>'plan_id' JOIN accounts a ON a.id::text=e.body->>'user_id'
+      WHERE p_map->>(p.body->>'owner_admin_id') IS DISTINCT FROM p_map->>(a.body->>'created_by')
+    UNION ALL SELECT 1 FROM executions e JOIN tasks t ON t.id=e.body->>'task_id' JOIN plans p ON p.id=e.body->>'plan_id'
+      WHERE t.body->'owner_admin_id' IS DISTINCT FROM p.body->'owner_admin_id') THEN
     v_issues:=v_issues||'"source_scope_mismatch"'::jsonb;
   END IF;
   IF EXISTS(SELECT 1 FROM private.employee_transfer_mapped_notifications_input(p_job.id,'notification_automation_plans') GROUP BY p_map->>(body->>'owner_admin_id'),lower(body->>'name') HAVING count(*)>1)
@@ -225,6 +231,7 @@ BEGIN
     SELECT 1 FROM bonuses b LEFT JOIN recipients r ON r.id=b.body->>'reference_id' LEFT JOIN messages m ON m.id=r.body->>'message_id'
       WHERE r.id IS NULL OR m.id IS NULL OR b.body->'user_id' IS DISTINCT FROM r.body->'recipient_id'
         OR m.body->>'notification_category' IS DISTINCT FROM 'performance_reward' OR b.body->'amount' IS DISTINCT FROM m.body->'reward_amount'
+        OR (b.body->>'created_by' IS NOT NULL AND p_map->>(b.body->>'created_by') IS DISTINCT FROM p_map->>(m.body->>'sender_id'))
     UNION ALL SELECT 1 FROM messages m JOIN recipients r ON r.body->>'message_id'=m.id LEFT JOIN bonuses b ON b.body->>'reference_id'=r.id
       WHERE m.body->>'notification_category'='performance_reward' AND (b.id IS NULL OR b.body->'user_id' IS DISTINCT FROM r.body->'recipient_id' OR b.body->'amount' IS DISTINCT FROM m.body->'reward_amount')
     UNION ALL SELECT 1 FROM messages m LEFT JOIN executions e ON e.id=m.body->>'automation_execution_id'
@@ -235,7 +242,8 @@ BEGIN
     UNION ALL SELECT 1 FROM executions e LEFT JOIN messages m ON m.id=e.body->>'message_id'
       LEFT JOIN recipients r ON r.body->>'message_id'=m.id AND r.body->'recipient_id'=e.body->'user_id'
       LEFT JOIN bonuses b ON b.id=e.body->>'wallet_transaction_id'
-      WHERE (e.body->>'wallet_transaction_id' IS NOT NULL AND (b.id IS NULL OR b.body->'user_id' IS DISTINCT FROM e.body->'user_id'
+      WHERE (e.body->>'message_id' IS NOT NULL AND (m.id IS NULL OR m.body->>'automation_execution_id' IS DISTINCT FROM e.id))
+        OR (e.body->>'wallet_transaction_id' IS NOT NULL AND (b.id IS NULL OR b.body->'user_id' IS DISTINCT FROM e.body->'user_id'
           OR b.body->'amount' IS DISTINCT FROM e.body->'reward_amount' OR b.body->>'reference_id' IS DISTINCT FROM r.id OR b.body->>'operation_id' IS DISTINCT FROM e.id))
         OR (e.body->>'status'='succeeded' AND (m.id IS NULL OR r.id IS NULL OR m.body->>'automation_execution_id' IS DISTINCT FROM e.id
           OR m.body->'sender_id' IS DISTINCT FROM e.body->'owner_admin_id' OR m.body->'reward_amount' IS DISTINCT FROM e.body->'reward_amount'
