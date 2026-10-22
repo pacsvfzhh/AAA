@@ -587,8 +587,11 @@ test('source export independently preserves every column, virtual keys, precisio
   assert.ok(notifications.texts.message_recipients.includes(`"${BIG}"`)); assert.ok(notifications.texts.messages.includes('123456'));
   assert.doesNotMatch(JSON.stringify(notifications.texts), /delivery_claim|private diagnostic/);
   const historical = lines(notifications.texts.notification_automation_executions).map(JSON.parse).find(r => r.id === N.historical);
+  assert.equal(historical.status, 'failed');
   for (const key of ['task_id', 'owner_admin_id', 'user_id', 'plan_id', 'message_id', 'wallet_transaction_id', 'completed_at', 'error_message']) assert.equal(historical[key], null);
-  await stage(); const p = await plan(); await db.exec("SET LOCAL TimeZone='America/New_York'");
+  // Keep this real exported all-NULL historical execution as the positive counterpart to #70–72.
+  await stage(); const p = await plan(); checkPlan(p); assert.deepEqual(p.conflicts, []);
+  await db.exec("SET LOCAL TimeZone='America/New_York'");
   assert.deepEqual(await plan(), p); checkStatus(await status()); assert.equal(await scalar(db, "SELECT current_setting('TimeZone')"), 'America/New_York');
 }));
 test('manual and circular automation rewards use existing mapped transactions/reference/operation; no second credit', () => transaction(async () => {
@@ -1084,6 +1087,66 @@ for (const [kind, variant] of [
     assert.deepEqual(await plan(), p);
   });
   await noLegacy();
+}));
+
+// Three independently reviewed source-link regressions. Only caller-controlled notification bytes
+// and their wire catalog are changed; original identity/finance exports, real SQL48–53 prerequisites,
+// admin/employee mappings, source database, server summary and business rows must remain unchanged.
+for (const [label, changes, expectedConflict, inspect] of [
+  ['NULL-owner failed execution cannot link branch task/plan to root employee', {
+    notification_automation_executions: patchRow(r => r.id === N.historical, { task_id: N.task, plan_id: N.plan, user_id: S.two }),
+  }, 'source_scope_mismatch', input => {
+    const r = lines(input.texts.notification_automation_executions).map(JSON.parse).find(r => r.id === N.historical);
+    assert.deepEqual([r.status, r.owner_admin_id, r.task_id, r.plan_id, r.user_id, r.message_id, r.wallet_transaction_id],
+      ['failed', null, N.task, N.plan, S.two, null, null]);
+    const taskRow = lines(input.texts.notification_automation_tasks).map(JSON.parse).find(r => r.id === N.task);
+    const planRow = lines(input.texts.notification_automation_plans).map(JSON.parse).find(r => r.id === N.plan);
+    const employee = lines(identity.texts.accounts).map(JSON.parse).find(r => r.id === S.two);
+    assert.equal(taskRow.owner_admin_id, S.branch); assert.equal(planRow.owner_admin_id, S.branch);
+    assert.equal(employee.created_by, NEW.root); assert.notEqual(S.branch, NEW.root);
+  }],
+  ['manual reward sender cannot differ from the non-NULL original finance created_by', {
+    messages: patchRow(r => r.id === N.manual, { sender_id: NEW.root }),
+  }, 'reward_link_mismatch', input => {
+    const m = lines(input.texts.messages).map(JSON.parse).find(r => r.id === N.manual);
+    const bonus = lines(finance.texts.wallet_transactions).map(JSON.parse)
+      .find(r => r.type === 'performance_bonus' && r.reference_id === N.manualRecipient);
+    assert.equal(m.audit_origin, 'manual_admin'); assert.equal(m.automation_execution_id, null);
+    assert.equal(m.sender_id, NEW.root); assert.equal(bonus.created_by, S.branch); assert.equal(bonus.user_id, S.one);
+    assert.notEqual(m.sender_id, bonus.created_by);
+    assert.ok(input.texts.messages.includes(MANUAL_REWARD), 'Do not round/rewrite the reward amount to create the mismatch.');
+  }],
+  ['failed execution with non-NULL message_id must be reverse-linked, not hijack a manual message', {
+    notification_automation_executions: patchRow(r => r.id === N.historical, { message_id: N.manual }),
+  }, 'reward_link_mismatch', input => {
+    const r = lines(input.texts.notification_automation_executions).map(JSON.parse).find(r => r.id === N.historical);
+    const m = lines(input.texts.messages).map(JSON.parse).find(r => r.id === N.manual);
+    assert.equal(r.status, 'failed'); assert.equal(r.message_id, N.manual);
+    for (const field of ['task_id', 'plan_id', 'owner_admin_id', 'user_id', 'wallet_transaction_id']) assert.equal(r[field], null);
+    assert.equal(m.audit_origin, 'manual_admin'); assert.equal(m.automation_execution_id, null);
+  }],
+]) test(label, () => transaction(async () => {
+  const input = altered(changes); inspect(input);
+  assert.deepEqual(input.catalog.identity_catalog, identity.catalog);
+  assert.deepEqual(input.catalog.finance_catalog, finance.catalog);
+  for (const key of KEYS) {
+    const changed = Object.hasOwn(changes, key), expected = notifications.catalog.tables.find(t => t.key === key);
+    const actual = input.catalog.tables.find(t => t.key === key);
+    assert.equal(actual.rows, expected.rows, 'The regression changes references, not row counts.');
+    if (changed) {
+      assert.notEqual(input.texts[key], notifications.texts[key]);
+      assert.notEqual(actual.row_hashes_sha256, expected.row_hashes_sha256, 'Recompute the raw notification catalog.');
+    } else { assert.equal(input.texts[key], notifications.texts[key]); assert.deepEqual(actual, expected); }
+  }
+  const before = await snapshot(), modes = await triggers(), sourceBefore = await snapshot(source);
+  await stage(input);
+  const changedTables = (await snapshot()).filter((r, i) => JSON.stringify(r) !== JSON.stringify(before[i])).map(r => r.name);
+  assert.deepEqual(changedTables, ['private.employee_transfer_staging'], 'No prerequisite/business/summary writes are permitted.');
+  await unchanged(async () => {
+    const p = await plan(); checkPlan(p, input); assert.deepEqual(p.conflicts, [expectedConflict]);
+    const s = checkStatus(await status(), input); assert.deepEqual(s.plan, p);
+  });
+  assert.deepEqual(await snapshot(source), sourceBefore); assert.deepEqual(await triggers(), modes); await noLegacy();
 }));
 
 console.log(`SQL54 registered ${caseNo} unique cases; executing ${selectedCases}. No excluded case is a pass.`);

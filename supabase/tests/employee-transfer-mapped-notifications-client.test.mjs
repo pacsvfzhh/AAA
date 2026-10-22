@@ -72,14 +72,14 @@ const plan = (c = catalog()) => ({ ...common(), catalog_hash: HASH, plan_hash: P
 const chunk = (key, no = 0, text = line(key)) => ({ table_key: key, chunk_no: no, rows: rowCount(text), bytes: Buffer.byteLength(text), sha256: sha(text) });
 const bindReply = () => ({ success: true, scope: SCOPE, catalog_hash: HASH, full_site_complete: false });
 const stageReply = (key = 'messages', no = 0, text = line(key)) => ({ success: true, scope: SCOPE, ...chunk(key, no, text), full_site_complete: false });
-function status(c = catalog(), staged = {}, receipt = null, withPlan = true) {
+function status(c = catalog(), staged = {}, receipt = null) {
   const tables = TABLES.map(key => {
     const blocks = staged[key] ?? [], text = blocks.join('');
     return { key, chunks: blocks.length, rows: rowCount(text), bytes: Buffer.byteLength(text), row_hashes_sha256: rowHash(text) };
   });
   const complete = tables.every((t, i) => t.chunks > 0 && t.rows === c.tables[i].rows && t.bytes === c.tables[i].bytes && t.row_hashes_sha256 === c.tables[i].row_hashes_sha256);
   return { ...common(), bound: true, catalog_hash: HASH, catalog: structuredClone(c), tables, complete,
-    plan: complete && withPlan ? plan(c) : null, chunk: receipt };
+    plan: complete ? plan(c) : null, chunk: receipt };
 }
 function unbound() {
   return { ...status(), bound: false, catalog_hash: null, catalog: null, complete: false, plan: null, chunk: null };
@@ -222,7 +222,6 @@ test('status validates unbound, exact 13-table order, complete equivalence, rece
   assert.deepEqual(api.validateEmployeeMappedNotificationsStatus(unbound()), unbound());
   const texts = data(), c = catalog(texts), full = () => status(c, allStaged(texts));
   assert.equal(api.validateEmployeeMappedNotificationsStatus(full()).complete, true);
-  const noPlan = full(); noPlan.plan = null; assert.equal(api.validateEmployeeMappedNotificationsStatus(noPlan).complete, true);
   const edits = [r => { r.bound = false; }, r => { r.catalog_hash = null; }, r => { r.catalog = null; },
     r => { r.tables.reverse(); }, r => { r.tables.pop(); }, r => { r.tables[0].chunks = 0; },
     r => { r.tables[0].rows = 500001; }, r => { r.tables[0].bytes = 256 * 1024 * 1024 + 1; },
@@ -238,6 +237,16 @@ test('status validates unbound, exact 13-table order, complete equivalence, rece
   }
   const partial = status(); partial.plan = plan(); assert.throws(() => api.validateEmployeeMappedNotificationsStatus(partial), redacted);
   const empty = status(catalog(emptyData()), { messages: ['', ''] }); assert.throws(() => api.validateEmployeeMappedNotificationsStatus(empty), redacted);
+});
+test('complete status requires a plan for populated and empty catalogs; missing plans never unlock an unknown bind', async () => {
+  for (const texts of [data(), emptyData()]) {
+    const c = catalog(texts), full = status(c, allStaged(texts)), noPlan = { ...full, plan: null };
+    assert.equal(full.complete, true); assert.equal(full.plan.checked, true);
+    assert.throws(() => api.validateEmployeeMappedNotificationsStatus(noPlan), redacted);
+    const h = harness(), s = session(); h.replies.push({ reject: Error(SECRET) }); await assert.rejects(s.bind(c), redacted);
+    h.respond(noPlan); await assert.rejects(s.status(), redacted); await writesBlocked(s, h, c);
+    h.respond(full); await s.status(); h.respond(bindReply()); await s.bind(c);
+  }
 });
 test('Object descriptors, array holes/symbols/prototypes/proxies and nested catalogs cannot execute getters', async () => {
   let getters = 0;
@@ -307,11 +316,11 @@ test('status consistency freezes job/candidate mapping/catalog/hash and plan cou
   }
   h.respond(status()); await assert.rejects(s.status(), redacted); // complete evidence cannot regress
 });
-test('a plan read before any local catalog still binds counts when complete status omits its optional plan', async () => {
+test('a plan read before any local catalog still binds counts in complete status and its mandatory plan', async () => {
   const h = harness(), s = session(); h.respond(plan()); await s.plan();
   const texts = data(); texts.messages += line('messages', 2); const changed = catalog(texts);
-  h.respond(status(changed, allStaged(texts), null, false)); await assert.rejects(s.status(), redacted);
-  h.respond(status(catalog(), allStaged(data()), null, false)); await s.status();
+  h.respond(status(changed, allStaged(texts))); await assert.rejects(s.status(), redacted);
+  h.respond(status(catalog(), allStaged(data()))); await s.status();
 });
 test('progress cannot regress or change hash at the same chunk count; receipts must match the queried block', async () => {
   const texts = emptyData(), raws = [line('messages', 1), line('messages', 2)]; texts.messages = raws.join('');
@@ -382,6 +391,26 @@ for (const submitted of [false, true]) test(`unknown stage submitted=${submitted
   }
   h.respond(status(catalog(), staged, submitted ? chunk('messages') : null)); await s.status('messages', 0);
   const calls = h.calls.length; h.respond(stageReply()); await s.stage('messages', 0, line('messages')); assert.equal(h.calls.length, calls + 1);
+});
+test('real committed wrong-table and wrong-number receipts cannot unlock an unknown stage, nor can the right receipt without a plan', async () => {
+  const texts = data(), raws = [line('messages', 1), line('messages', 2)]; texts.messages = raws.join('');
+  const c = catalog(texts), { h, s } = await ready(c), staged = { ...allStaged(texts), messages: raws };
+  h.respond(stageReply('messages', 0, raws[0])); await s.stage('messages', 0, raws[0]);
+  h.replies.push({ reject: Error(SECRET) }); await assert.rejects(s.stage('messages', 1, raws[1]), redacted);
+  for (const [key, no, raw] of [['broadcast_messages', 0, texts.broadcast_messages], ['messages', 0, raws[0]]]) {
+    h.respond(status(c, staged, chunk(key, no, raw))); await s.status(key, no); await writesBlocked(s, h, c);
+  }
+  const full = status(c, staged, chunk('messages', 1, raws[1])); h.respond({ ...full, plan: null });
+  await assert.rejects(s.status('messages', 1), redacted); await writesBlocked(s, h, c);
+  h.respond(full); await s.status('messages', 1);
+  h.respond(stageReply('messages', 1, raws[1])); await s.stage('messages', 1, raws[1]);
+});
+test('an unbound response carrying a committed receipt is rejected and cannot unlock an unknown bind', async () => {
+  const h = harness(), s = session(); h.replies.push({ reject: Error(SECRET) }); await assert.rejects(s.bind(catalog()), redacted);
+  const forged = { ...unbound(), chunk: chunk('messages') };
+  assert.throws(() => api.validateEmployeeMappedNotificationsStatus(forged), redacted);
+  h.respond(forged); await assert.rejects(s.status('messages', 0), redacted); await writesBlocked(s, h);
+  h.respond(unbound()); await s.status('messages', 0); h.respond(bindReply()); await s.bind(catalog());
 });
 test('stage receipts are unknown writes on failure, not success; all identity/byte/digest fields are checked', async () => {
   const edits = [r => { r.scope = 'site-notifications'; }, r => { r.success = false; }, r => { r.full_site_complete = true; },

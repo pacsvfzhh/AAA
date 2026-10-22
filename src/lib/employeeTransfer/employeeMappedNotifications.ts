@@ -154,7 +154,7 @@ function status(value: unknown): EmployeeMappedNotificationsStatus {
   if (totalBytes > limits.maxTotalBytes || complete !== (bound && tables.every((t, i) => t.chunks > 0
     && t.rows === c!.tables[i].rows && t.bytes === c!.tables[i].bytes && t.row_hashes_sha256 === c!.tables[i].row_hashes_sha256))) invalid();
   const p = r.plan === null ? null : plan(r.plan), receipt = r.chunk === null ? null : chunk(r.chunk);
-  if ((!complete && p !== null) || (!bound && (p !== null || receipt !== null))) invalid();
+  if (complete !== (p !== null) || (!bound && (p !== null || receipt !== null))) invalid();
   if (p) {
     if (!sameBinding(binding, p) || p.catalog_hash !== digest) invalid();
     checkPlanCatalog(p, c!);
@@ -182,9 +182,6 @@ export interface EmployeeMappedNotificationsSession {
   plan(signal?: AbortSignal): Promise<EmployeeMappedNotificationsPlan>;
   status(tableKey?: NotificationsTableKey | null, chunkNo?: number | null, signal?: AbortSignal): Promise<EmployeeMappedNotificationsStatus>;
 }
-// SQL54 is implemented separately. Keep this local transport contract isolated until shared RPC types are updated.
-const rpc: (name: string, args: Record<string, unknown>) => Query = supabase.rpc.bind(supabase) as unknown as
-  (name: string, args: Record<string, unknown>) => Query;
 export function createEmployeeMappedNotificationsSession(jobToken: string): EmployeeMappedNotificationsSession {
   try { uuid(jobToken); } catch { invalid(); }
   let busy = false, bound = false, complete = false;
@@ -293,7 +290,7 @@ export function createEmployeeMappedNotificationsSession(jobToken: string): Empl
         if (binding) checkCatalog(snapshot, binding);
         if (planned) checkPlanCatalog(planned, snapshot);
         return { writing: { pending: { kind: 'bind' }, pin: () => { c ??= snapshot; } },
-          operation: auth => rpc('employee_import_mapped_notifications_bind', { ...auth, p_catalog: snapshot }),
+          operation: auth => supabase.rpc('employee_import_mapped_notifications_bind', { ...auth, p_catalog: { ...snapshot } }),
           validate: value => {
             const r = object(value, ['success', 'scope', 'catalog_hash', 'full_site_complete']), digest = hash(r.catalog_hash);
             if (r.success !== true || r.scope !== SCOPE || r.full_site_complete !== false || (catalogHash && digest !== catalogHash)) invalid();
@@ -323,7 +320,7 @@ export function createEmployeeMappedNotificationsSession(jobToken: string): Empl
           || prior.reduce((n, receipt) => n + receipt.rows, rows) > table.rows
           || prior.reduce((n, receipt) => n + receipt.bytes, bytes.length) > table.bytes) invalid();
         return { writing: { pending: { kind: 'stage', chunk: expected } },
-          operation: auth => rpc('employee_import_mapped_notifications_stage', { ...auth, p_table_key: key, p_chunk_no: no, p_ndjson: ndjson }),
+          operation: auth => supabase.rpc('employee_import_mapped_notifications_stage', { ...auth, p_table_key: key, p_chunk_no: no, p_ndjson: ndjson }),
           validate: value => {
             const r = object(value, ['success', 'scope', 'table_key', 'chunk_no', 'rows', 'bytes', 'sha256', 'full_site_complete']);
             const receipt = chunk({ table_key: r.table_key, chunk_no: r.chunk_no, rows: r.rows, bytes: r.bytes, sha256: r.sha256 });
@@ -333,7 +330,7 @@ export function createEmployeeMappedNotificationsSession(jobToken: string): Empl
       }, signal);
     },
     plan(signal) {
-      return request(() => ({ operation: auth => rpc('employee_import_mapped_notifications_plan', auth),
+      return request(() => ({ operation: auth => supabase.rpc('employee_import_mapped_notifications_plan', auth),
         validate: value => { const p = plan(value); checkPlan(p); return p; },
         commit: p => { binding = p; catalogHash = p.catalog_hash; planned = p; bound = true; complete = true; } }), signal);
     },
@@ -342,7 +339,7 @@ export function createEmployeeMappedNotificationsSession(jobToken: string): Empl
         const key = tableKey === null ? null : notificationsTableKey(tableKey);
         const no = chunkNo === null ? null : count(chunkNo, limits.maxChunks - 1);
         if ((key === null) !== (no === null)) invalid();
-        return { operation: auth => rpc('employee_import_mapped_notifications_status', { ...auth, p_table_key: key, p_chunk_no: no }),
+        return { operation: auth => supabase.rpc('employee_import_mapped_notifications_status', { ...auth, p_table_key: key, p_chunk_no: no }),
           validate: value => { const s = status(value); checkStatus(s, key, no); return s; },
           commit: s => {
             binding = s; progress = s.tables; bound = s.bound; complete = s.complete;
