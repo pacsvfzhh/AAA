@@ -18,7 +18,7 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // are real disk files; temporary plaintext workspaces and Edge Storage are in memory.
 // Source fixture trigger changes finish BEFORE import; no importer error is bypassed.
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const LAST = '20261102000054_prepare_mapped_notifications.sql';
+const LAST = '20261102000055_verify_site_restore.sql';
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';
@@ -280,14 +280,15 @@ after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   const foreign = edge.foreign.slice(); mock.restoreAll(); assert.deepEqual(foreign, []);
 });
-test('strict latest 43/44/45/46/47/48/49/50/51/52/53/54 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
-  assert.equal(replay.files.length, 581);
-  assert.deepEqual(replay.files.slice(-12), ['20261102000043_preserve_transfer_announcements.sql',
+test('strict latest 43–55 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
+  assert.equal(replay.files.length, 582);
+  assert.deepEqual(replay.files.slice(-13), ['20261102000043_preserve_transfer_announcements.sql',
     '20261102000044_preflight_site_restore.sql', '20261102000045_verify_site_prerequisites.sql',
     '20261102000046_backup_employee_before_restore.sql', '20261102000047_backup_employee_media.sql',
     '20261102000048_reserve_employee_identities.sql', '20261102000049_restore_mapped_employee_identities.sql',
     '20261102000050_restore_mapped_dispatch_dependencies.sql', '20261102000051_restore_mapped_employee_finance.sql',
-    '20261102000052_restore_mapped_employee_activity.sql', '20261102000053_restore_mapped_employee_verification.sql', LAST]);
+    '20261102000052_restore_mapped_employee_activity.sql', '20261102000053_restore_mapped_employee_verification.sql',
+    '20261102000054_prepare_mapped_notifications.sql', LAST]);
   assert.equal(replay.failures.length, 12);
   const paths = Object.keys(compiled.metafile.inputs);
   for (const module of ['siteTransfer', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
@@ -385,6 +386,10 @@ test('real SQL ten-domain export -> 11 disk .edx -> empty distinct target import
   assert.deepEqual(result.verifiedDomains, DOMAINS); assert.equal(result.maintenance, true);
   assert.equal(result.fullSiteComplete, false); assert.equal(result.importReady, false);
   await assertMaintenance(result); await assertBackups(context); await assertBusiness();
+  assert.deepEqual(result.serverVerification.verified_domains, DOMAINS);
+  assert.deepEqual(result.serverVerification.counts, { employees: 1, pending_withdrawals: 1, pending_withdrawal_amount: '3' });
+  assert.equal(callsOf('employee_import_site_verify').length, 1);
+  assert.match(result.serverVerification.verification_hash, /^[a-f0-9]{64}$/);
   assert.equal(callsOf('employee_import_site_verify_prerequisites').length, 2);
   assert.ok(callsOf('employee_import_site_verify_prerequisites').every(call => !call.error && call.result.verified));
   assert.deepEqual(await targetExcluded(), before); assert.deepEqual(await triggers(target), modes);

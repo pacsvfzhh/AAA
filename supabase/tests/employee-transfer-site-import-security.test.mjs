@@ -309,7 +309,7 @@ test('real transport: import POST timeout never falls back or retries', async t 
   } finally { http = undefined; }
 });
 
-const eligible = () => ({ version: 1, protocol: 'site-maintenance-restore-v2', site_id: TARGET, source_site_id: SITE,
+const eligible = () => ({ version: 1, protocol: 'site-maintenance-restore-v3', site_id: TARGET, source_site_id: SITE,
   can_restore_to_maintenance: true, blockers: [], missing_rpcs: [], full_site_complete: false, can_release: false });
 function admissionHarness(response, error = null) {
   const calls = [], domains = [];

@@ -1,5 +1,6 @@
 import { getAdminFinancialSessionToken } from '../auth';
 import { supabase } from '../supabase';
+import type { Database } from '../../types/database';
 import { createActivityImportSession } from './activityApi';
 import { stageActivityImport } from './activityTransfer';
 import { createDispatchImportSession, createProductsImportSession, createSharedSettingsReplacementSession, getTransferMaintenance } from './api';
@@ -39,6 +40,8 @@ import { SITE_DOMAINS, type AuthenticatedSiteBundleSet, type AuthenticatedSiteDo
 import { createVerificationImportSession } from './verificationApi';
 import { createVerificationMediaSession, stageVerificationBundle, type VerificationMediaFile } from './verificationMedia';
 
+export type SiteRestoreVerification = Database['public']['Functions']['employee_import_site_verify']['Returns'];
+
 export interface SiteRestoreOptions {
   adminPassword: string;
   passphrase: string;
@@ -51,7 +54,7 @@ export interface SiteRestoreOptions {
   beforeDomain?: () => Promise<void>;
 }
 
-const { object, uuid, count, checkAbort } = dispatchTransferChecks;
+const { object, uuid, hash, count, checkAbort } = dispatchTransferChecks;
 const backupNames = {
   shared: 'backup-shared.edx', products: 'backup-products.edx', dispatch: 'backup-dispatch.edx',
   notifications: 'backup-notifications.edx', chat: 'backup-chat.edx',
@@ -72,6 +75,30 @@ function uuidMap(value: unknown): Record<string, string> {
 function total(counts: Readonly<Record<string, number>>): number {
   return Object.values(counts).reduce((sum, value) => sum + count(value), 0);
 }
+function validateSiteVerification(value: unknown, jobId: string, sourceSiteId: string, packageId: string): SiteRestoreVerification {
+  const r = object(value, ['version', 'success', 'scope', 'job_id', 'source_site_id', 'package_id', 'verification_hash',
+    'verified_domains', 'counts', 'maintenance', 'accounts_active', 'automation_resumed', 'can_release', 'full_site_complete']);
+  if (r.version !== 1 || r.success !== true || r.scope !== 'site-restore-verification'
+    || uuid(r.job_id) !== jobId || uuid(r.source_site_id) !== sourceSiteId || uuid(r.package_id) !== packageId
+    || r.maintenance !== true || r.accounts_active !== false || r.automation_resumed !== false
+    || r.can_release !== false || r.full_site_complete !== false
+    || typeof r.verification_hash !== 'string' || r.verification_hash.length !== 64) blocked();
+  const domains = r.verified_domains;
+  if (!Array.isArray(domains) || Object.getPrototypeOf(domains) !== Array.prototype
+    || domains.length !== SITE_DOMAINS.length || Reflect.ownKeys(domains).length !== SITE_DOMAINS.length + 1) blocked();
+  for (const [index, name] of SITE_DOMAINS.entries()) {
+    const field = Object.getOwnPropertyDescriptor(domains, String(index));
+    if (!field?.enumerable || !('value' in field) || field.value !== name) blocked();
+  }
+  const counts = object(r.counts, ['employees', 'pending_withdrawals', 'pending_withdrawal_amount']);
+  const amount = counts.pending_withdrawal_amount;
+  // Keep the original decimal string; financial precision must not pass through Number or parseFloat.
+  if (typeof amount !== 'string' || amount.trim() !== amount || !/^(0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(amount)) blocked();
+  return { version: 1, success: true, scope: 'site-restore-verification', job_id: jobId, source_site_id: sourceSiteId,
+    package_id: packageId, verification_hash: hash(r.verification_hash), verified_domains: [...SITE_DOMAINS],
+    counts: { employees: count(counts.employees), pending_withdrawals: count(counts.pending_withdrawals), pending_withdrawal_amount: amount },
+    maintenance: true, accounts_active: false, automation_resumed: false, can_release: false, full_site_complete: false };
+}
 
 // Redacted public context; retain BOTH operation and cleanup failures without logging their contents.
 class SiteRestoreError extends Error {
@@ -91,7 +118,10 @@ class SiteRestoreError extends Error {
 // Admission and complete input authentication belong to siteImport; this is not a resume path.
 export async function runSiteRestore(
   bundle: AuthenticatedSiteBundleSet, options: SiteRestoreOptions,
-): Promise<{ jobId: string; verifiedDomains: SiteDomain[]; maintenance: true; fullSiteComplete: false; importReady: false }> {
+): Promise<{
+  jobId: string; verifiedDomains: SiteDomain[]; maintenance: true; fullSiteComplete: false; importReady: false;
+  serverVerification: SiteRestoreVerification;
+}> {
   const settings = { ...options };
   const signal = settings.signal;
   let password = settings.adminPassword, passphrase = settings.passphrase;
@@ -99,6 +129,7 @@ export async function runSiteRestore(
   settings.adminPassword = ''; settings.passphrase = '';
   let domain: string = 'site', phase = 'prepare', jobId: string | null = null;
   const verified = new Set<SiteDomain>();
+  let serverVerification: SiteRestoreVerification | null = null;
   const inputSpaces = new Set<ArchiveBundleWorkspace>();
   const spaces: { original: ArchiveBundleWorkspace; workspace: ArchiveBundleWorkspace; discard: () => Promise<void> }[] = [];
   const files = new Set<ReplacementBackupFile>();
@@ -488,6 +519,19 @@ export async function runSiteRestore(
 
     domain = 'site';
     await verifyPrerequisites(token);
+    report('verify-site');
+    if (jobId === null) blocked();
+    const verification = await step(async () => {
+      const query = supabase.rpc('employee_import_site_verify', {
+        p_admin_session_token: getAdminFinancialSessionToken(), p_job_token: token,
+      });
+      const result = await (signal ? query.abortSignal(signal) : query);
+      checkAbort(signal);
+      if (result.error) blocked();
+      return result.data;
+    });
+    serverVerification = validateSiteVerification(verification, jobId, sourceSiteId, packageId);
+    if (serverVerification.counts.employees !== employeeIds.length) blocked();
     report('verify-maintenance');
     const maintenance = await step(() => getTransferMaintenance(signal));
     if (verified.size !== SITE_DOMAINS.length || !maintenance.active || !maintenance.dirty || maintenance.job_id !== jobId) blocked();
@@ -500,12 +544,13 @@ export async function runSiteRestore(
       catch (error) { cleanupRequired = true; errors.push(error); }
     }
   }
-  if (failed || cleanupRequired || signal?.aborted || jobId === null) {
+  if (failed || cleanupRequired || signal?.aborted || jobId === null || serverVerification === null) {
     throw new SiteRestoreError(domain, phase, jobId, SITE_DOMAINS.filter(name => verified.has(name)), cleanupRequired, errors);
   }
   try { checkAbort(signal); report('maintenance'); }
   catch (error) { throw new SiteRestoreError(domain, phase, jobId, SITE_DOMAINS.filter(name => verified.has(name)), false, [error]); }
-  return { jobId, verifiedDomains: SITE_DOMAINS.filter(name => verified.has(name)), maintenance: true, fullSiteComplete: false, importReady: false };
+  return { jobId, verifiedDomains: SITE_DOMAINS.filter(name => verified.has(name)), maintenance: true,
+    fullSiteComplete: false, importReady: false, serverVerification };
 }
 
 // Reopen the already authenticated, staged accounts verbatim. Parse ONLY each UUID, never rewrite numeric JSON.
