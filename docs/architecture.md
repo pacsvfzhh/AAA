@@ -30,7 +30,7 @@
 - `src/lib/supabase.ts`：
   - typed client（类型来自 `src/types/database.ts`），读取 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`。
   - 普通请求超时 8 秒，稽核/归档及共享设置导入/导出 RPC 请求 120 秒（不改变数据库角色执行上限）；网络错误有 XHR 回退。
-  - 只对 GET 与白名单只读 RPC/稽核读取自动重试（最多 2 次），写操作不重试，避免重复执行。新增只读 RPC 如需重试，要加入白名单。`get_employee_import_*` POST一律不自动重试，不因get命名自动重发；SQL54四个显式RPC也不自动重试，含STABLE plan/status，客户端等待120秒不改变服务端上限。SQL55 `employee_import_site_verify` 同样单次120秒、不自动重试，返回实物总核对回执而非营业许可。
+  - 只对 GET 与白名单只读 RPC/稽核读取自动重试（最多 2 次），写操作不重试，避免重复执行。新增只读 RPC 如需重试，要加入白名单。`get_employee_import_*` POST一律不自动重试，不因get命名自动重发；SQL54四个显式RPC也不自动重试，含STABLE plan/status，客户端等待120秒不改变服务端上限。SQL55 `employee_import_site_verify` 同样单次120秒、不自动重试，返回实物总核对回执而非营业许可。SQL56/sourceCutover的freeze/resume及状态读均不自动重试，不因status只读而加入重试白名单。
   - `formatSupabaseError()`：统一把错误转成可显示的文字。
 - Realtime 一般只当作「有变化」的信号：收到后防抖、再重新查询。异步请求用请求序号或 AbortSignal，防止旧响应覆盖新结果。
 - 后台页面懒加载；打开过的 tab 保持挂载，用 `hidden` 切换（切换时状态不丢失）。
@@ -38,6 +38,15 @@
 - 品牌配置：`useCompanyName()`、`useCurrencyUnit()` 读 `admin_configs`（考虑 `branding_mode` 全局/自定义），默认 `AAA SERVICE`、`USDC`，带 localStorage 缓存与 Realtime 更新。
 
 空站十领域恢复在各域完成后，现由 `siteRestoreApi` 调用 SQL55 服务端原子总核对，再核实仍处于原任务dirty维护；客户端严格绑定任务/来源站/包/十域顺序和员工总数，金额保留原十进制字符串。总核对失败、丢响应、凭据错绑或清理未确认均不返回成功。SQL55 v3准入在首笔写入前要求总核对能力，不接受旧v1/v2。`EmployeeSiteImport` 结果页及安全报告保存 `serverVerification`，仍保持账号停用、自动化暂停、不可恢复营业；本轮未部署。
+
+## 旧站停站切换、截止凭据与互锁（第55节，2026-10-22 UTC+8，本地未部署）
+- 最新采用停站切换，不做在线增量或搬运行队列；先由现有worker排空待发自动化，freeze时queue/failures/processing订单必须全零。日常备份保持业务只读、不自动停站；SQL56/sourceCutover.ts/SourceCutoverPanel只在超管密码及精确确认语「確認暫停舊站業務並導出」后建立持久source维护，不改账号/自动化原状态、进度/基线/activated_at或钱，也不自动导出。
+- 复用既有jobs/maintenance，source冻结为`source-cutover-v1`的finished terminal技术任务，不占单活running任务，十域导出正常；getlog包装保留旧子协议排除并排除source冻结，freeze不算`last_export_at`最近成功导出。取消/离开/过期不解除source维护；本人超管带当前cutoff_id、密码及「確認恢復舊站業務並放棄切站」显式恢复，有running export阻断，dirty import不能借此解除。
+- 客户端模块级`activeWrite/uncertainWrite`跨实例互锁，写结果未知时不自动重试/恢复/stop或假称回滚，状态读也不自动重试。`writeGeneration`绑定状态读发起时的写代次，新写入之后才到的旧status拒绝，不能错误解锁；只有写结束后新发起且严格核验成功的状态读可解除未知。父页所有导入/导出/本机核验/独立备份及停止入口双向互锁，仍保留显式「刷新狀態」核对通道。
+- SQL56 site snapshot在冻结时携`source_cutover`并复查三项零值，导出前后比较后进入加密index。reader严格校验固定字段/UTC微秒格式，重算去掉cutoff_hash后的PostgreSQL jsonb文本SHA-256并绑定索引来源站，认证整组回调传递元数据；合法重加密但摘要篡改亦拒绝。未冻结的日常备份不强制带cutoff。
+- 来源元数据不是远程签名、旧站当前仍冻结的远程证明或新站营业许可。恢复旧站后不能用旧切站文件启用新站，不能两站同时营业；本机认证不能自动撤销旧文件或代替跨站协调。source屏障只冻结受保护DB写，不代表停Storage/cron或原子跨DB文件快照；无新表、不改guard/cron/Storage/Edge。
+- 现有DB25/25、client74/74、Chromium/WebKit各25场景（含父组TAP52）、SQL56十域11磁文维护态整站61项五互斥组3+14+9+6+29已通过（原60+新frozen往返/合法重加密摘要篡改拒绝）；583份SQL仍12原历史失败、109表967列不变。实现agent的typecheck/lint/build已通过；主会话foundation/scope/UI/Golden最后复跑、再次复审待结果，不在此计为通过或宣称无问题。
+- 本轮仅文档更新，无正式访问或SQL/Edge/Storage/权限/config/cron/前端部署，前端仍待用户另行部署。最终自动化续接、账号启用/营业放行、同名彻底替换及其余原pending未完成；隔离浏览器/数据库替身不替代真实Storage、原生PG并发/容量和正式切站验收。
 
 ## src/lib 工具速查
 | 文件 | 用途 |
@@ -78,8 +87,9 @@
 | `employeeTransfer/employeeMappedActivity.ts` | 第51节SQL52七显式RPC：候选UUID下登录/工时/停工三表原文恢复，资金完整verified前置及身份/订单/派单/资金实物重验、逐员工事务与真实计数。历史员工号/会话散列/设备JSON精度与两种NULL保留，未结束严格按最后心跳收尾；不发信号/通知或改钱包。深冻结/不倒退/互斥，未知apply仅同来源status可续，未全stage的早期丢响应安全暂停、不自动重试。旧summary/verified map不写，完整恢复/封存/替换/放行false；未接UI/整站协调器/双包证明，未部署，详见计划第51节 |
 | `employeeTransfer/employeeMappedVerification.ts`、`employeeMappedVerificationMedia.ts` | 第52节SQL53：新UUID实名15列记录七显式RPC（严格要求SQL52 verified并实物重验，仅映射user/审阅人/非NULL URL，不改is_verified，仅verification_requests许可、不旁路触发器）及实际证件媒体inventory/bind/upload/recheckImport（mapped-verification作用域，service-only授权/提交、服务器候选路径、upsert=false、回读、全部apply后终检；50MiB/3000/1GiB）。原文NDJSON、严格冻结、不自动重试，未知apply同来源status，早期未完整暂存失败关闭，媒体不确定须新会话显式对账、不自动修复/删除；独立阶段，未接UI/协调器，完整备份/封存/替换/整站false，未部署 |
 | `employeeTransfer/employeeMappedNotifications.ts` | 第53节SQL54四显式方法bind/stage/plan/status，仅目录绑定/13表原文暂存与只读映射和SQL51奖金关联预检，非实际通知恢复。每入口SQL53实名verified及SQL48–53实物重验；只写私有staging，不发permit/改summary，plan/status STABLE无heartbeat。共享RPC类型、当前会话、深冻结/不倒退；未知bind须status核对目录，未知stage须同table+chunk的原文回执（部分stage亦可查），plan不能解锁；无自动重试，取消后底层未结束仍互斥。四RPC120秒等待不改服务端上限，完整恢复/备份/封存/替换/整站false、配置/记录/媒体/自动化pending为true，员工停用/dirty维护不变；新编号配置对应/独立备份/媒体/13表apply仍缺，无UI/协调器或媒体Edge修改，未部署 |
-| `employeeTransfer/siteTransfer.ts`、`siteExportApi.ts` | 十领域真实导出适配与串行协调；SQL41同一MVCC目录基线、每领域catalog绑定、独立密文保存/认证/明文清理后close，最终源目录及全部密文复核后写加密index。11文件本机检查核对同包/域/卷/行摘要；媒体调用各领域只读inspect，反向验证记录引用与附件及魔数。新增withAuthenticatedSiteBundleSet先全组认证，之后每域重新认证同索引摘要及目录才给恢复器，callback后真实清理、结束后不能再读；档案额外重读绑定原catalog/密文哈希/字节数。失败无自动写重试/取消，不启用业务；当前始终importReady/fullSiteComplete=false。不是完整站点可恢复协议，见计划第39–40节 |
-| `employeeTransfer/siteImport.ts`、`siteRestoreApi.ts` | 认证全部11文件后才作目标准入；仅接受SQL45 v2，拒同站/业务残留/任务与维护。串联五份独立加密备份及十域实际恢复、身份后再恢复派单依赖、最终媒体回读/核验；SQL45进入维护后与末尾重验前置配置。所有账号停用/自动化暂停/dirty维护持续，结果不明不自动重跑、不是全站营业放行或完整同名员工替换；已由EmployeeSiteImport接维护态向导，见计划第40–41节 |
+| `employeeTransfer/sourceCutover.ts`、`components/admin/SourceCutoverPanel.tsx` | SQL56旧站停站切换，三项零值前置/密码及精确确认语/当前cutoff_id恢复；模块级未知互锁及writeGeneration拒旧status、父页全入口互锁，读写不自动重试。持久source维护兼容十域导出，不改原业务状态，不能解除dirty import或放行新站，见第55节 |
+| `employeeTransfer/siteTransfer.ts`、`siteExportApi.ts` | SQL56来源截止凭据进入加密index，reader重算PG摘要/绑定来源站，非远程签名或新站许可；十领域真实导出适配与串行协调；SQL41同一MVCC目录基线、每领域catalog绑定、独立密文保存/认证/明文清理后close，最终源目录及全部密文复核后写加密index。11文件本机检查核对同包/域/卷/行摘要；媒体调用各领域只读inspect，反向验证记录引用与附件及魔数。新增withAuthenticatedSiteBundleSet先全组认证，之后每域重新认证同索引摘要及目录才给恢复器，callback后真实清理、结束后不能再读；档案额外重读绑定原catalog/密文哈希/字节数。失败无自动写重试/取消，不启用业务；当前始终importReady/fullSiteComplete=false。不是完整站点可恢复协议，见计划第39–40节 |
+| `employeeTransfer/siteImport.ts`、`siteRestoreApi.ts` | 认证全部11文件后才作目标准入；仅接受SQL55升级的v3（含SQL45前置复核与总核对能力），拒v1/v2及同站/业务残留/任务与维护。串联五份独立加密备份及十域实际恢复、身份后再恢复派单依赖、最终媒体回读/核验；SQL45进入维护后与末尾重验前置配置。所有账号停用/自动化暂停/dirty维护持续，结果不明不自动重跑、不是全站营业放行或完整同名员工替换；已由EmployeeSiteImport接维护态向导，见计划第40–41节 |
 | `components/admin/EmployeeSiteImport.tsx` | 维护态写入向导：本机配套核验后独立只读准入，密码/确认语/独立备份目录，逐计划显式批准、聊天手选与可见性控制；body portal原生模态焦点循环，边界暂停/停止、不自动重试或假续接，首次开始后锁定重跑。非敏感JSON报告保存失败另提示，不改变已写入事实；无员工封存/启用/维护解除入口。浏览器/API替身回归见第41节，未部署 |
 | `employeeTransfer/browserStorage.ts` | 用户手势选独立随机子目录，输出一次写入、不覆写、不删密文；OPFS随机明文工作区流式append/open/abort，读后路径冻结、迟到操作不可复活，清理失败阻断成功。真实Chromium OPFS已本地复验；原生目录选择器/CORS/配额仍待实机验收 |
 | `employeeTransfer/deviceInfo.ts` | 登录设备JSON共享秘密键拒绝规则；普通历史时间/文本及原始数字不改写。activity传输及员工独立备份均调用；SQL41开始前复用SQL39服务端检查，不把会话秘密写进迁移文件 |

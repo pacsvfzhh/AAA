@@ -76,6 +76,15 @@
 - `can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false`，`configuration_pending/records_pending/media_pending/automation_pending=true`；员工停用、dirty维护保留，未开放同名覆盖或营业。上文第32–33节旧配置备份/实际恢复能力不能直接当作本轮新编号链已完成，下一步仍须通知配置对应+独立备份、媒体及13表实际候选UUID恢复；自动化截止点/队列续接、聊天映射、双密文完整证明/安全封存/总协调与放行仍缺。
 - 新DB72唯一场景按20/20/32互斥范围最终通过，新client38（含真实transport四RPC60组合及24伪前缀/后缀检查，不另拆计数）通过。foundation/scope98、SQL54下旧十域11密文维护态28分别通过；旧通知六文件与mapped verification逐项列于计划第53.3节，不加总。无正式访问或SQL/Edge/Storage/权限/config/cron/前端部署，无UI/浏览器测试，真实Storage/PG并发/容量未验；不作为实际通知恢复、干净建库或总套件证明。
 
+## 停站切换的自动化排空与截止点（第55节，2026-10-22 UTC+8，本地未部署）
+- 用户最新决定采用停站切换，不做在线增量，不搬运行队列。由现有worker先排空待发自动化并处理失败，freeze时`notification_automation_queue`、`notification_automation_failures`及`processing`订单必须全部为零；非零即阻断，不通过清空记录、跳过失败或丢弃待发通知冒充排空。日常备份只读业务资料、不自动停站。
+- SQL56/sourceCutover.ts/SourceCutoverPanel通过超管密码及「確認暫停舊站業務並導出」建立持久source维护，不暂停/重启方案，不改账号/自动化原启停、基线、进度、activated_at或资金，不重新加入成员、重建基线或补发历史奖金。冻结为独立terminal技术任务，不占单活任务，十域导出正常；getlog保留旧子协议排除并排除freeze，不计作最近成功导出。
+- 取消/离开/过期不自动解除。本人超管可带当前cutoff_id、密码及「確認恢復舊站業務並放棄切站」明确恢复旧站，有running export阻断；不能解除dirty import。恢复旧站后不能再用旧切站文件启用新站，不能两站同时营业。
+- 来源截止凭据进入加密index，reader严格重算去掉cutoff_hash后的PG jsonb文本摘要并绑定来源站；合法重加密但摘要篡改也拒绝。它不是远程签名、旧站当前仍冻结的证明或新站启动worker/营业的许可；旧文件不会因旧站恢复而自动被删除或失效，不能以本机认证代替跨站放行。
+- source屏障仅冻结受保护DB写，不代表停止cron、Storage上传/删除或原子跨DB文件快照。无新表，不改guard/cron/Storage/Edge，不改现有worker规则；最终自动化按截止点安全续接、账号启用/营业放行仍未完成。上文第31–33/53节的历史“截止点/队列待做”按当时事实保留；当前不搬运行队列的决定不代表自动化续接或新编号通知实际恢复已完成，其余pending不关闭。
+- 切站freeze/resume与状态读均不自动重试；模块级未知互锁及writeGeneration拒迟到旧status，父页所有导入/导出/备份互锁，保留显式状态刷新核对。新DB25/25、client74/74、Chromium/WebKit各25场景（含父组TAP52）、SQL56十域11磁文维护态整站61项五互斥组3+14+9+6+29已通过（原60+新frozen往返/合法重加密摘要篡改拒绝）；583份SQL仍12原历史失败、109表967列不变。实现agent的typecheck/lint/build通过，主会话foundation/scope/UI/Golden最后复跑与再次复审待结果，不记为通过或已无问题，详见计划第55节。
+- 本轮仅同步文档，没有正式服务访问或SQL/Edge/Storage/权限/config/cron/前端部署；前端仍待用户另行部署。真实Storage、原生PG并发/容量、最终自动化续接及正式停站切换营业验收未完成，同名彻底替换及其他原pending仍未完成，不宣称完整功能完成。
+
 ## 公告 `AnnouncementManagement.tsx` + `TiptapEditor.tsx`
 - 表 `announcements`，直接表操作（不经稽核）。二级只管理自己的公告；超管可管理全部，并设置全局公告与轮播。支持发布时间、隐藏、置顶排序；正文上限 500KB。
 - 媒体存储桶：编辑器插入的图片/视频/封面 → `announcement-images`；正文里的 base64 图片经 `processContentImages` → `template-images`；Word 导入的图片 → `chat-images`。删除公告时会尝试清理正文图片（`src/lib/storageCleanup.ts`）。
