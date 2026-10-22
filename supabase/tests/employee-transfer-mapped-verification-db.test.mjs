@@ -133,6 +133,7 @@ async function withClone(dump, job, fn) {
   finally { db = previous.db; task = previous.task; bindings = previous.bindings; await site.close(); }
 }
 async function capture(kind) {
+  console.log(`SQL53 setup: capture ${kind}`);
   const job = await on(source, `employee_export_${kind}_begin`, { p_admin_session_token: sourceSession,
     p_admin_password: PASSWORDS.root, ...['identity', 'finance', 'activity', 'verification'].includes(kind) ? { p_package_id: pkg } : {} });
   assert.equal(job.success, true);
@@ -488,7 +489,9 @@ before(async () => {
   for (const [module, names] of [[globalThis, ['fetch']], [http, ['request', 'get']], [https, ['request', 'get']],
     [net, ['connect', 'createConnection']], [tls, ['connect']]])
     for (const name of names) mock.method(module, name, () => assert.fail('network and production services forbidden'));
+  console.log('SQL53 setup: strict replay started');
   replay = await createSites({ upTo: MIGRATION }); source = replay.oldSite; db = replay.newSite;
+  console.log('SQL53 setup: strict replay completed');
   assert.equal(replay.files.at(-1), MIGRATION); assert.equal(replay.validation.freshDatabaseVerified, false);
   assert.deepEqual(replay.failures, EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message })));
   await buildNewSite(source); await buildNewSite(db);
@@ -579,16 +582,20 @@ before(async () => {
     assert.equal(r.success, true); assert.equal(r.admin_map[S.branch], NEW.branch); assert.equal(r.admin_map[NEW.root], NEW.root);
     await rpc('employee_transfer_cancel', auth(sharedTask));
   }, db, true);
+  console.log('SQL53 setup: shared restore completed');
   sharedDump = await db.dumpDataDir('none');
   await transaction(() => configure(dispatch), db, true);
   await transaction(async () => { await restoreValid(); await restoreIdentities(); await restoreDependencies(); await noLegacy(); }, db, true);
+  console.log('SQL53 setup: mapped identity and dependencies completed');
   readyTask = task; preFinanceDump = await db.dumpDataDir('none');
   await transaction(() => restoreFinance(), db, true);
   await transaction(() => noLegacy());
+  console.log('SQL53 setup: mapped finance completed');
   preActivityDump = await db.dumpDataDir('none');
   await transaction(() => restoreActivity(), db, true);
   await transaction(() => noLegacy());
   readyDump = await db.dumpDataDir('none');
+  console.log('SQL53 setup: verified mapped activity ready');
 }, { timeout: 600000 });
 after(async () => { await Promise.allSettled([source?.close(), db?.close()]); mock.restoreAll(); });
 

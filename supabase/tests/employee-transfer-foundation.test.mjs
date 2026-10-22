@@ -67,6 +67,7 @@ const criticalMigrations = [
   '20261102000050_restore_mapped_dispatch_dependencies.sql',
   '20261102000051_restore_mapped_employee_finance.sql',
   '20261102000052_restore_mapped_employee_activity.sql',
+  '20261102000053_restore_mapped_employee_verification.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -225,11 +226,18 @@ const publicFunctions = [
   'employee_import_mapped_activity_plan(uuid,uuid)', 'employee_import_mapped_activity_begin(uuid,uuid,text)',
   'employee_import_mapped_activity_apply(uuid,uuid,uuid,text)', 'employee_import_mapped_activity_status(uuid,uuid,uuid)',
   'employee_import_mapped_activity_verify(uuid,uuid)',
+  'employee_import_mapped_verification_bind(uuid,uuid,jsonb)', 'employee_import_mapped_verification_stage(uuid,uuid,text,integer,text)',
+  'employee_import_mapped_verification_plan(uuid,uuid)', 'employee_import_mapped_verification_begin(uuid,uuid,text)',
+  'employee_import_mapped_verification_apply(uuid,uuid,uuid,text)', 'employee_import_mapped_verification_status(uuid,uuid,uuid)',
+  'employee_import_mapped_verification_verify(uuid,uuid)',
+  'get_employee_transfer_mapped_verification_media(uuid,uuid)', 'employee_import_mapped_verification_media_bind(uuid,uuid,jsonb)',
   ...archivePublicFunctions,
 ];
 const serviceOnlyFunctions = [
   'employee_transfer_verification_media_authorize(uuid,uuid,text,text)',
   'employee_transfer_verification_media_commit(uuid,uuid,text,text,integer,text,text,text,text)',
+  'employee_transfer_mapped_verification_media_authorize(uuid,uuid,text,text)',
+  'employee_transfer_mapped_verification_media_commit(uuid,uuid,text,text,integer,text,text,text,text)',
   'employee_transfer_notification_media_authorize(uuid,uuid,text,text)',
   'employee_transfer_notification_media_commit(uuid,uuid,text,text,integer,text,text,text,text)',
   'employee_transfer_chat_media_authorize(uuid,uuid,text,text)',
@@ -256,14 +264,16 @@ async function checkCatalog(db) {
     assert.equal(functions[0].anon_execute, true, name);
     assert.equal(functions[0].authenticated_execute, true, name);
     assert.equal(functions[0].public_execute, false, name);
-    if (archivePublicFunctions.includes(name) || name.startsWith('employee_import_identity_reserv') || name.startsWith('employee_import_mapped_identity_') || name.startsWith('employee_import_mapped_dependency_') || name.startsWith('employee_import_mapped_finance_') || name.startsWith('employee_import_mapped_activity_')) {
+    if (archivePublicFunctions.includes(name) || name.startsWith('employee_import_identity_reserv') || name.startsWith('employee_import_mapped_identity_') || name.startsWith('employee_import_mapped_dependency_') || name.startsWith('employee_import_mapped_finance_') || name.startsWith('employee_import_mapped_activity_') || name.startsWith('employee_import_mapped_verification_') || name === 'get_employee_transfer_mapped_verification_media(uuid,uuid)') {
       assert.equal(functions[0].service_role_execute, false, name);
     }
     if (archiveReadOnlyFunctions.has(name) || ['employee_import_identity_reservation_status(uuid,uuid,uuid)',
       'employee_import_mapped_identity_plan(uuid,uuid,uuid)', 'employee_import_mapped_identity_status(uuid,uuid,uuid)',
       'employee_import_mapped_dependency_plan(uuid,uuid)', 'employee_import_mapped_dependency_status(uuid,uuid)',
       'employee_import_mapped_finance_plan(uuid,uuid)', 'employee_import_mapped_finance_status(uuid,uuid,uuid)',
-      'employee_import_mapped_activity_plan(uuid,uuid)', 'employee_import_mapped_activity_status(uuid,uuid,uuid)'].includes(name)) {
+      'employee_import_mapped_activity_plan(uuid,uuid)', 'employee_import_mapped_activity_status(uuid,uuid,uuid)',
+      'employee_import_mapped_verification_plan(uuid,uuid)', 'employee_import_mapped_verification_status(uuid,uuid,uuid)',
+      'get_employee_transfer_mapped_verification_media(uuid,uuid)'].includes(name)) {
       assert.equal(functions[0].provolatile, 's', `${name} must be STABLE, not a heartbeat-writing read`);
     }
   }
@@ -289,7 +299,7 @@ async function checkCatalog(db) {
   assert.deepEqual(archiveHelpers.map(item => item.signature).sort(), archivePrivateFunctions.map(name => `private.${name}`).sort(),
     'every private archive helper must be checked, not just a helper-count increase');
   for (const name of serviceOnlyFunctions) {
-    const functions = await rows(db, `SELECT prosecdef, proconfig,
+    const functions = await rows(db, `SELECT prosecdef, proconfig, provolatile,
       has_function_privilege('anon', oid, 'EXECUTE') AS anon_execute,
       has_function_privilege('authenticated', oid, 'EXECUTE') AS authenticated_execute,
       has_function_privilege('service_role', oid, 'EXECUTE') AS service_role_execute,
@@ -303,6 +313,9 @@ async function checkCatalog(db) {
     assert.equal(functions[0].authenticated_execute, false, name);
     assert.equal(functions[0].public_execute, false, name);
     assert.equal(functions[0].service_role_execute, true, name);
+    if (name === 'employee_transfer_mapped_verification_media_authorize(uuid,uuid,text,text)') {
+      assert.equal(functions[0].provolatile, 's', `${name} must be STABLE, not a heartbeat-writing read`);
+    }
   }
   const helpers = await rows(db, `SELECT oid, proname,
     EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f', proowner)))
@@ -373,7 +386,7 @@ async function exerciseRealReplay() {
   try {
     const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql')).sort();
     assert.deepEqual(files, diskFiles, 'must replay every migration, including future additions');
-    assert.equal(files.length, 579, 'migration baseline changed: review all additions, never expand known failures');
+    assert.equal(files.length, 580, 'migration baseline changed: review all additions, never expand known failures');
     assert.deepEqual(failures, expectedFailures);
     assert.equal(validation.freshDatabaseVerified, false);
     for (const file of criticalMigrations) {

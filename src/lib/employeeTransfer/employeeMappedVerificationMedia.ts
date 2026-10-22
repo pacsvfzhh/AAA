@@ -158,13 +158,8 @@ async function readReceipt(response: Response, signal?: AbortSignal): Promise<un
     reader.releaseLock();
   }
 }
-// Local SQL53 signatures keep this import-only module independent of concurrent shared RPC type work.
 type Query = PromiseLike<{ data: unknown; error?: unknown }> & { abortSignal(signal: AbortSignal): Query };
 type Auth = { p_admin_session_token: string; p_job_token: string };
-type Rpc = {
-  (name: 'get_employee_transfer_mapped_verification_media', args: Auth): Query;
-  (name: 'employee_import_mapped_verification_media_bind', args: Auth & { p_files: readonly EmployeeMappedVerificationMediaFile[] }): Query;
-};
 export function createEmployeeMappedVerificationMediaSession(
   jobToken: string, transport: typeof fetch = globalThis.fetch,
 ): EmployeeMappedVerificationMediaSession {
@@ -177,7 +172,6 @@ export function createEmployeeMappedVerificationMediaSession(
     apiKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
     if (typeof apiKey !== 'string' || !apiKey || apiKey !== apiKey.trim() || /[\r\n]/.test(apiKey) || typeof transport !== 'function') invalid();
   } catch { throw new EmployeeMappedVerificationMediaError(false, false); }
-  const rpc = supabase.rpc.bind(supabase) as unknown as Rpc;
   let busy = false, paused = false;
   let boundFiles: readonly EmployeeMappedVerificationMediaFile[] | undefined;
   const auth = (): Auth => ({ p_admin_session_token: uuid(getAdminFinancialSessionToken()), p_job_token: jobToken });
@@ -222,7 +216,7 @@ export function createEmployeeMappedVerificationMediaSession(
     check(signal);
     const current = auth();
     check(signal);
-    const query = rpc('get_employee_transfer_mapped_verification_media', current); // Intentionally NO direction argument.
+    const query = supabase.rpc('get_employee_transfer_mapped_verification_media', current); // Intentionally NO direction argument.
     const result = await settleQuery(query, signal);
     check(signal);
     if (result.error) invalid();
@@ -253,7 +247,7 @@ export function createEmployeeMappedVerificationMediaSession(
       check(signal);
       const current = auth();
       check(signal); mark();
-      const query = rpc('employee_import_mapped_verification_media_bind', { ...current, p_files: files });
+      const query = supabase.rpc('employee_import_mapped_verification_media_bind', { ...current, p_files: files.map(file => ({ ...file })) });
       const result = await settleQuery(query, signal);
       check(signal);
       if (result.error) invalid();
