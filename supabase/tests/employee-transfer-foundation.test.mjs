@@ -64,6 +64,7 @@ const criticalMigrations = [
   '20261102000047_backup_employee_media.sql',
   '20261102000048_reserve_employee_identities.sql',
   '20261102000049_restore_mapped_employee_identities.sql',
+  '20261102000050_restore_mapped_dispatch_dependencies.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -211,6 +212,9 @@ const publicFunctions = [
   'employee_import_mapped_identity_plan(uuid,uuid,uuid)', 'employee_import_mapped_identity_status(uuid,uuid,uuid)',
   'employee_import_mapped_identity_core(uuid,uuid,uuid,text)', 'employee_import_mapped_identity_orders(uuid,uuid,uuid,integer)',
   'employee_import_mapped_identity_verify(uuid,uuid,uuid)',
+  'employee_import_mapped_dependency_plan(uuid,uuid)', 'employee_import_mapped_dependency_status(uuid,uuid)',
+  'employee_import_mapped_dependency_begin(uuid,uuid,text)', 'employee_import_mapped_dependency_chunk(uuid,uuid,text,integer)',
+  'employee_import_mapped_dependency_verify(uuid,uuid)',
   ...archivePublicFunctions,
 ];
 const serviceOnlyFunctions = [
@@ -242,11 +246,12 @@ async function checkCatalog(db) {
     assert.equal(functions[0].anon_execute, true, name);
     assert.equal(functions[0].authenticated_execute, true, name);
     assert.equal(functions[0].public_execute, false, name);
-    if (archivePublicFunctions.includes(name) || name.startsWith('employee_import_identity_reserv') || name.startsWith('employee_import_mapped_identity_')) {
+    if (archivePublicFunctions.includes(name) || name.startsWith('employee_import_identity_reserv') || name.startsWith('employee_import_mapped_identity_') || name.startsWith('employee_import_mapped_dependency_')) {
       assert.equal(functions[0].service_role_execute, false, name);
     }
     if (archiveReadOnlyFunctions.has(name) || ['employee_import_identity_reservation_status(uuid,uuid,uuid)',
-      'employee_import_mapped_identity_plan(uuid,uuid,uuid)', 'employee_import_mapped_identity_status(uuid,uuid,uuid)'].includes(name)) {
+      'employee_import_mapped_identity_plan(uuid,uuid,uuid)', 'employee_import_mapped_identity_status(uuid,uuid,uuid)',
+      'employee_import_mapped_dependency_plan(uuid,uuid)', 'employee_import_mapped_dependency_status(uuid,uuid)'].includes(name)) {
       assert.equal(functions[0].provolatile, 's', `${name} must be STABLE, not a heartbeat-writing read`);
     }
   }
@@ -356,7 +361,7 @@ async function exerciseRealReplay() {
   try {
     const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql')).sort();
     assert.deepEqual(files, diskFiles, 'must replay every migration, including future additions');
-    assert.equal(files.length, 576, 'migration baseline changed: review all additions, never expand known failures');
+    assert.equal(files.length, 577, 'migration baseline changed: review all additions, never expand known failures');
     assert.deepEqual(failures, expectedFailures);
     assert.equal(validation.freshDatabaseVerified, false);
     for (const file of criticalMigrations) {

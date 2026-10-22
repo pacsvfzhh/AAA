@@ -2630,6 +2630,26 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string };
         Returns: import('../lib/employeeTransfer/employeeMappedIdentity').EmployeeMappedIdentityStatus;
       };
+      employee_import_mapped_dependency_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedDependency').EmployeeMappedDependencyPlan;
+      };
+      employee_import_mapped_dependency_status: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedDependency').EmployeeMappedDependencyStatus;
+      };
+      employee_import_mapped_dependency_begin: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedDependency').EmployeeMappedDependencyStatus;
+      };
+      employee_import_mapped_dependency_chunk: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number };
+        Returns: import('../lib/employeeTransfer/employeeMappedDependency').EmployeeMappedDependencyStatus;
+      };
+      employee_import_mapped_dependency_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedDependency').EmployeeMappedDependencyStatus;
+      };
       employee_import_replacement_plan: {
         Args: { p_admin_session_token: string; p_job_token: string; p_after?: string | null; p_limit?: number };
         Returns: import('../lib/employeeTransfer/employeeReplacement').EmployeeReplacementPlan;

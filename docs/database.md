@@ -69,6 +69,14 @@
 - 状态只存原staging的mapped-identity-v1，不填旧identity_restore/verified_identity_map；旧依赖/财务恢复器不能直接消费，仍须逐域接新映射。全部完整恢复/备份/封存/替换/全站完成标志false，dependencies_pending=true；不启用或解除dirty维护，未绑定SQL46/47密文证明或接UI。
 - 本地新DB75/client417、含旧身份与基础范围七文件885/885，SQL49整站维护态28/28；静态/构建/聊天6/稽核48通过。576份SQL仍12旧失败、109表/967列，不是干净建库/原生PG验收。无正式访问或SQL/Edge/Storage/config/前端部署、UI/本轮浏览器测试，见计划第48节（含非数据回滚的DROP参考）。
 
+## 新员工UUID派单依赖恢复（SQL50，2026-10-22，本地未部署）
+- `20261102000050_restore_mapped_dispatch_dependencies.sql`只新增9个私有helper和5个公共RPC，无新表/旧函数或触发器定义变更。`employee_import_mapped_dependency_plan/status`为STABLE，`begin/chunk/verify`显式写；固定SECURITY DEFINER/search_path/UTC/ISO，公共接口仅anon/authenticated且内部重验超管/原任务，PUBLIC/service_role及私有helper无直调权限。
+- 全包SQL49已核验停用身份是唯一员工对应来源，每次重新核对原文、账号/凭据/订单与零钱包、配置/valid及实际引用；要求真实配置备份封存、dirty维护和同包管理员/分组映射。拒缺失/重复/额外身份、旧身份或依赖路径混用、残留及漂移，不接客户端ID图。
+- 成员user_id改候选、group/assigned_by取服务器对应，NULL/时间保留；used员工改候选，订单UUID保留但必须是该员工的已完成订单，valid必须存在。先成员后used、每块≤200、空表显式空块；只发当前表精确写许可，used仅旁路已审核使用计数触发器并恢复，valid使用次数与最后使用时间不变。失败只回滚本请求，不撤销旧块。
+- 状态独立保存于staging的全零员工`mapped-dependencies-v1`，完整计划/映射hash/进度及实物重验；不填旧identity_restore/dependency_restore/verified map。status在未开始时明确started=false，未知写入先显式status，不自动重试；RPC等待120秒不改变服务端时限。
+- 所有完整恢复/备份/封存/替换/全站完成标志false，账号停用且dirty维护持续；无UI/整站接线。后续资金真实恢复将改变零钱包，须另建阶段化验证后才能重核本链，不能删除现有防护冒充完成；其他领域映射/双包证明/封存窗口及营业放行仍缺。
+- 新DB145、新client207/旧身份client417/基础范围94共863项，最新SQL50旧维护态整站28项另列；577份SQL仍12旧失败/109表967列，非干净建库/原生PG并发或容量证明。无正式访问、SQL/Edge/Storage/config/cron/前端部署，也无本轮UI/浏览器测试；详见计划第49节及仅移除函数的回滚参考。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：

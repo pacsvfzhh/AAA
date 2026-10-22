@@ -1,6 +1,8 @@
 # 全站业务资料导出 / 导入实施计划（精简历史订单）
 
-最新补充：第48节SQL49/employeeMappedIdentity已接候选UUID的实际停用账号/凭据/精简订单恢复及逐字段核验，字段/原文/源与目标漂移、幂等、UTC与失败事务回滚已本地验证。只允许无同名活跃或封存历史的新身份，不消费完整备份证明、不开放覆盖；其他领域映射/封存窗口仍待做。七专项885/885及SQL49下整站维护态28/28通过，正式未访问/部署。
+最新补充：第49节SQL50/employeeMappedDependency已将派单成员与已用交单接到SQL49服务器新员工UUID：全包身份/配置/valid实物重验、先成员后used分块写入、精确防止使用次数重复累计，独立状态不伪造旧verified map。新DB145/client207、旧身份client417及基础/范围94共863项，最新SQL50旧整站维护态28项通过；其余领域映射/双包证明/封存窗口和营业放行未完成，正式未访问/部署。
+
+第48节SQL49/employeeMappedIdentity已接候选UUID的实际停用账号/凭据/精简订单恢复及逐字段核验，字段/原文/源与目标漂移、幂等、UTC与失败事务回滚已本地验证。只允许无同名活跃或封存历史的新身份，不消费完整备份证明、不开放覆盖；其他领域映射/封存窗口仍待做。七专项885/885及SQL49下整站维护态28/28通过，正式未访问/部署。
 
 第47节新增SQL48/employeeIdentityReservation服务端候选身份绑定：复用真实导入任务及来源目录，服务器生成候选UUID，固定来源/目标指纹，重复请求返回同一候选，漂移或占用阻断。只写私有技术暂存/审计，不占用users全局身份空间、不消费SQL46/47备份证明、不接实际恢复/封存；全部完成/恢复/替换门禁仍false。五专项392项及整站维护态28项最终完整通过，正式环境未访问/部署。
 
@@ -1184,3 +1186,28 @@ DROP FUNCTION private.employee_transfer_mapped_identity_check_written(private.em
 DROP FUNCTION private.employee_transfer_mapped_identity_saved(private.employee_transfer_jobs,uuid);
 DROP FUNCTION private.employee_transfer_mapped_identity_source(private.employee_transfer_jobs,uuid);
 ```
+
+## 49. 新员工UUID的派单成员与已用交单恢复（2026-10-22，UTC+8，本地未部署）
+
+### 49.1 本轮实现
+- 新增`20261102000050_restore_mapped_dispatch_dependencies.sql`，只追加9个私有helper及5个公共RPC，无新表、不改旧函数/迁移/触发器定义。`employee_import_mapped_dependency_plan/status`为STABLE只读，`begin/chunk/verify`显式写入；固定SECURITY DEFINER/search_path/UTC/ISO，私有函数及PUBLIC/service_role全撤权，公共接口只授权anon/authenticated并重验超管/本人任务。
+- 同一真实导入任务、独立封存配置备份、dirty维护及配置/valid实际恢复是前置；每个来源员工都必须完成SQL49核验，并再次比对账号/凭据/精简订单、停用无会话和零钱包。映射只能取服务器候选及完整计划；额外/重复/缺失状态、同目标映射、旧identity_restore或dependency_restore混用均阻断。
+- 重新解析全部七表派单原始NDJSON，对照解析行、连续块号、全局行序、行摘要、字节、目录及完整引用。配置/分组/Base/valid逐字段重验；不只信任曾经verified标记。计划绑定站点/包/目录/管理员、组及员工映射，列出目标残留或缺assigner冲突；begin仅保存独立技术状态，不清空业务。
+- `dispatch_group_members`保留原id/assigned_at，user_id用候选UUID、group_id/assigned_by取同包服务器对应，来源NULL保留；不按用户名猜员工或将管理员缺口置空。`used_order_data`保留原id/valid/order/time，user_id改候选；来源与目标完成订单都必须归属该员工，valid必须存在。
+- 先全部成员、后used，单块≤200行，零集合也需显式空块；真实提交才推进计数/游标。每个请求重查全部已提交内容及全表数量，同数量异内容或目标残留阻断；显式重复块只在核验后返回原进度，不跳过新冲突。
+- 写前锁维护库存表→任务→重新鉴权，只许可当前一张成员或used表；used仅事务内旁路已审核`trigger_update_valid_data_usage`并恢复原模式，外键和维护守卫保持。valid的usage_count/last_used_at绝不重算或再次累加。失败回滚本请求的业务/状态/事件及触发器DDL，不冒称撤销此前提交块。
+
+### 49.2 状态、客户端及未开放边界
+- 独立状态位于原staging全零员工键`mapped-dependencies-v1`，固定计划/管理员、组、身份映射/计数/游标/verified逐项重验。未开始的status明确started=false；计划或状态不续heartbeat，不写旧summary.identity_restore/dependency_restore/verified_identity_map，也不让旧财务等恢复器误认为源UUID仍可直接使用。
+- `employeeMappedDependency.ts`提供plan/begin/chunk/verify/status五显式调用；严格响应字段/数字/空块/顺序与不倒退校验、嵌套冻结、当前会话、请求互斥。未知写结果阻断后续写入，plan不能解除不确定状态，只有显式status核对可续；取消后底层请求未结束仍保持互斥。五RPC加入120秒等待，写操作不自动重试。
+- 全部`can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false`，maintenance/dependencies_pending=true；verified仅本两表一致。不启用员工、不封存/覆盖、不开维护解除、无UI或整站协调器接线。
+- **后续资金阶段不能直接复用SQL49/SQL50的零钱包检查。** 财务真实恢复后会改变钱包/账本，必须新增阶段化实物验证契约，同时证明账号/订单未漂移和已提交财务一致；不能简单删掉零状态防护。六表资金/账本游标、活动/实名/通知/聊天/媒体/档案映射、SQL46/47精确双密文证明、共享缺依赖、封存安全窗口及全站营业放行仍待做。
+
+### 49.3 本地验证与部署
+- 新数据库完整145/145：真实两站历史迁移回放、实际独立磁盘加密备份/封存、真实配置/valid及SQL48→49身份恢复，覆盖两员工不同管理员/分组对应、NULL/微秒/高精度、最大及NULL使用次数、全部引用、源原文/解析/目标/保存状态漂移、权限/过期/取消、未知触发器、晚审计/约束失败事务回滚、非UTC、显式空块及零员工整包。真实client→anon RPC分别在begin/used/verify提交后丢响应，经status续传且写入仅一次；另有独立dump跨真实COMMIT续接。
+- 新客户端207、旧身份client417、基础/范围94，四文件完整718/718；合并新DB共863项，无失败/取消/跳过。最新SQL50下旧十领域/11密文/真实两站维护态整站回归28/28另列，合计891项；聊天6/稽核48、typecheck/lint/build及差异检查通过，保留既有构建体积警告。
+- 严格回放577份SQL，仍精确保留原12项历史失败，109根表/967列不变，非干净建库证明；未跑完整employee-transfer总套件。独立复审未发现高置信缺陷，零员工边界随后已补实测。
+- 本轮无UI变更或浏览器功能测试，无正式服务访问或SQL/Edge/Storage/权限/config/cron/前端部署。PGlite不能代替原生PG多连接锁/取消、PostgREST超时与大包全量重扫性能；真实Storage/CORS/原生目录、完整备份封存与切站演练未验。
+
+### 49.4 回滚参考（未执行）
+只移除本阶段函数，不撤销已提交成员/used或解除维护；先停用调用方，再按迁移末尾的DROP清单删除五个公共接口及九个helper，不用CASCADE。SQL49/48的移除必须在本阶段之后进行；任何正式执行须另行确认。

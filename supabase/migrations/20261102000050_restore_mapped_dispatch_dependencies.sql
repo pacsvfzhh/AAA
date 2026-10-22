@@ -1,10 +1,8 @@
 -- 独立全包映射路径：只恢复成员/已用交单，不写旧身份或依赖回执，不开放完整恢复。
--- 仅本地新增，未部署；不续 heartbeat、不启用账号、不封存、不结束维护。
 BEGIN;
 SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
--- SQL10 的目录检查不足以证明 parsed rows 对应原文；重新解析全部派单原文，
--- 包括配置/valid，避免通过只修改 parsed rows 而继续沿用旧摘要。
+-- Parsed rows must match raw NDJSON, not just the saved catalog digest.
 CREATE FUNCTION private.employee_transfer_mapped_dependency_source(p_job private.employee_transfer_jobs)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
@@ -71,8 +69,6 @@ BEGIN
 END;
 $$;
 
--- 只接受每一个来源账户的 SQL49 完整 verified 状态；不是旧 id=id map。
--- 哈希绑定完整 SQL49 计划及来源目录，不接受任何客户端映射。
 CREATE FUNCTION private.employee_transfer_mapped_dependency_map(p_job private.employee_transfer_jobs)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
@@ -111,7 +107,6 @@ BEGIN
       OR (v_state#>>'{plan,target_id}') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
       RAISE EXCEPTION 'Mapped dependency employee candidate changed.';
     END IF;
-    -- SQL49 重扫 credentials/orders 原文及绑定，并实际重验账户、凭据和全部已提交订单。
     PERFORM private.employee_transfer_mapped_identity_check_written(p_job,v_source.id,v_state);
     v_target:=(v_state#>>'{plan,target_id}')::uuid;
     IF v_map ? v_source.id::text OR v_target=v_source.id OR v_target='00000000-0000-0000-0000-000000000000'
@@ -129,8 +124,6 @@ BEGIN
 END;
 $$;
 
--- 基础任务/超管/已封存备份/dirty 维护由 SQL37 owner 核对；这里独立复核
--- SQL16 的配置及 valid 实物部分，绝不调用旧 verified_identity_map。
 CREATE FUNCTION private.employee_transfer_mapped_dependency_owner(p_job private.employee_transfer_jobs)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
@@ -214,7 +207,6 @@ BEGIN
     PERFORM private.employee_transfer_check_valid_rows(v_rows,v_admin);
   END LOOP;
   v_identity:=private.employee_transfer_mapped_dependency_map(p_job);
-  -- 完整来源引用检查不使用过滤 JOIN 后的行数来冒充成功。
   IF EXISTS(SELECT 1 FROM private.employee_transfer_dispatch_input(p_job.id,'dispatch_group_members') AS m
       WHERE NOT ((v_identity->'identity_map') ? (m.body->>'user_id')))
     OR EXISTS(WITH orders AS MATERIALIZED(SELECT * FROM private.employee_transfer_identity_input(p_job.id,'orders'))
@@ -293,8 +285,7 @@ BEGIN
 END;
 $$;
 
--- p_started 只影响初次残留检查；plan_hash 不含可变目标残留数量或 conflicts。
--- 因此已开始后可独立重算原计划，同时由 progress 验证全部实物/提交计数。
+-- Exclude mutable residual counts from the hash; progress validates committed contents.
 CREATE FUNCTION private.employee_transfer_mapped_dependency_plan(
   p_job private.employee_transfer_jobs,p_owner jsonb,p_started boolean
 ) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
@@ -460,7 +451,6 @@ BEGIN
   v_state:=jsonb_build_object('plan',v_plan,'admin_map',v_owner->'admin_map','group_map',v_owner->'group_map',
     'identity_map',v_owner->'identity_map','counts','{"dispatch_group_members":0,"used_order_data":0}'::jsonb,
     'next_chunks','{"dispatch_group_members":0,"used_order_data":0}'::jsonb,'verified',false);
-  -- begin 只建立技术状态，无业务清空/插入，也不修改旧 summary。
   INSERT INTO private.employee_transfer_staging(job_id,employee_id,table_key,chunk_no,row_count,payload)
     VALUES(v_job.id,'00000000-0000-0000-0000-000000000000','mapped-dependencies-v1',0,1,v_state);
   PERFORM private.employee_transfer_mapped_dependency_progress(v_job,v_owner,v_state);
@@ -495,7 +485,6 @@ BEGIN
     AND v_state#>'{next_chunks,dispatch_group_members}' IS DISTINCT FROM v_state#>'{plan,chunks,dispatch_group_members}' THEN
     RAISE EXCEPTION 'Restore all mapped members before used submission records.';
   END IF;
-  -- 显式重复只在全进度/全部实物核对后返回；不 skip 新冲突，不自动重发。
   IF p_chunk_no<v_next THEN RETURN private.employee_transfer_mapped_dependency_receipt(v_state->'plan',v_state);END IF;
   SELECT payload->'rows',row_count INTO STRICT v_rows,v_count FROM private.employee_transfer_staging WHERE job_id=v_job.id
     AND employee_id='00000000-0000-0000-0000-000000000000' AND table_key='dispatch-in:'||p_table_key AND chunk_no=p_chunk_no;
@@ -529,7 +518,6 @@ BEGIN
   PERFORM private.employee_transfer_clear_write_permit();
   v_state:=jsonb_set(jsonb_set(v_state,ARRAY['counts',p_table_key],to_jsonb((v_state#>>ARRAY['counts',p_table_key])::integer+v_count)),
     ARRAY['next_chunks',p_table_key],to_jsonb(p_chunk_no+1));
-  -- 恢复触发器后再重验配置/valid 计数与时间、全部 SQL49 实物及已提交行。
   v_owner:=private.employee_transfer_mapped_dependency_owner(v_job);
   PERFORM private.employee_transfer_mapped_dependency_progress(v_job,v_owner,v_state);
   UPDATE private.employee_transfer_staging SET payload=v_state WHERE job_id=v_job.id
@@ -538,7 +526,6 @@ BEGIN
     jsonb_build_object('table_key',p_table_key,'chunk_no',p_chunk_no,'rows',v_count,'full_site_complete',false));
   RETURN private.employee_transfer_mapped_dependency_receipt(v_state->'plan',v_state);
 EXCEPTION WHEN OTHERS THEN
-  -- PL/pgSQL 子事务先回滚本块 DDL/DML（包含原触发器模式），不假回滚旧块。
   PERFORM private.employee_transfer_clear_write_permit();RAISE;
 END;
 $$;
@@ -590,8 +577,7 @@ GRANT EXECUTE ON FUNCTION public.employee_import_mapped_dependency_plan(uuid,uui
 NOTIFY pgrst,'reload schema';
 COMMIT;
 
--- 未执行 DROP 参考：只移除本阶段接口，不撤销已提交成员/used，不删任务/审计，
--- 不恢复营业；移除 SQL49/48 前须先移除此依赖路径。不要使用 CASCADE。
+-- Unexecuted rollback: removes functions only, not committed data or maintenance.
 -- DROP FUNCTION public.employee_import_mapped_dependency_plan(uuid,uuid);
 -- DROP FUNCTION public.employee_import_mapped_dependency_status(uuid,uuid);
 -- DROP FUNCTION public.employee_import_mapped_dependency_begin(uuid,uuid,text);

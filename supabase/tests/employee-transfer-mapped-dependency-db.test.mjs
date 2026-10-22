@@ -357,8 +357,16 @@ before(async () => {
   other = await adminLogin(db, 'dependency-other-root', PASSWORDS.root); pkg = randomUUID();
   // Only compile local helpers, with auth/supabase replaced at the module boundary. No SDK network.
   const compiled = await build({ stdin: { contents: `export {createReplacementBackup} from './src/lib/employeeTransfer/replacementBackup.ts';
-    export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
-    bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020' });
+    export {createDispatchBackup} from './src/lib/employeeTransfer/dispatchBackup.ts';
+    export {createEmployeeMappedDependencySession} from './src/lib/employeeTransfer/employeeMappedDependency.ts';
+    export {setHarness} from 'mapped-dependency-db:state';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
+    bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', plugins: [{ name: 'local-mapped-dependency-sql', setup(builder) {
+      builder.onResolve({ filter: /^(?:mapped-dependency-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'mapped-dependency-db' }));
+      builder.onLoad({ filter: /.*/, namespace: 'mapped-dependency-db' }, ({ path }) => ({ contents: path === 'mapped-dependency-db:state'
+        ? 'let h;export const setHarness=v=>{h=v};export const current=()=>h;'
+        : path === '../auth' ? 'import{current}from"mapped-dependency-db:state";export const getAdminFinancialSessionToken=()=>current().token;'
+          : 'import{current}from"mapped-dependency-db:state";export const supabase={rpc:(name,args)=>current().rpc(name,args)};' }));
+    } }] });
   modules = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
   await transaction(async () => { shared = await capture('shared'); dispatch = await capture('dispatch'); identity = await capture('identity'); expected = await expectedDependencies(); }, source, true);
   assert.deepEqual(identity.catalog.tables.map(t => t.rows), [2, 2, 4]);
@@ -801,4 +809,83 @@ test('SQL50 real COMMIT then dropped chunk response resumes from status on a sep
       assert.equal((await verify()).verified, true); assert.deepEqual(await validSnapshot(), valid); await assertDependencies(); await noLegacy();
     }, db, true));
   });
+});
+
+for (const lost of ['begin', 'used', 'verify']) test(`SQL50 real client to anon RPC reconciles lost ${lost} response after COMMIT`, async () => {
+  const dump = await db.dumpDataDir('none'), originalTask = task;
+  await withClone(dump, originalTask, async () => {
+    const valid = await validSnapshot(), calls = [];
+    let drop = true;
+    modules.setHarness({ token: session, rpc(name, args) {
+      const query = transaction(async () => {
+        calls.push({ name, args });
+        return on(db, name, args);
+      }, db, true).then(data => {
+        const selected = lost === 'begin' ? name === PREFIX + 'begin' : lost === 'verify' ? name === PREFIX + 'verify'
+          : name === PREFIX + 'chunk' && args.p_table_key === 'used_order_data';
+        if (drop && selected) { drop = false; throw new Error('response dropped AFTER COMMIT'); }
+        return { data, error: null };
+      });
+      query.abortSignal = () => query;
+      return query;
+    } });
+    const client = modules.createEmployeeMappedDependencySession(task.job_token), p = await client.plan();
+    if (lost === 'begin') {
+      await assert.rejects(client.begin(p), /unconfirmed/);
+      const n = calls.length;
+      await assert.rejects(client.begin(p), /unconfirmed/); assert.equal(calls.length, n);
+      await client.plan(); await assert.rejects(client.begin(p), /unconfirmed/);
+      assert.equal((await client.status()).started, true);
+    } else await client.begin(p);
+    for (let no = 0; no < p.chunks.dispatch_group_members; no++) await client.chunk('dispatch_group_members', no);
+    if (lost === 'used') {
+      await assert.rejects(client.chunk('used_order_data', 0), /unconfirmed/);
+      const n = calls.length;
+      await assert.rejects(client.chunk('used_order_data', 1), /unconfirmed/); assert.equal(calls.length, n);
+      const s = await client.status(); assert.equal(s.next_chunks.used_order_data, 1);
+      assert.equal(s.counts.used_order_data, 1);
+    }
+    for (let no = lost === 'used' ? 1 : 0; no < p.chunks.used_order_data; no++) await client.chunk('used_order_data', no);
+    if (lost === 'verify') {
+      await assert.rejects(client.verify(), /unconfirmed/);
+      const n = calls.length; await assert.rejects(client.verify(), /unconfirmed/); assert.equal(calls.length, n);
+      assert.equal((await client.status()).verified, true);
+    } else assert.equal((await client.verify()).verified, true);
+    assert.equal(drop, false);
+    await transaction(async () => { await assertDependencies(); await noLegacy(); });
+    assert.deepEqual(await validSnapshot(), valid);
+    assert.equal(calls.filter(c => c.name === PREFIX + 'begin').length, 1);
+    assert.equal(calls.filter(c => c.name === PREFIX + 'verify').length, 1);
+    assert.equal(calls.filter(c => c.name === PREFIX + 'chunk').length, p.chunks.dispatch_group_members + p.chunks.used_order_data);
+    for (const c of calls) assert.deepEqual(Object.keys(c.args).sort(), ['p_admin_session_token', 'p_job_token',
+      ...c.name === PREFIX + 'begin' ? ['p_plan_hash'] : c.name === PREFIX + 'chunk' ? ['p_table_key', 'p_chunk_no'] : []].sort());
+  });
+});
+
+test('SQL50 zero-employee package still requires both explicit empty dependency chunks', async () => {
+  const previousIdentity = identity;
+  const empty = await transaction(async () => {
+    for (const name of ['used_order_data', 'dispatch_group_members', 'orders', 'financial_employee_credentials', 'wallets', 'users']) {
+      await change(`public.${name}`, `DELETE FROM public.${name}`, [], source);
+    }
+    return { dispatch: await capture('dispatch'), identity: await capture('identity') };
+  }, source);
+  try {
+    identity = empty.identity;
+    assert.deepEqual(identity.catalog.tables.map(t => t.rows), [0, 0, 0]);
+    await withClone(sharedDump, null, () => transaction(async () => {
+      await configure(empty.dispatch); await restoreValid(); await stageIdentity();
+      const p = await plan(); common(p); assert.equal(p.can_begin, true);
+      assert.deepEqual(p.totals, { dispatch_group_members: 0, used_order_data: 0 });
+      assert.deepEqual(p.chunks, { dispatch_group_members: 1, used_order_data: 1 });
+      const valid = await validSnapshot(); await begin(p);
+      await assert.rejects(verify(), /incomplete/);
+      await assert.rejects(chunk('used_order_data', 0), /members/);
+      await chunk('dispatch_group_members', 0); await assert.rejects(verify(), /incomplete/);
+      await chunk('used_order_data', 0); assert.equal((await verify()).verified, true);
+      assert.deepEqual(await validSnapshot(), valid);
+      assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.users'), 0);
+      await noLegacy();
+    }));
+  } finally { identity = previousIdentity; }
 });
