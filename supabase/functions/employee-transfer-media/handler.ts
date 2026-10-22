@@ -24,13 +24,14 @@ const ARCHIVE_TARGET = new RegExp(`^transfer-archives/${UUID}/[0-9a-f]{64}$`);
 const EMPLOYEE_SAFETY_IDENTITY = new RegExp(`^employee-safety-media-v1:(${UUID}):(${UUID}):(${UUID}):([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64}):([0-9a-f]{64})$`);
 const RPCS = {
   verification: { authorize: 'employee_transfer_verification_media_authorize', commit: 'employee_transfer_verification_media_commit' },
+  'mapped-verification': { authorize: 'employee_transfer_mapped_verification_media_authorize', commit: 'employee_transfer_mapped_verification_media_commit' },
   notifications: { authorize: 'employee_transfer_notification_media_authorize', commit: 'employee_transfer_notification_media_commit' },
   chat: { authorize: 'employee_transfer_chat_media_authorize', commit: 'employee_transfer_chat_media_commit' },
   archives: { authorize: 'employee_transfer_archive_media_authorize', commit: 'employee_transfer_archive_media_commit' },
   'employee-safety': { authorize: 'employee_safety_backup_media_authorize', commit: 'employee_safety_backup_media_commit' },
 };
 type Scope = keyof typeof RPCS;
-type MediaKind = Exclude<Scope, 'employee-safety'>;
+type MediaKind = Exclude<Scope, 'employee-safety' | 'mapped-verification'>;
 const ACTIONS = new Set(['download', 'recheck-export', 'upload', 'recheck-import']);
 const ALLOWED_HEADERS = 'authorization, apikey, content-type, x-client-info, x-transfer-action, x-transfer-scope, x-admin-session-token, x-transfer-job-token, x-transfer-object-key';
 const CORS = {
@@ -159,7 +160,28 @@ async function employeeSafetyContext(value: unknown, action: string, key: string
   return { direction: 'export', key, bucket: value.bucket, path: value.path, source_url: value.source_url,
     file, generation: identity[4], avatar: value.avatar, kind: value.kind };
 }
+// SQL53 has an independent import-only context. Never relax the old same-owner verification rule.
+async function mappedVerificationContext(value: unknown, action: string, key: string, crypto: Pick<Crypto, 'subtle'>): Promise<Context> {
+  if ((action !== 'upload' && action !== 'recheck-import') || !record(value) ||
+    !exact(value, ['direction', 'key', 'bucket', 'path', 'source_url', 'file', 'generation', 'source_id', 'target_id']) ||
+    value.direction !== 'import' || value.key !== key || value.bucket !== BUCKET || !safePath(value.path) ||
+    typeof value.source_id !== 'string' || value.source_id.length !== 36 || !UUID_PATTERN.test(value.source_id) ||
+    typeof value.target_id !== 'string' || value.target_id.length !== 36 || !UUID_PATTERN.test(value.target_id) ||
+    value.source_id.toLowerCase() === value.target_id.toLowerCase() ||
+    typeof value.generation !== 'string' || value.generation !== value.generation.trim() ||
+    !/^(0|[1-9][0-9]{0,5})$/.test(value.generation) || Number(value.generation) > 500000) fail();
+  const path = sourcePath(value.source_url);
+  const [sourceFolder, sourceName] = path.split('/');
+  const [folder, name] = value.path.split('/');
+  if (sourceName.slice(0, 36) !== value.source_id || folder !== sourceFolder || name.slice(0, 36) !== value.target_id ||
+    !IMPORT_NAME.test(name) || name.slice(name.lastIndexOf('.') + 1) !== sourceName.slice(sourceName.lastIndexOf('.') + 1).toLowerCase() ||
+    await digest(new TextEncoder().encode(value.source_url as string), crypto) !== key) fail();
+  const file = fileTuple(value.file, key, value.source_url as string, 'verification', false);
+  return { direction: 'import', key, bucket: BUCKET, path: value.path, source_url: value.source_url as string,
+    file, generation: value.generation, avatar: false };
+}
 async function context(value: unknown, action: string, key: string, origin: string, crypto: Pick<Crypto, 'subtle'>, scope: Scope): Promise<Context> {
+  if (scope === 'mapped-verification') return mappedVerificationContext(value, action, key, crypto);
   if (scope === 'employee-safety') return employeeSafetyContext(value, action, key, crypto);
   if (scope === 'archives') return archiveContext(value, action, key, crypto);
   const direction = action === 'download' || action === 'recheck-export' ? 'export' : 'import';
@@ -410,11 +432,12 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
       if (request.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       if (!origin || !crypto?.subtle) fail(500, 'TRANSFER_FAILED');
       const rawScope = request.headers.get('x-transfer-scope') ?? 'verification';
-      if (rawScope !== 'verification' && rawScope !== 'notifications' && rawScope !== 'chat' && rawScope !== 'archives' && rawScope !== 'employee-safety') fail(400, 'INVALID_REQUEST');
+      if (rawScope !== 'verification' && rawScope !== 'notifications' && rawScope !== 'chat' && rawScope !== 'archives' && rawScope !== 'employee-safety' && rawScope !== 'mapped-verification') fail(400, 'INVALID_REQUEST');
       const scope: Scope = rawScope;
       const rpcs = RPCS[scope];
       const action = request.headers.get('x-transfer-action') ?? '';
       if (scope === 'employee-safety' && action !== 'download' && action !== 'recheck-export') fail(400, 'INVALID_REQUEST');
+      if (scope === 'mapped-verification' && action !== 'upload' && action !== 'recheck-import') fail(400, 'INVALID_REQUEST');
       const admin = request.headers.get('x-admin-session-token') ?? '';
       if (scope === 'archives' && action === 'read') {
         if (!UUID_PATTERN.test(admin) || admin.length !== 36 || request.signal.aborted ||
@@ -455,7 +478,7 @@ export function createEmployeeTransferMediaHandler(deps: MediaHandlerDependencie
       const authorized = await deps.rpc(rpcs.authorize, args);
       if (authorized.error || authorized.data === null || authorized.data === undefined) fail(403, 'NOT_AUTHORIZED');
       const ctx = await context(authorized.data, action, key, origin, crypto, scope);
-      const kind = scope === 'employee-safety' ? ctx.kind! : scope;
+      const kind = scope === 'employee-safety' ? ctx.kind! : scope === 'mapped-verification' ? 'verification' : scope;
       if (request.signal.aborted) fail(400, 'INVALID_REQUEST');
       let bytes: Uint8Array | undefined;
       let file: FileTuple;

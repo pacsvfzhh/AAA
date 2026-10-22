@@ -2706,6 +2706,51 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityStatus;
       };
+      employee_import_mapped_verification_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog: Record<string, unknown> };
+        Returns: import('../lib/employeeTransfer/employeeMappedVerification').EmployeeMappedVerificationBindReceipt;
+      };
+      employee_import_mapped_verification_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedVerification').EmployeeMappedVerificationStageReceipt;
+      };
+      employee_import_mapped_verification_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedVerification').EmployeeMappedVerificationPlan;
+      };
+      employee_import_mapped_verification_begin: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedVerification').EmployeeMappedVerificationStatus;
+      };
+      employee_import_mapped_verification_apply: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string; p_plan_hash: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedVerification').EmployeeMappedVerificationStatus;
+      };
+      employee_import_mapped_verification_status: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_source_id: string | null };
+        Returns: import('../lib/employeeTransfer/employeeMappedVerification').EmployeeMappedVerificationStatus;
+      };
+      employee_import_mapped_verification_verify: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedVerification').EmployeeMappedVerificationStatus;
+      };
+      get_employee_transfer_mapped_verification_media: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_import_mapped_verification_media_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_files: EmployeeVerificationMediaFile[] };
+        Returns: Record<string, unknown>;
+      };
+      employee_transfer_mapped_verification_media_authorize: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: string; p_object_key: string };
+        Returns: Record<string, unknown>;
+      };
+      employee_transfer_mapped_verification_media_commit: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_action: string; p_object_key: string; p_bytes: number;
+          p_sha256: string; p_content_type: string; p_storage_origin: string; p_generation: string };
+        Returns: Record<string, unknown>;
+      };
       employee_import_replacement_plan: {
         Args: { p_admin_session_token: string; p_job_token: string; p_after?: string | null; p_limit?: number };
         Returns: import('../lib/employeeTransfer/employeeReplacement').EmployeeReplacementPlan;
