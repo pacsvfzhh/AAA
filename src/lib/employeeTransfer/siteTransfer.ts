@@ -19,6 +19,7 @@ import type { ReplacementBackupFile } from './replacementBackup';
 import { validateSharedExportCatalog } from './sharedExport';
 import { Sha256 } from './sha256';
 import { createSiteExportDrivers } from './siteExportApi';
+import { validateSourceCutoff, type SourceCutoff } from './sourceCutover';
 import { inspectVerificationBundle } from './verificationMedia';
 import { validateVerificationCatalog, validateVerificationRow } from './verificationTransfer';
 
@@ -46,13 +47,14 @@ export interface SiteVolumeReceipt {
 }
 export interface SiteBundleResult {
   packageId: string; sourceSiteId: string; volumes: SiteVolumeReceipt[]; fullSiteComplete: false; importReady: false;
+  sourceCutover?: SourceCutoff;
 }
 export interface AuthenticatedSiteDomain {
   catalog: unknown; media: unknown; manifest: VolumeManifest;
   workspace: ArchiveBundleWorkspace; file: ReplacementBackupFile; cipherSha256: string; cipherBytes: number;
 }
 export interface AuthenticatedSiteBundleSet {
-  packageId: string; sourceSiteId: string; volumes: SiteVolumeReceipt[];
+  packageId: string; sourceSiteId: string; volumes: SiteVolumeReceipt[]; sourceCutover?: SourceCutoff;
   readDomain<T>(domain: SiteDomain, use: (value: AuthenticatedSiteDomain) => Promise<T>): Promise<T>;
 }
 interface SiteCatalog {
@@ -62,6 +64,7 @@ interface SiteCatalog {
 interface SiteSnapshot {
   version: 1; protocol: 'site-bundle-set-v1'; site_id: string; package_id: string;
   catalogs: Record<SiteDomain, SiteCatalog>; sha256: string; full_site_complete: false; import_ready: false;
+  source_cutover?: SourceCutoff;
 }
 interface SavedVolume { receipt: SiteVolumeReceipt; file: ReplacementBackupFile; manifest: VolumeManifest }
 interface IndexedVolume extends SiteVolumeReceipt { volumeId: string }
@@ -109,9 +112,13 @@ function validateCatalog(domain: SiteDomain, value: unknown): SiteCatalog {
   }
 }
 function validateSnapshot(value: unknown): SiteSnapshot {
-  const r = object(value, ['version', 'protocol', 'site_id', 'package_id', 'catalogs', 'sha256', 'full_site_complete', 'import_ready']);
+  const hasCutover = value !== null && typeof value === 'object' && Object.hasOwn(value, 'source_cutover');
+  const r = object(value, ['version', 'protocol', 'site_id', 'package_id', 'catalogs', 'sha256', 'full_site_complete', 'import_ready',
+    ...(hasCutover ? ['source_cutover'] : [])]);
+  const cutoff = hasCutover ? validateSourceCutoff(r.source_cutover) : undefined;
   if (r.version !== 1 || r.protocol !== PROTOCOL || r.full_site_complete !== false || r.import_ready !== false) invalid();
   const site = uuid(r.site_id), pkg = uuid(r.package_id), raw = object(r.catalogs, SITE_DOMAINS);
+  if (cutoff && cutoff.site_id !== site) invalid();
   const catalogs = {} as Record<SiteDomain, SiteCatalog>;
   for (const domain of SITE_DOMAINS) {
     const catalog = validateCatalog(domain, raw[domain]);
@@ -123,7 +130,8 @@ function validateSnapshot(value: unknown): SiteSnapshot {
     if (catalog.finance_catalog !== undefined) same(catalog.finance_catalog, catalogs.finance);
   }
   return { version: 1, protocol: PROTOCOL, site_id: site, package_id: pkg, catalogs,
-    sha256: hash(r.sha256), full_site_complete: false, import_ready: false };
+    sha256: hash(r.sha256), full_site_complete: false, import_ready: false,
+    ...(cutoff ? { source_cutover: cutoff } : {}) };
 }
 async function rpc(name: 'get_employee_transfer_capabilities' | 'get_employee_export_site_snapshot' | 'get_employee_transfer_log',
   extra: Record<string, string | number> = {}, signal?: AbortSignal): Promise<unknown> {
@@ -417,7 +425,8 @@ export async function exportSiteBundleSet(options: RunOptions & {
     const receipt: SiteVolumeReceipt = { domain: 'index', filename: INDEX_FILE, ...written, rows: 0, files: 0 };
     saved.push({ receipt, file, manifest: verified.manifest });
     outcome = { packageId: baseline.package_id, sourceSiteId: baseline.site_id,
-      volumes: saved.map(item => ({ ...item.receipt })), fullSiteComplete: false, importReady: false };
+      volumes: saved.map(item => ({ ...item.receipt })), fullSiteComplete: false, importReady: false,
+      ...(baseline.source_cutover ? { sourceCutover: structuredClone(baseline.source_cutover) } : {}) };
   } catch {
     failure = options.signal?.aborted ? new DOMException('Site export cancelled; reconcile saved files and server task.', 'AbortError')
       : new Error(`Site export stopped during ${phase}. Keep saved files and reconcile the active server task. No automatic cancellation or rollback was performed.`);
@@ -485,6 +494,7 @@ export async function withAuthenticatedSiteBundleSet<T>(
     const bundle: AuthenticatedSiteBundleSet = {
       packageId: inspected.packageId, sourceSiteId: inspected.sourceSiteId,
       volumes: inspected.volumes.map(volume => ({ ...volume })),
+      ...(baseline.source_cutover ? { sourceCutover: structuredClone(baseline.source_cutover) } : {}),
       async readDomain(domain, consume) {
         if (!active || busy) invalid();
         const expected = index.volumes.find(volume => volume.domain === domain);
