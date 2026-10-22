@@ -160,16 +160,22 @@ $$;
 CREATE FUNCTION private.employee_transfer_mapped_verification_expected(p_job private.employee_transfer_jobs,p_source uuid,p_target uuid,p_key text)
 RETURNS TABLE(id text,body jsonb) LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
-DECLARE v_row record;v_body jsonb;v_field text;v_url text;v_ref jsonb;v_receipt jsonb;
+DECLARE v_row record;v_body jsonb;v_field text;v_url text;v_ref jsonb;v_receipt jsonb;v_refs jsonb;v_receipts jsonb;v_key text;v_admin_map jsonb;
 BEGIN
   IF p_key IS DISTINCT FROM 'verification_requests' THEN RAISE EXCEPTION 'Invalid mapped verification table.';END IF;
+  v_admin_map:=private.employee_transfer_mapped_activity_saved(p_job)->'admin_map';
+  SELECT COALESCE(jsonb_object_agg(value->>'key',value),'{}') INTO v_refs
+    FROM jsonb_array_elements(private.employee_transfer_mapped_verification_media_refs(p_job));
+  IF EXISTS(SELECT 1 FROM private.employee_transfer_staging WHERE job_id=p_job.id AND table_key='mapped-verification-media-import'
+    GROUP BY payload#>>'{file,key}' HAVING count(*)<>1) THEN RAISE EXCEPTION 'Mapped verification media receipt keys changed.';END IF;
+  SELECT COALESCE(jsonb_object_agg(payload#>>'{file,key}',payload),'{}') INTO v_receipts FROM private.employee_transfer_staging
+    WHERE job_id=p_job.id AND table_key='mapped-verification-media-import';
   FOR v_row IN SELECT h.id,h.body FROM private.employee_transfer_mapped_verification_input(p_job.id,p_key) h WHERE h.body->>'user_id'=p_source::text LOOP
-    v_body:=v_row.body||jsonb_build_object('user_id',p_target,'audited_by',private.employee_transfer_mapped_activity_saved(p_job)#>>ARRAY['admin_map',v_row.body->>'audited_by']);
+    v_body:=v_row.body||jsonb_build_object('user_id',p_target,'audited_by',v_admin_map->>(v_row.body->>'audited_by'));
     FOREACH v_field IN ARRAY ARRAY['id_front_url','id_back_url','selfie_url'] LOOP
       v_url:=v_row.body->>v_field;IF v_url IS NULL THEN CONTINUE;END IF;
-      SELECT value INTO STRICT v_ref FROM jsonb_array_elements(private.employee_transfer_mapped_verification_media_refs(p_job)) WHERE value->>'source_url'=v_url;
-      SELECT payload INTO STRICT v_receipt FROM private.employee_transfer_staging WHERE job_id=p_job.id
-        AND table_key='mapped-verification-media-import' AND payload#>>'{file,key}'=v_ref->>'key';
+      v_key:=encode(extensions.digest(convert_to(v_url,'UTF8'),'sha256'),'hex');v_ref:=v_refs->v_key;v_receipt:=v_receipts->v_key;
+      IF v_ref IS NULL OR v_receipt IS NULL THEN RAISE EXCEPTION 'Mapped verification document has not been verified.';END IF;
       v_body:=v_body||jsonb_build_object(v_field,(v_receipt->>'storage_origin')||'/storage/v1/object/public/verification-documents/'||private.employee_transfer_mapped_verification_media_path(p_job,v_ref,p_target));
     END LOOP;
     id:=v_row.id;body:=v_body;RETURN NEXT;
@@ -307,6 +313,9 @@ BEGIN
       OR v_state->'completed_employees' IS DISTINCT FROM v_phase->'completed_employees'
       OR (v_state->'verified'='true'::jsonb AND v_state->'completed_employees' IS DISTINCT FROM v_plan->'employees') THEN
       RAISE EXCEPTION 'Mapped verification saved plan, mappings or progress changed.';
+    END IF;
+    IF v_state->'verified'='true'::jsonb AND NOT private.employee_transfer_mapped_verification_media_ready(p_job,true) THEN
+      RAISE EXCEPTION 'Verified mapped verification media generation changed.';
     END IF;
   END IF;
   RETURN v_owner;
