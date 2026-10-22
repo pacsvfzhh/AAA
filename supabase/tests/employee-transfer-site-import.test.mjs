@@ -18,7 +18,7 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // are real disk files; temporary plaintext workspaces and Edge Storage are in memory.
 // Source fixture trigger changes finish BEFORE import; no importer error is bypassed.
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const LAST = '20261102000055_verify_site_restore.sql';
+const LAST = '20261102000056_freeze_cutover_source.sql';
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';
@@ -46,10 +46,11 @@ mock.method(globalThis, 'fetch', async (url, init) => {
   return response;
 });
 const compiled = await build({
-  stdin: { contents: `export {exportSiteBundleSet, withAuthenticatedSiteBundleSet} from './src/lib/employeeTransfer/siteTransfer.ts';
+  stdin: { contents: `export {exportSiteBundleSet, inspectSiteBundleSet, withAuthenticatedSiteBundleSet} from './src/lib/employeeTransfer/siteTransfer.ts';
+    export {freezeSourceCutover, getSourceCutoverStatus} from './src/lib/employeeTransfer/sourceCutover.ts';
     export {importSiteBundleSetToMaintenance} from './src/lib/employeeTransfer/siteImport.ts';
     export {readTransferMetadata} from './src/lib/employeeTransfer/crypto.ts';
-    export {verifyEncryptedVolume} from './src/lib/employeeTransfer/container.ts';
+    export {verifyEncryptedVolume, writeEncryptedVolume} from './src/lib/employeeTransfer/container.ts';
     export {setHarness} from 'site-import-test:state';`, resolveDir: root },
   bundle: true, write: false, platform: 'browser', format: 'esm', metafile: true,
   define: { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(ORIGIN), 'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify('offline-test-key') },
@@ -159,7 +160,7 @@ function workspaces({ failCleanup = () => false } = {}) {
 function allDead(w) { assert.ok(w.spaces.every(s => s.dead && !s.data.size)); }
 const fileList = set => set.map(f => new File([f.raw], f.name));
 const readDirectory = output => Promise.all([...output.outputs.values()].map(async f => ({ name: f.name, raw: await readFile(f.path) })));
-async function exportSet() {
+async function exportSet(checkResult = () => {}) {
   const output = directory(), w = workspaces();
   let last;
   let result;
@@ -170,6 +171,7 @@ async function exportSet() {
   assert.equal(result.importReady, false); assert.equal(result.fullSiteComplete, false); allDead(w);
   const files = await readDirectory(output);
   for (const v of result.volumes) { const f = files.find(f => f.name === v.filename); assert.equal(sha(f.raw), v.cipherSha256); }
+  checkResult(result);
   return files;
 }
 function explicitRoles(plan) {
@@ -280,18 +282,18 @@ after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   const foreign = edge.foreign.slice(); mock.restoreAll(); assert.deepEqual(foreign, []);
 });
-test('strict latest 43–55 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
-  assert.equal(replay.files.length, 582);
-  assert.deepEqual(replay.files.slice(-13), ['20261102000043_preserve_transfer_announcements.sql',
+test('strict latest 43–56 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
+  assert.equal(replay.files.length, 583);
+  assert.deepEqual(replay.files.slice(-14), ['20261102000043_preserve_transfer_announcements.sql',
     '20261102000044_preflight_site_restore.sql', '20261102000045_verify_site_prerequisites.sql',
     '20261102000046_backup_employee_before_restore.sql', '20261102000047_backup_employee_media.sql',
     '20261102000048_reserve_employee_identities.sql', '20261102000049_restore_mapped_employee_identities.sql',
     '20261102000050_restore_mapped_dispatch_dependencies.sql', '20261102000051_restore_mapped_employee_finance.sql',
     '20261102000052_restore_mapped_employee_activity.sql', '20261102000053_restore_mapped_employee_verification.sql',
-    '20261102000054_prepare_mapped_notifications.sql', LAST]);
+    '20261102000054_prepare_mapped_notifications.sql', '20261102000055_verify_site_restore.sql', LAST]);
   assert.equal(replay.failures.length, 12);
   const paths = Object.keys(compiled.metafile.inputs);
-  for (const module of ['siteTransfer', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
+  for (const module of ['siteTransfer', 'sourceCutover', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
     assert.ok(paths.some(p => p.endsWith(`/employeeTransfer/${module}.ts`)), module);
   assert.equal(paths.some(p => /src\/lib\/(?:auth|supabase)\.ts$|node_modules\/@supabase\//.test(p)), false);
   t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; no clean-build/native-PG claim`);
@@ -396,6 +398,113 @@ test('real SQL ten-domain export -> 11 disk .edx -> empty distinct target import
   assertProgress(context); allDead(context.w); assert.equal(context.progress.at(-1).phase, 'maintenance');
   assert.equal(names().includes('employee_import_finish'), false); assert.equal(names().includes('employee_transfer_leave_maintenance'), false);
 }));
+
+test('frozen golden: real source freeze -> 11 disk .edx -> authenticated cutoff -> empty target maintenance restore (NO resume/release)', { timeout: 300000 }, async t => {
+  let frozenFiles, cutoff, packageId;
+  await isolated(source, sourceSession, async () => {
+    assert.equal(await scalar(source, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), 0);
+    const modes = await triggers(source), pending = await scalar(source, 'SELECT count(*)::int FROM public.notification_automation_queue');
+    assert.ok(pending > 0, 'fixture login/work triggers really queued automation');
+    // Drain through the actual worker, not DELETE/TRUNCATE or a fabricated empty receipt.
+    await scalar(source, 'SELECT public.process_notification_automation_queue_fast(100)');
+    for (const table of ['notification_automation_queue', 'notification_automation_failures'])
+      assert.equal(await scalar(source, `SELECT count(*)::int FROM public.${table}`), 0, table);
+    assert.equal(await scalar(source, "SELECT count(*)::int FROM public.orders WHERE status='processing'"), 0);
+    const frozen = await api.freezeSourceCutover(PASSWORDS.root, '確認暫停舊站業務並導出');
+    assert.equal(frozen.success, true); assert.equal(frozen.frozen, true); assert.deepEqual(frozen.blockers, []);
+    assert.deepEqual(frozen.counts, { pending_automation: 0, failed_automation: 0, processing_orders: 0 });
+    assert.equal(frozen.full_site_complete, false); cutoff = structuredClone(frozen.cutoff);
+    assert.equal(cutoff.site_id, sourceId);
+    const stored = await scalar(source, "SELECT summary->'source_cutover' FROM private.employee_transfer_jobs WHERE id=$1 AND kind='export' AND status='finished'", [cutoff.cutoff_id]);
+    assert.deepEqual(cutoff, stored);
+    assert.equal(cutoff.cutoff_hash, await scalar(source, `SELECT encode(extensions.digest(convert_to(((summary->'source_cutover')-'cutoff_hash')::text,'UTF8'),'sha256'),'hex')
+      FROM private.employee_transfer_jobs WHERE id=$1`, [cutoff.cutoff_id]), 'real PG jsonb digest, not JS JSON.stringify');
+    const maintenance = await rows(source, 'SELECT to_jsonb(m)::text AS body FROM private.employee_transfer_maintenance m');
+    assert.equal(await scalar(source, 'SELECT dirty FROM private.employee_transfer_maintenance'), false);
+    frozenFiles = await exportSet(result => {
+      assert.deepEqual(result.sourceCutover, cutoff); packageId = result.packageId;
+    });
+    assert.deepEqual(await rows(source, 'SELECT to_jsonb(m)::text AS body FROM private.employee_transfer_maintenance m'), maintenance,
+      'all ten export closes preserve the original source freeze');
+    assert.deepEqual(await api.getSourceCutoverStatus(), frozen);
+    const snapshots = callsOf('get_employee_export_site_snapshot');
+    assert.equal(snapshots.length, 2);
+    for (const call of snapshots) { assert.equal(call.error, null); assert.deepEqual(call.result.source_cutover, cutoff); }
+    const closes = state.calls.filter(call => /^employee_export_.*_close$|^employee_products_close$/.test(call.name));
+    assert.equal(closes.length, 10); assert.ok(closes.every(call => !call.error && call.result.success === true));
+    assert.equal(await scalar(source, "SELECT count(*)::int FROM private.employee_transfer_jobs WHERE status='running'"), 0);
+    assert.equal(names().some(name => /resume|leave_maintenance|employee_transfer_cancel/.test(name)), false);
+    await source.exec('SAVEPOINT frozen_write_probe');
+    try {
+      await assert.rejects(source.query("UPDATE public.users SET remarks='must remain frozen' WHERE id=$1", [I.employee]),
+        /Business writes are paused for employee transfer maintenance/);
+    } finally { await source.exec('ROLLBACK TO SAVEPOINT frozen_write_probe; RELEASE SAVEPOINT frozen_write_probe'); }
+    assert.deepEqual(await triggers(source), modes);
+  });
+  // isolated() rolls back ONLY this local test transaction; no resume RPC or fake restoration.
+  assert.equal(await scalar(source, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), 0);
+  state.calls = [];
+  const w = workspaces(), files = fileList(frozenFiles);
+  const inspected = await api.inspectSiteBundleSet(files, PASS, w.create);
+  assert.equal(inspected.packageId, packageId); assert.deepEqual(inspected.sourceCutover, cutoff);
+  inspected.sourceCutover.cutoff_hash = '0'.repeat(64);
+  await api.withAuthenticatedSiteBundleSet(files, PASS, w.create, async bundle => {
+    assert.equal(bundle.sourceSiteId, sourceId); assert.equal(bundle.packageId, packageId);
+    assert.deepEqual(bundle.sourceCutover, cutoff);
+    // Public return values are copies: changing one cannot rewrite the authenticated index.
+    bundle.sourceCutover.cutoff_hash = 'f'.repeat(64); bundle.sourceCutover.frozen_at = '2000-01-01T00:00:00.000000Z';
+    await bundle.readDomain('activity', async input => { assert.equal(input.manifest.sourceSiteId, cutoff.site_id); });
+  });
+  await api.withAuthenticatedSiteBundleSet(files, PASS, w.create, async bundle => { assert.deepEqual(bundle.sourceCutover, cutoff); });
+  assert.equal(state.calls.length, 0, 'standalone index authentication/reader never calls SQL'); allDead(w);
+
+  // A valid encrypted ZIP with a forged cutoff hash must still fail semantic authentication.
+  const index = frozenFiles.find(file => file.name === 'site-index.edx'), raw = index.raw;
+  const bytes = value => ({ async *[Symbol.asyncIterator]() { for (let i = 0; i < value.length; i += 65536) yield value.subarray(i, i + 65536); } });
+  const tamperSpaces = workspaces(), space = tamperSpaces.create();
+  try {
+    const metadata = await api.readTransferMetadata(bytes(raw));
+    const manifest = await api.verifyEncryptedVolume(bytes(raw), PASS, space, { expectedMetadata: metadata, limits: { maxLineBytes: 2 * 1024 * 1024 } });
+    assert.equal(manifest.entries.length, 1);
+    const path = manifest.entries[0].path, parts = [];
+    for await (const part of space.open(path)) parts.push(Buffer.from(part));
+    const document = JSON.parse(Buffer.concat(parts).toString('utf8'));
+    assert.deepEqual(document.snapshot.source_cutover, cutoff);
+    document.snapshot.source_cutover.cutoff_hash = '0'.repeat(64);
+    const payload = Buffer.from(JSON.stringify(document) + '\n');
+    const { exportId, sourceSiteId, volumeId, createdAt, scope, volumeIndex, volumeCount } = manifest;
+    const info = { exportId, sourceSiteId, volumeId, createdAt, scope, volumeIndex, volumeCount }, output = directory();
+    const file = output.createFile(index.name);
+    await file.write(api.writeEncryptedVolume((async function* () {
+      yield { path, bytes: payload.length, open: () => bytes(payload) };
+    })(), info, PASS));
+    // Prove GCM/ZIP/manifest are valid; only the cutoff's PG digest is wrong.
+    await api.verifyEncryptedVolume(file.open(), PASS, tamperSpaces.create(), { expectedMetadata: metadata, limits: { maxLineBytes: 2 * 1024 * 1024 } });
+    const forgedRaw = await readFile(output.outputs.get(index.name).path);
+    const forged = fileList(frozenFiles.map(value => value.name === index.name ? { name: index.name, raw: forgedRaw } : value));
+    let consumed = false;
+    await assert.rejects(api.withAuthenticatedSiteBundleSet(forged, PASS, tamperSpaces.create, async () => { consumed = true; }));
+    assert.equal(consumed, false); assert.equal(state.calls.length, 0);
+  } finally { for (const temporary of tamperSpaces.spaces) await temporary.abort(); allDead(tamperSpaces); }
+
+  await isolated(target, targetSession, async () => {
+    assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.users'), 0);
+    const before = await targetExcluded(), modes = await triggers(target);
+    const context = startImport({ options: { files: fileList(frozenFiles) } }), result = await mustComplete(context, t);
+    assert.deepEqual(result.verifiedDomains, DOMAINS); assert.equal(result.maintenance, true);
+    assert.equal(result.fullSiteComplete, false); assert.equal(result.importReady, false);
+    assert.deepEqual(result.serverVerification.verified_domains, DOMAINS);
+    assert.deepEqual(result.serverVerification.counts, { employees: 1, pending_withdrawals: 1, pending_withdrawal_amount: '3' });
+    assert.equal(callsOf('employee_import_site_verify').length, 1);
+    await assertMaintenance(result); await assertBackups(context); await assertBusiness();
+    for (const table of ['notification_automation_plans', 'notification_automation_tasks'])
+      assert.equal(await scalar(target, `SELECT count(*)::int FROM public.${table} WHERE status='active'`), 0);
+    assert.deepEqual(await targetExcluded(), before); assert.deepEqual(await triggers(target), modes);
+    assertProgress(context); allDead(context.w); assert.equal(context.progress.at(-1).phase, 'maintenance');
+    assert.equal(names().some(name => /resume|leave_maintenance|employee_import_finish/.test(name)), false);
+  });
+  t.diagnostic('Real worker -> SQL56 freeze -> 11 disk ciphertexts -> authenticated PG cutoff (including re-encrypted forged-hash rejection) -> ten-domain SQL55 maintenance verification; no source resume or target release. Local source/target isolation ROLLBACK only.');
+});
 
 test('wrong confirmation makes ZERO RPC; wrong passphrase / tampered LAST domain / missing / mixed package reject before first write', { timeout: 180000 }, async () => isolated(target, targetSession, async () => {
   let c = startImport({ options: { confirmation: '確認導入' } }); await assert.rejects(c.promise); assert.equal(state.calls.length, 0);

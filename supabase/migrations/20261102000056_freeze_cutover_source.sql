@@ -160,11 +160,24 @@ BEGIN
 END;
 $$;
 
+ALTER FUNCTION public.get_employee_transfer_log(uuid,integer) SET SCHEMA private;
+ALTER FUNCTION private.get_employee_transfer_log(uuid,integer) RENAME TO employee_transfer_log_before_cutover;
+CREATE FUNCTION public.get_employee_transfer_log(p_admin_session_token uuid,p_limit integer DEFAULT 100)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+DECLARE v_result jsonb;
+BEGIN
+  v_result := private.employee_transfer_log_before_cutover(p_admin_session_token,p_limit);
+  RETURN v_result||jsonb_build_object('last_export_at',(SELECT max(finished_at) FROM private.employee_transfer_jobs
+    WHERE kind='export' AND status='finished' AND options->>'export_protocol' IS DISTINCT FROM 'source-cutover-v1'));
+END;
+$$;
+
 REVOKE ALL ON FUNCTION private.employee_transfer_cutover_lock(),private.employee_transfer_source_cutoff(),
-  private.employee_transfer_site_snapshot_v1(uuid,uuid) FROM PUBLIC,anon,authenticated,service_role;
+  private.employee_transfer_site_snapshot_v1(uuid,uuid),private.employee_transfer_log_before_cutover(uuid,integer) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.get_employee_export_cutover_status(uuid),public.employee_export_cutover_freeze(uuid,text,text),
-  public.employee_export_cutover_resume(uuid,text,text,uuid),public.get_employee_export_site_snapshot(uuid,uuid) FROM PUBLIC,anon,authenticated,service_role;
+  public.employee_export_cutover_resume(uuid,text,text,uuid),public.get_employee_export_site_snapshot(uuid,uuid),public.get_employee_transfer_log(uuid,integer) FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.get_employee_export_cutover_status(uuid),public.employee_export_cutover_freeze(uuid,text,text),
-  public.employee_export_cutover_resume(uuid,text,text,uuid),public.get_employee_export_site_snapshot(uuid,uuid) TO anon,authenticated;
+  public.employee_export_cutover_resume(uuid,text,text,uuid),public.get_employee_export_site_snapshot(uuid,uuid),public.get_employee_transfer_log(uuid,integer) TO anon,authenticated;
 NOTIFY pgrst,'reload schema';
 COMMIT;
