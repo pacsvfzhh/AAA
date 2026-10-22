@@ -87,7 +87,7 @@ function chunks(text, size = 200) {
   return result;
 }
 let source, db, session, sourceSession, branch, emergency, other, pkg, task, sharedTask;
-let identity, dispatch, shared, finance, activity, verification, modules, bindings, sharedDump, preFinanceDump, preActivityDump, readyDump, readyTask, replay;
+let identity, dispatch, shared, finance, activity, verification, largeVerification, modules, bindings, sharedDump, preFinanceDump, preActivityDump, readyDump, readyTask, replay;
 let counter = 0;
 const auth = (job = task, token = session) => ({ p_admin_session_token: token, p_job_token: job.job_token });
 async function on(site, name, args, role = 'anon') {
@@ -571,10 +571,13 @@ before(async () => {
   await transaction(async () => {
     await seedActivity(); await seedVerification();
     shared = await capture('shared'); dispatch = await capture('dispatch'); identity = await capture('identity');
-    finance = await capture('finance'); activity = await capture('activity'); verification = await capture('verification');
+    finance = await capture('finance'); activity = await capture('activity'); largeVerification = await capture('verification');
+    // Routine fixture keeps 8 real source rows (6 employee one, 2 employee two); the dedicated 205-row test uses largeVerification.
+    await source.query('DELETE FROM public.verification_requests WHERE id<>ALL($1::uuid[])', [[4001, 4002, 4003, 4005, 4007, 4203, 4204, 4205].map(id)]);
+    verification = await capture('verification');
   }, source, true);
   assert.deepEqual(activity.catalog.identity_catalog, identity.catalog);
-  assert.deepEqual(verification.catalog.identity_catalog, identity.catalog);
+  assert.deepEqual(verification.catalog.identity_catalog, identity.catalog); assert.deepEqual(largeVerification.catalog.identity_catalog, identity.catalog);
   assert.deepEqual(finance.catalog.identity_catalog, identity.catalog); assert.deepEqual(identity.catalog.tables.map(t => t.rows), [2, 2, 4]);
   await transaction(async () => {
     const prepared = await prepare('shared', shared); sharedTask = prepared.job;
@@ -670,14 +673,14 @@ for (const role of ['anon', 'authenticated']) test(`SQL53 ${role}: full 15-field
   const maintenance = await scalar(db, 'SELECT to_jsonb(m) FROM private.employee_transfer_maintenance m');
   const flags = await rows(db, 'SELECT id,is_verified,is_active FROM public.users ORDER BY id');
   const p = await stage(verification, role); common(p); assert.equal(p.can_begin, true); assert.deepEqual(p.conflicts, []);
-  assert.deepEqual(p.totals, { verification_requests: 205 }); assert.equal(p.employees, 2); assert.notEqual(p.site_id, p.source_site_id);
+  assert.deepEqual(p.totals, { verification_requests: 8 }); assert.equal(p.employees, 2); assert.notEqual(p.site_id, p.source_site_id);
   assert.equal((await status(null, {}, role)).started, false);
   const begun = await begin(p, {}, role); common(begun, p); assert.equal(begun.completed_employees, 0); assert.equal(begun.started, true);
   await assert.rejects(verify({}, role));
   for (const [n, sourceId] of EMPLOYEES.entries()) {
     assert.equal((await status(sourceId, {}, role)).employee.applied, false);
     const r = await apply(p, sourceId, {}, role); common(r, p); assert.equal(r.completed_employees, n + 1); assert.equal(r.employee.applied, true);
-    assert.deepEqual(r.employee.counts, { verification_requests: sourceId === S.one ? 203 : 2 });
+    assert.deepEqual(r.employee.counts, { verification_requests: sourceId === S.one ? 6 : 2 });
     assert.deepEqual(await status(sourceId, {}, role), r); assert.deepEqual(await plan({}, role), p);
     const frozen = await snapshot(); assert.deepEqual(await apply(p, sourceId, {}, role), r); assert.deepEqual(await snapshot(), frozen);
     assert.deepEqual(await triggers(), modes); await noLegacy();
@@ -724,13 +727,16 @@ test('SQL53 NULLs, Unicode, historic field meanings and microseconds survive non
 }));
 
 test('SQL53 205 source requests cross real 200/5 chunk boundary, exact ordered hashes and per-employee counts', () => transaction(async () => {
-  assert.deepEqual(chunks(verification.texts.verification_requests).map(text => lines(text).length), [200, 5]);
-  const table = verification.catalog.tables[0]; assert.equal(table.rows, 205);
-  assert.equal(table.bytes, Buffer.byteLength(verification.texts.verification_requests));
-  assert.equal(table.row_hashes_sha256, sha(lines(verification.texts.verification_requests).map(sha).join('')));
-  const p = await stage(); await finish(p); await assertVerification();
-  assert.equal((await status(S.one)).employee.counts.verification_requests, 203);
-  assert.equal((await status(S.two)).employee.counts.verification_requests, 2);
+  const routine = verification; verification = largeVerification;
+  try {
+    assert.deepEqual(chunks(verification.texts.verification_requests).map(text => lines(text).length), [200, 5]);
+    const table = verification.catalog.tables[0]; assert.equal(table.rows, 205);
+    assert.equal(table.bytes, Buffer.byteLength(verification.texts.verification_requests));
+    assert.equal(table.row_hashes_sha256, sha(lines(verification.texts.verification_requests).map(sha).join('')));
+    const p = await stage(); await finish(p); await assertVerification();
+    assert.equal((await status(S.one)).employee.counts.verification_requests, 203);
+    assert.equal((await status(S.two)).employee.counts.verification_requests, 2);
+  } finally { verification = routine; }
 }));
 
 test('SQL53 frozen catalog/chunks/media tuples allow exact no-op repeats, never changed or additional input', () => transaction(async () => {
@@ -789,7 +795,8 @@ test('SQL53 rescans fixed 15 raw fields, duplicate keys, final newline and UUID 
 
 test('SQL53 rejects 201-row chunks and over-64KiB rows instead of truncating originals', () => transaction(async () => {
   await bind(); const frozen = await snapshot(), row = JSON.parse(lines(verification.texts.verification_requests)[0]);
-  await assert.rejects(stageChunk('verification_requests', 0, lines(verification.texts.verification_requests).slice(0, 201).join('')));
+  const raw201 = lines(largeVerification.texts.verification_requests).slice(0, 201); assert.equal(raw201.length, 201);
+  await assert.rejects(stageChunk('verification_requests', 0, raw201.join('')));
   await assert.rejects(stageChunk('verification_requests', 0, JSON.stringify({ ...row, real_name: 'x'.repeat(65536) }) + '\n'));
   assert.deepEqual(await snapshot(), frozen);
 }));
@@ -1021,7 +1028,7 @@ test('SQL53 media inventory retains old exact refs/file shape, new import-only s
   const bare = await inventory(); assert.deepEqual(Object.keys(bare).sort(), ['scope', 'direction', 'files', 'full_site_complete'].sort());
   assert.equal(bare.scope, MEDIA_SCOPE); assert.equal(bare.direction, 'import'); assert.equal(bare.full_site_complete, false);
   assert.deepEqual(bare.files, verification.files.map(file => ({ key: file.key, source_url: file.source_url, bucket: 'verification-documents', path: file.source_url.split(MEDIA_PREFIX + '/')[1], file: null })));
-  assert.equal(verification.files.length, 6); // Each employee's repeated document URL deduplicated across 205 rows.
+  assert.equal(verification.files.length, 6); // Each employee's repeated document URL deduplicated across the retained source rows.
   const r = await mediaBind(); assert.deepEqual(r, { success: true, scope: MEDIA_SCOPE, files: verification.files.length,
     bytes: verification.files.reduce((n, file) => n + file.bytes, 0), repeated: false, full_site_complete: false });
   assert.deepEqual((await inventory()).files.map(ref => ref.file), verification.files); await commitMedia();
