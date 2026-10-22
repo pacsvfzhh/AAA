@@ -2706,6 +2706,22 @@ export interface Database {
         Args: { p_admin_session_token: string; p_job_token: string };
         Returns: import('../lib/employeeTransfer/employeeMappedActivity').EmployeeMappedActivityStatus;
       };
+      employee_import_mapped_notifications_bind: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_catalog: Record<string, unknown> };
+        Returns: import('../lib/employeeTransfer/employeeMappedNotifications').EmployeeMappedNotificationsBindReceipt;
+      };
+      employee_import_mapped_notifications_stage: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string; p_chunk_no: number; p_ndjson: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedNotifications').EmployeeMappedNotificationsStageReceipt;
+      };
+      employee_import_mapped_notifications_plan: {
+        Args: { p_admin_session_token: string; p_job_token: string };
+        Returns: import('../lib/employeeTransfer/employeeMappedNotifications').EmployeeMappedNotificationsPlan;
+      };
+      employee_import_mapped_notifications_status: {
+        Args: { p_admin_session_token: string; p_job_token: string; p_table_key: string | null; p_chunk_no: number | null };
+        Returns: import('../lib/employeeTransfer/employeeMappedNotifications').EmployeeMappedNotificationsStatus;
+      };
       employee_import_mapped_verification_bind: {
         Args: { p_admin_session_token: string; p_job_token: string; p_catalog: Record<string, unknown> };
         Returns: import('../lib/employeeTransfer/employeeMappedVerification').EmployeeMappedVerificationBindReceipt;

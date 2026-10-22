@@ -196,6 +196,18 @@ BEGIN
         OR (r.body ? 'owner_admin_id' AND r.body->'owner_admin_id' IS DISTINCT FROM t.body->'owner_admin_id')) THEN
     v_issues:=v_issues||'"source_scope_mismatch"'::jsonb;
   END IF;
+  IF EXISTS(WITH executions AS MATERIALIZED(SELECT body FROM private.employee_transfer_mapped_notifications_input(p_job.id,'notification_automation_executions')),
+      tasks AS MATERIALIZED(SELECT id,body FROM private.employee_transfer_mapped_notifications_input(p_job.id,'notification_automation_tasks')),
+      plans AS MATERIALIZED(SELECT id,body FROM private.employee_transfer_mapped_notifications_input(p_job.id,'notification_automation_plans')),
+      accounts AS MATERIALIZED(SELECT id,body FROM private.employee_transfer_identity_input(p_job.id,'accounts'))
+    SELECT 1 FROM executions e JOIN tasks t ON t.id=e.body->>'task_id'
+      WHERE e.body->>'owner_admin_id' IS NOT NULL AND e.body->'owner_admin_id' IS DISTINCT FROM t.body->'owner_admin_id'
+    UNION ALL SELECT 1 FROM executions e JOIN plans p ON p.id=e.body->>'plan_id'
+      WHERE e.body->>'owner_admin_id' IS NOT NULL AND e.body->'owner_admin_id' IS DISTINCT FROM p.body->'owner_admin_id'
+    UNION ALL SELECT 1 FROM executions e JOIN accounts a ON a.id::text=e.body->>'user_id'
+      WHERE e.body->>'owner_admin_id' IS NOT NULL AND p_map->>(e.body->>'owner_admin_id') IS DISTINCT FROM p_map->>(a.body->>'created_by')) THEN
+    v_issues:=v_issues||'"source_scope_mismatch"'::jsonb;
+  END IF;
   IF EXISTS(SELECT 1 FROM private.employee_transfer_mapped_notifications_input(p_job.id,'notification_automation_plans') GROUP BY p_map->>(body->>'owner_admin_id'),lower(body->>'name') HAVING count(*)>1)
     OR EXISTS(SELECT 1 FROM private.employee_transfer_mapped_notifications_input(p_job.id,'notification_automation_tasks') GROUP BY p_map->>(body->>'owner_admin_id'),body->>'plan_id',body->>'name',body->>'is_shared_template' HAVING count(*)>1)
     OR EXISTS(SELECT 1 FROM private.employee_transfer_mapped_notifications_input(p_job.id,'message_templates') GROUP BY p_map->>(body->>'admin_id'),body->>'name' HAVING count(*)>1)
@@ -255,9 +267,21 @@ BEGIN
       INTO v_bad USING p_owner->'identity_map';
     IF v_bad THEN v_issues:=v_issues||'"notification_target_not_empty"'::jsonb;EXIT;END IF;
   END LOOP;
-  FOREACH v_key IN ARRAY ARRAY['notification_automation_executions','messages','message_recipients','broadcast_messages','broadcast_recipients'] LOOP
-    EXECUTE format('SELECT EXISTS(SELECT 1 FROM private.employee_transfer_mapped_notifications_input($1,$2) s JOIN public.%I t ON t.id=s.id::uuid)',v_key)
-      INTO v_bad USING p_job.id,v_key;
+  FOREACH v_key IN ARRAY ARRAY['notification_automation_executions','messages','message_recipients','broadcast_messages','broadcast_recipients',
+    'notification_automation_plans','notification_automation_tasks','message_templates'] LOOP
+    EXECUTE format('SELECT EXISTS(SELECT 1 FROM private.employee_transfer_mapped_notifications_input($1,$2) s JOIN public.%I t ON t.id=s.id::uuid
+      WHERE NOT CASE $2 WHEN ''notification_automation_plans'' THEN
+        to_jsonb(t)->>''owner_admin_id'' IS NOT DISTINCT FROM $3->>(s.body->>''owner_admin_id'')
+          AND lower(to_jsonb(t)->>''name'') IS NOT DISTINCT FROM lower(s.body->>''name'')
+        WHEN ''message_templates'' THEN to_jsonb(t)->>''admin_id'' IS NOT DISTINCT FROM $3->>(s.body->>''admin_id'')
+          AND to_jsonb(t)->''name'' IS NOT DISTINCT FROM s.body->''name''
+        WHEN ''notification_automation_tasks'' THEN to_jsonb(t)->>''owner_admin_id'' IS NOT DISTINCT FROM $3->>(s.body->>''owner_admin_id'')
+          AND to_jsonb(t)->''name'' IS NOT DISTINCT FROM s.body->''name'' AND to_jsonb(t)->''is_shared_template'' IS NOT DISTINCT FROM s.body->''is_shared_template''
+          AND ((to_jsonb(t)->>''plan_id'' IS NULL AND s.body->>''plan_id'' IS NULL) OR EXISTS(
+            SELECT 1 FROM private.employee_transfer_mapped_notifications_input($1,''notification_automation_plans'') sp
+              JOIN public.notification_automation_plans tp ON tp.id=(to_jsonb(t)->>''plan_id'')::uuid
+              WHERE sp.id=s.body->>''plan_id'' AND tp.owner_admin_id::text=$3->>(sp.body->>''owner_admin_id'') AND lower(tp.name)=lower(sp.body->>''name'')))
+        ELSE false END)',v_key) INTO v_bad USING p_job.id,v_key,p_owner->'admin_map';
     IF v_bad THEN v_issues:=v_issues||'"notification_uuid_collision"'::jsonb;EXIT;END IF;
   END LOOP;
   IF EXISTS(SELECT 1 FROM private.employee_transfer_mapped_finance_input(p_job.id,'wallet_transactions') s

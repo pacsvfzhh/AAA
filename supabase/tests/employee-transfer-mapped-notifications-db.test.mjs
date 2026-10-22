@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, mock, test as registerTest } from 'node:test';
 import { createHash, randomUUID, webcrypto } from 'node:crypto';
-import { access, mkdtemp, open, rm } from 'node:fs/promises';
+import { access, mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +18,8 @@ import { createSites, adminLogin, rpc as baseRpc, rows, scalar } from './support
 import { EXPECTED_REPLAY_FAILURES } from './support/replay-migrations.mjs';
 import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 
-// SQL54 contract tests, intentionally independent of a future mapped-notifications client.
+// SQL54 contract tests: the first 59 cases are independent of the mapped-notifications client.
+// Appended client integration cases use the actual client and anon RPCs; only response delivery is simulated.
 // Real source exports, independent disk AES/ZIP shared/dispatch backups and public SQL48–53 RPCs
 // establish positive prerequisites. Never insert jobs, identity maps, verified flags or backup proof.
 // Direct postgres DML is only local source business fixtures or explicitly rollback-only corruption.
@@ -177,7 +178,7 @@ async function noLegacy() {
   const s = await summary();
   for (const key of ['identity_restore', 'dependency_restore', 'verified_identity_map', 'finance_catalog', 'finance_plan', 'finance_restore',
     'activity_catalog', 'activity_restore', 'verification_catalog', 'verification_restore', 'notifications_catalog', 'notifications_plan',
-    'notifications_restore', 'notifications_media_files', 'notifications_storage_origin']) assert.equal(s[key], undefined, key);
+    'notification_restore', 'notification_media_files', 'notification_storage_origin']) assert.equal(s[key], undefined, key);
   assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_write_permits'), 0);
   assert.equal(await scalar(db, 'SELECT dirty FROM private.employee_transfer_maintenance WHERE job_id=$1', [task.job_id]), true);
   assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.users WHERE is_active'), 0);
@@ -338,7 +339,9 @@ async function seedNotifications() {
 }
 
 before(async () => {
-  await access(new URL(`../migrations/${MIGRATION}`, import.meta.url));
+  const migrationUrl = new URL(`../migrations/${MIGRATION}`, import.meta.url);
+  await access(migrationUrl);
+  console.log(`SQL54 migration SHA256 ${sha(await readFile(migrationUrl))}`);
   for (const [object, names] of [[globalThis, ['fetch']], [http, ['request', 'get']], [https, ['request', 'get']],
     [net, ['connect', 'createConnection']], [tls, ['connect']]])
     for (const name of names) mock.method(object, name, () => assert.fail('network/production services forbidden'));
@@ -504,9 +507,9 @@ test('strict replay remains 581 files, twelve known failures, 109 tables/967 col
   assert.equal(replay.validation.freshDatabaseVerified, false);
   assert.deepEqual(replay.failures, EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message })));
   assert.equal(await scalar(db, `SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname IN ('public','private') AND c.relkind IN ('r','p')`), 109);
+    WHERE n.nspname IN ('public','private') AND c.relkind IN ('r','p') AND NOT c.relispartition`), 109);
   assert.equal(await scalar(db, `SELECT count(*)::int FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname IN ('public','private') AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped`), 967);
+    WHERE n.nspname IN ('public','private') AND c.relkind IN ('r','p') AND NOT c.relispartition AND a.attnum>0 AND NOT a.attisdropped`), 967);
 }));
 test('four exact signatures, no defaults; STABLE plan/status and all private helpers revoked', () => transaction(async () => {
   const specs = { bind: [['p_catalog'], ['jsonb']], stage: [['p_table_key', 'p_chunk_no', 'p_ndjson'], ['text', 'integer', 'text']],
@@ -529,7 +532,7 @@ test('four exact signatures, no defaults; STABLE plan/status and all private hel
   const helpers = await rows(db, `SELECT prosecdef,proconfig,oid::regprocedure::text AS signature,
     EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee=0 AND privilege_type='EXECUTE') AS public_execute
     FROM pg_proc WHERE pronamespace='private'::regnamespace AND proname LIKE 'employee_transfer_mapped_notifications_%'`);
-  assert.ok(helpers.length > 0);
+  assert.equal(helpers.length, 10);
   for (const fn of helpers) {
     assert.equal(fn.prosecdef, true); assert.equal(fn.public_execute, false);
     assert.ok(fn.proconfig.includes('search_path=pg_catalog, public, private, pg_temp'));
@@ -785,7 +788,7 @@ test('SQL48–53 saved mapping/verified/count corruption is rejected, never prom
 }));
 test('legacy notification summaries/staging cannot be mixed with mapped namespace', () => transaction(async () => {
   await stage();
-  for (const key of ['notifications_catalog', 'notifications_plan', 'notifications_restore', 'notifications_media_files', 'notifications_storage_origin'])
+  for (const key of ['notifications_catalog', 'notifications_plan', 'notification_restore', 'notification_media_files', 'notification_storage_origin'])
     await isolated(async () => {
       await db.query('UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,$2::text[],$3::jsonb) WHERE id=$1', [task.job_id, [key], JSON.stringify(key === 'notifications_catalog' ? notifications.catalog : {})]);
       await denyAll();
@@ -829,7 +832,14 @@ test('mapped target employee notification residue is a conflict, never a delete/
     VALUES($1,$2,'root','local residue','local residue','realtime','normal','manual_admin','realtime_only')`, [id(200), NEW.root]);
   await change('public.message_recipients', 'INSERT INTO public.message_recipients(message_id,recipient_id) VALUES($1,$2)', [id(200), bindings[S.two].target_id]);
   await unchanged(async () => { const p = await plan(); checkPlan(p); assert.ok(p.conflicts.includes('notification_target_not_empty'), JSON.stringify(p.conflicts)); assert.deepEqual((await status()).plan, p); });
-  await assert.rejects(bind()); await assert.rejects(stageChunk('messages', 0, notifications.texts.messages)); await noLegacy();
+  // This is a raw preparation phase, not an apply: a conflict may coexist with immutable staging.
+  // Repeating known bytes must neither erase the conflict nor grant any business write permission.
+  await unchanged(async () => {
+    assert.equal((await bind()).success, true);
+    assert.deepEqual(await stageChunk('messages', 0, notifications.texts.messages), receipt('messages', 0, notifications.texts.messages));
+    const p = await plan(); checkPlan(p); assert.ok(p.conflicts.includes('notification_target_not_empty'));
+  });
+  await noLegacy();
 }));
 for (const key of ['messages', 'broadcast_messages', 'message_templates'])
   test(`${key} source UUID collision blocks without replacing unrelated target content`, () => transaction(async () => {
@@ -842,7 +852,8 @@ for (const key of ['messages', 'broadcast_messages', 'message_templates'])
   }));
 test('mapped reward actual transaction corruption blocks all entry points; source links cannot mask target drift', () => transaction(async () => {
   await stage();
-  const changed = await change('public.wallet_transactions', "UPDATE public.wallet_transactions SET reference_id=$2 WHERE type='performance_bonus' AND reference_id=$1 RETURNING id", [N.autoRecipient, N.manualRecipient]);
+  // Use a new reference, not the existing manual reference (which is protected by a real unique index).
+  const changed = await change('public.wallet_transactions', "UPDATE public.wallet_transactions SET reference_id=$2 WHERE type='performance_bonus' AND reference_id=$1 RETURNING id", [N.autoRecipient, id(995)]);
   assert.equal(changed.length, 1); await denyAll();
 }));
 test('missing target date capability is not created/normalized by plan/status or writes', () => transaction(async () => {
@@ -900,6 +911,113 @@ for (const lost of ['bind', 'stage']) test(`COMMIT then lost ${lost} reply: reop
       const p = await plan(); checkPlan(p); assert.deepEqual(p.conflicts, []); checkStatus(await status()); await noLegacy();
     }, db, true);
   });
+}));
+
+// New integrity regression: changing BOTH sender and execution owner must not bypass task ownership.
+// Only untrusted notification raw input is changed. Real SQL48–53 and original finance remain intact.
+test('execution and sender cannot collude on another mapped admin while task/employee belong to the original owner', () => transaction(async () => {
+  const input = altered({
+    notification_automation_executions: patchRow(r => r.id === N.execution, { owner_admin_id: NEW.root }),
+    messages: patchRow(r => r.id === N.automatic, { sender_id: NEW.root }),
+  });
+  await stage(input);
+  await unchanged(async () => {
+    const p = await plan(); checkPlan(p, input);
+    assert.ok(p.conflicts.includes('source_scope_mismatch'), `Cross-owner execution accepted: ${JSON.stringify(p.conflicts)}`);
+    assert.deepEqual((await status()).plan, p);
+  });
+}));
+
+let clientModule;
+async function clientWith(transport) {
+  if (!clientModule) {
+    const compiled = await build({ stdin: { contents: `export {createEmployeeMappedNotificationsSession} from './src/lib/employeeTransfer/employeeMappedNotifications.ts';
+      export {setHarness} from 'mapped-notifications-db:state';`, resolveDir: fileURLToPath(new URL('../../', import.meta.url)) },
+      bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2020', plugins: [{ name: 'local-mapped-notifications-client', setup(builder) {
+        builder.onResolve({ filter: /^(?:mapped-notifications-db:state|\.\.\/(?:auth|supabase))$/ }, args => ({ path: args.path, namespace: 'mapped-notifications-db' }));
+        builder.onLoad({ filter: /.*/, namespace: 'mapped-notifications-db' }, ({ path }) => ({ contents: path === 'mapped-notifications-db:state'
+          ? 'let h;export const setHarness=v=>{h=v};export const current=()=>h;'
+          : path === '../auth' ? 'import{current}from"mapped-notifications-db:state";export const getAdminFinancialSessionToken=()=>current().token;'
+            : 'import{current}from"mapped-notifications-db:state";export const supabase={rpc:(name,args)=>current().rpc(name,args)};' }));
+      } }] });
+    clientModule = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
+  }
+  clientModule.setHarness({ token: session, rpc: transport });
+  return clientModule.createEmployeeMappedNotificationsSession(task.job_token);
+}
+function queryFor(run) {
+  // Start once, just like a single SDK request; multiple then observers cannot resend SQL.
+  let pending;
+  const query = { then(resolve, reject) { pending ??= Promise.resolve().then(run); return pending.then(resolve, reject); }, abortSignal() { return query; } };
+  return query;
+}
+for (const lost of ['bind', 'stage']) test(`real client to anon RPC: committed ${lost} response lost, exact status reconciliation and zero automatic retries`, () => withClone(readyDump, async () => {
+  const calls = []; let drop = true;
+  const client = await clientWith((name, args) => queryFor(async () => {
+    calls.push({ name, args });
+    const data = await transaction(() => rpc(name, args), db, true);
+    if (name === PREFIX + lost && drop) { drop = false; return { data: null, error: { message: 'response lost after actual COMMIT' } }; }
+    return { data, error: null };
+  }));
+  if (lost === 'stage') await client.bind(notifications.catalog);
+  await assert.rejects(lost === 'bind' ? client.bind(notifications.catalog) : client.stage('messages', 0, notifications.texts.messages), /unconfirmed/);
+  assert.equal(drop, false);
+  const n = calls.length;
+  await assert.rejects(client.bind(notifications.catalog), /unconfirmed/);
+  await assert.rejects(client.stage('messages', 0, notifications.texts.messages), /unconfirmed/);
+  assert.equal(calls.length, n, 'An unconfirmed write cannot be retried automatically.');
+  if (lost === 'stage') {
+    const wrong = await client.status('broadcast_messages', 0); assert.equal(wrong.chunk, null);
+    const afterWrong = calls.length;
+    await assert.rejects(client.stage('broadcast_messages', 0, notifications.texts.broadcast_messages), /unconfirmed/);
+    assert.equal(calls.length, afterWrong, 'Wrong-chunk status must not unlock the pending stage.');
+    const s = await client.status('messages', 0); assert.deepEqual(s.chunk, chunkReceipt('messages', 0, notifications.texts.messages));
+  } else {
+    const s = await client.status(); assert.equal(s.bound, true); assert.equal(s.complete, false);
+  }
+  for (const key of KEYS) {
+    if (lost === 'stage' && key === 'messages') continue;
+    await client.stage(key, 0, notifications.texts[key]);
+  }
+  const p = await client.plan(); checkPlan(p); assert.deepEqual(p.conflicts, []);
+  checkStatus(await client.status());
+  assert.equal(calls.filter(c => c.name === PREFIX + lost).length, lost === 'stage' ? 13 : 1);
+  for (const c of calls) { assert.equal(c.args.p_admin_session_token, session); assert.equal(c.args.p_job_token, task.job_token); }
+  await transaction(noLegacy);
+}));
+test('real client cancellation keeps mutex until the actual pending stage commits, then requires exact status', () => withClone(readyDump, async () => {
+  const calls = []; let blocked = false, enter, release, underlying;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const client = await clientWith((name, args) => queryFor(() => {
+    const run = (async () => {
+      calls.push({ name, args });
+      if (name === PREFIX + 'stage' && !blocked) { blocked = true; enter(); await gate; }
+      const data = await transaction(() => rpc(name, args), db, true); return { data, error: null };
+    })();
+    if (name === PREFIX + 'stage') underlying = run;
+    return run;
+  }));
+  await client.bind(notifications.catalog);
+  const abort = new AbortController();
+  const pending = client.stage('messages', 0, notifications.texts.messages, abort.signal);
+  const rejected = assert.rejects(pending, { name: 'AbortError' });
+  await entered; abort.abort(); await rejected;
+  try {
+    const n = calls.length;
+    await assert.rejects(client.status('messages', 0), /unconfirmed/);
+    await assert.rejects(client.bind(notifications.catalog), /unconfirmed/);
+    assert.equal(calls.length, n, 'Abort cannot release the mutex while the actual RPC remains unfinished.');
+  } finally { release(); }
+  // Await the exact pending SDK transport, then let the client's finally microtasks drain.
+  // No timing assumption, status polling, write retry or pretend cancellation of the SQL.
+  assert.ok(underlying); await underlying;
+  await new Promise(resolve => setImmediate(resolve));
+  const s = await client.status('messages', 0);
+  assert.deepEqual(s.chunk, chunkReceipt('messages', 0, notifications.texts.messages));
+  assert.equal(calls.filter(c => c.name === PREFIX + 'stage').length, 1);
+  for (const key of KEYS.filter(k => k !== 'messages')) await client.stage(key, 0, notifications.texts[key]);
+  const p = await client.plan(); checkPlan(p); assert.deepEqual(p.conflicts, []); await transaction(noLegacy);
 }));
 
 console.log(`SQL54 registered ${caseNo} unique cases; executing ${selectedCases}. No excluded case is a pass.`);
