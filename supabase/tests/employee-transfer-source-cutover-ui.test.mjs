@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,7 +19,10 @@ const SITE = id(1), CUTOFF = id(2), AUTH = id(3), PASSWORD = 'isolated-cutover-p
 const PASS = 'isolated-export-passphrase-CANARY';
 const FREEZE = '確認暫停舊站業務並導出', RESUME = '確認恢復舊站業務並放棄切站';
 const STATUS_RPC = 'get_employee_export_cutover_status', FREEZE_RPC = 'employee_export_cutover_freeze', RESUME_RPC = 'employee_export_cutover_resume';
-const constants = { SITE, CUTOFF, AUTH, PASSWORD, FREEZE, RESUME, STATUS_RPC, FREEZE_RPC, RESUME_RPC };
+const FROZEN_AT = '2026-10-22T20:13:14.123456Z';
+const CUTOFF_HASH = createHash('sha256').update(`{"policy": "drained-queue-v1", "site_id": "${SITE}", "version": 1, "cutoff_id": "${CUTOFF}", "frozen_at": "${FROZEN_AT}"}`, 'ascii').digest('hex');
+assert.equal(CUTOFF_HASH, '002fce9a885100f44bbd72bafab823be5f700dbca61d38146394a0cf1ac9b4e5');
+const constants = { SITE, CUTOFF, AUTH, PASSWORD, FREEZE, RESUME, STATUS_RPC, FREEZE_RPC, RESUME_RPC, FROZEN_AT, CUTOFF_HASH };
 
 async function loadPlaywright() {
   if (process.env.EMPLOYEE_TRANSFER_PLAYWRIGHT_MODULE) return import(pathToFileURL(process.env.EMPLOYEE_TRANSFER_PLAYWRIGHT_MODULE).href);
@@ -32,11 +36,11 @@ async function loadPlaywright() {
 }
 const playwright = await loadPlaywright();
 function installHarness(c) {
-  const { SITE, CUTOFF, AUTH, PASSWORD, FREEZE, RESUME, STATUS_RPC, FREEZE_RPC, RESUME_RPC } = c;
+  const { SITE, CUTOFF, AUTH, PASSWORD, FREEZE, RESUME, STATUS_RPC, FREEZE_RPC, RESUME_RPC, FROZEN_AT, CUTOFF_HASH } = c;
   const initial = new URLSearchParams(location.search).get('state');
   const fresh = frozen => ({ version: 1, success: true, scope: 'source-cutover', site_id: SITE, frozen,
     cutoff: frozen ? { version: 1, policy: 'drained-queue-v1', site_id: SITE, cutoff_id: CUTOFF,
-      frozen_at: '2026-10-22T20:13:14.123456Z', cutoff_hash: 'a'.repeat(64) } : null,
+      frozen_at: FROZEN_AT, cutoff_hash: CUTOFF_HASH } : null,
     blockers: [], counts: { pending_automation: 0, failed_automation: 0, processing_orders: 0 }, full_site_complete: false });
   const h = window.__h = { state: fresh(initial === 'frozen'), calls: [], signals: [], events: [], busy: false, uncertain: false,
     violations: [], forbidden: [], siteCalls: [], next: null, waiting: null, release: null, authReads: 0, fresh };
@@ -85,6 +89,11 @@ export const inspectSiteBundleSet=async()=>{h().siteCalls.push('inspect');return
 export const createBrowserWorkspaceFactory=async()=>()=>({});
 export const pickTransferDirectory=async()=>{h().siteCalls.push('picker');return {name:'local-mocked-directory'}};
 `;
+const backupMock = `import React from 'react';
+export default function SafetyBoundary({disabled,supported}){
+return <section aria-label="isolated-backup-boundary"><button type="button" disabled={disabled||!supported}
+ onClick={()=>window.__h.siteCalls.push('employee-backup')}>隔離員工備份邊界</button><output>{String(disabled)}</output></section>;
+}`;
 const childMock = `import React from 'react';
 export default function Boundary({disabled,supported,inspection}){
 return <section aria-label="isolated-import-boundary"><button type="button" disabled={disabled||!supported||!inspection}
@@ -96,7 +105,8 @@ before(async () => {
   screenshotDir = await mkdtemp(join(tmpdir(), 'source-cutover-ui-screenshots-'));
   const entry = `import React,{useState}from'react';import{createRoot}from'react-dom/client';
     import Panel from './src/components/admin/SourceCutoverPanel';import Parent from './src/components/admin/EmployeeDataMigration';
-    (${installHarness.toString()})(${JSON.stringify(constants)});
+    import * as CutoverApi from './src/lib/employeeTransfer/sourceCutover';
+    (${installHarness.toString()})(${JSON.stringify(constants)});window.__cutoverApi=CutoverApi;
     function App(){const[disabled,setDisabled]=useState(false);window.__setDisabled=setDisabled;
       return new URLSearchParams(location.search).get('view')==='parent'?<Parent/>:<main style={{padding:12,maxWidth:1100,margin:'auto'}}>
       <Panel disabled={disabled} onBusyChange={v=>{window.__h.busy=v;window.__h.events.push(['busy',v])}}
@@ -112,10 +122,10 @@ before(async () => {
       b.onLoad({ filter: /.*/, namespace: 'cutover-ui-migration' }, () => ({ contents: migrationMocks }));
       b.onResolve({ filter: /^\.\/EmployeeSiteImport$/ }, () => ({ path: 'import', namespace: 'cutover-ui-child' }));
       b.onResolve({ filter: /^\.\/EmployeeSafetyBackupPanel$/ }, () => ({ path: 'backup', namespace: 'cutover-ui-child' }));
-      b.onLoad({ filter: /.*/, namespace: 'cutover-ui-child' }, ({ path }) => ({ contents: path === 'import' ? childMock : 'export default function SafetyBoundary(){return null}', loader: 'tsx', resolveDir: root }));
+      b.onLoad({ filter: /.*/, namespace: 'cutover-ui-child' }, ({ path }) => ({ contents: path === 'import' ? childMock : backupMock, loader: 'tsx', resolveDir: root }));
     } }] });
   const inputs = Object.keys(compiled.metafile.inputs);
-  for (const name of ['SourceCutoverPanel.tsx', 'EmployeeDataMigration.tsx', 'sourceCutover.ts', 'dispatchTransfer.ts']) assert.ok(inputs.some(p => p.endsWith('/' + name)), `actual ${name} must be rendered/loaded`);
+  for (const name of ['SourceCutoverPanel.tsx', 'EmployeeDataMigration.tsx', 'sourceCutover.ts', 'dispatchTransfer.ts', 'sha256.ts']) assert.ok(inputs.some(p => p.endsWith('/' + name)), `actual ${name} must be rendered/loaded`);
   assert.equal(inputs.some(p => /node_modules\/@supabase|src\/lib\/(?:auth|supabase)\.ts|\/(?:siteImport|siteTransfer|browserStorage|employeeSafetyBackup)\.ts$/.test(p)), false, 'production boundaries must not enter UI bundle');
   const config = loadTailwindConfig(root + 'tailwind.config.js');
   const css = await postcss([tailwindcss({ ...config, content: [root + 'src/components/admin/SourceCutoverPanel.tsx', root + 'src/components/admin/EmployeeDataMigration.tsx'] })])
@@ -177,6 +187,18 @@ async function noCredentialStorage(page) {
 const exportButton = page => page.getByRole('button', { name: '開始目前十個領域加密導出', exact: true });
 const inspectButton = page => page.getByRole('button', { name: '僅解密與核驗，不導入', exact: true });
 const importBoundary = page => page.getByRole('button', { name: '隔離實際導入邊界', exact: true });
+const backupBoundary = page => page.getByRole('button', { name: '隔離員工備份邊界', exact: true });
+async function moduleWritesBlocked(page) {
+  const observed = await page.evaluate(async ({ PASSWORD, FREEZE, RESUME, CUTOFF }) => {
+    const h = window.__h, before = { calls: h.calls.length, authReads: h.authReads }, rejected = [];
+    for (const write of [() => window.__cutoverApi.freezeSourceCutover(PASSWORD, FREEZE), () => window.__cutoverApi.resumeSourceCutover(PASSWORD, RESUME, CUTOFF)]) {
+      try { await write(); rejected.push(false); } catch { rejected.push(true); }
+    }
+    return { before, after: { calls: h.calls.length, authReads: h.authReads }, rejected };
+  }, { PASSWORD, FREEZE, RESUME, CUTOFF });
+  assert.deepEqual(observed.rejected, [true, true]);
+  assert.deepEqual(observed.after, observed.before, 'module interlock must reject both writes before authentication/RPC');
+}
 async function prepareParent(page) {
   await ready(page);
   await page.getByRole('tab', { name: '導入', exact: true }).click();
@@ -184,6 +206,7 @@ async function prepareParent(page) {
   await page.locator('#migration-inspect-passphrase').fill(PASS); await inspectButton(page).click();
   await page.getByText('輸入檔案各卷解密核驗結果', { exact: true }).waitFor();
   assert.equal(await importBoundary(page).isEnabled(), true, 'import baseline must otherwise be ready');
+  assert.equal(await backupBoundary(page).isEnabled(), true, 'independent backup baseline must otherwise be ready');
   await page.getByRole('tab', { name: '導出', exact: true }).click();
   await page.locator('#migration-admin-password').fill(PASSWORD); await page.locator('#migration-passphrase').fill(PASS); await page.locator('#migration-confirmation').fill(PASS);
   await page.getByRole('button', { name: '選擇保存目錄', exact: true }).click();
@@ -251,10 +274,12 @@ for (const engine of ['chromium', 'webkit']) {
         await (op === 'freeze' ? freezeButton(page) : resumeButton(page)).click();
         await panel(page).getByText(/本次操作結果未知/).waitFor();
         assert.equal(await page.evaluate(() => window.__h.uncertain), true); assert.equal(await passwordInput(page).inputValue(), '');
+        await moduleWritesBlocked(page);
         await panel(page).locator('form').dispatchEvent('submit');
         await setFault(page, { name: STATUS_RPC, error: true }); await refreshButton(page).click();
         await panel(page).getByText(/無法確認舊站狀態/).waitFor();
         assert.equal(await page.evaluate(() => window.__h.uncertain), true); assert.equal(await passwordInput(page).isDisabled(), true);
+        await moduleWritesBlocked(page);
         assert.equal(await refreshButton(page).isEnabled(), true);
         await refreshButton(page).click(); await panel(page).getByText(/已重新讀取並核對服務端狀態/).waitFor();
         assert.equal(await page.evaluate(() => window.__h.uncertain), false); assert.equal(await passwordInput(page).isEnabled(), true);
@@ -262,7 +287,38 @@ for (const engine of ['chromium', 'webkit']) {
         const calls = await page.evaluate(() => window.__h.calls.map(c => c.name));
         assert.deepEqual(calls, [STATUS_RPC, op === 'freeze' ? FREEZE_RPC : RESUME_RPC, STATUS_RPC, STATUS_RPC]);
         await noCredentialStorage(page); await screenshot(page, engine, op + '-reconciled');
+        // Prove the real module gate (not only form state) is released by this explicit valid refresh.
+        await fill(page, op === 'freeze' ? RESUME : FREEZE);
+        await (op === 'freeze' ? resumeButton(page) : freezeButton(page)).click();
+        await panel(page).getByText(op === 'freeze' ? /服務端已確認恢復舊站業務並放棄本次切站/ : /服務端已確認建立持久維護屏障/).waitFor();
+        assert.equal(await page.evaluate(() => window.__h.calls.length), 5);
+        assert.equal(await passwordInput(page).inputValue(), '');
       }, op === 'resume' ? { query: 'state=frozen' } : {});
+      for (const change of ['hash', 'site', 'cutoff', 'microsecond']) await run('valid-format-cutoff-drift-rejected-' + change, async page => {
+        await ready(page); await fill(page);
+        await page.evaluate(({ change, name }) => {
+          const data = window.__h.fresh(true);
+          if (change === 'hash') data.cutoff.cutoff_hash = 'a'.repeat(64);
+          if (change === 'site') { data.site_id = 'ba000000-0000-4000-8000-000000000099'; data.cutoff.site_id = data.site_id; }
+          if (change === 'cutoff') data.cutoff.cutoff_id = 'ba000000-0000-4000-8000-000000000098';
+          if (change === 'microsecond') data.cutoff.frozen_at = '2026-10-22T20:13:14.123457Z';
+          window.__h.tampered = data; window.__h.next = { name, data };
+        }, { change, name: FREEZE_RPC });
+        await freezeButton(page).click(); await panel(page).getByText(/本次操作結果未知/).waitFor();
+        assert.equal(await page.evaluate(() => window.__h.uncertain), true); await moduleWritesBlocked(page);
+        assert.equal(await panel(page).getByText(/服務端已確認建立持久維護屏障/).count(), 0);
+        await page.evaluate(name => { window.__h.next = { name, data: window.__h.tampered }; }, STATUS_RPC);
+        await refreshButton(page).click(); await panel(page).getByText(/無法確認舊站狀態/).waitFor();
+        assert.equal(await page.evaluate(() => window.__h.uncertain), true); assert.equal(await passwordInput(page).isDisabled(), true);
+        await moduleWritesBlocked(page); await screenshot(page, engine, 'rejected-cutoff-' + change);
+        await refreshButton(page).click(); await panel(page).getByText(/已重新讀取並核對服務端狀態/).waitFor();
+        assert.equal(await page.evaluate(() => window.__h.uncertain), false); assert.equal(await passwordInput(page).isEnabled(), true);
+        await panel(page).getByText(CUTOFF_HASH, { exact: true }).waitFor();
+        await fill(page, RESUME); await resumeButton(page).click();
+        await panel(page).getByText(/服務端已確認恢復舊站業務並放棄本次切站/).waitFor();
+        assert.deepEqual(await page.evaluate(() => window.__h.calls.map(c => c.name)), [STATUS_RPC, FREEZE_RPC, STATUS_RPC, STATUS_RPC, RESUME_RPC]);
+        assert.equal(await passwordInput(page).inputValue(), ''); await noCredentialStorage(page);
+      });
       await run('wrong-site-refresh-does-not-unlock-unknown-write', async page => {
         await ready(page); await fill(page); await setFault(page, { name: FREEZE_RPC, lost: true }); await freezeButton(page).click();
         await panel(page).getByText(/本次操作結果未知/).waitFor();
@@ -328,14 +384,28 @@ for (const engine of ['chromium', 'webkit']) {
           else { await refreshButton(page).click(); await panel(page).getByText(/已重新讀取並核對服務端狀態/).waitFor(); }
           assert.equal(await exportButton(page).isEnabled(), true);
         }, parentOptions);
-        // Deliberately test the actual disabled prop passed to the database-import boundary.
-        // No expected-failure annotation: missing parent wiring must produce a real failure.
+        // Test actual disabled props for BOTH independent backup and database-import boundaries.
         await run('parent-database-import-interlock-' + state, async page => {
           await prepareParent(page); await fill(page); await setFault(page, { name: FREEZE_RPC, ...(state === 'busy' ? { hold: true } : { lost: true }) });
           await freezeButton(page).click();
           if (state === 'busy') await page.waitForFunction(() => window.__h.waiting !== null); else await panel(page).getByText(/本次操作結果未知/).waitFor();
           await page.getByRole('tab', { name: '導入', exact: true }).click();
           assert.equal(await importBoundary(page).isDisabled(), true, `actual EmployeeSiteImport boundary must receive disabled=true while cutover is ${state}`);
+          assert.equal(await backupBoundary(page).isDisabled(), true, `actual EmployeeSafetyBackupPanel boundary must receive disabled=true while cutover is ${state}`);
+          assert.deepEqual(await page.evaluate(() => window.__h.siteCalls), ['inspect', 'picker']);
+          await page.getByRole('tab', { name: '導出', exact: true }).click();
+          if (state === 'busy') { await page.evaluate(() => window.__h.release()); await panel(page).getByText(/服務端已確認建立持久維護屏障/).waitFor(); }
+          else {
+            await setFault(page, { name: STATUS_RPC, error: true }); await refreshButton(page).click();
+            await panel(page).getByText(/無法確認舊站狀態/).waitFor(); await moduleWritesBlocked(page);
+            await page.getByRole('tab', { name: '導入', exact: true }).click();
+            assert.equal(await importBoundary(page).isDisabled(), true); assert.equal(await backupBoundary(page).isDisabled(), true);
+            await page.getByRole('tab', { name: '導出', exact: true }).click(); await refreshButton(page).click();
+            await panel(page).getByText(/已重新讀取並核對服務端狀態/).waitFor();
+          }
+          await page.getByRole('tab', { name: '導入', exact: true }).click();
+          assert.equal(await importBoundary(page).isEnabled(), true); assert.equal(await backupBoundary(page).isEnabled(), true);
+          assert.deepEqual(await page.evaluate(() => window.__h.siteCalls), ['inspect', 'picker']);
         }, parentOptions);
       }
     } finally { await browser.close(); }

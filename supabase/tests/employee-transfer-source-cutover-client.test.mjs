@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { after, mock, test } from 'node:test';
+import { after, beforeEach, mock, test } from 'node:test';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
@@ -12,7 +13,13 @@ const STATUS_RPC = 'get_employee_export_cutover_status', FREEZE_RPC = 'employee_
 const COUNT_KEYS = ['pending_automation', 'failed_automation', 'processing_orders'];
 const BLOCKERS = [...COUNT_KEYS, 'transfer_running', 'other_maintenance'];
 const TIME = '2026-10-22T20:13:14.123456Z';
-const cutoff = () => ({ version: 1, policy: 'drained-queue-v1', site_id: SITE, cutoff_id: CUTOFF, frozen_at: TIME, cutoff_hash: 'a'.repeat(64) });
+// Independent Node crypto oracle for the exact PostgreSQL jsonb::text ASCII preimage.
+const pgCutoffText = r => `{"policy": "${r.policy}", "site_id": "${r.site_id}", "version": ${r.version}, "cutoff_id": "${r.cutoff_id}", "frozen_at": "${r.frozen_at}"}`;
+const sha = text => createHash('sha256').update(text, 'ascii').digest('hex');
+const cutoff = (overrides = {}) => {
+  const r = { version: 1, policy: 'drained-queue-v1', site_id: SITE, cutoff_id: CUTOFF, frozen_at: TIME, ...overrides };
+  return { ...r, cutoff_hash: sha(pgCutoffText(r)) };
+};
 const status = (frozen = false) => ({ version: 1, success: true, scope: 'source-cutover', site_id: SITE, frozen,
   cutoff: frozen ? cutoff() : null, blockers: [], counts: Object.fromEntries(COUNT_KEYS.map(key => [key, 0])), full_site_complete: false });
 const turn = async () => { for (let n = 0; n < 20; n++) await Promise.resolve(); };
@@ -61,6 +68,23 @@ const invoke = (op, signal) => op === 'status' ? api.getSourceCutoverStatus(sign
   : op === 'freeze' ? api.freezeSourceCutover(PASSWORD, FREEZE, signal)
     : api.resumeSourceCutover(PASSWORD, RESUME, CUTOFF, signal);
 const validReply = op => status(op === 'freeze');
+async function reconcile(h, reply = status()) {
+  const calls = h.calls.length;
+  h.respond(reply);
+  assert.deepEqual(await api.getSourceCutoverStatus(), reply);
+  assert.equal(h.calls.length, calls + 1);
+  assert.equal(h.calls.at(-1).name, STATUS_RPC, 'only a real, explicit valid status read restores the module gate');
+}
+async function writesBlocked(h) {
+  const calls = h.calls.length, reads = h.authReads, replies = h.replies.length;
+  await assert.rejects(invoke('freeze'), safeError);
+  await assert.rejects(invoke('resume'), safeError);
+  assert.equal(h.calls.length, calls, 'blocked writes must not reach the RPC boundary');
+  assert.equal(h.authReads, reads, 'blocked writes must not read authentication');
+  assert.equal(h.replies.length, replies);
+}
+// Fresh harnesses are NOT production state resets. Reconcile the real module before each test.
+beforeEach(async () => { await reconcile(harness()); });
 
 test('isolated bundle uses real sourceCutover and dispatch checks with no SDK/auth/network implementation', () => {
   const inputs = Object.keys(compiled.metafile.inputs);
@@ -161,19 +185,20 @@ test('cutoff requires exact six-digit UTC format, finite timestamp and fixed pol
   for (const frozen_at of ['2026-10-22T20:13:14Z', '2026-10-22T20:13:14.123Z', '2026-10-22T20:13:14.1234567Z',
     '2026-10-22T20:13:14.123456+00:00', '2026-10-23T04:13:14.123456+08:00', '2026-10-22 20:13:14.123456Z',
     '2026-13-22T20:13:14.123456Z', '2026-10-22T99:13:14.123456Z', '', null, 42]) {
-    assert.throws(() => api.validateSourceCutoff({ ...cutoff(), frozen_at }), safeError);
+    assert.throws(() => api.validateSourceCutoff(cutoff({ frozen_at })), safeError);
   }
 });
-// These are intentionally ordinary assertions, not TODO/skip/expected-failure tests.
-// Implementation gaps must stay visible until a separately authorized implementation fix.
+// Preserve all original negative assertions; no TODO/skip/expected-failure annotations.
 test('cutoff UTC format rejects a trailing newline rather than accepting a non-exact timestamp', () => {
-  assert.throws(() => api.validateSourceCutoff({ ...cutoff(), frozen_at: TIME + '\n' }), safeError);
+  assert.throws(() => api.validateSourceCutoff(cutoff({ frozen_at: TIME + '\n' })), safeError);
 });
 test('freeze refuses an otherwise valid unfrozen receipt instead of reporting an unconfirmed freeze as success', async () => {
   const h = harness(); h.respond(status(false)); await assert.rejects(api.freezeSourceCutover(PASSWORD, FREEZE), safeError);
+  await writesBlocked(h);
 });
 test('resume refuses a still-frozen receipt', async () => {
   const h = harness(); h.respond(status(true)); await assert.rejects(api.resumeSourceCutover(PASSWORD, RESUME, CUTOFF), safeError);
+  await writesBlocked(h);
 });
 for (const op of ['freeze', 'resume']) for (const settlement of ['resolve', 'reject']) {
   test(`${op}: cancel with signal-ignoring ${settlement} retains write mutex until underlying request settles`, async () => {
@@ -189,6 +214,7 @@ for (const op of ['freeze', 'resume']) for (const settlement of ['resolve', 'rej
       await observed;
     }
     const result = await observed; assert.ok(result.error); assert.equal(aborted(result.error), true);
+    await writesBlocked(h);
     h.respond(status()); await api.getSourceCutoverStatus(); assert.equal(h.calls.length, 2);
   });
 }
@@ -198,6 +224,79 @@ for (const op of ['freeze', 'resume']) test(`${op}: non-cancelled write blocks c
     for (const next of ['status', 'freeze', 'resume']) await assert.rejects(invoke(next), safeError);
     assert.equal(h.calls.length, 1); assert.equal(h.authReads, 1);
   } finally { gate.resolve({ data: validReply(op), error: null }); await pending; }
+});
+
+test('cutoff hash matches a fixed independent Node SHA256 vector for the exact PG text, not JSON.stringify', () => {
+  const expected = '39a5383553570cc1da868c2afc3ff3f6ef63cfaee4f1c8bfced3cc4b897a66ff';
+  assert.equal(cutoff().cutoff_hash, expected);
+  assert.deepEqual(api.validateSourceCutoff(cutoff()), cutoff());
+  const { cutoff_hash, ...fields } = cutoff();
+  assert.notEqual(sha(JSON.stringify(fields)), cutoff_hash, 'compact JSON is not the PG text preimage');
+  assert.throws(() => api.validateSourceCutoff({ ...fields, cutoff_hash: sha(JSON.stringify(fields)) }), safeError);
+  for (const overrides of [{ site_id: id(90) }, { cutoff_id: id(91) }, { frozen_at: '2026-10-23T00:00:00.000001Z' }]) {
+    const raw = cutoff(overrides);
+    assert.notEqual(raw.cutoff_hash, expected);
+    assert.deepEqual(api.validateSourceCutoff(raw), raw, 'a correctly rebound independent PG digest is valid');
+  }
+});
+const digestMutations = [
+  ['well-formed incorrect hash', r => { r.cutoff_hash = 'f'.repeat(64); }],
+  ['site UUID drift', r => { r.site_id = id(99); }],
+  ['cutoff UUID drift', r => { r.cutoff_id = id(98); }],
+  ['UTC microsecond drift', r => { r.frozen_at = '2026-10-22T20:13:14.123457Z'; }],
+];
+for (const [label, mutate] of digestMutations) test(`cutoff rejects valid-format ${label} with a stale/mismatched digest`, async () => {
+  const raw = cutoff(); mutate(raw);
+  assert.throws(() => api.validateSourceCutoff(raw), safeError);
+  for (const op of ['status', 'freeze']) {
+    const h = harness();
+    await reconcile(h); h.calls.length = 0; h.authReads = 0;
+    const reply = status(true); reply.cutoff = structuredClone(raw); reply.site_id = raw.site_id;
+    h.respond(reply); await assert.rejects(invoke(op), safeError);
+    assert.equal(h.calls.length, 1);
+    if (op === 'freeze') await writesBlocked(h);
+  }
+});
+test('a correctly hashed cutoff still cannot bind a status from another site', async () => {
+  const h = harness(), reply = status(true); reply.cutoff = cutoff({ site_id: id(99) });
+  assert.deepEqual(api.validateSourceCutoff(reply.cutoff), reply.cutoff, 'prove independent cutoff digest itself is valid');
+  h.respond(reply); await assert.rejects(api.getSourceCutoverStatus(), safeError);
+});
+for (const op of ['freeze', 'resume']) test(`${op}: lost response locks both writes across harness changes until a validated explicit status read`, async () => {
+  const h = harness(); h.replies.push({ reject: Error(PASSWORD + ' PRIVATE-BACKEND-ERROR') });
+  await assert.rejects(invoke(op), safeError); await writesBlocked(h); await turn();
+  assert.equal(h.calls.length, 1, 'no automatic retry/recovery read');
+  // Replacing an auth/RPC harness does not reset production module state.
+  const next = harness(); await writesBlocked(next);
+  assert.deepEqual(api.validateSourceCutoff(cutoff()), cutoff()); await writesBlocked(next);
+  const controller = new AbortController(); controller.abort(PASSWORD);
+  await assert.rejects(api.getSourceCutoverStatus(controller.signal), aborted); await writesBlocked(next);
+  const badHash = status(true); badHash.cutoff.cutoff_hash = 'a'.repeat(64);
+  const drift = status(true); drift.cutoff.frozen_at = '2026-10-22T20:13:14.123457Z';
+  for (const failedRead of [{ error: { message: PASSWORD } }, { reject: Error(PASSWORD) },
+    { data: { ...status(), full_site_complete: true } }, { data: badHash }, { data: drift }]) {
+    next.replies.push(failedRead); await assert.rejects(api.getSourceCutoverStatus(), safeError); await writesBlocked(next);
+  }
+  const gate = deferred(); next.replies.push({ wait: gate.promise });
+  const reading = api.getSourceCutoverStatus(); await turn();
+  try { await writesBlocked(next); }
+  finally { gate.resolve({ data: status(true), error: null }); }
+  assert.deepEqual(await reading, status(true));
+  const reads = next.calls.length;
+  next.respond(validReply(op)); assert.deepEqual(await invoke(op), validReply(op));
+  assert.equal(next.calls.length, reads + 1);
+  assert.equal(next.calls.at(-1).name, op === 'freeze' ? FREEZE_RPC : RESUME_RPC);
+});
+for (const op of ['freeze', 'resume']) test(`${op}: aborted status and its late valid response cannot unlock an unknown write`, async () => {
+  const h = harness(); h.replies.push({ reject: Error(PASSWORD) }); await assert.rejects(invoke(op), safeError);
+  const gate = deferred(), c = new AbortController(); h.replies.push({ wait: gate.promise });
+  const pending = api.getSourceCutoverStatus(c.signal), observed = pending.then(value => ({ value }), error => ({ error }));
+  await turn(); c.abort(PASSWORD);
+  try { await writesBlocked(h); }
+  finally { gate.resolve({ data: status(true), error: null }); await observed; }
+  const result = await observed; assert.ok(result.error); assert.equal(aborted(result.error), true);
+  await writesBlocked(h); await reconcile(h);
+  h.respond(validReply(op)); await invoke(op);
 });
 
 test('real supabase transport: exact cutover RPC 120s list, POST failure/abort single attempt and lookalikes 8s', async t => {
