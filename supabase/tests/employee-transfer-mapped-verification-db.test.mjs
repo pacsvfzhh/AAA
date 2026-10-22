@@ -962,10 +962,11 @@ test('SQL53 permits only verification writes and never disables triggers or bypa
 for (const fault of ['constraint', 'audit']) test(`SQL53 late ${fault} failure rolls back current employee only; prior COMMITTED employee remains intact`, () => withClone(readyDump, readyTask, async () => {
   let p; await transaction(async () => { p = await stage(); await begin(p); await apply(p, S.two); }, db, true);
   await transaction(async () => {
-    if (fault === 'constraint') await db.exec(`ALTER TABLE public.verification_requests ADD CONSTRAINT mapped_verification_late CHECK(id<>'${id(4203)}'::uuid) NOT VALID`);
+    if (fault === 'constraint') await db.exec(`ALTER TABLE public.verification_requests ADD CONSTRAINT mapped_verification_late CHECK(user_id<>'${bindings[S.one].target_id}'::uuid OR id<>'${id(4203)}'::uuid) NOT VALID`);
     else await db.exec(`CREATE FUNCTION public.mapped_verification_late_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
       RAISE EXCEPTION 'mapped verification final audit failed'; END $$;
       CREATE TRIGGER mapped_verification_late_failure BEFORE INSERT ON private.employee_transfer_events FOR EACH ROW EXECUTE FUNCTION public.mapped_verification_late_failure()`);
+    common(await plan(), p);
     const frozen = await snapshot(), modes = await triggers(); await assert.rejects(apply(p));
     assert.deepEqual(await snapshot(), frozen); assert.deepEqual(await triggers(), modes); assert.equal(await permits(), 0);
     assert.equal((await status(S.two)).employee.applied, true); assert.equal((await status(S.one)).employee.applied, false);

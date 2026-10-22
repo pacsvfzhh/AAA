@@ -93,6 +93,11 @@
 - 客户端深冻结/实际计数/候选与进度校验；未知apply仅同来源status解锁，取消后底层未结束仍互斥，120秒等待且写不自动重试。早期未完整stage的status拒绝，只安全暂停；完整备份/封存/替换/放行false、员工停用/dirty维护不变，无UI或整站接线。
 - 新DB60按三互斥组最终全覆盖、新旧客户端/基础范围1342、最新旧整站28，共1430项；聊天6/稽核48/工时6及静态/构建通过。579份回放仍12旧失败、109表/967列，非干净建库或总套件证明；无正式访问/部署或本轮UI/浏览器验证。原生PG并发/容量/Storage与完整封存未验，见计划第51节及回滚参考。
 
+## 新员工UUID实名记录与证件媒体恢复（SQL53，2026-10-22，本地未部署）
+- `20261102000053_restore_mapped_employee_verification.sql`仅新增19私有helper/11公共RPC，无新表或旧函数/触发器修改：记录`employee_import_mapped_verification_bind/stage/plan/begin/apply/status/verify`，媒体`get_employee_transfer_mapped_verification_media`、`employee_import_mapped_verification_media_bind`及仅service_role的`employee_transfer_mapped_verification_media_authorize/commit`。
+- 严格要求SQL52活动verified并实物重验此前各阶段；实名15列仅映射user_id/审阅人/非NULL证件URL，`users.is_verified`不改，仅许可`public.verification_requests`、不旁路触发器。媒体仅upload/recheck-import，服务器候选路径、upsert=false、实际回读、完成计数generation不可变，全部apply后终检；50MiB/3000文件/记录加媒体1GiB。
+- 完整员工备份/封存/替换/整站门禁false，员工停用、dirty维护不变；独立阶段未接UI/协调器。DB1–20组最终20/20，其余数据库分组仍在运行、尚未计入；580份回放仍12旧失败、109表/967列。无正式访问/部署，回滚参考仅DROP函数、不撤销行/文件/维护，见计划第52节。
+
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
 - 新 RPC 写法：

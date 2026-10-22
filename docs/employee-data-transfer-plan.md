@@ -1,5 +1,6 @@
 # 全站业务资料导出 / 导入实施计划（精简历史订单）
 
+最新补充：第52节SQL53/employeeMappedVerification(+Media)已接新员工UUID的实名15列记录及实际证件媒体独立阶段：严格要求SQL52活动verified并实物重验此前各阶段，仅映射user_id/审阅人/非NULL证件URL，不改users.is_verified，只许可public.verification_requests、不旁路触发器；媒体仅mapped-verification的upload/recheck-import，service-only授权/提交、服务器候选路径、upsert=false、实际回读，全部apply后终检。DB1–20最终20/20，其余数据库分组仍在运行、尚未计入；新core/media客户端464/464等见第52.3节。独立阶段未接UI/整站协调器，完整员工备份/封存/替换/全站门禁false，员工停用、dirty维护不解除，无正式访问或部署。
 最新补充：第51节SQL52/employeeMappedActivity已接新员工UUID的登录历史、工时和停工标记：完整资金verified前置及身份/订单/派单/资金实物重验，逐员工三表事务、最后心跳收尾、设备精度/两种NULL与历史会话脱敏保留。新DB60项按三个互斥组最终全覆盖，新旧客户端/基础范围1342及最新SQL52旧整站28项通过，共1430项；不改旧49–51或旧verified map。实名/通知/聊天等其余映射、双包证明/封存窗口和营业放行未完成，无UI/本轮浏览器或正式访问部署。
 
 第49节SQL50/employeeMappedDependency已将派单成员与已用交单接到SQL49服务器新员工UUID：全包身份/配置/valid实物重验、先成员后used分块写入、精确防止使用次数重复累计，独立状态不伪造旧verified map。新DB145/client207、旧身份client417及基础/范围94共863项，最新SQL50旧整站维护态28项通过；其余领域映射/双包证明/封存窗口和营业放行未完成，正式未访问/部署。
@@ -1266,3 +1267,26 @@ DROP FUNCTION private.employee_transfer_mapped_identity_source(private.employee_
 
 ### 51.4 回滚参考（未执行）
 先停用调用方，按依赖从公共`verify/status/apply/begin/plan/stage/bind`七接口移除，再移除私有`receipt/context/plan/conflicts/phase/check_written/expected/empty/saved/check_counts/source/parse/catalog/input`十四helper（前缀分别为`employee_import_mapped_activity_`和`employee_transfer_mapped_activity_`，准确签名见SQL52），不使用CASCADE。只移除本阶段函数，不撤销已提交活动历史、资金或任务，不删除员工或解除dirty维护；SQL51等前置仅在本阶段之后移除。任何正式执行仍须单独说明影响并确认。
+
+## 52. 新员工UUID的实名记录与实际证件媒体恢复（2026-10-22，UTC+8，本地未部署）
+
+### 52.1 服务端与数据口径
+- 新增`20261102000053_restore_mapped_employee_verification.sql`，仅追加30个函数：19个私有helper与11个公共RPC；无新表，不改旧迁移、SQL48–52或旧函数/触发器。记录阶段七RPC：`employee_import_mapped_verification_bind/stage/plan/begin/apply/status/verify`；媒体阶段四RPC：`get_employee_transfer_mapped_verification_media`、`employee_import_mapped_verification_media_bind`、`employee_transfer_mapped_verification_media_authorize/commit`（后两者仅service_role）。固定SECURITY DEFINER/search_path，公共记录RPC仅anon/authenticated且核验本人超管原任务，私有及PUBLIC无直调权。
+- 每次入口严格要求SQL52活动阶段verified，并对此前身份/订单/派单/资金/活动重新做实物重验，不信任旧verified map；仅实名15列：只把`user_id`、审阅人和非NULL证件URL映射到服务器候选员工/管理员及本站固定证件路径，其余列原文保留。不修改`users.is_verified`，只授权`public.verification_requests`一张表的恢复许可，不旁路任何触发器。
+- 独立staging命名空间，沿用同包实名原文NDJSON，每次重新解析并核对摘要/字节/顺序/目录，冻结后新块或变化输入拒绝，相同块幂等。未完整暂存时status失败关闭，早期丢响应只安全暂停。
+- 媒体范围仅`mapped-verification`的`upload`与`recheck-import`：服务器按候选UUID生成目标路径（来源路径不是网络目的地），仅本站supabase.co固定verification-documents三目录，`upsert=false`、上传后实际回读、完成计数与generation不可变，全部员工apply后做最终recheckImport，再SQL verify。单文件50MiB、3000文件、记录加媒体1GiB；不下载来源、不删除/覆盖旧文件。
+
+### 52.2 客户端、中断与未完成范围
+- `employeeMappedVerification.ts`提供七个显式方法（bind/stage/plan/begin/apply/status/verify），原文NDJSON、目录/计划/响应严格冻结、校验响应安全标志与真实计数，写不自动重试；未知apply只能用同来源员工status核对，取消后底层未结束仍互斥。
+- `employeeMappedVerificationMedia.ts`提供inventory/bind/upload/recheckImport，签名/清单/路径/魔数/大小逐项校验；媒体结果不确定必须新建会话并显式对账，不自动修复、不自动删除、不假回滚、不关闭任务。
+- `supabase/functions/employee-transfer-media/handler.ts`新增`mapped-verification`作用域，仅接受upload/recheck-import，与其余作用域隔离，仅本地未配置/部署。
+- 这是独立阶段，未接UI或整站协调器；完整员工备份/封存/替换/整站完成门禁仍false，员工停用、dirty维护不解除。通知/聊天/自动化/档案等其余引用、SQL46/47双包证明、安全封存窗口与营业放行仍缺。
+
+### 52.3 本地验证与限制（截至当前）
+- SQL53数据库测试分组中，第1–20组最终20/20通过；其余分组仍在运行、尚未计入任何通过数，完成后再更新本节，不据此宣称整文件或58项通过。
+- 新core/media客户端464/464；旧实名API/客户端与映射活动/资金/派单/身份共六文件1499/1499；foundation/scope 97/97；旧整站导入28/28；聊天6/稽核48/工时6；typecheck/lint/build/格式及Edge语法检查通过。
+- 580份SQL回放仍保留12项历史失败、109表/967列不变，非干净建库；未跑完整迁移总套件。起初600秒命令未通过不计；已优化为每次调用只预取一次期望媒体引用并保留全部检查，常规8行加专项真实205200/5边界保留覆盖，未移除任何验证。
+- 无UI/浏览器测试，无正式服务访问，无SQL/配置/Storage/Edge/前端部署；原生PG并发/取消/容量、真实Storage/CORS与完整封存未验。
+
+### 52.4 回滚参考（未执行）
+仅提供DROP FUNCTION参考：先停用调用方，再按依赖移除11个公共RPC与19个私有helper（准确签名见SQL53），不使用CASCADE。只移除函数，不撤销已写入的记录行、已上传文件或维护状态，不解除dirty维护；SQL52等前置仅在本阶段之后移除。任何正式执行仍须单独说明影响并确认。

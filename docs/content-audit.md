@@ -97,3 +97,8 @@ job 的两种状态：
 
 ## 现状（2026-10-09）
 - 超管已清空两个板块：稽核记录、已删员工档案与通知、私有证据文件、确认暂存、待重试任务均为 0。
+
+## 新UUID实名记录与证件媒体边界（第52节，2026-10-22，本地未部署）
+- SQL53/employeeMappedVerification(+Media)仅在SQL52活动verified且此前各阶段实物重验通过后，按服务器候选UUID恢复实名15列记录和固定verification-documents实际证件；不修改`users.is_verified`、旧封存UUID、稽核/通知留证或档案，不旁路触发器，不新增替换能力。
+- 媒体只做upload/recheck-import，upsert=false、实际回读，不覆盖/删除旧文件；不确定须新会话显式对账。实名verified仅本子阶段，不是双密文完整恢复或安全封存证明；完整备份/封存/替换/放行false、dirty维护不解除。
+- DB1–20组最终20/20，其余分组仍在运行、尚未计入；详见计划第52节与仅DROP函数的回滚参考。
