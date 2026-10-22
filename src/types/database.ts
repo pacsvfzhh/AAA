@@ -3371,6 +3371,18 @@ export interface Database {
         Args: { p_admin_session_token: string; p_source_site_id: string };
         Returns: import('../lib/employeeTransfer/siteImport').SiteImportPreflight;
       };
+      get_employee_export_cutover_status: {
+        Args: { p_admin_session_token: string };
+        Returns: import('../lib/employeeTransfer/sourceCutover').SourceCutoverStatus;
+      };
+      employee_export_cutover_freeze: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_confirmation: string };
+        Returns: import('../lib/employeeTransfer/sourceCutover').SourceCutoverStatus;
+      };
+      employee_export_cutover_resume: {
+        Args: { p_admin_session_token: string; p_admin_password: string; p_confirmation: string; p_cutoff_id: string };
+        Returns: import('../lib/employeeTransfer/sourceCutover').SourceCutoverStatus;
+      };
       get_employee_export_site_snapshot: {
         Args: { p_admin_session_token: string; p_package_id: string };
         Returns: Record<string, unknown>;

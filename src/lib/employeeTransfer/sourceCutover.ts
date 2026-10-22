@@ -52,7 +52,7 @@ async function request(name: Rpc, args: { p_admin_password?: string; p_confirmat
     checkAbort(signal);
     if (result.error) invalid();
     return validateStatus(result.data);
-  } catch { checkAbort(signal); invalid(); }
+  } catch { checkAbort(signal); return invalid(); }
   finally { if (write) activeWrite = false; }
 }
 export const getSourceCutoverStatus = (signal?: AbortSignal): Promise<SourceCutoverStatus> => request('get_employee_export_cutover_status', {}, signal);

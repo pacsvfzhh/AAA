@@ -5,33 +5,13 @@ import {
   freezeSourceCutover,
   getSourceCutoverStatus,
   resumeSourceCutover,
+  type SourceCutoverStatus,
 } from '../../lib/employeeTransfer/sourceCutover';
 
 interface Props {
   disabled: boolean;
   onBusyChange: (busy: boolean) => void;
   onUncertainChange: (uncertain: boolean) => void;
-}
-
-interface SourceCutoff {
-  version: 1;
-  policy: 'drained-queue-v1';
-  site_id: string;
-  cutoff_id: string;
-  frozen_at: string;
-  cutoff_hash: string;
-}
-
-interface SourceCutoverStatus {
-  version: 1;
-  success: true;
-  scope: 'source-cutover';
-  site_id: string;
-  frozen: boolean;
-  cutoff: SourceCutoff | null;
-  blockers: string[];
-  counts: { pending_automation: number; failed_automation: number; processing_orders: number };
-  full_site_complete: false;
 }
 
 type Operation = 'refresh' | 'freeze' | 'resume';
@@ -55,7 +35,8 @@ const blockerLabels: Record<string, string> = {
   source_not_frozen: '舊站目前未暫停，請刷新狀態。',
   cutoff_mismatch: '切站截止點已改變，請刷新後重新確認。',
   maintenance_active: '另有維護保護，請先核對服務端狀態。',
-  active_transfer_job: '仍有進行中的遷移任務，請先核對任務狀態。',
+  transfer_running: '仍有進行中的遷移任務，請先核對任務狀態。',
+  other_maintenance: '另有導入維護保護，不能使用舊站切換操作解除。',
   super_admin_required: '此操作僅限目前登入的超級管理員。',
   session_expired: '管理員驗證已失效，請重新登入後核對狀態。',
 };

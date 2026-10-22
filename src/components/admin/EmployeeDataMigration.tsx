@@ -15,6 +15,7 @@ import {
 } from '../../lib/employeeTransfer/browserStorage';
 
 import EmployeeSiteImport from './EmployeeSiteImport';
+import SourceCutoverPanel from './SourceCutoverPanel';
 import EmployeeSafetyBackupPanel from './EmployeeSafetyBackupPanel';
 
 interface SiteTransferProgress {
@@ -69,7 +70,7 @@ const limitations = [
   '遷入檔案的整組導出編排尚未接通；來源站若已有遷入檔案，會在開始導出前阻擋，不能略過後視為成功。',
   '部分舊式頭像值暫不支援，遇到不支援的值會阻擋，不能視為已備份。',
   '目前按領域分卷，單一領域的紀錄與媒體合計上限為 1 GiB、最多 3,000 個媒體檔案；不是約 150 MB 自動分卷，超限會失敗。',
-  '導出期間來源站必須暫停業務寫入並保持資料穩定，否則一致性核對會失敗；本頁不會代為停站。',
+  '日常備份不自動停站，資料變動會使一致性核對失敗；切站時請先使用「舊站停站切換」建立持久屏障，導出完成也不會自動恢復舊站。',
 ];
 const stopConfirmationText = '確認停止導出任務';
 const domainLabels: Record<string, string> = {
@@ -172,6 +173,8 @@ export default function EmployeeDataMigration() {
   const [importBusy, setImportBusy] = useState(false);
   const [employeeBackupBusy, setEmployeeBackupBusy] = useState(false);
   const [employeeBackupPending, setEmployeeBackupPending] = useState(false);
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [sourceUncertain, setSourceUncertain] = useState(false);
   const [wakeStatus, setWakeStatus] = useState<'idle' | 'requesting' | 'active' | 'unavailable'>('idle');
   const mounted = useRef(false);
   const operation = useRef<AbortController | null>(null);
@@ -182,7 +185,8 @@ export default function EmployeeDataMigration() {
   const resumeGate = useRef<(() => void) | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const support = browserSupport();
-  const busy = run !== null || stopping || importBusy || employeeBackupBusy || employeeBackupPending;
+  const otherBusy = run !== null || stopping || importBusy || employeeBackupBusy || employeeBackupPending;
+  const busy = otherBusy || sourceBusy || sourceUncertain;
   const exportAvailable = capabilityStatus === 'ready' && capabilities?.version === 1
     && capabilities.can_export === true && capabilities.missing_rpcs.length === 0;
   const passphraseValid = Array.from(passphrase).length >= 14 && passphrase === confirmation;
@@ -509,6 +513,7 @@ export default function EmployeeDataMigration() {
         {outputDirectory && <p className="break-all text-sm text-slate-300">本次輸出子目錄：<span className="font-mono text-cyan-200">{outputDirectory}</span>。請保留整個目錄，不要只保留最後一卷。</p>}
 
         <div role="tabpanel" id="migration-panel-export" aria-labelledby="migration-tab-export" hidden={tab !== 'export'} tabIndex={0} className="space-y-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
+          <SourceCutoverPanel disabled={otherBusy} onBusyChange={setSourceBusy} onUncertainChange={setSourceUncertain} />
           <section className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
             <h2 className="font-semibold text-white">目前可驗證的領域</h2>
             <p className="mt-1 text-sm text-slate-400">預設導出目前協定的十個領域，不需逐個選擇員工。這不是完整站點覆蓋清單；原生檔案已接通，遷入檔案整組編排與下列缺項仍未完成。實際以各卷及索引的配套核驗為準。</p>
@@ -522,7 +527,7 @@ export default function EmployeeDataMigration() {
           <form onSubmit={submitExport} className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
             <h2 className="flex items-center gap-2 font-semibold text-white"><KeyRound className="h-4 w-4 text-cyan-300" aria-hidden="true" />驗證與加密</h2>
             <div className="mt-3 rounded-lg border border-amber-800/60 bg-amber-950/30 p-3 text-sm text-amber-100">
-              <p>導出期間來源站必須暫停業務寫入，否則核對會失敗；本頁不會替你停站。開始前亦應處理進行中訂單並審核待處理提款，再取得穩定快照。正式切站須另行確認，不能把待處理提款重複付款。</p>
+              <p>日常備份不自動停站，來源變動會使核對失敗。切站時先在上方清零待發通知與處理中訂單，再明確暫停舊站；截止憑據會寫入加密索引。待處理提款仍會一起搬遷，之後只在新站處理，不能重複付款。</p>
               <p className="mt-2">檔案可能包含舊密碼校驗資料、財務、聊天及實名證件，並非只有文字或網址。請將加密檔與口令分開保管；口令遺失無法還原，服務端校驗超管目前密碼不等於搬遷超管密碼。</p>
             </div>
             <fieldset disabled={busy || selecting || !exportAvailable || !support.export} className="mt-4 space-y-4 disabled:opacity-60">

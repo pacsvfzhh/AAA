@@ -112,7 +112,7 @@ function validateCatalog(domain: SiteDomain, value: unknown): SiteCatalog {
   }
 }
 function validateSnapshot(value: unknown): SiteSnapshot {
-  const hasCutover = value !== null && typeof value === 'object' && Object.hasOwn(value, 'source_cutover');
+  const hasCutover = value !== null && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'source_cutover');
   const r = object(value, ['version', 'protocol', 'site_id', 'package_id', 'catalogs', 'sha256', 'full_site_complete', 'import_ready',
     ...(hasCutover ? ['source_cutover'] : [])]);
   const cutoff = hasCutover ? validateSourceCutoff(r.source_cutover) : undefined;
@@ -587,7 +587,8 @@ export async function inspectSiteBundleSet(files: File[], passphrase: string, cr
     }
     volumes.push({ domain: 'index', filename: INDEX_FILE, cipherBytes: verifiedIndex.cipherBytes,
       cipherSha256: verifiedIndex.cipherSha256, rows: 0, files: 0 });
-    outcome = { packageId: baseline.package_id, sourceSiteId: baseline.site_id, volumes, fullSiteComplete: false, importReady: false };
+    outcome = { packageId: baseline.package_id, sourceSiteId: baseline.site_id, volumes, fullSiteComplete: false, importReady: false,
+      ...(baseline.source_cutover ? { sourceCutover: structuredClone(baseline.source_cutover) } : {}) };
   } catch {
     failure = options.signal?.aborted ? new DOMException('Inspection cancelled.', 'AbortError')
       : new Error('The selected encrypted files could not be confirmed as a complete, matching domain set. No database writes were performed.');
