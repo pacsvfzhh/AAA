@@ -239,7 +239,7 @@ export function createNativeTransferDatabase(...args) {
     checkedCommand('initdb', ['-D', data, '-U', 'native_harness', '--no-locale', '--encoding=UTF8', '--auth-local=trust', '--auth-host=reject']);
     startAttempted = true;
     checkedCommand('pg_ctl', ['-D', data, '-l', join(directory, 'postgres.log'), '-w', '-t', '15', '-o',
-      `-c listen_addresses='' -c unix_socket_directories='${socket}' -c unix_socket_permissions=0700 -c max_connections=12 -c statement_timeout=30000`, 'start']);
+      `-c listen_addresses='' -c unix_socket_directories='${socket}' -c unix_socket_permissions=0700 -c max_connections=12 -c statement_timeout=30000 -c track_functions=all`, 'start']);
     bootstrap = await connect('native_harness');
     await send(bootstrap, { text: `CREATE ROLE postgres LOGIN SUPERUSER BYPASSRLS;
       ALTER DATABASE postgres OWNER TO postgres; ALTER SCHEMA public OWNER TO postgres;` });

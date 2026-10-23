@@ -94,11 +94,32 @@ function bridge(name, args) {
   } };
   return query;
 }
+const PROFILE_RE = /site_verify$|_verify$|notifications_(chunk|begin)$|chat_(chunk|begin)$/;
+async function fnStats() {
+  return new Map((await rows(active, `SELECT funcid::regprocedure::text AS f,calls::float8 AS calls,total_time::float8 AS total,self_time::float8 AS self
+    FROM pg_stat_xact_user_functions`)).map(r => [r.f, r]));
+}
 async function execAs(role, name, args) {
+  const prof = process.env.EMPLOYEE_TRANSFER_FN_PROFILE === '1' && PROFILE_RE.test(name) && active === target;
+  const before = prof ? await fnStats() : null;
+  try { return await execAsInner(role, name, args); }
+  finally {
+    if (prof) {
+      const after = await fnStats(); const diff = [];
+      for (const [f, a] of after) {
+        const b = before.get(f) ?? { calls: 0, total: 0, self: 0 };
+        if (a.calls > b.calls) diff.push({ f: f.replace(/\(.*$/, ''), calls: a.calls - b.calls, total: a.total - b.total, self: a.self - b.self });
+      }
+      diff.sort((x, y) => y.total - x.total);
+      console.error(`FNPROFILE ${name}\n` + diff.slice(0, 28).map(d => `  ${d.f.padEnd(70)} calls=${String(d.calls).padStart(5)} total=${d.total.toFixed(1).padStart(8)} self=${d.self.toFixed(1).padStart(8)}`).join('\n'));
+    }
+  }
+}
+async function execAsInner(role, name, args) {
   await active.exec('SAVEPOINT site_import_rpc');
   try {
     await active.exec(`SET LOCAL ROLE ${role}`);
-    if (databaseBackend === 'native') await active.exec("SET LOCAL statement_timeout='3s'");
+    if (databaseBackend === 'native') await active.exec(process.env.EMPLOYEE_TRANSFER_DIAG_NO_TIMEOUT === '1' ? "SET LOCAL statement_timeout='120s'" : "SET LOCAL statement_timeout='3s'");
     const started = performance.now();
     let data;
     try { data = await baseRpc(active, name, args, { role: null }); }
