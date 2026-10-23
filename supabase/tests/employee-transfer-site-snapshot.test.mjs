@@ -17,6 +17,8 @@ const DOMAINS = ['shared', 'products', 'dispatch', 'identity', 'finance', 'activ
 const SHARED = ['admins', 'financial_admin_credentials', 'admin_groups', 'admin_group_members',
   'admin_configs', 'system_configs', 'history_cleanup_config'];
 const PACKAGED = DOMAINS.slice(3);
+const CATALOG_DEPENDENCIES = [['finance', 'identity'], ['activity', 'identity'], ['verification', 'identity'],
+  ['notifications', 'finance'], ['chat', 'finance']];
 const id = n => `41000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const I = { employee: id(1), product: id(2), message: id(3), customer: id(4), chat: id(5), login: id(6),
   verification: id(7), audit: id(8), adminGroup: id(9), adminMember: id(10), groupOrder: id(11), valid: id(12) };
@@ -115,6 +117,28 @@ async function checkedRead() {
   assert.deepEqual(await dataState(), before, 'snapshot must not write any table, sequence, heartbeat, staging or event');
   return result;
 }
+// Compare server JSONB TEXT as UTF8 bytes, not a JS parse/stringify round trip
+// (which could lose numeric precision/scale). The old independent one-uuid calls
+// reconstruct every changed domain and the complete external response/hash.
+async function assertIndependentSnapshotBytes(pkg = PACKAGE) {
+  const result = (await rows(db, `WITH actual AS MATERIALIZED (
+      SELECT public.get_employee_export_site_snapshot($1,$2) AS body
+    ), catalogs AS MATERIALIZED (
+      SELECT (body->'catalogs') || jsonb_build_object(
+        'identity',private.employee_transfer_identity_catalog($2),
+        'finance',private.employee_transfer_finance_catalog($2),
+        'activity',private.employee_transfer_activity_catalog($2),
+        'verification',private.employee_transfer_verification_catalog($2),
+        'notifications',private.employee_transfer_notifications_catalog($2),
+        'chat',private.employee_transfer_chat_catalog($2)) AS body FROM actual
+    ) SELECT actual.body::text AS actual_text,catalogs.body::text AS catalogs_text,
+      ((actual.body-'catalogs'-'sha256') || jsonb_build_object('catalogs',catalogs.body,
+        'sha256',encode(extensions.digest(convert_to(catalogs.body::text,'UTF8'),'sha256'),'hex')))::text AS expected_text
+      FROM actual CROSS JOIN catalogs`, [session, pkg]))[0];
+  assert.deepEqual(Buffer.from(result.actual_text, 'utf8'), Buffer.from(result.expected_text, 'utf8'));
+  assert.equal(JSON.parse(result.actual_text).sha256, sha(result.catalogs_text));
+  return result.actual_text;
+}
 async function begin(domain, pkg = PACKAGE) {
   const job = await call(`employee_export_${domain}_begin`, { p_admin_session_token: session, p_admin_password: PASSWORDS.root,
     ...(PACKAGED.includes(domain) ? { p_package_id: pkg } : {}) });
@@ -207,6 +231,77 @@ test('RPC is STABLE SECURITY DEFINER with fixed search_path/UTC/ISO and SQL40-st
   assert.doesNotMatch(p.proacl, /(?:^|,)=[^,]*X/);
   for (const [role, allowed] of [['anon', true], ['authenticated', true], ['service_role', false], ['site_snapshot_untrusted', false]]) {
     assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2,'EXECUTE')", [role, SIGNATURE]), allowed);
+  }
+});
+for (const [domain, dependency] of CATALOG_DEPENDENCIES) {
+  const name = `private.employee_transfer_${domain}_catalog`;
+  const helper = `${name}_with_${dependency}`;
+  test(`${domain} wrapper/helper are STABLE SECURITY DEFINER with fixed GUCs and no PUBLIC/anon/authenticated/service_role execution`, async () => isolated(async () => {
+    for (const signature of [`${name}(uuid)`, `${helper}(uuid,jsonb)`]) {
+      const p = (await rows(db, `SELECT prosecdef,provolatile,proconfig,proacl::text,prosrc,
+        EXISTS(SELECT 1 FROM aclexplode(COALESCE(proacl,acldefault('f',proowner))) WHERE grantee=0 AND privilege_type='EXECUTE') AS public_execute
+        FROM pg_proc WHERE oid=to_regprocedure($1)`, [signature]))[0];
+      assert.equal(p.prosecdef, true); assert.equal(p.provolatile, 's'); assert.equal(p.public_execute, false);
+      assert.deepEqual(p.proconfig, ['search_path=pg_catalog, public, private, pg_temp', 'TimeZone=UTC', 'DateStyle=ISO, YMD']);
+      assert.doesNotMatch(p.proacl, /(?:^|,)=[^,]*X/);
+      for (const role of ['anon', 'authenticated', 'service_role', 'site_snapshot_untrusted']) {
+        assert.equal(await scalar(db, "SELECT has_function_privilege($1,$2,'EXECUTE')", [role, signature]), false);
+      }
+      if (signature === `${name}(uuid)`) {
+        assert.ok(p.prosrc.includes(`private.employee_transfer_${dependency}_catalog(p_package_id)`), 'wrapper must compute its live server dependency');
+        assert.ok(p.prosrc.includes(`${helper}(p_package_id,`));
+      } else {
+        assert.doesNotMatch(p.prosrc, /private\.employee_transfer_(identity|finance)_catalog\(/, 'helper must not repeat its dependency scan');
+      }
+    }
+    // Grant only schema visibility in a rolled-back local fixture so a denied
+    // helper call proves its function ACL, not merely private schema isolation.
+    await db.exec('GRANT USAGE ON SCHEMA private TO anon,authenticated,service_role,site_snapshot_untrusted');
+    for (const role of ['anon', 'authenticated', 'service_role', 'site_snapshot_untrusted']) {
+      await db.exec('SAVEPOINT helper_acl');
+      try {
+        await db.exec(`SET LOCAL ROLE ${role}`);
+        await assert.rejects(db.query(`SELECT ${helper}($1,'{}'::jsonb)`, [PACKAGE]), /permission denied for function/);
+      } finally { await db.exec('ROLLBACK TO SAVEPOINT helper_acl; RELEASE SAVEPOINT helper_acl'); }
+    }
+  }));
+  test(`${domain} independent one-uuid catalog, fresh-dependency helper and snapshot catalog are byte-identical`, async () => {
+    const result = (await rows(db, `WITH identity AS MATERIALIZED (
+        SELECT private.employee_transfer_identity_catalog($1) AS catalog
+      ), finance AS MATERIALIZED (
+        SELECT private.employee_transfer_finance_catalog_with_identity($1,catalog) AS catalog FROM identity
+      ) SELECT ${name}($1)::text AS independent_text,
+        ${helper}($1,catalog)::text AS helper_text,
+        (public.get_employee_export_site_snapshot($2,$1)->'catalogs'->$3)::text AS snapshot_text
+        FROM ${dependency}`, [PACKAGE, session, domain]))[0];
+    assert.deepEqual(Buffer.from(result.helper_text, 'utf8'), Buffer.from(result.independent_text, 'utf8'));
+    assert.deepEqual(Buffer.from(result.snapshot_text, 'utf8'), Buffer.from(result.independent_text, 'utf8'));
+  });
+}
+test('SQL41 computes identity once and finance once using only this call\'s local server dependencies', async () => {
+  const source = await scalar(db, 'SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure($1)', [SIGNATURE]);
+  assert.equal((source.match(/private\.employee_transfer_identity_catalog\(/g) ?? []).length, 1);
+  assert.equal((source.match(/private\.employee_transfer_finance_catalog_with_identity\(/g) ?? []).length, 1);
+  assert.doesNotMatch(source, /private\.employee_transfer_(finance|activity|verification|notifications|chat)_catalog\(/);
+});
+test('complete snapshot JSONB UTF8 bytes and SHA equal independently recomputed original catalogs, including fresh identity/finance changes', async () => isolated(async () => {
+  const initial = await assertIndependentSnapshotBytes();
+  assert.notEqual(await assertIndependentSnapshotBytes(randomUUID()), initial);
+  await change('public.users', 'UPDATE public.users SET remarks=$2 WHERE id=$1', [I.employee, '新依赖：精度与空值\nnot cached']);
+  const identityChanged = await assertIndependentSnapshotBytes();
+  assert.notEqual(identityChanged, initial);
+  await change('public.wallets', 'UPDATE public.wallets SET available_balance=12345678901234567890.1234567890123456789 WHERE user_id=$1', [I.employee]);
+  const financeChanged = await assertIndependentSnapshotBytes();
+  assert.notEqual(financeChanged, identityChanged);
+  await change('public.employee_login_history', "UPDATE public.employee_login_history SET device_info='null'::jsonb WHERE id=$1", [I.login]);
+  assert.notEqual(await assertIndependentSnapshotBytes(), financeChanged);
+  await db.exec(`SET LOCAL timezone='Pacific/Honolulu'; SET LOCAL datestyle='SQL, DMY'; SET LOCAL search_path=pg_temp,public`);
+  await assertIndependentSnapshotBytes();
+}));
+test('independent wrappers retain their original NULL-package errors rather than accepting a partial dependency', async () => {
+  for (const [domain] of CATALOG_DEPENDENCIES) {
+    await assert.rejects(db.query(`SELECT private.employee_transfer_${domain}_catalog(NULL)`),
+      domain === 'chat' ? /A chat package id is required\./ : /An employee identity package id is required\./);
   }
 });
 test('exact response, seven-table shared metadata and server jsonb catalogs TEXT SHA256 (not JS JSON text)', async () => {

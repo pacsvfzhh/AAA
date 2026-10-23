@@ -181,13 +181,13 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION private.employee_transfer_notifications_catalog(p_package_id uuid)
+-- Internal dependency must be freshly computed in the caller's MVCC snapshot.
+CREATE FUNCTION private.employee_transfer_notifications_catalog_with_finance(p_package_id uuid,p_finance jsonb)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
-DECLARE v_key text;v_query text;v_rows bigint;v_bytes bigint;v_largest bigint;v_hash text;v_total bigint:=0;v_tables jsonb:='[]';v_row record;v_finance jsonb;
+DECLARE v_key text;v_query text;v_rows bigint;v_bytes bigint;v_largest bigint;v_hash text;v_total bigint:=0;v_tables jsonb:='[]';v_row record;
 BEGIN
   PERFORM private.employee_transfer_notifications_schema();
-  v_finance:=private.employee_transfer_finance_catalog(p_package_id);
   FOREACH v_key IN ARRAY private.employee_transfer_notifications_keys() LOOP
     v_query:=private.employee_transfer_notifications_query(v_key);
     EXECUTE 'SELECT count(*),COALESCE(sum(octet_length(body::text||E''\n'')),0),COALESCE(max(octet_length(body::text||E''\n'')),0) FROM ('||v_query||') AS r' INTO v_rows,v_bytes,v_largest;
@@ -198,8 +198,16 @@ BEGIN
     v_tables:=v_tables||jsonb_build_array(jsonb_build_object('key',v_key,'rows',v_rows,'bytes',v_bytes,'row_hashes_sha256',v_hash));
   END LOOP;
   RETURN jsonb_build_object('version',1,'scope','site-notifications','site_id',(SELECT site_id FROM private.employee_transfer_site),
-    'package_id',p_package_id,'identity_catalog',v_finance->'identity_catalog','finance_catalog',v_finance,
+    'package_id',p_package_id,'identity_catalog',p_finance->'identity_catalog','finance_catalog',p_finance,
     'date_runs_supported',to_regclass('public.notification_automation_date_runs') IS NOT NULL,'tables',v_tables,'full_site_complete',false);
+END;
+$$;
+
+CREATE FUNCTION private.employee_transfer_notifications_catalog(p_package_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
+BEGIN
+  RETURN private.employee_transfer_notifications_catalog_with_finance(p_package_id,private.employee_transfer_finance_catalog(p_package_id));
 END;
 $$;
 

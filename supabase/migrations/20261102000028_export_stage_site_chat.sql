@@ -186,14 +186,14 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION private.employee_transfer_chat_catalog(p_package_id uuid)
+-- Internal dependency must be freshly computed in the caller's MVCC snapshot.
+CREATE FUNCTION private.employee_transfer_chat_catalog_with_finance(p_package_id uuid,p_finance jsonb)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
-DECLARE v_key text;v_query text;v_rows bigint;v_bytes bigint;v_largest bigint;v_hash text;v_total bigint:=0;v_tables jsonb:='[]';v_row record;v_finance jsonb;
+DECLARE v_key text;v_query text;v_rows bigint;v_bytes bigint;v_largest bigint;v_hash text;v_total bigint:=0;v_tables jsonb:='[]';v_row record;
 BEGIN
   IF p_package_id IS NULL THEN RAISE EXCEPTION 'A chat package id is required.';END IF;
   PERFORM private.employee_transfer_chat_schema();
-  v_finance:=private.employee_transfer_finance_catalog(p_package_id);
   FOREACH v_key IN ARRAY private.employee_transfer_chat_keys() LOOP
     v_query:=private.employee_transfer_chat_query(v_key);
     EXECUTE 'SELECT count(*),COALESCE(sum(octet_length(body::text||E''\n'')),0),COALESCE(max(octet_length(body::text||E''\n'')),0) FROM ('||v_query||') AS r' INTO v_rows,v_bytes,v_largest;
@@ -205,8 +205,17 @@ BEGIN
     v_tables:=v_tables||jsonb_build_array(jsonb_build_object('key',v_key,'rows',v_rows,'bytes',v_bytes,'row_hashes_sha256',v_hash));
   END LOOP;
   RETURN jsonb_build_object('version',1,'scope','site-chat','site_id',(SELECT site_id FROM private.employee_transfer_site),
-    'package_id',p_package_id,'identity_catalog',v_finance->'identity_catalog','finance_catalog',v_finance,
+    'package_id',p_package_id,'identity_catalog',p_finance->'identity_catalog','finance_catalog',p_finance,
     'tables',v_tables,'full_site_complete',false);
+END;
+$$;
+
+CREATE FUNCTION private.employee_transfer_chat_catalog(p_package_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
+BEGIN
+  IF p_package_id IS NULL THEN RAISE EXCEPTION 'A chat package id is required.';END IF;
+  RETURN private.employee_transfer_chat_catalog_with_finance(p_package_id,private.employee_transfer_finance_catalog(p_package_id));
 END;
 $$;
 
@@ -395,7 +404,8 @@ REVOKE ALL ON FUNCTION private.employee_transfer_chat_keys(),private.employee_tr
   private.employee_transfer_chat_relation(text),private.employee_transfer_chat_schema(),
   private.employee_transfer_chat_cursor(text,jsonb),private.employee_transfer_chat_query(text),private.employee_transfer_chat_unique_json(json,integer),
   private.employee_transfer_check_chat_row(text,jsonb),private.employee_transfer_check_chat_catalog(jsonb),
-  private.employee_transfer_chat_catalog(uuid),private.employee_transfer_chat_owner(private.employee_transfer_jobs),
+  private.employee_transfer_chat_catalog(uuid),private.employee_transfer_chat_catalog_with_finance(uuid,jsonb),
+  private.employee_transfer_chat_owner(private.employee_transfer_jobs),
   private.employee_transfer_chat_input(uuid,text),private.employee_transfer_check_chat_input(private.employee_transfer_jobs)
   FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.employee_export_chat_begin(uuid,text,uuid),public.get_employee_export_chat_page(uuid,uuid,text,text,integer),

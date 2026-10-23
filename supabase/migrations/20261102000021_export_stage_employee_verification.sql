@@ -67,7 +67,8 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION private.employee_transfer_verification_catalog(p_package_id uuid)
+-- Internal dependency must be freshly computed in the caller's MVCC snapshot.
+CREATE FUNCTION private.employee_transfer_verification_catalog_with_identity(p_package_id uuid,p_identity jsonb)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_query text; v_rows bigint; v_bytes bigint; v_largest bigint; v_hash text;
@@ -81,9 +82,17 @@ BEGIN
   END IF;
   EXECUTE 'SELECT encode(extensions.digest(convert_to(COALESCE(string_agg(encode(extensions.digest(convert_to(body::text||E''\n'',''UTF8''),''sha256''),''hex''),'''' ORDER BY id),''''),''UTF8''),''sha256''),''hex'') FROM ('||v_query||') AS r' INTO v_hash;
   RETURN jsonb_build_object('version',1,'scope','employee-verification','site_id',(SELECT site_id FROM private.employee_transfer_site),
-    'package_id',p_package_id,'identity_catalog',private.employee_transfer_identity_catalog(p_package_id),
+    'package_id',p_package_id,'identity_catalog',p_identity,
     'tables',jsonb_build_array(jsonb_build_object('key','verification_requests','rows',v_rows,'bytes',v_bytes,'row_hashes_sha256',v_hash)),
     'full_site_complete',false);
+END;
+$$;
+
+CREATE FUNCTION private.employee_transfer_verification_catalog(p_package_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
+BEGIN
+  RETURN private.employee_transfer_verification_catalog_with_identity(p_package_id,private.employee_transfer_identity_catalog(p_package_id));
 END;
 $$;
 

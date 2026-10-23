@@ -96,7 +96,8 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION private.employee_transfer_activity_catalog(p_package_id uuid)
+-- Internal dependency must be freshly computed in the caller's MVCC snapshot.
+CREATE FUNCTION private.employee_transfer_activity_catalog_with_identity(p_package_id uuid,p_identity jsonb)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
 DECLARE v_key text; v_query text; v_rows bigint; v_bytes bigint; v_largest bigint; v_hash text; v_total bigint:=0; v_tables jsonb:='[]';
@@ -112,7 +113,15 @@ BEGIN
     v_tables:=v_tables||jsonb_build_array(jsonb_build_object('key',v_key,'rows',v_rows,'bytes',v_bytes,'row_hashes_sha256',v_hash));
   END LOOP;
   RETURN jsonb_build_object('version',1,'scope','employee-activity','site_id',(SELECT site_id FROM private.employee_transfer_site),
-    'package_id',p_package_id,'identity_catalog',private.employee_transfer_identity_catalog(p_package_id),'tables',v_tables,'full_site_complete',false);
+    'package_id',p_package_id,'identity_catalog',p_identity,'tables',v_tables,'full_site_complete',false);
+END;
+$$;
+
+CREATE FUNCTION private.employee_transfer_activity_catalog(p_package_id uuid)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp SET timezone='UTC' SET datestyle='ISO, YMD' AS $$
+BEGIN
+  RETURN private.employee_transfer_activity_catalog_with_identity(p_package_id,private.employee_transfer_identity_catalog(p_package_id));
 END;
 $$;
 

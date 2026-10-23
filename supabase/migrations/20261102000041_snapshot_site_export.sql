@@ -16,6 +16,8 @@ DECLARE
   v_tables jsonb := '[]'::jsonb;
   v_excluded jsonb;
   v_shared jsonb;
+  v_identity jsonb;
+  v_finance jsonb;
   v_catalogs jsonb;
   v_device jsonb;
 BEGIN
@@ -39,20 +41,23 @@ BEGIN
   v_shared := jsonb_build_object('version', 1, 'scope', 'shared-settings', 'site_id', v_site,
     'tables', v_tables, 'excluded_system_keys', v_excluded, 'full_site_complete', false);
 
-  -- All existing STABLE catalogs (including nested identity/finance) inherit the
-  -- caller's same MVCC snapshot. Keep their validation/limits/NULL semantics.
+  -- Reuse only freshly computed server dependencies within this STABLE call's
+  -- MVCC snapshot, never a client catalog or cross-request cache. Each helper
+  -- keeps its own schema/row validation, limits, hashes and NULL semantics.
   -- In particular SQL33 MUST reject previously imported archive namespaces;
   -- never catch that error, omit archives, or replace it with an empty catalog.
+  v_identity := private.employee_transfer_identity_catalog(p_package_id);
+  v_finance := private.employee_transfer_finance_catalog_with_identity(p_package_id, v_identity);
   v_catalogs := jsonb_build_object(
     'shared', v_shared,
     'products', private.employee_transfer_product_catalog(private.employee_transfer_product_snapshot()),
     'dispatch', private.employee_transfer_dispatch_catalog(),
-    'identity', private.employee_transfer_identity_catalog(p_package_id),
-    'finance', private.employee_transfer_finance_catalog(p_package_id),
-    'activity', private.employee_transfer_activity_catalog(p_package_id),
-    'verification', private.employee_transfer_verification_catalog(p_package_id),
-    'notifications', private.employee_transfer_notifications_catalog(p_package_id),
-    'chat', private.employee_transfer_chat_catalog(p_package_id),
+    'identity', v_identity,
+    'finance', v_finance,
+    'activity', private.employee_transfer_activity_catalog_with_identity(p_package_id, v_identity),
+    'verification', private.employee_transfer_verification_catalog_with_identity(p_package_id, v_identity),
+    'notifications', private.employee_transfer_notifications_catalog_with_finance(p_package_id, v_finance),
+    'chat', private.employee_transfer_chat_catalog_with_finance(p_package_id, v_finance),
     'archives', private.employee_transfer_archives_catalog(p_package_id));
   RETURN jsonb_build_object('version', 1, 'protocol', 'site-bundle-set-v1',
     'site_id', v_site, 'package_id', p_package_id, 'catalogs', v_catalogs,
