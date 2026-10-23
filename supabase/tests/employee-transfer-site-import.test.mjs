@@ -939,10 +939,27 @@ test('native capacity sample: ten thousand independent historical orders use rea
       FROM generate_series(1,10000) AS n`, [I.employee, I.product, TIME]);
     assert.equal(await scalar(source, 'SELECT count(*)::int FROM public.orders WHERE user_id=$1', [I.employee]), 10002);
     files = await isolated(source, sourceSession, exportSet, true);
+  } catch (error) {
+    assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.users'), 0);
+    assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_jobs'), 0);
+    assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), 0);
+    t.diagnostic('CAPACITY NOT ACCEPTED: source export failed before any target employee, job or maintenance write.');
+    throw error;
   } finally { await source.exec('ROLLBACK'); }
   await isolated(target, targetSession, async () => {
+    const modes = await triggers(target);
     const context = startImport({ options: { files: fileList(files) } });
-    const result = await mustComplete(context, t);
+    let result;
+    try { result = await mustComplete(context, t); }
+    catch (error) {
+      if (state.calls.some(call => call.error?.includes('statement timeout'))) {
+        await assertMaintenance({ jobId: error.jobId });
+        assert.deepEqual(await triggers(target), modes);
+        assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_write_permits'), 0);
+        t.diagnostic('CAPACITY NOT ACCEPTED: real server timeout; imported accounts remain disabled, dirty maintenance retained, triggers restored and no write permit leaked.');
+      }
+      throw error;
+    }
     assert.deepEqual(result.verifiedDomains, DOMAINS);
     assert.equal(result.maintenance, true);
     assert.equal(result.fullSiteComplete, false);

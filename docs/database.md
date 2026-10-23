@@ -17,6 +17,13 @@
 
 `private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；`anon` / `authenticated` 没有该 schema 的使用权限。
 
+## 资料迁移原生整站与容量门槛（第61节，2026-10-23 UTC+8，正式未部署）
+- 新增自建PG17适配器，仅显式本地工具、独立0700目录/Unix socket/禁TCP，无连接URI或任意对象注册入口。两站分别回放526历史文件后，通过独立bootstrap连接正常撤销业务postgres超级权限；已审45函数72trigger、96表871列profile和SQL00–57在NOSUPERUSER/BYPASSRLS属主下安装。每站584文件仍精确12项历史失败，不是干净建库；auth/Storage/cron仍为平台夹具。
+- 真实十域11份磁盘密文往返、五份独立备份、SQL55总核对及SQL57离线启用小样本27项通过、32筛选skip不计。每个桥接anon RPC设真实statement_timeout=3s；最后启用丢响应包含真实COMMIT，其余测试主要在外层事务/保存点隔离，不是每请求独立HTTP提交。SQL57小fixture约2.49秒/94受保护表，不能外推正式容量。
+- SQL07尚未部署草案修复独立新库重复全局设置：仅全组UUID不相交、条数和除id/时间外的全部内容多重集完全相同，才按内容内C序编号一一reuse；保留目标UUID/原行，不合并或删默认行，异内容/数量/部分占用/媒体仍阻断。新增19项，shared-replace全85及其他正式profile134合219通过；公共RPC/类型/业务trigger不变。
+- `test:employee-transfer:native-site`为上述小样本；`test:employee-transfer:native-capacity`是一名员工额外10000笔历史订单（总10002）的上线验收门槛，**目前非零失败**。原生3秒在订单写后核对触发，实验优化又遇完整核对/来源嵌套目录超时，SQL15实验已全撤回；不关检查、不提高角色上限、不将失败计通过。
+- HTTP工具安装命令被环境ACL拦截，未绕过；PostgREST/托管Storage仍未验。仅列出项目元数据，未默认使用“bolt备用”、未创建收费资源，无正式SQL/Edge/Storage/权限/配置/cron/前端部署。原生机制17、旧PGlite同组27及聊天6/稽核48/工时6、typecheck/lint/build另列通过，不称总迁移套件通过；完整迁移仍未完成。
+
 ## 资料迁移原生机制与跨域验收（第60节，2026-10-23 UTC+8，正式未部署）
 - 新增`employee-transfer-native-db.test.mjs`及`npm run test:employee-transfer:native`。只在测试自建的临时Unix socket集群执行，不接收数据库连接地址；PG17.6原生三连接、postgres NOSUPERUSER/BYPASSRLS，完整SQL00/04和原文SQL11两表/guard_write的合成机制夹具，17/17通过。验证竞争写等待恢复并COMMIT、O/A/R/D模式、FK/删除保护、漏恢复拒COMMIT、锁超时/NOWAIT、取消/3秒超时后数据/审计/真实permit回滚、跨事务许可隔离与旧快照拒写。
 - 这是机制子阶段，不是96表871列/45函数72trigger正式样本的原生完整安装，也没有原生执行SQL55/57十域总核验/放行或真实PostgREST容量。3秒故意超时证明安全回滚，不能证明实际迁移RPC能在3秒完成；没有提高正式角色或函数时限。

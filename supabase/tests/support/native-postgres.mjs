@@ -15,11 +15,9 @@ const safeInt8 = value => {
 };
 const mapInt8 = value => Array.isArray(value) ? value.map(mapInt8) : value === null ? null : safeInt8(value);
 
-// No registration API: neither an existing connection nor an arbitrary data directory can be branded.
 export const isNativeTransferDatabase = db => nativeDatabases.has(db);
 
-// Synchronous factory, like new PGlite(): readiness and startup failures live on waitReady.
-// Only explicit tool paths are accepted, never a URI, connection options or a pre-existing cluster.
+// Self-created socket clusters only; callers cannot supply a connection or data directory.
 export function createNativeTransferDatabase(...args) {
   if (args.length) throw new TypeError('Native transfer databases do not accept connection or directory options');
   const configuredBin = process.env.EMPLOYEE_TRANSFER_PG_BIN;
@@ -75,8 +73,7 @@ export function createNativeTransferDatabase(...args) {
     return connection;
   }
 
-  // pg rejects an ErrorResponse before ReadyForQuery arrives. Wait for BOTH, including errors,
-  // so SAVEPOINT recovery and isInTransaction() observe actual server state, not SQL guesses.
+  // pg emits errors before ReadyForQuery; wait for both before savepoint recovery.
   async function send(connection, config) {
     if (connection.failure) throw connection.failure;
     const wire = connection.client.connection;
@@ -160,8 +157,7 @@ export function createNativeTransferDatabase(...args) {
     if (cleanupPromise) return cleanupPromise;
     cleanupPromise = (async () => {
       try {
-        // A separate, self-created control connection can cancel even a busy bootstrap connection.
-        // PIDs are exclusively those opened by this invocation, never supplied by a caller.
+        // Cancel only this cluster's own connections, including a busy bootstrap connection.
         if (connections.some(connection => connection.client.processID && !connection.failure)) {
           let control;
           try {
@@ -272,8 +268,7 @@ export function createNativeTransferDatabase(...args) {
       return enqueue(async () => {
         checkSql(sql);
         if (!Array.isArray(params)) throw new TypeError('Native query parameters must be an array');
-        // Parameterless multi-command fixtures use the simple protocol; expose the last result's rows.
-        // Bound queries use the extended protocol: PostgreSQL rejects multiple prepared commands.
+        // Bound queries use the extended protocol, which rejects multiple commands.
         const raw = await send(main, { text: sql, values: params });
         return { rows: (Array.isArray(raw) ? raw.at(-1) : raw)?.rows ?? [] };
       });
