@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
+import { isNativeTransferDatabase } from './native-postgres.mjs';
 
 const missingTriggers = [
   ['orders', 'trigger_audit_order_status'],
@@ -161,9 +162,9 @@ async function readTriggers(db) {
     WHERE n.nspname='public' AND NOT t.tgisinternal ORDER BY c.relname,t.tgname`)).rows;
 }
 
-// Exact observations on an empty local PGlite fixture, never production baseline approval.
+// Exact observations on an empty local fixture, never production baseline approval.
 export async function applyProductionTriggerFixture(db) {
-  if (!(db instanceof PGlite)) throw new TypeError('Production trigger fixture accepts only a local PGlite test database');
+  if (!(db instanceof PGlite) && !isNativeTransferDatabase(db)) throw new TypeError('Production trigger fixture accepts only a local PGlite or self-created native test database');
   await db.waitReady;
   assert.equal(db.isInTransaction(), false, 'Fixture requires its own transaction');
   const { catalog, overrides } = await readObservations();

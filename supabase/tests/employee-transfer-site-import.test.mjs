@@ -8,7 +8,8 @@ import { join } from 'node:path';
 import { after, before, mock, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { assertExpectedReplayFailures } from './support/replay-migrations.mjs';
+import { assertExpectedReplayFailures, replayMigrations } from './support/replay-migrations.mjs';
+import { createNativeTransferDatabase } from './support/native-postgres.mjs';
 import { adminLogin, createSites, rows, rpc as baseRpc, scalar } from './support/transfer-harness.mjs';
 import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 import { replayProductionTransferMigrations } from './support/production-transfer.mjs';
@@ -21,7 +22,10 @@ import { replayProductionTransferMigrations } from './support/production-transfe
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const LAST = '20261102000057_release_imported_site.sql';
 const schemaProfile = process.env.EMPLOYEE_TRANSFER_SCHEMA_PROFILE;
+const databaseBackend = process.env.EMPLOYEE_TRANSFER_DB_BACKEND;
+if (databaseBackend !== undefined && databaseBackend !== 'native') throw new Error('Unknown site-import database backend');
 if (schemaProfile !== undefined && !['production-columns', 'production-triggers'].includes(schemaProfile)) throw new Error('Unknown site-import schema profile');
+if (databaseBackend === 'native' && schemaProfile !== 'production-triggers') throw new Error('Native site acceptance requires the reviewed production-triggers profile');
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';
@@ -207,7 +211,8 @@ function startImport(extra = {}) {
 function explain(error) {
   return { name: error.name, domain: error.domain, phase: error.phase, jobId: error.jobId,
     verifiedDomains: error.verifiedDomains, cleanupRequired: error.cleanupRequired,
-    message: error.message, causes: error.originalErrors?.map(explain), sqlErrors: state.calls.filter(c => c.error).map(c => ({ rpc: c.name, error: c.error })) };
+    message: error.message, causes: error.originalErrors?.map(explain), sqlErrors: state.calls.filter(c => c.error).map(c => ({ rpc: c.name, error: c.error })),
+    blockedPlans: state.calls.filter(c => c.result?.conflicts?.length).map(c => ({ rpc: c.name, conflicts: c.result.conflicts })) };
 }
 async function mustComplete(context, t) {
   try { return await context.promise; }
@@ -279,10 +284,23 @@ async function seedTarget() {
     ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`);
 }
 before(async () => {
-  replay = await createSites({ upTo: LAST }, schemaProfile ? {
-    replay: options => replayProductionTransferMigrations({ ...options, triggerProfile: schemaProfile === 'production-triggers' }),
-  } : {});
-  source = replay.oldSite; target = replay.newSite;
+  if (databaseBackend === 'native') {
+    const nativeReplay = () => replayProductionTransferMigrations({ upTo: LAST, triggerProfile: true }, {
+      replay: options => replayMigrations(options, { createDatabase: () => createNativeTransferDatabase() }),
+    });
+    const first = await nativeReplay();
+    source = first.db;
+    const second = await nativeReplay();
+    target = second.db;
+    assert.deepEqual(first.files, second.files);
+    assert.deepEqual(first.failures, second.failures);
+    replay = { ...first, oldSite: source, newSite: target };
+  } else {
+    replay = await createSites({ upTo: LAST }, schemaProfile ? {
+      replay: options => replayProductionTransferMigrations({ ...options, triggerProfile: schemaProfile === 'production-triggers' }),
+    } : {});
+    source = replay.oldSite; target = replay.newSite;
+  }
   assertExpectedReplayFailures(replay, { upTo: LAST });
   await seedSource(); await seedTarget();
   sourceSession = await adminLogin(source, 'root', PASSWORDS.root); targetSession = await adminLogin(target, 'root', PASSWORDS.root);
@@ -311,8 +329,15 @@ test('strict latest 43–57 replay and real adapters; no importer/driver/SQL rec
   for (const module of ['siteTransfer', 'sourceCutover', 'siteRelease', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
     assert.ok(paths.some(p => p.endsWith(`/employeeTransfer/${module}.ts`)), module);
   assert.equal(paths.some(p => /src\/lib\/(?:auth|supabase)\.ts$|node_modules\/@supabase\//.test(p)), false);
-  t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; ${schemaProfile ?? 'local-replay'}; no clean-build/native-PG claim`);
+  t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; ${schemaProfile ?? 'local-replay'}; ${databaseBackend ?? 'PGlite'}; no clean-build/hosted-Storage/PostgREST/capacity claim`);
   if (schemaProfile) return Promise.all([source, target].map(async db => {
+    if (databaseBackend === 'native') {
+      assert.deepEqual(await scalar(db, `SELECT jsonb_build_object('name',current_user,'superuser',rolsuper,'bypassrls',rolbypassrls)
+        FROM pg_roles WHERE rolname=current_user`), { name: 'postgres', superuser: false, bypassrls: true });
+      assert.equal(await scalar(db, 'SHOW listen_addresses'), '');
+      assert.deepEqual(replay.productionTriggerBaseline, { functions: 45, triggers: 72, droppedTriggers: 3 });
+      assert.equal(replay.productionColumnBaseline.fingerprint, 'cc05ccfbec83f315554f6e598a80c4ca442169e8911089ce4fb081d5ae0db128');
+    }
     assert.equal(await scalar(db, "SELECT to_regclass('public.notification_automation_date_runs')"), null);
     await scalar(db, 'SELECT private.employee_transfer_assert_maintenance_guards()');
   }));

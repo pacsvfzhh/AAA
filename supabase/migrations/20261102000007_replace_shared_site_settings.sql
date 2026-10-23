@@ -110,22 +110,44 @@ BEGIN
         IF v_exact AND (v_target->>'admin_id' IS DISTINCT FROM v_mapped->>'admin_id' OR v_target->>'config_type' IS DISTINCT FROM v_mapped->>'config_type') THEN
           v_reason:='setting_id_conflict';
         END IF;
-        IF NOT v_exact THEN
-          SELECT count(*) INTO v_count FROM public.admin_configs WHERE admin_id IS NOT DISTINCT FROM (v_mapped->>'admin_id')::uuid AND config_type=v_row->>'config_type';
-          IF v_count>1 THEN v_reason:='ambiguous_target_setting'; END IF;
+        SELECT count(*) INTO v_count FROM public.admin_configs WHERE admin_id IS NOT DISTINCT FROM (v_mapped->>'admin_id')::uuid AND config_type=v_row->>'config_type';
+        IF v_count>1 THEN
+          IF (SELECT count(*) FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
+              WHERE (v_admin_map->>(source.value->>'admin_id')) IS NOT DISTINCT FROM v_mapped->>'admin_id' AND source.value->>'config_type'=v_row->>'config_type')=v_count
+            AND NOT EXISTS(SELECT 1 FROM private.employee_transfer_shared_rows(v_key) AS target
+              WHERE target.body->>'admin_id' IS NOT DISTINCT FROM v_mapped->>'admin_id' AND target.body->>'config_type'=v_row->>'config_type'
+                AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
+                  WHERE (jsonb_set(source.value,'{admin_id}',COALESCE(v_admin_map->(source.value->>'admin_id'),'null'::jsonb))-ARRAY['created_at','updated_at'])
+                    =(target.body-ARRAY['created_at','updated_at']))) THEN
+            IF NOT v_exact THEN v_reason:='ambiguous_target_setting'; END IF;
+          ELSIF NOT v_exact AND v_row->>'admin_id' IS NULL
+            AND (SELECT count(*) FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
+              WHERE source.value->>'admin_id' IS NULL AND source.value->>'config_type'=v_row->>'config_type')=v_count
+            AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
+              JOIN public.admin_configs target ON target.id=(source.value->>'id')::uuid
+              WHERE source.value->>'admin_id' IS NULL AND source.value->>'config_type'=v_row->>'config_type')
+            AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
+              WHERE source.value->>'admin_id' IS NULL AND source.value->>'config_type'=v_row->>'config_type'
+                AND (SELECT count(*) FROM private.employee_transfer_shared_rows(v_key) AS target
+                  WHERE target.body-ARRAY['id','created_at','updated_at']=source.value-ARRAY['id','created_at','updated_at'])
+                  <>(SELECT count(*) FROM jsonb_array_elements(p_data->'admin_configs') AS other(value)
+                    WHERE other.value-ARRAY['id','created_at','updated_at']=source.value-ARRAY['id','created_at','updated_at'])) THEN
+            -- Independent installs can seed identical global rows with unrelated UUIDs.
+            SELECT target.body INTO v_target FROM (
+              SELECT body,row_number() OVER(PARTITION BY body-ARRAY['id','created_at','updated_at'] ORDER BY cursor COLLATE "C") AS ordinal
+              FROM private.employee_transfer_shared_rows(v_key)
+            ) target JOIN (
+              SELECT value,row_number() OVER(PARTITION BY value-ARRAY['id','created_at','updated_at'] ORDER BY value->>'id' COLLATE "C") AS ordinal
+              FROM jsonb_array_elements(p_data->'admin_configs')
+            ) source ON target.ordinal=source.ordinal
+              AND target.body-ARRAY['id','created_at','updated_at']=source.value-ARRAY['id','created_at','updated_at']
+            WHERE source.value->>'id'=v_id;
+            v_exact:=true;
+          ELSE v_reason:='ambiguous_target_setting'; END IF;
+        ELSIF NOT v_exact THEN
           SELECT body INTO v_target FROM private.employee_transfer_shared_rows(v_key) WHERE body->>'admin_id' IS NOT DISTINCT FROM v_mapped->>'admin_id'
             AND body->>'config_type'=v_row->>'config_type' ORDER BY cursor LIMIT 1;
         END IF;
-        SELECT count(*) INTO v_count FROM public.admin_configs WHERE admin_id IS NOT DISTINCT FROM (v_mapped->>'admin_id')::uuid AND config_type=v_row->>'config_type';
-        IF v_count>1 AND (
-          (SELECT count(*) FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
-            WHERE (v_admin_map->>(source.value->>'admin_id')) IS NOT DISTINCT FROM v_mapped->>'admin_id' AND source.value->>'config_type'=v_row->>'config_type')<>v_count
-          OR EXISTS(SELECT 1 FROM private.employee_transfer_shared_rows(v_key) AS target
-            WHERE target.body->>'admin_id' IS NOT DISTINCT FROM v_mapped->>'admin_id' AND target.body->>'config_type'=v_row->>'config_type'
-              AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_data->'admin_configs') AS source(value)
-                WHERE (jsonb_set(source.value,'{admin_id}',COALESCE(v_admin_map->(source.value->>'admin_id'),'null'::jsonb))-ARRAY['created_at','updated_at'])
-                  =(target.body-ARRAY['created_at','updated_at'])))
-        ) THEN v_reason:='ambiguous_target_setting'; END IF;
         IF v_target IS NOT NULL THEN v_target_id:=v_target->>'id'; END IF;
         IF COALESCE(v_mapped->>'icon_custom_url','')<>'' OR COALESCE(v_target->>'icon_custom_url','')<>'' THEN v_reason:='media_backup_and_rewrite_required'; END IF;
         v_mapped:=jsonb_set(v_mapped,'{id}',to_jsonb(v_target_id));

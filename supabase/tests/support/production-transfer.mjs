@@ -4,6 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { assertExpectedReplayFailures, replayMigrations } from './replay-migrations.mjs';
 import { assertTransferScopeCoverage, TRANSFER_PRODUCTION_SCHEMA_FINGERPRINT } from './transfer-scope.mjs';
 import { applyProductionTriggerFixture } from './production-triggers.mjs';
+import { isNativeTransferDatabase } from './native-postgres.mjs';
 
 const historicalEnd = '20261101000003_keep_user_stopped_work_sessions_stopped.sql';
 export const PRODUCTION_TRANSFER_LAST = '20261102000057_release_imported_site.sql';
@@ -19,14 +20,18 @@ export async function readTransferSchema(db) {
     GROUP BY n.nspname,c.relname ORDER BY n.nspname,c.relname`)).rows;
 }
 
-// The optional trigger profile reproduces reviewed observations, not native PostgreSQL or Storage.
-export async function replayProductionTransferMigrations({ upTo = PRODUCTION_TRANSFER_LAST, log = () => {}, triggerProfile = false } = {}) {
+// The optional trigger profile reproduces reviewed observations, not hosted Supabase or Storage.
+export async function replayProductionTransferMigrations(
+  { upTo = PRODUCTION_TRANSFER_LAST, log = () => {}, triggerProfile = false } = {},
+  { replay = replayMigrations } = {},
+) {
   if (typeof triggerProfile !== 'boolean') throw new TypeError('Explicit trigger profile boolean required');
   const transferFiles = (await readdir(migrationDir)).filter(name => name.startsWith('20261102') && name.endsWith('.sql')).sort();
   if (!transferFiles.includes(upTo)) throw new TypeError('A reviewed employee transfer migration endpoint is required');
-  const result = await replayMigrations({ upTo: historicalEnd, strict: true, log });
+  const result = await replay({ upTo: historicalEnd, strict: true, log });
   const { db } = result;
   try {
+    if (isNativeTransferDatabase(db)) await db.finishHistoricalSetup();
     const productionTriggerBaseline = triggerProfile ? await applyProductionTriggerFixture(db) : null;
     await db.exec(`BEGIN;
       DROP TABLE public.notification_automation_date_runs;
