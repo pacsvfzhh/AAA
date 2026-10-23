@@ -26,11 +26,11 @@ test('production schema profile matches the independently fetched read-only cata
   assert.deepEqual(assertTransferScopeCoverage(clone(), options), { tableCount: 96, columnCount: 871, exportAuthorized: false });
 });
 
-test('the two profiles have exactly ten table and eight nullable differences, no implicit relaxation', () => {
+test('the two profiles have exactly thirteen table and eight nullable differences, no implicit relaxation', () => {
   const keys = new Set(production.map(table => `${table.schema}.${table.name}`));
   const absent = local.filter(table => !keys.has(`${table.schema}.${table.name}`));
-  assert.equal(absent.length, 10);
-  assert.equal(absent.filter(table => table.schema === 'private' && table.name.startsWith('employee_transfer_')).length, 9);
+  assert.equal(absent.length, 13);
+  assert.equal(absent.filter(table => table.schema === 'private' && table.name.startsWith('employee_transfer_')).length, 12);
   assert.equal(absent.filter(table => table.name === 'notification_automation_date_runs').length, 1);
   const differences = [];
   for (const table of production) {

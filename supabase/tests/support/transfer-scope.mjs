@@ -1636,7 +1636,8 @@ const productionAbsentTables = new Set([
   'private.employee_transfer_events', 'private.employee_transfer_excluded_columns',
   'private.employee_transfer_jobs', 'private.employee_transfer_site',
   'private.employee_transfer_staging', 'private.employee_transfer_trigger_policy',
-  'private.employee_transfer_shared_backups',
+  'private.employee_transfer_shared_backups', 'private.employee_transfer_notification_backups',
+  'private.employee_transfer_chat_backups',
   // 仅此历史正式结构快照不存在此表；本地业务库存仍必须纳入，不能按任务表排除。
   'private.employee_transfer_archive_records',
   'private.employee_transfer_maintenance', 'private.employee_transfer_write_permits',

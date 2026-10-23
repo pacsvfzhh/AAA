@@ -11,6 +11,7 @@ import { build } from 'esbuild';
 import { assertExpectedReplayFailures } from './support/replay-migrations.mjs';
 import { adminLogin, createSites, rows, rpc as baseRpc, scalar } from './support/transfer-harness.mjs';
 import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
+import { replayProductionTransferMigrations } from './support/production-transfer.mjs';
 
 // LOCAL ONLY. Only the two foundations (auth/supabase) are replaced. The coordinator,
 // ten export/import drivers, SQL, plans, backup seals and verification receipts are REAL.
@@ -19,6 +20,8 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // Source fixture trigger changes finish BEFORE import; no importer error is bypassed.
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const LAST = '20261102000057_release_imported_site.sql';
+const schemaProfile = process.env.EMPLOYEE_TRANSFER_SCHEMA_PROFILE;
+if (schemaProfile !== undefined && schemaProfile !== 'production-columns') throw new Error('Unknown site-import schema profile');
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';
@@ -276,7 +279,8 @@ async function seedTarget() {
     ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`);
 }
 before(async () => {
-  replay = await createSites({ upTo: LAST }); source = replay.oldSite; target = replay.newSite;
+  replay = await createSites({ upTo: LAST }, schemaProfile === 'production-columns' ? { replay: replayProductionTransferMigrations } : {});
+  source = replay.oldSite; target = replay.newSite;
   assertExpectedReplayFailures(replay, { upTo: LAST });
   await seedSource(); await seedTarget();
   sourceSession = await adminLogin(source, 'root', PASSWORDS.root); targetSession = await adminLogin(target, 'root', PASSWORDS.root);
@@ -305,7 +309,11 @@ test('strict latest 43–57 replay and real adapters; no importer/driver/SQL rec
   for (const module of ['siteTransfer', 'sourceCutover', 'siteRelease', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
     assert.ok(paths.some(p => p.endsWith(`/employeeTransfer/${module}.ts`)), module);
   assert.equal(paths.some(p => /src\/lib\/(?:auth|supabase)\.ts$|node_modules\/@supabase\//.test(p)), false);
-  t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; no clean-build/native-PG claim`);
+  t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; ${schemaProfile ?? 'local-replay'}; no clean-build/native-PG claim`);
+  if (schemaProfile === 'production-columns') return Promise.all([source, target].map(async db => {
+    assert.equal(await scalar(db, "SELECT to_regclass('public.notification_automation_date_runs')"), null);
+    await scalar(db, 'SELECT private.employee_transfer_assert_maintenance_guards()');
+  }));
 });
 async function targetExcluded() {
   return { announcements: await rows(target, 'SELECT to_jsonb(t)::text AS body FROM public.announcements t ORDER BY id'),
