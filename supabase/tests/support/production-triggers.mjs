@@ -36,7 +36,12 @@ async function readObservations() {
   assert.deepEqual(catalog.aclProfiles, Object.fromEntries(Object.entries(aclProfiles).map(([key, value]) => [key, value.raw])));
   assert.deepEqual(catalog.missing, missingTriggers);
   assert.equal(catalog.functions.length, 43);
-  assert.equal(new Set(catalog.functions.map(row => row[0])).size, 43);
+  assert.deepEqual(catalog.additionalFunctions.map(row => row[0]),
+    ['public.update_system_configs_updated_at()', 'public.update_valid_data_usage_stats()']);
+  assert.deepEqual(Object.keys(catalog.additionalTriggers),
+    ['system_configs.set_system_configs_updated_at', 'used_order_data.trigger_update_valid_data_usage']);
+  catalog.functions = [...catalog.functions, ...catalog.additionalFunctions];
+  assert.equal(new Set(catalog.functions.map(row => row[0])).size, 45);
   for (const row of catalog.functions) {
     assert.equal(row.length, 4);
     const [name, hash, path, profile] = row;
@@ -45,7 +50,7 @@ async function readObservations() {
     assert.match(path, /^(pg_catalog|public|private|pg_temp)(, (pg_catalog|public|private|pg_temp))*$/);
     assert.ok(Object.hasOwn(aclProfiles, profile), `Unknown ACL profile: ${profile}`);
   }
-  assert.equal(Object.keys(overrides.functions).length, 9);
+  assert.equal(Object.keys(overrides.functions).length, 11);
   for (const [name, definition] of Object.entries(overrides.functions)) {
     const observed = catalog.functions.find(row => row[0] === name);
     assert.ok(observed, `Override not in catalog: ${name}`);
@@ -53,6 +58,7 @@ async function readObservations() {
     assert.equal(sha256(definition), observed[1], `Override full SHA mismatch: ${name}`);
   }
   assert.equal(Object.keys(catalog.triggers).length, 70);
+  catalog.triggers = { ...catalog.triggers, ...catalog.additionalTriggers };
   for (const [name, hash] of Object.entries(catalog.triggers)) {
     assert.match(name, /^[a-z_]+\.[a-z_]+$/);
     assert.match(hash, /^[a-f0-9]{64}$/);
@@ -178,7 +184,7 @@ export async function applyProductionTriggerFixture(db) {
     }
     if (failures.length) {
       throw new AggregateError(failures,
-        `Production observation fixture mismatch (${failures.length}/43 functions):\n${failures.map(error => error.message).join('\n')}`);
+        `Production observation fixture mismatch (${failures.length}/${catalog.functions.length} functions):\n${failures.map(error => error.message).join('\n')}`);
     }
     for (const [table, trigger] of missingTriggers) {
       // No IF EXISTS or CASCADE: a missing historical object or a dependency must fail closed.

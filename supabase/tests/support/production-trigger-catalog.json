@@ -55,6 +55,14 @@
     ["public.update_user_total_income_on_order_success()", "1998803decffd046f51d2acc8fe807011f317f6f93984904a316e9c31bdb45e5", "public, pg_temp", "service"],
     ["public.validate_work_session()", "e66ea6eb3a68d14412efd74daa5220fdfba86cf0aac110a09a8ff73b1a92db3a", "public, pg_temp", "service"]
   ],
+  "additionalFunctions": [
+    ["public.update_system_configs_updated_at()", "e9e4414d74b12aec5fecac62694d405ca61eb75537e0623c4dea25d023bada86", "public, pg_temp", "broad"],
+    ["public.update_valid_data_usage_stats()", "81a5f67798a8032558389b5c6ef978be48ca99585c139c063a57968223e59898", "public, pg_temp", "broad"]
+  ],
+  "additionalTriggers": {
+    "system_configs.set_system_configs_updated_at": "bf0f92dac810b8bc136d768b846c7f0c687acf0ad43d611d17744d930ebaf045",
+    "used_order_data.trigger_update_valid_data_usage": "ceff4c5daa4b49e650926d9d17ba95c5e4ea5dc75b3c69e03fe923ca16d3a11d"
+  },
   "missing": [
     ["orders", "trigger_audit_order_status"],
     ["wallet_transactions", "trigger_audit_commission_transaction"],

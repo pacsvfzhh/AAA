@@ -284,18 +284,32 @@ BEGIN
 END;
 $$;
 
+DO $install_shared_replace_audit$
+DECLARE v_system_hash text; v_system_portable text; v_system_native text; v_mode text;
+BEGIN
+  SELECT encode(extensions.digest(convert_to(pg_get_functiondef(t.tgfoid),'UTF8'),'sha256'),'hex'),
+    private.employee_transfer_install_trigger_digest(t.oid),private.employee_transfer_trigger_digest(t.oid),t.tgenabled::text
+    INTO v_system_hash,v_system_portable,v_system_native,v_mode FROM pg_trigger t
+    WHERE t.tgrelid='public.system_configs'::regclass AND t.tgname='set_system_configs_updated_at' AND NOT t.tgisinternal;
+  IF v_system_hash IS NULL OR (v_system_hash<>'7f6bfa6679e72e65ae1616b97cc13d193d547875cc3e396ce3041e9001eff52b'
+    AND (v_system_portable IS DISTINCT FROM 'bf0f92dac810b8bc136d768b846c7f0c687acf0ad43d611d17744d930ebaf045' OR v_mode<>'O')) THEN
+    RAISE EXCEPTION 'An unreviewed write trigger prevents shared replacement.';
+  END IF;
+  EXECUTE format($definition$
 CREATE FUNCTION private.employee_transfer_assert_shared_replace_triggers()
 RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path=pg_catalog,public,private,pg_temp AS $$
-DECLARE v_count integer; v_invalid boolean;
+SET search_path=pg_catalog,public,private,pg_temp AS $body$
+DECLARE v_count integer; v_invalid boolean; v_system_native constant text := %L; v_system_mode constant text := %L;
 BEGIN
   PERFORM private.employee_transfer_assert_shared_insert_triggers();
   WITH expected(table_name,trigger_name,definition,function_hash) AS (VALUES
     ('admins','pause_notification_automation_plans_for_disabled_admin','CREATE TRIGGER pause_notification_automation_plans_for_disabled_admin AFTER UPDATE OF is_active ON public.admins FOR EACH ROW EXECUTE FUNCTION pause_notification_automation_plans_for_disabled_admin()', 'd4e6c22e3b65548e2985dfd289bb3b8360f5af1a0f38abf9f8ae7958ea40284a'),
-    ('system_configs','set_system_configs_updated_at','CREATE TRIGGER set_system_configs_updated_at BEFORE UPDATE ON public.system_configs FOR EACH ROW EXECUTE FUNCTION update_system_configs_updated_at()', '7f6bfa6679e72e65ae1616b97cc13d193d547875cc3e396ce3041e9001eff52b')
+    ('system_configs','set_system_configs_updated_at','CREATE TRIGGER set_system_configs_updated_at BEFORE UPDATE ON public.system_configs FOR EACH ROW EXECUTE FUNCTION update_system_configs_updated_at()', %L)
   )
   SELECT count(*)::integer,COALESCE(bool_or(expected.trigger_name IS NULL OR trigger.tgenabled NOT IN ('O','A') OR pg_get_triggerdef(trigger.oid) IS DISTINCT FROM expected.definition
-    OR pg_get_userbyid(procedure.proowner)<>'postgres' OR encode(extensions.digest(convert_to(pg_get_functiondef(procedure.oid),'UTF8'),'sha256'),'hex') IS DISTINCT FROM expected.function_hash),false)
+    OR pg_get_userbyid(procedure.proowner)<>'postgres' OR encode(extensions.digest(convert_to(pg_get_functiondef(procedure.oid),'UTF8'),'sha256'),'hex') IS DISTINCT FROM expected.function_hash
+    OR (relation.relname='system_configs' AND (private.employee_transfer_trigger_digest(trigger.oid) IS DISTINCT FROM v_system_native
+      OR trigger.tgenabled::text IS DISTINCT FROM v_system_mode))),false)
   INTO v_count,v_invalid FROM pg_trigger AS trigger JOIN pg_class AS relation ON relation.oid=trigger.tgrelid JOIN pg_proc AS procedure ON procedure.oid=trigger.tgfoid
   LEFT JOIN expected ON expected.table_name=relation.relname AND expected.trigger_name=trigger.tgname
   WHERE relation.relnamespace='public'::regnamespace AND NOT trigger.tgisinternal AND (
@@ -305,7 +319,10 @@ BEGIN
       AND NOT (relation.relname IN ('admin_configs','system_configs') AND trigger.tgname IN ('guard_content_audit_public_media_reference','guard_employee_chat_image_reference'))));
   IF v_count<>2 OR v_invalid THEN RAISE EXCEPTION 'An unreviewed write trigger prevents shared replacement.'; END IF;
 END;
-$$;
+$body$;
+$definition$,v_system_native,v_mode,v_system_hash);
+END;
+$install_shared_replace_audit$;
 
 CREATE FUNCTION public.employee_import_shared_replace_apply(p_admin_session_token uuid,p_job_token uuid,p_plan_hash text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER

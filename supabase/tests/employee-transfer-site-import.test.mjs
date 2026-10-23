@@ -419,6 +419,35 @@ test('real SQL ten-domain export -> 11 disk .edx -> empty distinct target import
   assert.equal(names().includes('employee_import_finish'), false); assert.equal(names().includes('employee_transfer_leave_maintenance'), false);
 }));
 
+test('chat scope mismatch is rejected by the real import preflight before chat writes, including the production profile without source sync', { timeout: 300000 }, async t => {
+  let invalid;
+  await source.exec('BEGIN');
+  try {
+    await source.exec('SAVEPOINT wrong_source_type');
+    try {
+      await assert.rejects(source.query("UPDATE public.customer_employee_conversations SET source_type='ccc_service' WHERE id=$1", [I.chat]),
+        error => error.code === '23503' && error.constraint === 'customer_employee_conversations_customer_id_fkey');
+    } finally { await source.exec('ROLLBACK TO SAVEPOINT wrong_source_type; RELEASE SAVEPOINT wrong_source_type'); }
+    await fixtureChange(source, 'public.simulated_customers',
+      'UPDATE public.simulated_customers SET admin_id=$2 WHERE id=$1', [I.customer, NEW.emergency]);
+    assert.equal(await scalar(source, 'SELECT admin_id FROM public.simulated_customers WHERE id=$1', [I.customer]), NEW.emergency);
+    invalid = await isolated(source, sourceSession, exportSet, true);
+  } finally { await source.exec('ROLLBACK'); }
+  await isolated(target, targetSession, async () => {
+    const context = startImport({ options: { files: fileList(invalid) } });
+    await assert.rejects(context.promise, error => {
+      t.diagnostic(JSON.stringify(explain(error)));
+      assert.equal(error.domain, 'chat');
+      return true;
+    });
+    assert.ok(state.calls.some(call => JSON.stringify(call.result)?.includes('source_scope_mismatch')));
+    assert.equal(callsOf('employee_import_chat_chunk').length, 0);
+    assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.customer_employee_conversations'), 0);
+    assert.equal(context.proofs.some(proof => proof.domain === 'chat'), false);
+    allDead(context.w);
+  });
+});
+
 test('frozen golden: real source freeze -> 11 disk .edx -> authenticated cutoff -> empty target maintenance restore (NO resume/release)', { timeout: 300000 }, async t => {
   let frozenFiles, cutoff, packageId;
   await isolated(source, sourceSession, async () => {

@@ -36,7 +36,9 @@ BEGIN
     LEFT JOIN pg_proc AS p ON p.oid=t.tgfoid
     WHERE t.oid IS NULL OR t.tgenabled NOT IN ('O','A') OR p.prosecdef OR pg_get_userbyid(p.proowner)<>'postgres'
       OR pg_get_triggerdef(t.oid) IS DISTINCT FROM expected.definition
-      OR encode(extensions.digest(convert_to(pg_get_functiondef(p.oid),'UTF8'),'sha256'),'hex') IS DISTINCT FROM expected.function_hash
+      OR (encode(extensions.digest(convert_to(pg_get_functiondef(p.oid),'UTF8'),'sha256'),'hex') IS DISTINCT FROM expected.function_hash
+        AND NOT (expected.table_name='used_order_data' AND t.tgenabled='O'
+          AND private.employee_transfer_install_trigger_digest(t.oid)='ceff4c5daa4b49e650926d9d17ba95c5e4ea5dc75b3c69e03fe923ca16d3a11d'))
   ) THEN RAISE EXCEPTION 'Unreviewed submission data triggers.'; END IF;
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,jsonb_build_object('mode',t.tgenabled::text,'digest',private.employee_transfer_trigger_digest(t.oid)))
     INTO v_expected FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
