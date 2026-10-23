@@ -21,7 +21,7 @@ import { replayProductionTransferMigrations } from './support/production-transfe
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const LAST = '20261102000057_release_imported_site.sql';
 const schemaProfile = process.env.EMPLOYEE_TRANSFER_SCHEMA_PROFILE;
-if (schemaProfile !== undefined && schemaProfile !== 'production-columns') throw new Error('Unknown site-import schema profile');
+if (schemaProfile !== undefined && !['production-columns', 'production-triggers'].includes(schemaProfile)) throw new Error('Unknown site-import schema profile');
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';
@@ -279,7 +279,9 @@ async function seedTarget() {
     ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`);
 }
 before(async () => {
-  replay = await createSites({ upTo: LAST }, schemaProfile === 'production-columns' ? { replay: replayProductionTransferMigrations } : {});
+  replay = await createSites({ upTo: LAST }, schemaProfile ? {
+    replay: options => replayProductionTransferMigrations({ ...options, triggerProfile: schemaProfile === 'production-triggers' }),
+  } : {});
   source = replay.oldSite; target = replay.newSite;
   assertExpectedReplayFailures(replay, { upTo: LAST });
   await seedSource(); await seedTarget();
@@ -310,7 +312,7 @@ test('strict latest 43–57 replay and real adapters; no importer/driver/SQL rec
     assert.ok(paths.some(p => p.endsWith(`/employeeTransfer/${module}.ts`)), module);
   assert.equal(paths.some(p => /src\/lib\/(?:auth|supabase)\.ts$|node_modules\/@supabase\//.test(p)), false);
   t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; ${schemaProfile ?? 'local-replay'}; no clean-build/native-PG claim`);
-  if (schemaProfile === 'production-columns') return Promise.all([source, target].map(async db => {
+  if (schemaProfile) return Promise.all([source, target].map(async db => {
     assert.equal(await scalar(db, "SELECT to_regclass('public.notification_automation_date_runs')"), null);
     await scalar(db, 'SELECT private.employee_transfer_assert_maintenance_guards()');
   }));

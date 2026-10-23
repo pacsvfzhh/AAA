@@ -162,6 +162,7 @@ export async function applyProductionTriggerFixture(db) {
   assert.equal(db.isInTransaction(), false, 'Fixture requires its own transaction');
   const { catalog, overrides } = await readObservations();
   return db.transaction(async tx => {
+    await tx.exec('SET LOCAL search_path=pg_catalog,public,private,pg_temp');
     await assertEmptyHistoricalFixture(tx);
     const before = await readTriggers(tx);
     const failures = [];

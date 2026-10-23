@@ -20,7 +20,7 @@ DECLARE v_expected constant jsonb := '{
  "users.trigger_cleanup_user_data": "489017d87a5adb4215218e8a536071690534592f5d35de1d321ca9071816309d",
  "wallets.prevent_delete_wallets": "d592e4870cadcfaae56331a7ac970d54c6c4762566b8745e25f4aca2ece75d6f",
  "wallets.trigger_enqueue_changed_wallet": "e08a1c5297af0f42114e8891513b03d5b3c17a896c4d98da47da6a88f4c6e784"
-}'; v_native jsonb; v_actual jsonb; v_modes jsonb;
+}'; v_reviewed_production constant text := '8ceee5862b2ad9f5dc70d5f5b7c05c1b7aca44a6d66897d5b52a07d885931248'; v_native jsonb; v_actual jsonb; v_modes jsonb;
 BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),
     jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
@@ -28,7 +28,8 @@ BEGIN
     FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
     WHERE c.relnamespace='public'::regnamespace AND c.relname IN ('users','financial_employee_credentials','wallets','orders','product_types')
       AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
-  IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN
+  IF (v_actual IS DISTINCT FROM v_expected AND
+    encode(sha256(convert_to(jsonb_build_array(v_actual,v_modes)::text,'UTF8')),'hex') IS DISTINCT FROM v_reviewed_production) OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN
     RAISE EXCEPTION 'Unreviewed employee identity write triggers.';
   END IF;
   EXECUTE format($definition$

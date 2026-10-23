@@ -13,14 +13,15 @@ DECLARE v_expected constant jsonb:='{
  "withdrawals.prevent_delete_withdrawals": "a630fc0e1769b79ff96333ef2aa1677913a5abe084f11c05eff44fdd09033a50",
  "withdrawals.trigger_track_withdrawal_ledger": "16ee1df52ee04ba1b302511ec9044c03e09159cc100a57165c2ad95bd4e7039d",
  "withdrawals.withdrawals_emit_event": "fc78bd1ac454093cf49470c630807384893134660de9f0a443e30a89fe0512cc"
-}';v_native jsonb; v_actual jsonb;v_modes jsonb;
+}';v_reviewed_production constant text := 'e89608da4e16cd77ee743964790aa5f57c49a3a6fb836ab9e2a8c802adc52309'; v_native jsonb; v_actual jsonb;v_modes jsonb;
 BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
     jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid))
     INTO v_actual,v_modes,v_native FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid WHERE c.relnamespace='public'::regnamespace
       AND c.relname IN ('wallets','wallet_balance_baselines','wallet_ledger_entries','wallet_transactions','withdrawals','wallet_reconciliation_audit')
       AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
-  IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN RAISE EXCEPTION 'Unreviewed employee finance triggers.';END IF;
+  IF (v_actual IS DISTINCT FROM v_expected AND
+    encode(sha256(convert_to(jsonb_build_array(v_actual,v_modes)::text,'UTF8')),'hex') IS DISTINCT FROM v_reviewed_production) OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN RAISE EXCEPTION 'Unreviewed employee finance triggers.';END IF;
   EXECUTE format($definition$
     CREATE FUNCTION private.employee_transfer_assert_finance_triggers()
     RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, private, pg_temp AS $body$

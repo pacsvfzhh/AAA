@@ -26,14 +26,15 @@ DECLARE v_expected constant jsonb := '{
  "notification_automation_executions.guard_content_audit_public_media_reference": "d592f533c62e78a5af1acf09471ba207f8a86cda76c054fa669f91b75bf24ba0",
  "notification_automation_executions.snapshot_notification_automation_execution_plan": "f1c29c3b2df76170178e12ad7000ee36fd507bad16db346bd2906f7fa0b0b9be",
  "notification_automation_plan_members.validate_notification_automation_plan_member": "3a579dc80eb9b06e7ae2cd5c62f941d208ec7c81e17f611087a930f14cc74870"
-}'; v_native jsonb; v_actual jsonb; v_modes jsonb;
+}'; v_reviewed_production constant text := '44f357a2d6a599f41df45c5a15c49f85fa36f77caf695a8d01b10ab7ad8cbc11'; v_native jsonb; v_actual jsonb; v_modes jsonb;
 BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),
     jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
     jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)) INTO v_actual,v_modes,v_native
     FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace='public'::regnamespace
       AND c.relname=ANY(private.employee_transfer_notifications_keys()) AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
-  IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN
+  IF (v_actual IS DISTINCT FROM v_expected AND
+    encode(sha256(convert_to(jsonb_build_array(v_actual,v_modes)::text,'UTF8')),'hex') IS DISTINCT FROM v_reviewed_production) OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN
     RAISE EXCEPTION 'Unreviewed notification restore triggers.';
   END IF;
   EXECUTE format($definition$

@@ -23,14 +23,15 @@ DECLARE v_expected constant jsonb := '{
  "simulated_customers.guard_content_audit_public_media_reference": "feb4b4f4955111252276bb8fd4a56e243101f1f7828d1ad16fdb35551be94f1b",
  "simulated_customers.guard_employee_chat_image_reference": "9b633e65d012847cd2bd40c26b2346a3a72cee6194796e8443499596da4ae7e7",
  "simulated_customers.set_customer_id_trigger": "6431ebe38e8ca6a157b88d22825f3c047a550768a04f47c8f53311c73d42675e"
-}';v_native jsonb; v_actual jsonb;v_modes jsonb;
+}';v_reviewed_production constant text := '178cb8751dfe966939b8ebe7d541ee9ee2c413a87853dad77599520e1a53de6a'; v_native jsonb; v_actual jsonb;v_modes jsonb;
 BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),
     jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
     jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)) INTO v_actual,v_modes,v_native
     FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace='public'::regnamespace
       AND c.relname=ANY(private.employee_transfer_chat_keys()) AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
-  IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN
+  IF (v_actual IS DISTINCT FROM v_expected AND
+    encode(sha256(convert_to(jsonb_build_array(v_actual,v_modes)::text,'UTF8')),'hex') IS DISTINCT FROM v_reviewed_production) OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN
     RAISE EXCEPTION 'Unreviewed chat restore triggers.';
   END IF;
   EXECUTE format($definition$

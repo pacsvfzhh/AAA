@@ -10,14 +10,15 @@ DECLARE v_expected constant jsonb:='{
  "work_sessions.trigger_cleanup_duplicate_sessions": "7caa7848ebeed0617b0ea097a1492f0be5e7efcf757fa1a3a0ff68830f38b184",
  "work_sessions.trigger_prevent_multiple_active_sessions": "0693efe8c7049f0e583a6ded11f8a7811dba1a76fb131eb803c59882e6a7a679",
  "work_sessions.trigger_validate_work_session": "a4a555eb0c82b739e753718ecef8b8121acf3f50d2cc76ed789288ddecffd5e5"
-}';v_native jsonb; v_actual jsonb;v_modes jsonb;
+}';v_reviewed_production constant text := 'a3f2dccd07c466058652ac6f205cc6202840993a59e3a3eda5926aaf6237edbb'; v_native jsonb; v_actual jsonb;v_modes jsonb;
 BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
     jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid))
     INTO v_actual,v_modes,v_native FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
     WHERE t.tgrelid IN ('public.employee_login_history'::regclass,'public.work_sessions'::regclass,'private.employee_work_stop_markers'::regclass)
       AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
-  IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN RAISE EXCEPTION 'Unreviewed employee activity triggers.';END IF;
+  IF (v_actual IS DISTINCT FROM v_expected AND
+    encode(sha256(convert_to(jsonb_build_array(v_actual,v_modes)::text,'UTF8')),'hex') IS DISTINCT FROM v_reviewed_production) OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN RAISE EXCEPTION 'Unreviewed employee activity triggers.';END IF;
   EXECUTE format($definition$
     CREATE FUNCTION private.employee_transfer_assert_activity_triggers()
     RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, private, pg_temp AS $body$
