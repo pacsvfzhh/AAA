@@ -138,7 +138,7 @@ DECLARE v_query text; v_source text; v_bad boolean;
 BEGIN
   v_source:=CASE WHEN p_rows IS NULL THEN 'SELECT id,body FROM private.employee_transfer_identity_input($4,$3)'
     ELSE 'SELECT (body->>''id'')::uuid AS id,body FROM jsonb_array_elements($1) AS source(body)' END;
-  v_query:=private.employee_transfer_identity_query(p_key)||format(' AND src.%I=ANY(ARRAY(SELECT id FROM expected))',CASE WHEN p_key='credentials' THEN 'user_id' ELSE 'id' END);
+  v_query:=private.employee_transfer_identity_query(p_key)||format(' AND src.%I IN (SELECT id FROM expected)',CASE WHEN p_key='credentials' THEN 'user_id' ELSE 'id' END);
   EXECUTE 'WITH expected AS MATERIALIZED ('||v_source||'),actual AS MATERIALIZED ('||v_query||')
     SELECT EXISTS(SELECT id,CASE $3
       WHEN ''accounts'' THEN body||jsonb_build_object(''created_by'',$2->(body->>''created_by''),''is_active'',false)

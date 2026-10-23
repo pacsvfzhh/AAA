@@ -964,14 +964,6 @@ test('native capacity sample: ten thousand independent historical orders use rea
         assert.deepEqual(await triggers(target), modes);
         assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_write_permits'), 0);
         t.diagnostic('CAPACITY NOT ACCEPTED: real server timeout; imported accounts remain disabled, dirty maintenance retained, triggers restored and no write permit leaked.');
-        if (process.env.EMPLOYEE_TRANSFER_QUERY_PLAN === '1') {
-          const projection = await scalar(target, "SELECT private.employee_transfer_identity_query('orders')");
-          const plan = await rows(target, `EXPLAIN (ANALYZE,BUFFERS,TIMING OFF)
-            WITH expected AS MATERIALIZED (SELECT id,body FROM private.employee_transfer_identity_input($1,'orders')),
-              actual AS MATERIALIZED (${projection} AND src.id=ANY(ARRAY(SELECT id FROM expected)))
-            SELECT EXISTS(SELECT id,body FROM expected EXCEPT SELECT id,body FROM actual)`, [error.jobId]);
-          for (const row of plan) t.diagnostic(row['QUERY PLAN']);
-        }
       }
       throw error;
     }
