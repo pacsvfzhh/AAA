@@ -1,6 +1,6 @@
 /* @refresh reset */
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { Users, Settings, FileText, LogOut, Shield, Package, UserCheck, Zap, Database, Lock, Eye, EyeOff, Bell, PackageSearch, MessageCircle, Search, History, UserCog, Activity, Headphones, ChevronDown, ChevronUp, ChevronsUpDown, SlidersHorizontal, RotateCcw, Save, X, ArchiveRestore } from 'lucide-react';
+import { Users, Settings, FileText, LogOut, Shield, Package, UserCheck, Zap, Database, Lock, Eye, EyeOff, Bell, PackageSearch, MessageCircle, Search, History, UserCog, Activity, Headphones, ChevronDown, ChevronUp, ChevronsUpDown, SlidersHorizontal, RotateCcw, Save, X } from 'lucide-react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Admin } from '../../types';
@@ -73,7 +73,6 @@ function ServiceWorkspaceSkeleton({ service }: { service: 'customerservice' | 'c
 
 const EmployeeSearch = lazy(() => import('./EmployeeSearch'));
 const HistoryDataManagement = lazy(() => import('./HistoryDataManagement'));
-const EmployeeDataMigration = lazy(() => import('./EmployeeDataMigration'));
 const AccountLockManagement = lazy(() => import('./AccountLockManagement'));
 const EmployeeLoginHistory = lazy(() => import('./EmployeeLoginHistory'));
 
@@ -81,7 +80,7 @@ interface AdminDashboardProps {
   admin: Admin;
 }
 
-type AdminTabId = 'employees' | 'products' | 'withdrawals' | 'verifications' | 'announcements' | 'config' | 'admins' | 'validdata' | 'messages' | 'dispatch' | 'records' | 'customerservice' | 'cccservice' | 'employeesearch' | 'history' | 'accountlocks' | 'loginhistory' | 'datamigration';
+type AdminTabId = 'employees' | 'products' | 'withdrawals' | 'verifications' | 'announcements' | 'config' | 'admins' | 'validdata' | 'messages' | 'dispatch' | 'records' | 'customerservice' | 'cccservice' | 'employeesearch' | 'history' | 'accountlocks' | 'loginhistory';
 
 interface NavigationTab {
   id: AdminTabId;
@@ -169,11 +168,11 @@ function parseNavigationPreferences(value: unknown): NavigationPreferences {
 
   const parsed = value as { order?: unknown; labels?: unknown };
   const order = Array.isArray(parsed.order)
-    ? parsed.order.filter((entry): entry is AdminTabId => typeof entry === 'string' && entry !== 'datamigration')
+    ? parsed.order.filter((entry): entry is AdminTabId => typeof entry === 'string')
     : [];
   const labels = parsed.labels && typeof parsed.labels === 'object'
     ? Object.fromEntries(
-        Object.entries(parsed.labels).filter((entry): entry is [string, string] => entry[0] !== 'datamigration' && typeof entry[1] === 'string')
+        Object.entries(parsed.labels).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
       ) as Partial<Record<AdminTabId, string>>
     : {};
 
@@ -307,19 +306,6 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
   const navigationDragLastTargetRef = useRef<AdminTabId | null>(null);
   const navigationDragSuppressClickUntilRef = useRef(0);
   const { companyName } = useCompanyName(admin.id);
-
-  useEffect(() => {
-    if (admin.role === 'super_admin') return;
-    const fallbackTab = admin.role === 'emergency_admin' ? 'accountlocks' : 'employees';
-    setActiveTab(current => current === 'datamigration' ? fallbackTab : current);
-    setLoadedTabs(current => {
-      if (!current.has('datamigration')) return current;
-      const next = new Set(current);
-      next.delete('datamigration');
-      next.add(fallbackTab);
-      return next;
-    });
-  }, [admin.role]);
 
   useEffect(() => {
     if (!accountMenuOpen) return;
@@ -472,20 +458,19 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
       { id: 'validdata' as const, label: '交單數據', icon: Database },
       { id: 'admins' as const, label: '管理員', icon: Shield },
       { id: 'history' as const, label: '歷史資料', icon: History },
-      { id: 'datamigration' as const, label: '資料遷移', icon: ArchiveRestore },
     ] : []),
   ], [admin.role]);
 
   const tabs = useMemo<NavigationTab[]>(() => {
     const tabsById = new Map(defaultTabs.map(tab => [tab.id, tab]));
-    const orderedIds = navigationPreferences.order.filter(id => id !== 'datamigration' && tabsById.has(id));
+    const orderedIds = navigationPreferences.order.filter(id => tabsById.has(id));
     defaultTabs.forEach(tab => {
       if (!orderedIds.includes(tab.id)) orderedIds.push(tab.id);
     });
 
     return orderedIds.map(id => {
       const tab = tabsById.get(id)!;
-      const customLabel = id === 'datamigration' ? undefined : navigationPreferences.labels[id]?.trim();
+      const customLabel = navigationPreferences.labels[id]?.trim();
       return {
         ...tab,
         label: customLabel && !previousDefaultNavigationLabels[id]?.includes(customLabel)
@@ -497,7 +482,7 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
 
   const openNavigationSettings = () => {
     if (admin.role !== 'super_admin') return;
-    setNavigationDraft(tabs.filter(tab => tab.id !== 'datamigration').map(tab => ({ id: tab.id, label: tab.label })));
+    setNavigationDraft(tabs.map(tab => ({ id: tab.id, label: tab.label })));
     setNavigationSelectedItemId(null);
     setShowNavigationSettings(true);
   };
@@ -808,7 +793,6 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
   }, []);
 
   const handleTabChange = useCallback((tabId: typeof activeTab) => {
-    if (tabId === 'datamigration' && admin.role !== 'super_admin') return;
     if (
       activeTab === 'products'
       && tabId !== 'products'
@@ -820,7 +804,7 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
 
     setActiveTab(tabId);
     setLoadedTabs(prev => prev.has(tabId) ? prev : new Set([...prev, tabId]));
-  }, [activeTab, productOrderDirty, admin.role]);
+  }, [activeTab, productOrderDirty]);
 
   const handleEmployeeQuickAction = useCallback((action: 'message' | 'customerservice' | 'cccservice', employee: QuickActionEmployee) => {
     const targetTab: AdminTabId = action === 'message'
@@ -1274,7 +1258,7 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
           </aside>
 
           {/* Mobile: Horizontal Scrolling Tabs */}
-          <div className={`flex-1 min-w-0 flex flex-col ${activeTab === 'withdrawals' || activeTab === 'verifications' || activeTab === 'admins' || activeTab === 'validdata' || activeTab === 'config' || activeTab === 'history' || activeTab === 'datamigration' ? 'overflow-hidden' : activeTab === 'messages' ? 'lg:overflow-hidden' : 'lg:overflow-y-auto'} scrollbar-hide`} style={activeTab === 'customerservice' ? {
+          <div className={`flex-1 min-w-0 flex flex-col ${activeTab === 'withdrawals' || activeTab === 'verifications' || activeTab === 'admins' || activeTab === 'validdata' || activeTab === 'config' || activeTab === 'history' ? 'overflow-hidden' : activeTab === 'messages' ? 'lg:overflow-hidden' : 'lg:overflow-y-auto'} scrollbar-hide`} style={activeTab === 'customerservice' ? {
             background: `
               radial-gradient(ellipse 80% 60% at 10% 15%, rgba(249,115,22,0.11) 0%, transparent 50%),
               radial-gradient(ellipse 60% 50% at 80% 10%, rgba(245,158,11,0.1) 0%, transparent 50%),
@@ -1440,11 +1424,6 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
                 {loadedTabs.has('history') && (
                   <div className={activeTab === 'history' ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden' : 'hidden'}>
                     <HistoryDataManagement isActive={activeTab === 'history'} />
-                  </div>
-                )}
-                {loadedTabs.has('datamigration') && (
-                  <div className={activeTab === 'datamigration' ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden' : 'hidden'}>
-                    <EmployeeDataMigration key={admin.id} />
                   </div>
                 )}
               </>
