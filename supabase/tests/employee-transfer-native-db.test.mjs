@@ -18,7 +18,7 @@ const maintenance = await readFile(new URL('../migrations/20261102000011_guard_t
 const JOB = 'dc000000-0000-4000-8000-000000000001';
 const ADMIN = 'dc000000-0000-4000-8000-000000000002';
 const connections = [];
-let directory, data, socket, started = false, a, b, observer;
+let directory, data, socket, startAttempted = false, a, b, observer;
 const owner = process.getuid?.() === 0 ? { uid: 65534, gid: 65534 } : {};
 const childEnv = { PATH: process.env.PATH, LANG: 'C', LC_ALL: 'C',
   LD_LIBRARY_PATH: bin ? resolve(bin, '../lib') : '' };
@@ -81,9 +81,9 @@ before(async () => {
   await mkdir(socket, { mode: 0o700 });
   if (owner.uid !== undefined) await chown(socket, owner.uid, owner.gid);
   command('initdb', ['-D', data, '-U', 'native_harness', '--no-locale', '--encoding=UTF8', '--auth-local=trust', '--auth-host=reject']);
+  startAttempted = true;
   command('pg_ctl', ['-D', data, '-l', join(directory, 'postgres.log'), '-w', '-t', '15', '-o',
     `-c listen_addresses='' -c unix_socket_directories='${socket}' -c unix_socket_permissions=0700 -c max_connections=12`, 'start']);
-  started = true;
   async function connect(user) {
     const db = new Client({ host: socket, port: 5432, user, database: 'postgres', connectionTimeoutMillis: 5000 });
     connections.push(db); await db.connect(); await db.query("SET statement_timeout='10s'"); return db;
@@ -137,11 +137,21 @@ before(async () => {
 
 after(async () => {
   try {
-    if (started) await rollback();
+    if (observer) {
+      for (const db of [a, b]) if (db) await scalar(observer, 'SELECT pg_cancel_backend($1)', [db.processID]);
+      await rollback();
+    }
   } finally {
-    await Promise.all(connections.map(db => db.end()));
-    if (started) { command('pg_ctl', ['-D', data, '-w', '-t', '15', '-m', 'fast', 'stop']); started = false; }
-    if (directory) await rm(directory, { recursive: true, force: true });
+    try { await Promise.all(connections.map(db => db.end())); }
+    finally {
+      if (startAttempted) {
+        const status = spawnSync(join(bin, 'pg_ctl'), ['-D', data, 'status'],
+          { ...owner, env: childEnv, encoding: 'utf8', timeout: 5000 });
+        assert.ok(status.status === 0 || status.status === 3, 'Cannot confirm local cluster state; retain data directory');
+        if (status.status === 0) command('pg_ctl', ['-D', data, '-w', '-t', '15', '-m', 'fast', 'stop']);
+      }
+      if (directory) await rm(directory, { recursive: true, force: true });
+    }
   }
 });
 
@@ -150,7 +160,7 @@ const native = (name, fn) => test(name, { skip: !enabled ? 'Explicit local Postg
   finally {
     if (enabled) {
       await rollback();
-      await a.query('RESET statement_timeout; RESET lock_timeout; DELETE FROM private.employee_transfer_maintenance');
+      await a.query("SET statement_timeout='10s'; RESET lock_timeout; DELETE FROM private.employee_transfer_maintenance");
     }
   }
 });
@@ -245,27 +255,35 @@ native('canceling a waiting bypass releases locks without disabling triggers', a
 });
 
 native('canceling after trigger DDL rolls back imported rows and append-only receipts', async () => {
+  await enterMaintenance();
   const beforeState = await snapshot(); await a.query('BEGIN'); await bypass(a);
-  await a.query(`INSERT INTO public.wallet_transactions VALUES(40,'must rollback')`);
+  await a.query(`INSERT INTO private.employee_transfer_write_permits VALUES(pg_current_xact_id(),$1,ARRAY['public.native_guard_probe'])`, [JOB]);
+  await a.query(`INSERT INTO public.native_guard_probe VALUES(40); INSERT INTO public.wallet_transactions VALUES(40,'must rollback')`);
+  assert.equal(await scalar(a, 'SELECT count(*)::int FROM private.employee_transfer_write_permits'), 1);
   const pending = outcome(a.query('SELECT pg_sleep(15)'));
   try {
     await waiting(a, 'Timeout', 'PgSleep');
     assert.equal(await scalar(observer, 'SELECT pg_cancel_backend($1)', [a.processID]), true);
     assert.equal((await pending).error?.code, '57014');
     await unchanged(beforeState);
+    assert.equal(await scalar(observer, 'SELECT count(*)::int FROM public.native_guard_probe'), 0);
   } finally { await scalar(observer, 'SELECT pg_cancel_backend($1)', [a.processID]); await pending; }
 });
 
 native('the real three-second statement timeout rolls back an entire bypassing statement', async () => {
+  await enterMaintenance();
   const beforeState = await snapshot(); await a.query("SET statement_timeout='3s'");
   assert.equal(await scalar(a, 'SHOW statement_timeout'), '3s');
   await assert.rejects(a.query(`DO $$ DECLARE receipt jsonb; BEGIN
     receipt := private.employee_transfer_bypass_triggers(ARRAY['wallet_transactions']);
+    INSERT INTO private.employee_transfer_write_permits VALUES(pg_current_xact_id(),'${JOB}',ARRAY['public.native_guard_probe']);
+    INSERT INTO public.native_guard_probe VALUES(50);
     INSERT INTO public.wallet_transactions VALUES(50,'must rollback');
     PERFORM pg_sleep(15);
     PERFORM private.employee_transfer_restore_triggers(receipt);
   END; $$`), error => error.code === '57014' && /statement timeout/.test(error.message));
   await unchanged(beforeState);
+  assert.equal(await scalar(observer, 'SELECT count(*)::int FROM public.native_guard_probe'), 0);
 });
 
 native('an anon caller cannot execute private bypass or alter trigger modes', async () => {
