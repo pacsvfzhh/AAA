@@ -4,7 +4,7 @@
 
 **最新离线切站决定（第56节，2026-10-23 UTC+8）**：用户确认完全离线，新站启用后旧站由用户自行停用/管理；系统不联网核验旧站、不设跨站交接锁，不增加旧站确认checkbox。继续采用停站导出，不做在线增量、不搬运行队列：由现有worker先排空，freeze时`notification_automation_queue`、`notification_automation_failures`及`processing`订单全零，不删记录冒充排空；日常备份仍只读、不自动停站。冻结与启用须在同一UTC日（UTC+8每日08:00换日），已获用户同意，放行事务末尾再次检查防跨界。旧站恢复即放弃原切站文件，避免双站营业由用户负责，不以联网核验或交接锁作为系统阻断。截止元数据及放行回执不是远程签名或旧站当前状态证明。
 
-本轮进展（第56节）：SQL57 `20261102000057_release_imported_site.sql`、siteRelease.ts及SiteReleasePanel已完成本地空站离线放行。共享apply冻结非超管来源启停（含NULL）和source/role绑定；v3准入追加能力检查，冻结包在dispatch末绑定严格六字段cutoff，导入完成返回闭包releaseSession，token不进报告。本人超管用原任务/会话、密码、精确「確認啟用新站」及expected verification hash提交，真实SQL55重扫十域/五份密文备份，恢复来源账号启停及plan/task原状态，仅active员工一次入队，不现场发通知/奖金；成功仅清原dirty维护、任务finished并存独立放行回执，staging/备份保留。日常包无sourceCutover仍可维护态导入，但releaseSession=null不能启用；status不是新实物核验。真实新SQL专项24项及另3项golden/strict、新client187与3旧client合312、双浏览器各23场景含父组48/48通过；旧UI28/28由UIagent通过。foundation/scope、主会话最终typecheck/lint/build及audit/work复跑待最终核对，详细分项/skip/限制见56.4，不虚报全文件或总套件通过。584迁移仍12既有失败、109表967列，非干净建库；无正式服务访问或部署，full_site_complete始终false，同名彻底替换及其余缺项仍在。
+本轮进展（第56节）：SQL57 `20261102000057_release_imported_site.sql`、siteRelease.ts及SiteReleasePanel已完成本地空站离线放行。共享apply冻结非超管来源启停（含NULL）和source/role绑定；v3准入追加能力检查，冻结包在dispatch末绑定严格六字段cutoff，导入完成返回闭包releaseSession，token不进报告。本人超管用原任务/会话、密码、精确「確認啟用新站」及expected verification hash提交，真实SQL55重扫十域/五份密文备份，恢复来源账号启停及plan/task原状态，仅active员工一次入队，不现场发通知/奖金；成功仅清原dirty维护、任务finished并存独立放行回执，staging/备份保留。日常包无sourceCutover仍可维护态导入，但releaseSession=null不能启用；status不是新实物核验。真实新SQL专项24项及另3项golden/strict、新client187与3旧client合312、双浏览器各23场景含父组48/48通过；旧UI28/28由UIagent通过。foundation/scope修正显式SQL57清单及584基线后完整101/101通过；主会话新release client187+旧cutover74+site-import-security13完整三文件274/274通过，与此前312及reviewer结果重叠不加总。主会话typecheck/lint/build通过（保留迁移页约571KiB chunk警告），聊天6/稽核48/工时6分别通过；详细分项/skip/限制见56.4，不称全文件或总套件通过。584迁移仍12既有失败、109表967列，非干净建库；无正式服务访问或部署，full_site_complete始终false，同名彻底替换及其余缺项仍在。
 
 历史摘要说明：下列第55节及以前的子阶段结论保留当时范围和测试事实；其中“最终放行未实现”不再代表当前空站主线，现状以第56节为准，不扩大关闭新编号链或其他pending。
 
@@ -1444,6 +1444,7 @@ DROP FUNCTION private.employee_transfer_mapped_notifications_input(uuid,text);
 
 ### 56.2 SQL57与原子边界
 - 最新迁移`20261102000057_release_imported_site.sql`新增`employee_import_site_bind_cutoff(uuid,uuid,jsonb)`、`get_employee_import_site_release_status(uuid,uuid)`、`employee_import_site_release(uuid,uuid,text,text,text)`；包装共享apply和preflight，不改旧迁移文件。公共入口固定SECURITY DEFINER及`search_path = pg_catalog, public, private, pg_temp`，撤销默认权限后仅按需给anon/authenticated并在内验证超管本人，private helper/旧实现无浏览器直调权限。无新表，不部署或改动正式服务。
+- SQL57当前SHA256=`4c42abf2ccc5bdd98717d15cd64eea703bcdd0049e9b7e656cee41acc9dc2e1c`；本次仅精简WHAT说明注释、保留少量WHY注释，行为未改。
 - 共享apply保留SQL45实现，在共享staging可能被取消清理之前，把非超管来源`is_active`（true/false/NULL）及`source_id/role`绑定冻结到原任务summary。重做同apply不能重置快照；历史apply缺快照不从已停用目标反推、不补造。preflight保留`site-maintenance-restore-v3`及原响应形状，追加bind/status/release和正确共享wrapper能力检查，不另编v4或接受旧v1/v2。
 - target bind只收六字段`version/policy/site_id/cutoff_id/frozen_at/cutoff_hash`，严格类型/UTC微秒格式、PG jsonb去hash摘要及同source/异target校验，绑定本人原dispatch-import、包和dirty维护；已有cutoff不可改。旧日期可绑定检查，但过期不能release。冻结包在dispatch末绑定；无sourceCutover的日常包仍可维护态导入，不能补造截止凭据用于启用。
 - release必须本人超管当前会话、原task/job token、当前密码、精确「確認啟用新站」和expected verification hash；首先调用真实SQL55总核对，在其既有NOWAIT/try-lock顺序下重新扫描十域实物、最终媒体回执及五份实际密文备份，hash不符即拒绝。来源暂存failures和目标queue/failures/processing必须为零，同UTC日及任务/维护归属再检查；status或旧verified记录不能替代此过程。
@@ -1454,18 +1455,18 @@ DROP FUNCTION private.employee_transfer_mapped_notifications_input(uuid,text);
 ### 56.3 客户端、页面、报告与未知结果
 - `siteRelease.ts`严格校验字段、任务/站/包/cutoff/verification hash、时间及计数/布尔回执并冻结；模块级跨实例writeGeneration和未知写互锁保留，旧status不能解除新写不确定性。bind/status/release单次120秒、不自动重试，不提高数据库角色执行上限；只有底层写结束后新发起且严格认证的fresh status可核对未知结果。status只是候选条件/历史提交回执，不是一次新实物核验或新营业保证。
 - siteImport/siteRestoreApi完成冻结包导入后返回闭包releaseSession，原token仅留闭包、不进报告；日常包`sourceCutover`缺失/undefined合法且`releaseSession=null`，不得误拒维护态导入或授予启用。完整刷新/跨会话导入token安全恢复仍未实现，不能靠status重新造会话或称完整续接。
-- `SiteReleasePanel`接在`EmployeeSiteImport`结果下方，显示「新站最終啟用」、来源冻结信息及同UTC日期限。必须显式「查詢啟用條件」→密码/精确确认语→「核對並啟用新站」；无联网或额外旧站checkbox。取消/离开不启用、不解除维护；在途/未知结果互锁兄弟导出/导入/备份功能，但保留「查詢啟用條件」以处理未知结果。
+- `SiteReleasePanel`接在`EmployeeSiteImport`结果下方，显示「新站最終啟用」、来源冻结信息及同UTC日期限。必须显式「查詢啟用條件」→密码/精确确认语→「核對並啟用新站」；无联网或额外旧站checkbox。取消/离开不启用、不解除维护；在途/未知结果互锁兄弟导出/导入/备份功能，但保留「查詢啟用條件」以处理未知结果。EmployeeDataMigration的`bind-source-cutoff`已有「綁定來源切站截止點」真实进度说明，维护态标签为「維護態核驗通過（啟用前紀錄）」，仅澄清进度/历史结果，不扩大功能。
 - 单独保存`site-release-report.json`，仅脱敏放行回执，不含token/密码；`site-import-report.json`及上方serverVerification仍是导入当时维护回执，不重写成已启用。报告失败不撤销已提交放行，也不能因此重发；已放行后status中的receipt为历史事实，若后来另有维护，不能据旧回执称当前仍无维护。
 
 ### 56.4 最终本地证据
 - 主会话真实新release SQL专项24项（1父+23子）完整通过，筛选出的33旧顶层skip不计；另strict清单/原十域golden/冻结golden共3项通过，31skip不计。不是单次全文件通过或整个employee-transfer总套件通过，不把两条命令未执行的skip并入成功数。
 - 专项包含真实worker失败拒freeze→处理失败并drain→11份落盘密文导出/导入→4名员工true/false/NULL及三类管理员来源状态→active/paused/archived方案与active/draft/paused任务→真实历史奖励→真实COMMIT后丢响应→fresh status查成功且不重发→首次worker不重复旧奖励→真实新订单触发下一阶段7.25仅一次。是真实本地SQL/磁盘密文链，不能称真实线上两站验收。
 - 新client187通过，与3旧client合312通过，分项不再累计；reviewer新client187+旧cutover74亦通过，是重叠复验不加总。主会话Chromium/WebKit各23个隔离场景完整复跑，含两个父组48/48；既有UI28/28由UIagent通过，分开列示。
-- 最终主会话复验：foundation/scope更新显式迁移清单后完整101/101通过；584份迁移仍12项既有失败、109表967列，非干净建库证明。新启用client187+旧cutover74+transport安全13完整三文件274/274通过，与此前312及reviewer结果部分重叠、不加总。typecheck/lint/build与聊天6/稽核48/工时6分别通过；构建保留迁移页约571KiB的chunk警告。旧583基线初跑失败及早期中断命令均不计通过。
+- 最终主会话复验：foundation/scope修正显式SQL57迁移清单及584基线后完整101/101通过；584份迁移仍12项既有失败、109表967列，非干净建库证明。新release client187+旧cutover74+site-import-security13完整三文件274/274通过，与此前312及reviewer结果部分重叠、不加总。typecheck/lint/build与聊天6/稽核48/工时6分别通过；构建保留迁移页约571KiB的chunk警告。旧583基线初跑失败及早期中断命令均不计通过。
 - reviewer发现admins删除专用trigger被误判、paused plan含active task合法组合被拒，两项已修复，再审无新高置信问题。daily bundle可选sourceCutover undefined原判断bug已由主会话修复，原十域/冻结两条golden通过（已含上述3项，不重复加总）；早期代理fail/aborted命令和baseline初跑失败不算成功，不制造总数。
 - release本地95个受保护表完整行指纹约2.8秒，仅小fixture，不是anon3秒生产容量/大员工或原生PG/PostgREST并发证明。主会话未跑全employee-transfer总套件；预览仅登录页，隔离UI API/IO为替身且无外网，不代表真实Storage/CORS、原生目录、原生PG并发/取消/容量或真实两站切站验收。
 
 ### 56.5 部署、回退与未完成
-- SQL57/release模块及页面均仅本地实现，未访问或部署任何正式SQL、Edge、Storage、权限、config、cron或前端；前端待用户另行部署，正式操作仍逐项确认。本轮实际修改SQL、协调器、客户端、界面及测试，并同步七份既有文档；不是仅文档改动。
+- SQL57/release模块及页面均仅本地实现，未访问或部署任何正式SQL、Edge、Storage、权限、config、cron或前端；前端待用户另行部署，正式操作仍逐项确认。本轮新增SQL57、客户端、界面及专项测试，并修改协调器等相关模块和既有测试，同步七份既有文档。
 - 回退仅指停用对应前端入口后移除SQL57新增函数及还原共享apply/preflight的既有函数包装/权限，需另行审核、未执行；不是数据回滚，不使用CASCADE清staging、备份或业务，不删除维护、不借回退恢复/停止营业。移除函数不会撤销已放行状态、已产生队列/资金或恢复已释放维护；新站营业后不能直接切回旧站，用户须自行停用/管理旧站并处理切站后变动。
 - 本地空站离线放行已接，不再列为“最终放行未实现”；完整员工备份恢复、同名专用彻底替换、新编号通知配置/备份/媒体/13表实际恢复及其他引用/双包证明、统一原生/迁入档案与再次导入、共享头像图标、完整跨会话token恢复和容量多卷等仍缺。保留全部其他pending及`full_site_complete=false`，不改第55节及以前的历史实现/测试事实，不宣称完整迁移或正式验收完成。

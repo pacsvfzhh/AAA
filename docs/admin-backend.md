@@ -53,8 +53,8 @@
 - SQL57要求本人超管原task/session、密码及expected verification hash，提交时真实SQL55重扫十域、最终媒体及五份实际密文备份，来源failures与目标queue/failures/processing为零、同UTC日末尾再查防跨界。成功原子恢复来源员工/非超管is_active含NULL（不是全员启用）与plan/task原status，保留activated_at/version/updated_at/progress/executions及钱；active员工各入队一次、不现场发送或发奖。
 - 评估锁内支持paused/archived plan含active task，临时plan active→恢复task→plan原状态，不关trigger。完整受保护业务行前后指纹防隐藏副作用；只清本人原dirty维护、job finished并写独立回执/审计，保留staging/备份，同事务失败全回滚。既有删除管理员trigger保持，非新增删除功能。
 - 120秒单次请求不自动重试；跨实例writeGeneration拒迟到旧status。提交丢响应或取消导致结果未知时，兄弟导出/导入/备份入口继续互锁，仍可按「查詢啟用條件」发fresh status核对；即使真实COMMIT也不重发release。status的已放行回执是历史事实，后续另有维护时不能声称目前无维护。
-- 独立保存`site-release-report.json`；原`site-import-report.json`和上方serverVerification保持导入当时的维护态历史，不改写为启用成功。报告失败不撤销已提交放行、不能因此重跑；不含密码/token，full_site_complete=false，其余缺项不扩大关闭。
-- 主会话Chromium/WebKit各23场景含父组48/48完整复跑通过，既有UI28/28由UIagent通过；新client187及与3旧client合312通过，reviewer重叠复验不加总。真实新release SQL24及另strict/两golden3项通过，skip不计、不称全文件；foundation/scope及最终静态检查、audit/work待主会话最终核对（聊天6已通过），详见计划56.4。预览仅登录，隔离UI API/IO替身无外网，不代表真实Storage/CORS/原生PG并发/真实两站验收。95表指纹约2.8秒仅小fixture、非生产容量证明；未跑全employee-transfer总套件，无正式访问/部署，前端待用户部署。
+- 独立保存`site-release-report.json`；原`site-import-report.json`和上方serverVerification保持导入当时的维护态历史，不改写为启用成功。报告失败不撤销已提交放行、不能因此重跑；不含密码/token，full_site_complete=false，其余缺项不扩大关闭。EmployeeDataMigration已将`bind-source-cutoff`显示为「綁定來源切站截止點」，维护态阶段标签改为「維護態核驗通過（啟用前紀錄）」，仅说明真实进度及历史回执，不扩大功能。
+- 最终证据：主会话Chromium/WebKit各23场景含父组48/48完整复跑通过，既有UI28/28由UIagent通过；新release client187+旧cutover74+site-import-security13完整三文件274/274通过，与此前312及reviewer结果重叠不加总。真实新release SQL24及另strict/两golden3项通过，33/31skip不计、不称全文件。foundation/scope修正显式SQL57清单及584基线后完整101/101通过；584迁移仍12项原历史失败、109表967列，非干净建库。主会话typecheck/lint/build通过（保留迁移页约571KiB chunk警告），聊天6/稽核48/工时6分别通过，旧583基线初跑失败及早期fail/aborted不计通过，详见计划56.4。预览仅登录，隔离UI API/IO替身无外网，不代表真实Storage/CORS/原生PG并发/真实两站验收。95表指纹约2.8秒仅小fixture、非生产容量证明；未跑全employee-transfer总套件，无正式访问/部署，前端待用户部署。
 
 ### 舊站停站切換 `SourceCutoverPanel.tsx`（第55节，2026-10-22 UTC+8，本地未部署）
 > 下列保留SQL56当时的范围及测试事实；当前空站离线放行已接，见上方第56节。旧站由用户管理，不要求系统联网核验或交接锁，source面板本身仍不放行新站。

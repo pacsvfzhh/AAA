@@ -97,7 +97,7 @@
 - 全部检查成功才清本人原dirty维护、job finished及summary receipt/audit，保留staging和五份备份；同事务失败全回滚，COMMIT失响应则fresh status读回执、不再release。preflight维持v3并追加release/wrapper能力检查，bind/status/release120秒单次请求、不自动重试；跨实例writeGeneration及未知互锁保留，兄弟功能锁住时仍可查status。
 - SiteReleasePanel接EmployeeSiteImport下方，显式「查詢啟用條件」→密码/确认语→「核對並啟用新站」，无额外旧站checkbox或联网。独立site-release-report.json，原site-import-report为历史维护回执不重写；报告失败不撤销放行/重发。刷新完整跨会话导入token恢复尚未实现，不用status冒充完整续接或新的总核验。
 - 主会话真实新release SQL24项（父+23）专项通过，33旧顶层skip不计；另strict/原十域golden/冻结golden3项通过，31skip不计，不称全文件。包含真实worker失败拒freeze→drain→11落盘密文→4员工true/false/NULL及三类admin原状态→active/paused/archived plan与active/draft/paused task→真实历史奖励→真实COMMIT失响应/fresh status不重发→首次worker不重复旧奖→真实新订单下一阶段7.25仅一次。新client187与3旧client合312通过；双浏览器各23场景含父组48/48主会话完整复跑、旧UI28/28由UIagent通过，reviewer重叠复验不加总，详见计划56.4。
-- **待主会话最终核对**：foundation/scope正在重跑（旧583 baseline初跑失败正在修正，不计通过）；584迁移仍12既有失败、109表967列，非干净建库。typecheck/lint/build此前通过、主会话最终重跑待核对；聊天6通过，audit/work待复跑，早期fail/aborted不算通过。95受保护表指纹约2.8秒只是小fixture，不证明生产anon3秒容量；预览仅登录、UI API/IO替身无外网，不代表真实Storage/CORS/原生PG并发/真实两站验收，未跑全employee-transfer总套件。
+- 最终主会话复验：foundation/scope修正显式SQL57清单及584基线后完整101/101通过；584迁移仍12项原历史失败、109表967列，非干净建库。新release client187+旧cutover74+site-import-security13完整三文件274/274通过，与此前312及reviewer结果重叠不加总；Chromium/WebKit各23场景含父组48/48主会话完整复跑通过。typecheck/lint/build通过（保留迁移页约571KiB chunk警告），聊天6/稽核48/工时6分别通过；旧583基线初跑失败及早期fail/aborted不算通过。95受保护表指纹约2.8秒只是小fixture，不证明生产anon3秒容量；预览仅登录、UI API/IO替身无外网，不代表真实Storage/CORS/原生PG并发/真实两站验收，未跑全employee-transfer总套件。
 - 本地已接离线放行，不等于完整迁移完成；同名彻底替换、新编号剩余引用/通知恢复、双包证明、统一档案/共享媒体、完整跨会话续接及容量多卷仍缺。无正式SQL/Edge/Storage/权限/config/cron/前端访问或部署，前端待用户部署；回退仅移除函数/还原包装，不清维护、不撤销已释放营业或资金，非数据回滚。上文第55节及以前历史测试记录不改写为本轮成绩。
 
 ## 公告 `AnnouncementManagement.tsx` + `TiptapEditor.tsx`
