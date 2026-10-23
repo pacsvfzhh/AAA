@@ -1164,6 +1164,65 @@ for(const field of ['remarks','is_active','session','order_details'])test(`ident
   assert.equal(await permitCount(),0);
 }));
 
+test('identity cross-chunk checks isolate intact retries but SQL NULL and final verify reject earlier order field drift',()=>transaction(async()=>{
+  await configured();const plan=await identityStage(),start=await identityBegin(plan);
+  assert.ok(start.chunks.orders>=2);
+  let last;
+  for(const key of IDENTITY)for(let no=0;no<start.chunks[key];no++)last=await identityChunk(key,no);
+  assert.equal(last.verified,false);assert.equal(last.counts.orders,plan.counts.orders);
+  const finalChunk=start.chunks.orders-1;
+  assert.deepEqual(await identityChunk('orders',finalChunk),{...last,repeated:true});
+  const checkAllOrders=()=>isolated(db,()=>db.query(`SELECT private.employee_transfer_check_identity_written(
+    j,'orders',NULL::jsonb,j.summary#>'{identity_restore,admin_map}') FROM private.employee_transfer_jobs AS j WHERE id=$1`,[job.job_id]));
+  await checkAllOrders();
+  // Read only the UUID in JS; change a sub-double-precision digit in SQL, without rounding source JSON.
+  const early=JSON.parse(lines(chunks(identityPackage.texts.orders)[0])[1]).id,triggers=await triggerState();
+  await db.exec('ALTER TABLE public.orders DISABLE TRIGGER zz_employee_transfer_maintenance');
+  assert.equal((await db.query(`UPDATE public.orders SET commission_rate=commission_rate+0.0000000000000000001
+    WHERE id=$1 RETURNING id`,[early])).rows.length,1);
+  await db.exec('ALTER TABLE public.orders ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance');
+  const keep=await businessState(),state=await taskState(job);
+  assert.deepEqual(await identityChunk('orders',finalChunk),{...last,repeated:true},'an unverified retry checks only its own intact batch');
+  await assert.rejects(identityChunk('orders',0),/Employee identity post-write verification failed/);
+  await assert.rejects(identityVerify(),/Employee identity post-write verification failed/);
+  await assert.rejects(checkAllOrders(),/Employee identity post-write verification failed/,'SQL NULL must check every staged order, not an empty set');
+  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);
+  assert.deepEqual(await triggerState(),triggers);assert.equal(await permitCount(),0);assert.deepEqual(await status(),active(job,true));
+}));
+
+for(const delta of [-1,1])test(`identity cross-chunk final verify rejects ${delta<0?'a missing earlier-batch order':'an extra order for an imported employee'}`,()=>transaction(async()=>{
+  await configured();const plan=await identityStage(),receipt=await identityRestore(plan);
+  assert.ok(receipt.chunks.orders>=2);
+  const early=JSON.parse(lines(chunks(identityPackage.texts.orders)[0])[1]).id,triggers=await triggerState();
+  // Corrupt only this negative transaction, restoring every trigger before invoking the real RPC.
+  const disabled=await scalar(db,"SELECT private.employee_transfer_bypass_triggers(ARRAY['orders'])");
+  await db.exec('ALTER TABLE public.orders DISABLE TRIGGER zz_employee_transfer_maintenance');
+  if(delta<0){
+    assert.equal(await scalar(db,'SELECT (SELECT count(*) FROM public.used_order_data)+(SELECT count(*) FROM public.commission_audit_log)'),0);
+    // FK actions still fire statement guards on empty referencing tables.
+    await db.exec(`ALTER TABLE public.used_order_data DISABLE TRIGGER zz_employee_transfer_maintenance;
+      ALTER TABLE public.commission_audit_log DISABLE TRIGGER zz_employee_transfer_maintenance;
+      ALTER TABLE public.orders DISABLE TRIGGER prevent_delete_orders`);
+    assert.equal((await db.query('DELETE FROM public.orders WHERE id=$1 RETURNING id',[early])).rows.length,1);
+    await db.exec(`ALTER TABLE public.orders ENABLE TRIGGER prevent_delete_orders;
+      ALTER TABLE public.used_order_data ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance;
+      ALTER TABLE public.commission_audit_log ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance`);
+  }else{
+    assert.equal((await db.query(`INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,
+      order_number,transaction_id,status,commission_amount,commission_rate,created_at,processed_at)
+      SELECT $2::uuid,user_id,username,product_type_id,product_value,'IMPORTED-'||$2::text,'IMPORTED-'||$2::text,
+        status,commission_amount,commission_rate,created_at,processed_at FROM public.orders WHERE id=$1 RETURNING id`,[early,id(9999)])).rows.length,1);
+  }
+  await db.exec('ALTER TABLE public.orders ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance');
+  await db.query('SELECT private.employee_transfer_restore_triggers($1::jsonb)',[JSON.stringify(disabled)]);
+  assert.equal(await scalar(db,'SELECT count(*)::int FROM public.orders'),plan.counts.orders+delta);
+  assert.deepEqual(await triggerState(),triggers);
+  const keep=await businessState(),state=await taskState(job);
+  await assert.rejects(identityVerify(),/Employee identity committed count changed/);
+  assert.deepEqual(await businessState(),keep);assert.deepEqual(await taskState(job),state);
+  assert.equal(await permitCount(),0);assert.deepEqual(await status(),active(job,true));
+}));
+
 for(const [label,sql,parameters]of [
   ['expired session',"UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 second' WHERE admin_id=$1",()=>[NEW.root]],
   ['idle job',"UPDATE private.employee_transfer_jobs SET last_activity_at=now()-interval '4 hours' WHERE id=$1",()=>[job.job_id]],

@@ -134,26 +134,30 @@ $$;
 CREATE FUNCTION private.employee_transfer_check_identity_written(p_job private.employee_transfer_jobs,p_key text,p_rows jsonb,p_map jsonb)
 RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
-DECLARE v_query text; v_bad boolean; v_ids uuid[];
+DECLARE v_query text; v_source text; v_bad boolean;
 BEGIN
-  SELECT array_agg((body->>'id')::uuid) INTO v_ids FROM jsonb_array_elements(p_rows) AS source(body);
-  v_query:=private.employee_transfer_identity_query(p_key)||format(' AND src.%I=ANY($4)',CASE WHEN p_key='credentials' THEN 'user_id' ELSE 'id' END);
-  EXECUTE 'SELECT EXISTS(SELECT 1 FROM jsonb_array_elements($1) AS source(body) LEFT JOIN ('||v_query||') AS actual
-    ON actual.id=(source.body->>''id'')::uuid AND actual.body=CASE $3
-      WHEN ''accounts'' THEN source.body||jsonb_build_object(''created_by'',$2->(source.body->>''created_by''),''is_active'',false)
-      ELSE source.body END WHERE actual.id IS NULL)' INTO v_bad USING p_rows,p_map,p_key,v_ids;
+  v_source:=CASE WHEN p_rows IS NULL THEN 'SELECT id,body FROM private.employee_transfer_identity_input($4,$3)'
+    ELSE 'SELECT (body->>''id'')::uuid AS id,body FROM jsonb_array_elements($1) AS source(body)' END;
+  v_query:=private.employee_transfer_identity_query(p_key)||format(' AND src.%I=ANY(ARRAY(SELECT id FROM expected))',CASE WHEN p_key='credentials' THEN 'user_id' ELSE 'id' END);
+  EXECUTE 'WITH expected AS MATERIALIZED ('||v_source||'),actual AS MATERIALIZED ('||v_query||')
+    SELECT EXISTS(SELECT id,CASE $3
+      WHEN ''accounts'' THEN body||jsonb_build_object(''created_by'',$2->(body->>''created_by''),''is_active'',false)
+      ELSE body END FROM expected EXCEPT SELECT id,body FROM actual)' INTO v_bad USING p_rows,p_map,p_key,p_job.id;
   IF v_bad THEN RAISE EXCEPTION 'Employee identity post-write verification failed.'; END IF;
-  IF p_key='accounts' AND EXISTS(SELECT 1 FROM jsonb_array_elements(p_rows) AS source(body)
-    JOIN public.users AS u ON u.id=(source.body->>'id')::uuid WHERE u.is_active IS DISTINCT FROM false OR u.archived_at IS NOT NULL
-      OR u.current_session_token IS NOT NULL OR u.session_created_at IS NOT NULL OR u.last_heartbeat_at IS NOT NULL OR u.current_tab_id IS NOT NULL) THEN
+  IF p_key='accounts' AND EXISTS(SELECT 1 FROM public.users AS u WHERE u.id IN (
+      SELECT (body->>'id')::uuid FROM jsonb_array_elements(p_rows) AS source(body) WHERE p_rows IS NOT NULL
+      UNION ALL SELECT id FROM private.employee_transfer_identity_input(p_job.id,p_key) WHERE p_rows IS NULL)
+    AND (u.is_active IS DISTINCT FROM false OR u.archived_at IS NOT NULL
+      OR u.current_session_token IS NOT NULL OR u.session_created_at IS NOT NULL OR u.last_heartbeat_at IS NOT NULL OR u.current_tab_id IS NOT NULL)) THEN
     RAISE EXCEPTION 'Imported employee must remain disabled with no login session.';
   END IF;
-  IF p_key='orders' AND EXISTS(SELECT 1 FROM jsonb_array_elements(p_rows) AS source(body)
-    JOIN public.orders AS o ON o.id=(source.body->>'id')::uuid JOIN public.users AS u ON u.id=o.user_id
-    WHERE o.username IS DISTINCT FROM u.username OR o.product_type_id IS DISTINCT FROM p_job.placeholder_product_id
+  IF p_key='orders' AND EXISTS(SELECT 1 FROM public.orders AS o JOIN public.users AS u ON u.id=o.user_id
+    WHERE o.id IN (SELECT (body->>'id')::uuid FROM jsonb_array_elements(p_rows) AS source(body) WHERE p_rows IS NOT NULL
+      UNION ALL SELECT id FROM private.employee_transfer_identity_input(p_job.id,p_key) WHERE p_rows IS NULL)
+    AND (o.username IS DISTINCT FROM u.username OR o.product_type_id IS DISTINCT FROM p_job.placeholder_product_id
       OR o.product_value IS DISTINCT FROM 0.01::numeric OR o.order_number IS DISTINCT FROM 'IMPORTED-'||o.id::text
       OR o.transaction_id IS DISTINCT FROM 'IMPORTED-'||o.id::text OR o.assignment_id IS NOT NULL OR o.scheduled_process_at IS NOT NULL
-      OR o.dispatch_commission_rate_snapshot IS NOT NULL OR o.dispatch_success_rate_snapshot IS NOT NULL) THEN
+      OR o.dispatch_commission_rate_snapshot IS NOT NULL OR o.dispatch_success_rate_snapshot IS NOT NULL)) THEN
     RAISE EXCEPTION 'Imported order contains unapproved historical details or live dispatch references.';
   END IF;
 END;
@@ -162,7 +166,7 @@ $$;
 CREATE FUNCTION private.employee_transfer_verify_identity_contents(p_job private.employee_transfer_jobs,p_map jsonb)
 RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
-DECLARE v_key text; v_rows jsonb; v_actual bigint; v_expected bigint;
+DECLARE v_key text; v_actual bigint; v_expected bigint;
 BEGIN
   PERFORM private.employee_transfer_check_identity_input(p_job);
   FOREACH v_key IN ARRAY ARRAY['accounts','credentials','orders'] LOOP
@@ -175,10 +179,7 @@ BEGIN
       SELECT count(*) INTO v_actual FROM public.users AS u WHERE u.id IN(SELECT id FROM private.employee_transfer_identity_input(p_job.id,'accounts'));
     END IF;
     IF v_actual IS DISTINCT FROM v_expected THEN RAISE EXCEPTION 'Employee identity committed count changed.'; END IF;
-    FOR v_rows IN SELECT payload->'rows' FROM private.employee_transfer_staging WHERE job_id=p_job.id
-      AND employee_id='00000000-0000-0000-0000-000000000000' AND table_key='identity-in:'||v_key ORDER BY chunk_no LOOP
-      PERFORM private.employee_transfer_check_identity_written(p_job,v_key,v_rows,p_map);
-    END LOOP;
+    PERFORM private.employee_transfer_check_identity_written(p_job,v_key,NULL,p_map);
   END LOOP;
   IF NOT EXISTS(SELECT 1 FROM public.product_types WHERE id=p_job.placeholder_product_id AND name='舊站匯入（精簡訂單）' AND is_active=false) THEN
     RAISE EXCEPTION 'The historical order placeholder is missing or active.';
