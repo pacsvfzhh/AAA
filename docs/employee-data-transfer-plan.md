@@ -2,7 +2,7 @@
 
 **当前决策（取代同名员工先备份后封存规则）**：优先完成空白新站的完整导入，不让少见同名冲突阻断无冲突主线。同名员工自动独立加密备份并实际保存/回读认证→彻底删除新站该员工及其专属关联记录→再预检导入，不逐人审批、不进入「已刪員工紀錄」；备份或删除失败停止该员工，不计成功。只处理新站本次同名员工，不动旧站、管理员、共享角色或其他员工，不扩大为全站清理。
 
-**部署前最新状态（第57节，2026-10-23 UTC+8）**：用户要求开始部署，发现正式兼容阻断后确认先修复验证、再分别确认SQL和文件服务上线。已本地修复SQL11依赖正式不存在日期辅助表的安装问题，并新增精确96表/871列结构隔离回放；该结构下十一密文往返及空站release专项通过。但正式触发器集合、函数定义和属主/ACL与本地不同，SQL15等固定摘要仍会拒绝，不能直接部署；没有正式写入或部署。结构夹具不等于正式函数/触发器或原生PG验收，不扩大关闭其他pending。
+**部署前最新状态（第58节，2026-10-23 UTC+8）**：用户确认继续本地修复验证。第57节缺表兼容已修，第58节将五域75项固定审核改为可移植安装摘要，再固定本库原生运行时快照；不同OID/NOSUPERUSER及权限表示专项通过，PUBLIC特殊角色碰撞已修补。正式的缺失trigger、函数正文/search_path/ACL版本仍未审批，不能直接部署；本轮正式仅只读查询。完整正式定义、原生PG/Storage及其余pending不因此完成。SQL/媒体服务等正式部署仍需分别确认。
 
 **最新离线切站决定（第56节，2026-10-23 UTC+8）**：用户确认完全离线，新站启用后旧站由用户自行停用/管理；系统不联网核验旧站、不设跨站交接锁，不增加旧站确认checkbox。继续采用停站导出，不做在线增量、不搬运行队列：由现有worker先排空，freeze时`notification_automation_queue`、`notification_automation_failures`及`processing`订单全零，不删记录冒充排空；日常备份仍只读、不自动停站。冻结与启用须在同一UTC日（UTC+8每日08:00换日），已获用户同意，放行事务末尾再次检查防跨界。旧站恢复即放弃原切站文件，避免双站营业由用户负责，不以联网核验或交接锁作为系统阻断。截止元数据及放行回执不是远程签名或旧站当前状态证明。
 
@@ -1500,3 +1500,25 @@ DROP FUNCTION private.employee_transfer_mapped_notifications_input(uuid,text);
 - 需建立明确已审核、可移植的安装基线，并在安装后继续固定本库真实身份/ACL/函数定义及启用模式，覆盖未知定义、删/增/改trigger及失响应恢复等负例。当前列结构测试不替代这一步，不宣称58份已经兼容正式函数基线。
 - 两项媒体保护函数的正式SHA256符合现有常量，仅说明这两项；不扩大为全库函数审核。正式迁移、Edge（包括verify_jwt=false）、Storage/权限等仍须说明具体范围并分别取得确认；前端仍由用户部署，推送不等于上线。
 - 本轮只有正式只读元数据查询，无正式SQL/业务数据/停站/Edge/Storage/权限/config/cron或前端部署；未调用freeze/import/release。原完整迁移缺项与`full_site_complete=false`保持。
+
+## 58. 可移植安装审核与原生运行时固定（2026-10-23，UTC+8，未部署）
+
+### 58.1 已实现的限定子阶段
+- 用户说“开始”，本轮继续本地兼容修复；没有获准正式SQL/Edge/Storage/权限/配置/cron/前端部署或业务数据写入。
+- SQL04/15/18/20/27/32均未正式执行，仅修订这些草案，不改已执行历史迁移。新增私有`employee_transfer_install_trigger_digest(oid)`，安装摘要包含触发器全文、函数全文、属主名、BYPASSRLS、排序后的有效ACL（grantor/grantee角色名、权限及grant option）；不对函数正文做去空白、忽略search_path等处理。PUBLIC伪角色与合法名为`"PUBLIC"`的角色用独立标记区分。
+- 五域75项原常量先与真实本地原生摘要逐项相等后才转换（身份17、资金10、活动7、通知21、聊天20，阶段间有重复项）。新固定常量仍只允许此前已审业务定义；不把未知现场定义录入清单，也不在运行时跳过缺trigger。全部原模式仍只能O/A。
+- 可移植安装不依赖角色OID/rolsuper和ACL数组顺序；同一语句同时采集本库原生摘要，审核通过后将原生摘要与原模式写入生成的runtime assert函数字面量。运行时依旧固定owner OID、原始ACL、rolsuper/BYPASSRLS、函数全文、触发器定义及启用模式；NULL默认ACL改为显式同等ACL，旧运行时快照仍拒绝。SQL11/33维护函数/表身份固定、事务内精确旁路/恢复及延迟提交约束不变。
+- helper对PUBLIC、anon、authenticated、service_role均撤销执行；无新表或公共RPC，因此没有公共Database类型/前端接口变更。不修改任何业务函数或trigger、不补装正式缺失对象。
+
+### 58.2 验证与复审
+- production-db与production-scope两文件完整59/59通过（旧12+本轮47），无skip。五域逐项测试：等效默认ACL安装但旧runtime拒绝、缺/新增/禁用/REPLICA模式、函数配置/有效权限/属主变化、命名PUBLIC角色替换；安装和运行时均拒绝异常。独立PGlite clone内创建不同OID且NOSUPERUSER/BYPASSRLS的postgres，仅迁移受审trigger函数及4个安装helper的所有权，原runtime拒绝后五域安装DO均成功，不触碰系统对象。
+- triggers/foundation/scope/maintenance四文件完整343/343通过；584迁移仍严格匹配原12项历史失败，并非干净建库证明。
+- production-columns下strict及冻结黄金链2项通过（32 skip不计），真实日常十域导出→11落盘密文→空站导入另1项通过（33 skip不计）。同一套真实SQL和客户端，不伪造完成回执；仍沿用本地函数/触发器，不是正式定义验收。本轮未重跑release专项或整个迁移总套件。
+- typecheck/lint/build及聊天6/稽核48/工时6通过，保留既有构建警告。没有界面改动或浏览器功能测试，没有真实Storage/CORS、原生PG锁/并发/取消、PostgREST 3秒容量或正式两站演练。
+- 复审首版发现PUBLIC伪角色与同名角色摘要碰撞，已加独立标记并在五域复现拒绝；最终独立复审未发现新增高置信问题，复审144项是重叠测试、不另加总。初版OID测试REASSIGN OWNED误触系统对象、修正后漏迁helper所有权、旧独立trigger夹具缺service_role均修正后完整复跑；错误npm参数命令不计通过，不通过放宽业务审核让测试过关。
+
+### 58.3 正式差异仍阻断部署
+- SQL15精确查询范围（排除迁移维护trigger）本地为17、正式16，纠正第57节“本地18”的计数记录。正式缺`orders.trigger_audit_order_status`；资金另缺`wallet_transactions.trigger_audit_commission_transaction`；聊天缺`customer_employee_conversations.trg_sync_conversation_source_type`。只记录缺项，未准许省略，也不擅自补装。
+- 本轮正式只读读取实际触发器定义、函数摘要、属主/ACL和12个重点函数的配置/正文粗摘要。以下5个函数即便去掉行首缩进后，正文摘要仍与本地不同：`cleanup_duplicate_work_sessions()`、`cleanup_user_storage_files()`、`enqueue_changed_wallet()`、`private.protect_order_dispatch_rate_snapshots()`、`private.snapshot_order_dispatch_rates()`；其余7个粗摘要一致也不算语义批准，尚有search_path/ACL差异。粗摘要仅帮助定位，实际安装摘要仍严格比较完整原文，不能用去缩进掩盖字符串或动态SQL语义变化。
+- 下一步须读取并对比这些正文、权限和完整通知/聊天定义，确认每个正式版本的语义和保留/旁路行为，再以明确固定的整组基线及真实fixture验证，不直接换成观察到的hash。当前只关闭“环境OID/超级用户属性及等效ACL表示导致安装不可移植”子问题，整体正式基线任务继续，不能宣称58份已可正式部署。
+- 正式全程只读；无正式迁移、停站、导入、删除或部署。`full_site_complete=false`以及同名专用替换、新UUID通知实际恢复、统一档案、共享媒体、跨会话/容量等缺项保持；正式写入批次仍须另行说明并取得确认。

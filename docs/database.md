@@ -17,6 +17,12 @@
 
 `private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；`anon` / `authenticated` 没有该 schema 的使用权限。
 
+## 资料迁移可移植安装基线（第58节，2026-10-23 UTC+8，正式未部署）
+- SQL04新增私有`employee_transfer_install_trigger_digest(oid)`，SQL15/18/20/27/32仅在首次安装时使用它核对固定审核常量；函数/触发器全文不规范化、不去缩进，不自动采纳现场定义。属主用角色名，有效ACL含grantor/grantee角色名、PUBLIC伪角色独立标记、权限和grant option，顺序固定；BYPASSRLS仍参与审核。
+- 跨库OID与postgres是否superuser不参与安装常量；通过审核后，运行时仍固定本库原生摘要，含owner OID、原始ACL、rolsuper/BYPASSRLS及原启用模式。等效默认ACL可安装，但安装后NULL改为显式同等ACL也会被旧运行时快照拒绝。新增helper没有浏览器/服务角色执行权，无新表或公共RPC，不修改业务函数或trigger。
+- 专项59/59、基础/范围/维护/旁路343/343通过；不同OID/NOSUPERUSER的五域DO实测在独立PGlite clone内，不等于原生PostgreSQL或正式函数安装验收。production-columns日常/冻结真实客户端十一密文往返另分组3项通过，skip不计，完整迁移套件未跑。
+- 正式仍不能部署：SQL15排除维护trigger的精确范围为正式16/本地17（此前18有误）；另缺资金佣金审计、聊天来源同步trigger。函数正文/search_path/ACL版本差异未批准，75项常量仍仅接受已审本地业务定义；不替换成现场hash、不补装业务trigger。正式本轮仅只读查询，SQL/Edge/Storage/权限/配置/cron/前端均未部署，详细差异见计划第58节。
+
 ## 资料迁移部署前核对（第57节，2026-10-23 UTC+8，正式未部署）
 - 用户要求部署后，已重新只读核对AAA：仍为96根表/871列，列目录SHA256与`production-2026-10-17`固定值一致；缺日期辅助表、迁移接口及媒体Edge。用户确认先修复验证，再分别确认正式上线，不包含停站、导入或删除正式资料。
 - 尚未正式执行的SQL11已本地修订：只在首次安装时精确冻结`notification_automation_date_runs`是否存在；缺省时从固定守卫SQL字面量清单移除。不是运行时跳过缺表，不补建业务表，后续drop/新增/函数改写仍被严格清单拒绝，SQL33扩展不变。当前SQL11 SHA256=`015ee5670b75ae2bc6a6a7fce76de798a9d7c37abc00a4a5da4b69002d786425`。
