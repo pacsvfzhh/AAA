@@ -17,6 +17,13 @@
 
 `private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；`anon` / `authenticated` 没有该 schema 的使用权限。
 
+## 资料迁移已审正式版本基线（第59节，2026-10-23 UTC+8，正式未部署）
+- 已本地接入精确正式版本：45个直接触发函数全文SHA/原ACL、72个触发器摘要与模式，空PGlite历史回放后应用固定观察、再逐份执行SQL00–57。五域SQL15/18/20/27/32允许原本受审本地整组或明确正式整组（含mode O）；不逐trigger放宽、不规范化生产函数字符串，安装后仍固定本库原生OID/原ACL/rolsuper和原模式。
+- SQL07共享时间戳函数、SQL13交单计数函数另支持已审正式全文/命名有效ACL版本；前者生成本站固定版本/原生摘要与模式，后者继续原整组快照。业务函数/trigger未改，不补正式缺项，不关闭保护外键。正式三项缺trigger仅在明确整组版本中接受；之后删除、补回、改名、改正文/配置/权限/属主/模式及已知版本混搭仍拒绝。
+- 聊天正式复合外键为`(customer_id,source_type) → simulated_customers(id,source_type)`，保留自动级联约束；实际错类型写入被拒绝，跨管理员错误来源通过真实加密十一文件及完整导入预检被拒绝，聊天无写入。工时旧版cleanup被迁移旁路，末心跳收尾仍由恢复函数实现；正式超级角色生成编号的差异不触发，因为恢复使用明确编号。
+- 新正式专项75+旧profile59完整134/134、旧共享/基础/维护/旁路409/409；production-triggers配置下真实strict/日常/冻结/聊天范围4项及离线release专项24项通过，筛选skip不计。584回放仍精确12项旧失败；无原生PG或真实Storage验收，未跑迁移总套件。
+- 正式仅只读查询，结束确认迁移任务表/总核验RPC尚不存在；无SQL/Edge/Storage/权限/config/cron/前端部署。已识别函数/trigger版本安装阻断已在精确隔离样本解决，不再重复列为未审核；真实文件服务/桶策略/CORS、原生PG锁与取消、anon3秒时限和容量仍须验收，完整功能未完成。正式部署依然逐项说明并单独确认；第58及以前章节保留历史证据。
+
 ## 资料迁移可移植安装基线（第58节，2026-10-23 UTC+8，正式未部署）
 - SQL04新增私有`employee_transfer_install_trigger_digest(oid)`，SQL15/18/20/27/32仅在首次安装时使用它核对固定审核常量；函数/触发器全文不规范化、不去缩进，不自动采纳现场定义。属主用角色名，有效ACL含grantor/grantee角色名、PUBLIC伪角色独立标记、权限和grant option，顺序固定；BYPASSRLS仍参与审核。
 - 跨库OID与postgres是否superuser不参与安装常量；通过审核后，运行时仍固定本库原生摘要，含owner OID、原始ACL、rolsuper/BYPASSRLS及原启用模式。等效默认ACL可安装，但安装后NULL改为显式同等ACL也会被旧运行时快照拒绝。新增helper没有浏览器/服务角色执行权，无新表或公共RPC，不修改业务函数或trigger。
