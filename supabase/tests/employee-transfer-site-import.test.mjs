@@ -98,10 +98,13 @@ async function execAs(role, name, args) {
   await active.exec('SAVEPOINT site_import_rpc');
   try {
     await active.exec(`SET LOCAL ROLE ${role}`);
+    if (databaseBackend === 'native') await active.exec("SET LOCAL statement_timeout='3s'");
     const data = await baseRpc(active, name, args, { role: null });
+    if (databaseBackend === 'native') await active.exec("SET LOCAL statement_timeout='30s'");
     await active.exec('RESET ROLE; RELEASE SAVEPOINT site_import_rpc');
     return { data, error: null };
   } catch (error) {
+    if (databaseBackend === 'native' && error.code === '57014') console.error('Native capacity timeout context:', error.where);
     await active.exec('ROLLBACK TO SAVEPOINT site_import_rpc; RELEASE SAVEPOINT site_import_rpc');
     return { data: null, error: { message: error.message } };
   }
@@ -329,7 +332,7 @@ test('strict latest 43–57 replay and real adapters; no importer/driver/SQL rec
   for (const module of ['siteTransfer', 'sourceCutover', 'siteRelease', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
     assert.ok(paths.some(p => p.endsWith(`/employeeTransfer/${module}.ts`)), module);
   assert.equal(paths.some(p => /src\/lib\/(?:auth|supabase)\.ts$|node_modules\/@supabase\//.test(p)), false);
-  t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; ${schemaProfile ?? 'local-replay'}; ${databaseBackend ?? 'PGlite'}; no clean-build/hosted-Storage/PostgREST/capacity claim`);
+  t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; ${schemaProfile ?? 'local-replay'}; ${databaseBackend ?? 'PGlite'}; ${databaseBackend === 'native' ? 'each bridged RPC has a real 3s statement_timeout; ' : ''}no clean-build/hosted-Storage/PostgREST/capacity claim`);
   if (schemaProfile) return Promise.all([source, target].map(async db => {
     if (databaseBackend === 'native') {
       assert.deepEqual(await scalar(db, `SELECT jsonb_build_object('name',current_user,'superuser',rolsuper,'bypassrls',rolbypassrls)
@@ -920,6 +923,36 @@ test('synthetic verification/notification/chat media: disk set -> real handler/S
       assert.equal(links[i].includes(mediaUrl(o)), false); assert.ok(links[i].includes('transfer-'));
     }
     assertProgress(c); allDead(c.w);
+  });
+});
+
+test('native capacity sample: ten thousand independent historical orders use real three-second RPCs and encrypted files', {
+  skip: databaseBackend !== 'native' ? 'Requires explicitly selected self-created native PG17 databases' : false,
+  timeout: 600000,
+}, async t => {
+  let files;
+  await source.exec('BEGIN');
+  try {
+    await fixtureChange(source, 'public.orders', `INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,
+      order_number,transaction_id,status,created_at,processed_at)
+      SELECT gen_random_uuid(),$1,'import_employee',$2,100,'CAPACITY-ORDER-'||n,'CAPACITY-TX-'||n,'failure',$3,$3
+      FROM generate_series(1,10000) AS n`, [I.employee, I.product, TIME]);
+    assert.equal(await scalar(source, 'SELECT count(*)::int FROM public.orders WHERE user_id=$1', [I.employee]), 10002);
+    files = await isolated(source, sourceSession, exportSet, true);
+  } finally { await source.exec('ROLLBACK'); }
+  await isolated(target, targetSession, async () => {
+    const context = startImport({ options: { files: fileList(files) } });
+    const result = await mustComplete(context, t);
+    assert.deepEqual(result.verifiedDomains, DOMAINS);
+    assert.equal(result.maintenance, true);
+    assert.equal(result.fullSiteComplete, false);
+    assert.deepEqual(await rows(target, `SELECT status,count(*)::int AS n,sum(commission_amount)::text AS commission
+      FROM public.orders WHERE user_id=$1 GROUP BY status ORDER BY status`, [I.employee]),
+    [{ status: 'failure', n: 10001, commission: null }, { status: 'success', n: 1, commission: '10.00' }]);
+    assert.equal(await scalar(target, 'SELECT get_user_completed_orders_count($1)', [I.employee]), 10002);
+    assert.deepEqual(result.serverVerification.counts, { employees: 1, pending_withdrawals: 1, pending_withdrawal_amount: '3' });
+    await assertMaintenance(result); await assertBackups(context); allDead(context.w);
+    t.diagnostic('10002 completed order rows, one employee, real SQL55, disk ciphertexts, each bridged anon RPC limited to 3s; not PostgREST or production capacity acceptance.');
   });
 });
 

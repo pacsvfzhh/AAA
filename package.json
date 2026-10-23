@@ -17,6 +17,8 @@
     "test:employee-transfer:foundation": "node --test supabase/tests/employee-transfer-foundation.test.mjs",
     "test:employee-transfer:scope": "node --test supabase/tests/employee-transfer-scope.test.mjs",
     "test:employee-transfer:native": "EMPLOYEE_TRANSFER_NATIVE_REQUIRED=1 node --test supabase/tests/employee-transfer-native-db.test.mjs",
+    "test:employee-transfer:native-site": "EMPLOYEE_TRANSFER_DB_BACKEND=native EMPLOYEE_TRANSFER_SCHEMA_PROFILE=production-triggers node --test --test-name-pattern='strict latest|real SQL ten-domain export|frozen golden|release专项' supabase/tests/employee-transfer-site-import.test.mjs",
+    "test:employee-transfer:native-capacity": "EMPLOYEE_TRANSFER_DB_BACKEND=native EMPLOYEE_TRANSFER_SCHEMA_PROFILE=production-triggers node --test --test-name-pattern='strict latest|native capacity sample' supabase/tests/employee-transfer-site-import.test.mjs",
     "test:employee-transfer:cors": "EMPLOYEE_TRANSFER_CORS_REQUIRED=1 node --test supabase/tests/employee-transfer-media-cors.test.mjs"
   },
   "dependencies": {

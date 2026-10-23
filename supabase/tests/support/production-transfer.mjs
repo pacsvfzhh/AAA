@@ -57,8 +57,10 @@ export async function replayProductionTransferMigrations(
     return { ...result, productionColumnBaseline: { ...baseline, fingerprint },
       ...(productionTriggerBaseline ? { productionTriggerBaseline } : {}) };
   } catch (error) {
-    await db.exec('ROLLBACK');
-    await db.close();
+    const errors = [error];
+    try { await db.exec('ROLLBACK'); } catch (rollbackError) { errors.push(rollbackError); }
+    try { await db.close(); } catch (closeError) { errors.push(closeError); }
+    if (errors.length > 1) throw new AggregateError(errors, `${error.message}; installation cleanup failed`, { cause: error });
     throw error;
   }
 }
