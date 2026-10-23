@@ -99,7 +99,14 @@ async function execAs(role, name, args) {
   try {
     await active.exec(`SET LOCAL ROLE ${role}`);
     if (databaseBackend === 'native') await active.exec("SET LOCAL statement_timeout='3s'");
-    const data = await baseRpc(active, name, args, { role: null });
+    const started = performance.now();
+    let data;
+    try { data = await baseRpc(active, name, args, { role: null }); }
+    finally {
+      if (databaseBackend === 'native' && process.env.EMPLOYEE_TRANSFER_RPC_TIMING === '1') {
+        console.error(`Native RPC timing: ${active === source ? 'source' : 'target'} ${name} ${(performance.now() - started).toFixed(1)}ms`);
+      }
+    }
     if (databaseBackend === 'native') await active.exec("SET LOCAL statement_timeout='30s'");
     await active.exec('RESET ROLE; RELEASE SAVEPOINT site_import_rpc');
     return { data, error: null };

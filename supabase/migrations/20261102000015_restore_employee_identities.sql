@@ -134,13 +134,14 @@ $$;
 CREATE FUNCTION private.employee_transfer_check_identity_written(p_job private.employee_transfer_jobs,p_key text,p_rows jsonb,p_map jsonb)
 RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
-DECLARE v_query text; v_bad boolean;
+DECLARE v_query text; v_bad boolean; v_ids uuid[];
 BEGIN
-  v_query:=private.employee_transfer_identity_query(p_key);
+  SELECT array_agg((body->>'id')::uuid) INTO v_ids FROM jsonb_array_elements(p_rows) AS source(body);
+  v_query:=private.employee_transfer_identity_query(p_key)||format(' AND src.%I=ANY($4)',CASE WHEN p_key='credentials' THEN 'user_id' ELSE 'id' END);
   EXECUTE 'SELECT EXISTS(SELECT 1 FROM jsonb_array_elements($1) AS source(body) LEFT JOIN ('||v_query||') AS actual
     ON actual.id=(source.body->>''id'')::uuid AND actual.body=CASE $3
       WHEN ''accounts'' THEN source.body||jsonb_build_object(''created_by'',$2->(source.body->>''created_by''),''is_active'',false)
-      ELSE source.body END WHERE actual.id IS NULL)' INTO v_bad USING p_rows,p_map,p_key;
+      ELSE source.body END WHERE actual.id IS NULL)' INTO v_bad USING p_rows,p_map,p_key,v_ids;
   IF v_bad THEN RAISE EXCEPTION 'Employee identity post-write verification failed.'; END IF;
   IF p_key='accounts' AND EXISTS(SELECT 1 FROM jsonb_array_elements(p_rows) AS source(body)
     JOIN public.users AS u ON u.id=(source.body->>'id')::uuid WHERE u.is_active IS DISTINCT FROM false OR u.archived_at IS NOT NULL
