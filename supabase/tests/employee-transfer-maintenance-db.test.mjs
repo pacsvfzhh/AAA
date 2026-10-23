@@ -24,7 +24,8 @@ const EXCLUDED = ['private.employee_transfer_events', 'private.employee_transfer
 // maintenance tables to the shared inventory. Unexpected other roots still fail this test.
 const guarded = TRANSFER_SCOPE_COVERAGE_INVENTORY.map(t => `${t.schema}.${t.name}`)
   .filter(name => !EXCLUDED.includes(name) && !['private.employee_transfer_maintenance', 'private.employee_transfer_write_permits',
-    'private.employee_transfer_notification_backups', 'private.employee_transfer_chat_backups', 'private.employee_transfer_archive_records'].includes(name))
+    'private.employee_transfer_notification_backups', 'private.employee_transfer_chat_backups', 'private.employee_transfer_archive_records',
+    'private.employee_transfer_request_proofs'].includes(name))
   .concat(['public.orders_history_2025', 'public.orders_history_2026']).sort();
 const RPCS = ['employee_import_dispatch_enter_maintenance', 'get_employee_transfer_maintenance', 'employee_transfer_leave_maintenance'];
 const HELPERS = ['employee_transfer_guarded_tables', 'employee_transfer_guard_write', 'employee_transfer_lock_maintenance_tables',

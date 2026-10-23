@@ -249,6 +249,19 @@ export const TRANSFER_SCOPE_COVERAGE_INVENTORY = freezeInventory([
     ],
   },
   {
+    schema: 'private', name: 'employee_transfer_request_proofs', mode: 'exclude',
+    reason: '同一次请求、同一事务内完整核验的短暂结果回执，仅用于避免重复执行相同核验；绑定任务锁与写入计数，跨请求不复用、不导出也不从源站恢复。',
+    columns: [
+      { name: 'transaction_id', type: 'xid8', nullable: false },
+      { name: 'statement_at', type: 'timestamp with time zone', nullable: false },
+      { name: 'job_id', type: 'uuid', nullable: false },
+      { name: 'kind', type: 'text', nullable: false },
+      { name: 'binding', type: 'text', nullable: false },
+      { name: 'writes', type: 'bigint[]', nullable: false },
+      { name: 'result', type: 'jsonb', nullable: false },
+    ],
+  },
+  {
     schema: 'private', name: 'employee_transfer_notification_backups', mode: 'exclude',
     reason: '目标通知独立加密记录备份及封存回执仅为本站恢复准备，不迁入另一站或冒充成功；与派单备份隔离，已封存密文不随任务取消清除，媒体未包含。',
     columns: [
@@ -1637,7 +1650,7 @@ const productionAbsentTables = new Set([
   'private.employee_transfer_jobs', 'private.employee_transfer_site',
   'private.employee_transfer_staging', 'private.employee_transfer_trigger_policy',
   'private.employee_transfer_shared_backups', 'private.employee_transfer_notification_backups',
-  'private.employee_transfer_chat_backups',
+  'private.employee_transfer_chat_backups', 'private.employee_transfer_request_proofs',
   // 仅此历史正式结构快照不存在此表；本地业务库存仍必须纳入，不能按任务表排除。
   'private.employee_transfer_archive_records',
   'private.employee_transfer_maintenance', 'private.employee_transfer_write_permits',

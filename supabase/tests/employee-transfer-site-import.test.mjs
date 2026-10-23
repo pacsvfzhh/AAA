@@ -20,7 +20,7 @@ import { replayProductionTransferMigrations } from './support/production-transfe
 // are real disk files; temporary plaintext workspaces and Edge Storage are in memory.
 // Source fixture trigger changes finish BEFORE import; no importer error is bypassed.
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const LAST = '20261102000057_release_imported_site.sql';
+const LAST = '20261102000058_reuse_request_verification.sql';
 const schemaProfile = process.env.EMPLOYEE_TRANSFER_SCHEMA_PROFILE;
 const databaseBackend = process.env.EMPLOYEE_TRANSFER_DB_BACKEND;
 if (databaseBackend !== undefined && databaseBackend !== 'native') throw new Error('Unknown site-import database backend');
@@ -94,32 +94,11 @@ function bridge(name, args) {
   } };
   return query;
 }
-const PROFILE_RE = /site_verify$|_verify$|notifications_(chunk|begin)$|chat_(chunk|begin)$/;
-async function fnStats() {
-  return new Map((await rows(active, `SELECT funcid::regprocedure::text AS f,calls::float8 AS calls,total_time::float8 AS total,self_time::float8 AS self
-    FROM pg_stat_xact_user_functions`)).map(r => [r.f, r]));
-}
 async function execAs(role, name, args) {
-  const prof = process.env.EMPLOYEE_TRANSFER_FN_PROFILE === '1' && PROFILE_RE.test(name) && active === target;
-  const before = prof ? await fnStats() : null;
-  try { return await execAsInner(role, name, args); }
-  finally {
-    if (prof) {
-      const after = await fnStats(); const diff = [];
-      for (const [f, a] of after) {
-        const b = before.get(f) ?? { calls: 0, total: 0, self: 0 };
-        if (a.calls > b.calls) diff.push({ f: f.replace(/\(.*$/, ''), calls: a.calls - b.calls, total: a.total - b.total, self: a.self - b.self });
-      }
-      diff.sort((x, y) => y.total - x.total);
-      console.error(`FNPROFILE ${name}\n` + diff.slice(0, 28).map(d => `  ${d.f.padEnd(70)} calls=${String(d.calls).padStart(5)} total=${d.total.toFixed(1).padStart(8)} self=${d.self.toFixed(1).padStart(8)}`).join('\n'));
-    }
-  }
-}
-async function execAsInner(role, name, args) {
   await active.exec('SAVEPOINT site_import_rpc');
   try {
     await active.exec(`SET LOCAL ROLE ${role}`);
-    if (databaseBackend === 'native') await active.exec(process.env.EMPLOYEE_TRANSFER_DIAG_NO_TIMEOUT === '1' ? "SET LOCAL statement_timeout='120s'" : "SET LOCAL statement_timeout='3s'");
+    if (databaseBackend === 'native') await active.exec("SET LOCAL statement_timeout='3s'");
     const started = performance.now();
     let data;
     try { data = await baseRpc(active, name, args, { role: null }); }
@@ -345,16 +324,16 @@ after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   const foreign = edge.foreign.slice(); mock.restoreAll(); assert.deepEqual(foreign, []);
 });
-test('strict latest 43–57 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
-  assert.equal(replay.files.length, 584);
-  assert.deepEqual(replay.files.slice(-15), ['20261102000043_preserve_transfer_announcements.sql',
+test('strict latest 44–58 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
+  assert.equal(replay.files.length, 585);
+  assert.deepEqual(replay.files.slice(-15), [
     '20261102000044_preflight_site_restore.sql', '20261102000045_verify_site_prerequisites.sql',
     '20261102000046_backup_employee_before_restore.sql', '20261102000047_backup_employee_media.sql',
     '20261102000048_reserve_employee_identities.sql', '20261102000049_restore_mapped_employee_identities.sql',
     '20261102000050_restore_mapped_dispatch_dependencies.sql', '20261102000051_restore_mapped_employee_finance.sql',
     '20261102000052_restore_mapped_employee_activity.sql', '20261102000053_restore_mapped_employee_verification.sql',
     '20261102000054_prepare_mapped_notifications.sql', '20261102000055_verify_site_restore.sql',
-    '20261102000056_freeze_cutover_source.sql', LAST]);
+    '20261102000056_freeze_cutover_source.sql', '20261102000057_release_imported_site.sql', LAST]);
   assert.equal(replay.failures.length, 12);
   const paths = Object.keys(compiled.metafile.inputs);
   for (const module of ['siteTransfer', 'sourceCutover', 'siteRelease', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
@@ -891,6 +870,103 @@ test('site-wide verifier rechecks actual restored contents, seals, media and per
   });
 }));
 
+test('SQL58 reuses a full check only inside one task-locked statement; writes, DDL, rollbacks, settings, task rows and new requests recheck', { timeout: 600000 }, async t => isolated(target, targetSession, async () => {
+  const c = startImport(); await mustComplete(c, t);
+  const token = callsOf('employee_import_site_verify')[0].args.p_job_token;
+  const auth = { p_admin_session_token: targetSession, p_job_token: token };
+  // Trusted counting shims around the physical checks; every change below is rolled back with the test.
+  await target.exec(`CREATE TEMP SEQUENCE sql58_identity_checks; CREATE TEMP SEQUENCE sql58_admin_map_checks;
+    ALTER FUNCTION private.employee_transfer_verify_identity_contents_full(private.employee_transfer_jobs,jsonb) RENAME TO employee_transfer_verify_identity_contents_counted;
+    CREATE FUNCTION private.employee_transfer_verify_identity_contents_full(p_job private.employee_transfer_jobs,p_map jsonb)
+    RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, private, pg_temp AS $f$
+    BEGIN PERFORM nextval('pg_temp.sql58_identity_checks'); PERFORM private.employee_transfer_verify_identity_contents_counted(p_job,p_map); END $f$;
+    ALTER FUNCTION private.employee_transfer_identity_admin_map_full(private.employee_transfer_jobs) RENAME TO employee_transfer_identity_admin_map_counted;
+    CREATE FUNCTION private.employee_transfer_identity_admin_map_full(p_job private.employee_transfer_jobs)
+    RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, private, pg_temp AS $f$
+    BEGIN PERFORM nextval('pg_temp.sql58_admin_map_checks'); RETURN private.employee_transfer_identity_admin_map_counted(p_job); END $f$;`);
+  const counted = async () => ({
+    identity: Number(await scalar(target, 'SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM pg_temp.sql58_identity_checks')),
+    adminMap: Number(await scalar(target, 'SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM pg_temp.sql58_admin_map_checks')),
+  });
+  const physical = async run => {
+    const before = await counted(); await run(); const after = await counted();
+    return { identity: after.identity - before.identity, adminMap: after.adminMap - before.adminMap };
+  };
+  const locked = `j:=private.employee_transfer_job('${targetSession}'::uuid,'${token}'::uuid,'dispatch-import');`;
+  const unlocked = `SELECT * INTO STRICT j FROM private.employee_transfer_jobs WHERE token_hash=private.hash_financial_token('${token}'::uuid);`;
+  // One DO block is one client statement; each case is undone so fixture writes never leak into the next.
+  const statement = async (body, { lock = true, readOnly = false } = {}) => {
+    await target.exec('SAVEPOINT sql58_case');
+    try {
+      if (readOnly) await target.exec('SET LOCAL transaction_read_only = on');
+      await target.exec(`DO $sql58$ DECLARE j private.employee_transfer_jobs; m jsonb; BEGIN
+        ${lock ? locked : unlocked} m:=private.employee_transfer_identity_admin_map(j); ${body} END $sql58$`);
+    } finally { await target.exec('ROLLBACK TO SAVEPOINT sql58_case; RELEASE SAVEPOINT sql58_case'); }
+  };
+  const check = 'PERFORM private.employee_transfer_verify_identity_contents(j,m);';
+  const touchStaging = `UPDATE private.employee_transfer_staging SET row_count=row_count WHERE job_id=j.id AND table_key='identity-in:accounts' AND chunk_no=0;
+    IF NOT FOUND THEN RAISE EXCEPTION 'fixture staging row missing'; END IF;`;
+  let siteWide;
+  await t.test('one site-wide verification physically checks identities once instead of once per domain', async () => {
+    siteWide = await physical(async () => { const response = await execAs('anon', 'employee_import_site_verify', auth); assert.equal(response.error, null); });
+    t.diagnostic(`site-wide physical checks: ${JSON.stringify(siteWide)}`);
+    assert.equal(siteWide.identity, 1);
+  });
+  await t.test('a separate request never reuses an earlier request result', async () => {
+    const again = await physical(async () => { const response = await execAs('anon', 'employee_import_site_verify', auth); assert.equal(response.error, null); });
+    assert.deepEqual(again, siteWide);
+  });
+  await t.test('repeated identical checks in one locked statement run physically once', async () => {
+    assert.equal((await physical(() => statement(check + check + check))).identity, 1);
+  });
+  await t.test('a tracked write with unchanged data still forces a full recheck', async () => {
+    assert.equal((await physical(() => statement(check + touchStaging + check))).identity, 2);
+  });
+  await t.test('a write rolled back inside a savepoint still forces a full recheck', async () => {
+    assert.equal((await physical(() => statement(`${check} BEGIN ${touchStaging} RAISE EXCEPTION 'undo'; EXCEPTION WHEN raise_exception THEN NULL; END; ${check}`))).identity, 2);
+  });
+  await t.test('trigger DDL between checks forces a full recheck', async () => {
+    assert.equal((await physical(() => statement(`${check} ALTER TABLE public.orders DISABLE TRIGGER zz_employee_transfer_maintenance;
+      ALTER TABLE public.orders ENABLE ALWAYS TRIGGER zz_employee_transfer_maintenance; ${check}`))).identity, 2);
+  });
+  await t.test('formatting settings are part of the reuse binding: a UTC success is never replayed under another time zone', async () => {
+    let failure = null;
+    const used = await physical(async () => {
+      failure = await statement(`${check} PERFORM set_config('TimeZone','Asia/Taipei',true); ${check}`).then(() => null, error => error);
+    });
+    assert.match(failure?.message ?? '', /post-write verification failed/);
+    assert.equal(used.identity, 2);
+  });
+  await t.test('a change to another task row re-derives the administrator map', async () => {
+    const unchanged = await physical(() => statement('PERFORM private.employee_transfer_identity_admin_map(j);'));
+    assert.equal(unchanged.adminMap, 1);
+    const changed = await physical(() => statement(`UPDATE private.employee_transfer_jobs SET error=error WHERE id<>j.id AND kind='import';
+      IF NOT FOUND THEN RAISE EXCEPTION 'fixture task rows missing'; END IF; PERFORM private.employee_transfer_identity_admin_map(j);`));
+    assert.equal(changed.adminMap, 2);
+  });
+  await t.test('without the task lock in this statement nothing is reused', async () => {
+    assert.equal((await physical(() => statement(check + check, { lock: false }))).identity, 2);
+  });
+  await t.test('read-only callers neither record nor reuse proofs', async () => {
+    const proofs = () => scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_request_proofs');
+    const before = await proofs();
+    assert.equal((await physical(() => statement(check + check, { lock: false, readOnly: true }))).identity, 2);
+    assert.equal(await proofs(), before);
+  });
+  const modes = await rows(target, "SELECT tgname,tgenabled FROM pg_trigger WHERE tgrelid='public.orders'::regclass AND NOT tgisinternal");
+  const disable = modes.map(m => `ALTER TABLE public.orders DISABLE TRIGGER ${quote(m.tgname)};`).join(' ');
+  const restore = modes.map(m => `ALTER TABLE public.orders ${m.tgenabled === 'A' ? 'ENABLE ALWAYS' : m.tgenabled === 'R' ? 'ENABLE REPLICA' : m.tgenabled === 'D' ? 'DISABLE' : 'ENABLE'} TRIGGER ${quote(m.tgname)};`).join(' ');
+  await t.test('corruption between two checks in one statement is detected, never masked by the first result', async () => {
+    await assert.rejects(statement(`${check} ${disable} UPDATE public.orders SET commission_amount=11 WHERE id='${I.success}'::uuid;
+      IF NOT FOUND THEN RAISE EXCEPTION 'fixture order missing'; END IF; ${restore} ${check}`), /post-write verification failed/);
+  });
+  await t.test('valid data still verify and only the latest statement keeps proof rows', async () => {
+    const response = await execAs('anon', 'employee_import_site_verify', auth);
+    assert.equal(response.error, null); assert.equal(response.data.success, true);
+    assert.ok(await scalar(target, 'SELECT count(DISTINCT (transaction_id,statement_at))::int FROM private.employee_transfer_request_proofs') <= 1);
+  });
+}));
+
 // Synthetic file branch: REAL Edge handler + REAL SQL service-only authorize/commit;
 // fakeStorage is strictly in memory and never Supabase Storage acceptance.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
@@ -959,13 +1035,15 @@ test('native capacity sample: ten thousand independent historical orders use rea
   timeout: 600000,
 }, async t => {
   let files;
+  const extra = Number(process.env.EMPLOYEE_TRANSFER_CAPACITY_ORDERS ?? 10000);
+  assert.ok(Number.isInteger(extra) && extra >= 10000, 'capacity samples never shrink below ten thousand orders');
   await source.exec('BEGIN');
   try {
     await fixtureChange(source, 'public.orders', `INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,
       order_number,transaction_id,status,created_at,processed_at)
       SELECT gen_random_uuid(),$1,'import_employee',$2,100,'CAPACITY-ORDER-'||n,'CAPACITY-TX-'||n,'failure',$3,$3
-      FROM generate_series(1,10000) AS n`, [I.employee, I.product, TIME]);
-    assert.equal(await scalar(source, 'SELECT count(*)::int FROM public.orders WHERE user_id=$1', [I.employee]), 10002);
+      FROM generate_series(1,$4::integer) AS n`, [I.employee, I.product, TIME, extra]);
+    assert.equal(await scalar(source, 'SELECT count(*)::int FROM public.orders WHERE user_id=$1', [I.employee]), extra + 2);
     files = await isolated(source, sourceSession, exportSet, true);
   } catch (error) {
     assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.users'), 0);
@@ -991,13 +1069,15 @@ test('native capacity sample: ten thousand independent historical orders use rea
     assert.deepEqual(result.verifiedDomains, DOMAINS);
     assert.equal(result.maintenance, true);
     assert.equal(result.fullSiteComplete, false);
+    const sourceCommission = await scalar(source, 'SELECT commission_amount::text FROM public.orders WHERE id=$1', [I.success]);
+    assert.equal(Number(sourceCommission), 10);
     assert.deepEqual(await rows(target, `SELECT status,count(*)::int AS n,sum(commission_amount)::text AS commission
       FROM public.orders WHERE user_id=$1 GROUP BY status ORDER BY status`, [I.employee]),
-    [{ status: 'failure', n: 10001, commission: null }, { status: 'success', n: 1, commission: '10.00' }]);
-    assert.equal(await scalar(target, 'SELECT get_user_completed_orders_count($1)', [I.employee]), 10002);
+    [{ status: 'failure', n: extra + 1, commission: null }, { status: 'success', n: 1, commission: sourceCommission }]);
+    assert.equal(await scalar(target, 'SELECT get_user_completed_orders_count($1)', [I.employee]), extra + 2);
     assert.deepEqual(result.serverVerification.counts, { employees: 1, pending_withdrawals: 1, pending_withdrawal_amount: '3' });
     await assertMaintenance(result); await assertBackups(context); allDead(context.w);
-    t.diagnostic('10002 completed order rows, one employee, real SQL55, disk ciphertexts, each bridged anon RPC limited to 3s; not PostgREST or production capacity acceptance.');
+    t.diagnostic(`${extra + 2} completed order rows, one employee, real SQL55, disk ciphertexts, each bridged anon RPC limited to 3s; not PostgREST or production capacity acceptance.`);
   });
 });
 

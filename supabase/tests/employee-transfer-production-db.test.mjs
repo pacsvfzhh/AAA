@@ -131,8 +131,8 @@ test('the installation-only helper remains private to database owners', async ()
   }
 });
 
-test('all 58 transfer migrations install over the exact audited 96-table/871-column structural profile', async t => {
-  assert.equal(production.files.length, 584);
+test('all 59 transfer migrations install over the exact audited 96-table/871-column structural profile', async t => {
+  assert.equal(production.files.length, 585);
   assert.equal(production.files.at(-1), PRODUCTION_TRANSFER_LAST);
   assert.equal(production.failures.length, 12);
   assert.equal(production.validation.freshDatabaseVerified, false);

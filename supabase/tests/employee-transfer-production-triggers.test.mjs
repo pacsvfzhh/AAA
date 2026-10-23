@@ -214,9 +214,9 @@ test('the five-domain union matches all 70 independent trigger digests and exact
   }
 });
 
-test('all 58 real transfer migrations install after the exact trigger and 96-table/871-column profiles', async t => {
-  assert.equal(replay.files.length, 584);
-  assert.equal(replay.files.filter(file => file.startsWith('20261102')).length, 58);
+test('all 59 real transfer migrations install after the exact trigger and 96-table/871-column profiles', async t => {
+  assert.equal(replay.files.length, 585);
+  assert.equal(replay.files.filter(file => file.startsWith('20261102')).length, 59);
   assert.equal(replay.files.at(-1), PRODUCTION_TRANSFER_LAST);
   assert.equal(replay.validation.matched.length, 12);
   assert.equal(replay.failures.length, 12);

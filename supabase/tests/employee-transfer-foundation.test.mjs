@@ -72,6 +72,7 @@ const criticalMigrations = [
   '20261102000055_verify_site_restore.sql',
   '20261102000056_freeze_cutover_source.sql',
   '20261102000057_release_imported_site.sql',
+  '20261102000058_reuse_request_verification.sql',
 ];
 const expectedFiles = EXPECTED_REPLAY_FAILURES.map(item => item.file);
 const expectedFailures = EXPECTED_REPLAY_FAILURES.map(({ file, message }) => ({ file, message }));
@@ -105,7 +106,7 @@ const transferTables = [
   'employee_transfer_site', 'employee_transfer_jobs', 'employee_transfer_events',
   'employee_transfer_staging', 'employee_transfer_excluded_columns', 'employee_transfer_trigger_policy',
   'employee_transfer_shared_backups', 'employee_transfer_notification_backups', 'employee_transfer_chat_backups', 'employee_transfer_maintenance', 'employee_transfer_write_permits',
-  'employee_transfer_archive_records',
+  'employee_transfer_archive_records', 'employee_transfer_request_proofs',
 ];
 const archivePublicFunctions = [
   'employee_export_archives_begin(uuid,text,uuid)', 'get_employee_export_archives_page(uuid,uuid,text,text,integer)',
@@ -433,7 +434,7 @@ async function exerciseRealReplay() {
   try {
     const diskFiles = (await readdir(new URL('../migrations/', import.meta.url))).filter(file => file.endsWith('.sql')).sort();
     assert.deepEqual(files, diskFiles, 'must replay every migration, including future additions');
-    assert.equal(files.length, 584, 'migration baseline changed: review all additions, never expand known failures');
+    assert.equal(files.length, 585, 'migration baseline changed: review all additions, never expand known failures');
     assert.deepEqual(failures, expectedFailures);
     assert.equal(validation.freshDatabaseVerified, false);
     for (const file of criticalMigrations) {

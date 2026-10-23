@@ -7,7 +7,7 @@ import { applyProductionTriggerFixture } from './production-triggers.mjs';
 import { isNativeTransferDatabase } from './native-postgres.mjs';
 
 const historicalEnd = '20261101000003_keep_user_stopped_work_sessions_stopped.sql';
-export const PRODUCTION_TRANSFER_LAST = '20261102000057_release_imported_site.sql';
+export const PRODUCTION_TRANSFER_LAST = '20261102000058_reuse_request_verification.sql';
 const migrationDir = new URL('../../migrations/', import.meta.url);
 
 export async function readTransferSchema(db) {
