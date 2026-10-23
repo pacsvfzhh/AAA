@@ -17,6 +17,13 @@
 
 `private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；`anon` / `authenticated` 没有该 schema 的使用权限。
 
+## 资料迁移原生机制与跨域验收（第60节，2026-10-23 UTC+8，正式未部署）
+- 新增`employee-transfer-native-db.test.mjs`及`npm run test:employee-transfer:native`。只在测试自建的临时Unix socket集群执行，不接收数据库连接地址；PG17.6原生三连接、postgres NOSUPERUSER/BYPASSRLS，完整SQL00/04和原文SQL11两表/guard_write的合成机制夹具，17/17通过。验证竞争写等待恢复并COMMIT、O/A/R/D模式、FK/删除保护、漏恢复拒COMMIT、锁超时/NOWAIT、取消/3秒超时后数据/审计/真实permit回滚、跨事务许可隔离与旧快照拒写。
+- 这是机制子阶段，不是96表871列/45函数72trigger正式样本的原生完整安装，也没有原生执行SQL55/57十域总核验/放行或真实PostgREST容量。3秒故意超时证明安全回滚，不能证明实际迁移RPC能在3秒完成；没有提高正式角色或函数时限。
+- 新增`employee-transfer-media-cors.test.mjs`及`npm run test:employee-transfer:cors`：Chromium/WebKit各11场景，含父及配置项25/25通过。双本地HTTP源、原handler、真实OPTIONS及浏览器CORS，精确六scope分派、错误头在POST前拒绝、校验头可读、上传后回读及限时退出；RPC/Storage为合成替身，成功媒体流仅实名，不是六域完整恢复。页面CSP限本机，不拦截放行请求、不关闭浏览器跨域保护。
+- 正式只读复核7桶/策略、PG17.6 aarch64、postgres非superuser/BYPASSRLS、anon3秒及三个既有Edge；迁移表/总核验RPC和迁移媒体Edge仍不存在。Storage状态200及无对象OPTIONS200、完整请求头允许；迁移Edge OPTIONS404符合未部署状态。未读取业务行或实际文件，没有上传、删除、权限/配置/任务或部署变化。私有留证桶仍无浏览器策略，迁移必须经未来受控Edge，不放宽桶。
+- 新专项需显式配置本地二进制/驱动，缺工具时专用命令失败；总套件默认skip不算验收。原触发器/实名媒体416/416、聊天6/稽核48/工时6、typecheck/lint/build通过；没有重跑584份全结构或迁移总套件。托管Storage实际读写/CORS、网关/Edge运行限额、完整原生流程与代表性规模仍待隔离演练，full_site_complete=false；详见计划第60节。
+
 ## 资料迁移已审正式版本基线（第59节，2026-10-23 UTC+8，正式未部署）
 - 已本地接入精确正式版本：45个直接触发函数全文SHA/原ACL、72个触发器摘要与模式，空PGlite历史回放后应用固定观察、再逐份执行SQL00–57。五域SQL15/18/20/27/32允许原本受审本地整组或明确正式整组（含mode O）；不逐trigger放宽、不规范化生产函数字符串，安装后仍固定本库原生OID/原ACL/rolsuper和原模式。
 - SQL07共享时间戳函数、SQL13交单计数函数另支持已审正式全文/命名有效ACL版本；前者生成本站固定版本/原生摘要与模式，后者继续原整组快照。业务函数/trigger未改，不补正式缺项，不关闭保护外键。正式三项缺trigger仅在明确整组版本中接受；之后删除、补回、改名、改正文/配置/权限/属主/模式及已知版本混搭仍拒绝。

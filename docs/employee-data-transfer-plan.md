@@ -2,7 +2,7 @@
 
 **当前决策（取代同名员工先备份后封存规则）**：优先完成空白新站的完整导入，不让少见同名冲突阻断无冲突主线。同名员工自动独立加密备份并实际保存/回读认证→彻底删除新站该员工及其专属关联记录→再预检导入，不逐人审批、不进入「已刪員工紀錄」；备份或删除失败停止该员工，不计成功。只处理新站本次同名员工，不动旧站、管理员、共享角色或其他员工，不扩大为全站清理。
 
-**部署前最新状态（第59节，2026-10-23 UTC+8）**：用户确认继续本地修复。已完成已识别正式函数/触发器版本的语义审核、45函数/72trigger精确观察回放，五域明确整组版本及共享/交单辅助版本可安装，运行时仍只锁本库原生快照。新旧专项134/134、旧共享/基础/维护409/409、正式观察配置下真实加密日常/冻结/聊天范围分组4项及离线release24项通过；skip不计。正式仅只读，仍无部署；真实Storage/CORS、原生PG并发/取消、anon3秒容量及其余完整功能缺项尚未验收，不能直接上线。第58及以前章节保留历史证据，不再把已审版本差异重复列为未审。
+**部署前最新状态（第60节，2026-10-23 UTC+8）**：已补本地原生PostgreSQL 17.6三连接机制验收17/17，非superuser/BYPASSRLS属主可按原SQL04关闭及恢复指定trigger；竞争、取消、真实3秒语句超时和维护许可回滚通过。Chromium/WebKit各11个本地跨域场景，含父项及配置检查25/25；原trigger/媒体回归416/416、typecheck/lint/build及聊天6/稽核48/工时6通过。正式仅查桶/策略/角色/服务元数据及状态、OPTIONS，没有业务读取或写入；媒体Edge仍不存在。此为机制/本地HTTP证据，不是全结构原生迁移、SQL55/57原生全链或托管Storage上传/网关/容量验收；完整迁移缺项与full_site_complete=false不变，仍不能直接上线。第59及以前保留当时证据，已审正式版本不重新列未审。
 
 **最新离线切站决定（第56节，2026-10-23 UTC+8）**：用户确认完全离线，新站启用后旧站由用户自行停用/管理；系统不联网核验旧站、不设跨站交接锁，不增加旧站确认checkbox。继续采用停站导出，不做在线增量、不搬运行队列：由现有worker先排空，freeze时`notification_automation_queue`、`notification_automation_failures`及`processing`订单全零，不删记录冒充排空；日常备份仍只读、不自动停站。冻结与启用须在同一UTC日（UTC+8每日08:00换日），已获用户同意，放行事务末尾再次检查防跨界。旧站恢复即放弃原切站文件，避免双站营业由用户负责，不以联网核验或交接锁作为系统阻断。截止元数据及放行回执不是远程签名或旧站当前状态证明。
 
@@ -1552,3 +1552,32 @@ DROP FUNCTION private.employee_transfer_mapped_notifications_input(uuid,text);
 - 已识别的触发器/直接函数版本安装阻断已在明确观察样本解决；不能再笼统报告仍未审核，也不能说正式全部兼容/正式功能完成。正式结束只读核对迁移任务表和总核验RPC仍不存在；postgres仍OID16384/非superuser，anon仍statement_timeout=3s。
 - 本轮没有正式迁移、数据变更、停站、导入、删除或SQL/Edge/Storage/权限/config/cron/前端部署。SQL/媒体服务等正式操作仍须分别说明确切影响并单独取得确认；推送不等于部署。
 - 后续为真实Storage桶策略/CORS/媒体服务、原生PostgreSQL锁/并发/取消及PostgREST/anon3秒执行容量、正式两站演练；本地PG/媒体替身不代替这些验收。完整功能的同名专用替换、新UUID通知实际恢复、统一原生/迁入档案、共享头像图标、完整跨会话及容量多卷等原pending保持，full_site_complete=false。
+
+## 60. 原生PG17机制与真实浏览器跨域子验收（2026-10-23，UTC+8，未部署）
+
+### 60.1 实际完成的范围
+- 用户继续要求“开始吧”，本轮只补部署前验证、测试工具及文档；没有正式写入或部署授权，没有新增SQL/RPC、修改业务函数/trigger、前端页面或Edge实现。
+- `employee-transfer-native-db.test.mjs`创建独立临时PG17集群，仅Unix socket、禁TCP、临时目录0700；本轮原生版本17.6 x64，正式观察为17.6 aarch64，不能据本机时延推断正式性能。bootstrap管理连接之外，两个实际操作连接使用名为postgres的NOSUPERUSER/BYPASSRLS属主，模式origin；没有用超级用户代替被测属主执行旁路。
+- 夹具完整执行原文SQL00与SQL04。业务表/副作用和保护trigger为显式合成；SQL11只精确摘取两张维护/permit表与原文`employee_transfer_guard_write()`，附到独立probe表。没有调用全站准入/导入/核验/放行，没有伪造完整备份或业务恢复成功；这不是96表871列、正式45函数72trigger的原生安装，不能拿它解除五域完整基线或SQL55/57验收。
+- 三连接17项通过：O/A恢复且R/D不变；副作用抑制但FK/删除保护继续；漏restore的真实COMMIT被拒并回滚；跨事务旧receipt拒绝；另一writer在表锁等待，restore后仍须COMMIT才放行并正常运行原trigger；部分取锁超时/NOWAIT；取消等待或取消已旁路事务；真实3秒语句超时；anon拒访问私有helper和DDL；维护许可精确到事务且TRUNCATE始终拒绝；共享advisory锁和Read Committed/Repeatable Read旧快照拒写。
+- 取消及3秒超时场景真实插入write_permit、guard_probe、模拟资金行及append-only旁路审计，独立连接核对全部回滚与模式还原。3秒取消只是安全性证据，**不是实际导入/总核验可在3秒完成的容量证据**；没有调整正式时限，也没有函数级超时豁免。
+
+### 60.2 浏览器与文件服务检查
+- `employee-transfer-media-cors.test.mjs`使用两个实际本地HTTP源与生产原handler，Chromium/WebKit各11场景，含父及配置项TAP25/25通过。RPC/Storage仍为显式合成替身，没有真实Storage对象或正式管理员会话。
+- 六scope逐一检查确切authorize RPC及一次调用：verification、mapped-verification、notifications、chat、archives、employee-safety。浏览器能读取脱敏403，期间不访问Storage；原生OPTIONS必须含scope、action、两token及完整请求头。未许可的`x-transfer-url`必须在POST/RPC前被浏览器拒绝；实名下载的实际字节与暴露SHA/MIME头匹配，实名上传经本地store回读后才返回成功；挂起RPC由测试请求deadline退出。其余scope成功恢复、档案read独立响应和云端文件大小/耗时不在此测试范围。
+- 页面CSP只允许本机connect，监听到外部请求必须失败；不做网络route放行或关闭webSecurity。初版Chromium经route.continue跳过预检，测试确实失败；去除拦截后两引擎都观察到OPTIONS和未知头阻断。不能把拦截后的成功冒充原生CORS证据。
+- 正式只读重核7个桶及Storage策略、角色设置、三个既有Edge元数据。头像/图标桶5MiB、公告桶100MiB；迁移目前文件上限50MiB、头像5MiB，与受管理类型静态对应不代表托管容量通过。公告桶允许video/ogg但迁移暂不识别，遇实际引用会阻断，不能保证所有历史媒体可过；本轮未读取业务引用判断是否存在此类文件。
+- 仅请求Storage状态GET200、无对象的桶路径OPTIONS200，完整迁移请求头均被允许；未部署`employee-transfer-media`的OPTIONS404，不能用Storage的200证明Edge可用。没有实际对象GET、上传/回读、删除或修改桶策略。私有content-audit-evidence仍无浏览器策略；所有迁移文件须经未来受控Edge，不应为测试放宽整桶。
+- 查阅Supabase官方[Edge限制](https://supabase.com/docs/guides/functions/limits)及[数据库超时](https://supabase.com/docs/guides/database/postgres/timeouts)：Edge内存256MB/CPU2秒、免费wall150秒/付费400秒；正式anon仍3秒。没有确证或据猜测采用“Edge请求体6MB硬上限”，50MiB端到端和总upload/readback/auth耗时仍须真实隔离测试。
+
+### 60.3 测试命令、清理与复审
+- `npm run test:employee-transfer:native`要求`EMPLOYEE_TRANSFER_PG_BIN`指向本地PG17的bin目录、`EMPLOYEE_TRANSFER_PG_DRIVER`指向本地CommonJS pg驱动入口；不接收连接URI、不连接既有数据库。`npm run test:employee-transfer:cors`要求`EMPLOYEE_TRANSFER_CORS_PLAYWRIGHT`指向本地Playwright入口，可用`EMPLOYEE_TRANSFER_CORS_CHROMIUM`指定兼容浏览器路径。
+- 两专用命令缺工具就失败；总迁移套件未配置时会明确skip，**skip不算原生/浏览器验收**。本轮工具只临时装到开发容器，未新增项目依赖或修改package-lock；运行后停止自己创建的PG、关闭浏览器/HTTP并清理自己创建的临时数据。
+- 新原生专项17/17、新双浏览器专项25/25，旧trigger/实名媒体416/416；聊天6/稽核48/工时6及typecheck/lint/build通过。保留迁移页面约571KiB构建警告；没有重跑584份全结构、真实十一文件往返或整个employee-transfer总套件，不能搬用第59节成绩当本轮执行。
+- 独立复审修补测试问题：启动失败也检查pg_ctl状态，活集群先成功stop再rm，状态不明保留目录；每项恢复有限10秒测试时限，不RESET成0；取消实际写permit/probe后再验回滚；scope精确对应不只验后缀；浏览器deadline/父取消和嵌套清理。最终独立启动故障、错scope、挂起/父取消探针均符合预期；正常17/25重复复验不另加总。
+- 早期失败不算通过：pg CommonJS导出形状、原SQL11对dispatch_assignments的静态引用缺夹具、首次浏览器运行库/版本不匹配、首版路由预检及scope/清理缺口均修正后重新执行；没有通过改生产校验或放宽安全条件让测试变绿。前端生产实现未改，无后台页面交互或正式登录测试。
+
+### 60.4 仍保留的上线门禁
+- 正式迁移任务表/总核验RPC、迁移媒体Edge仍不存在；没有任何正式SQL/业务数据/停站/导入/删除/Edge/Storage/权限/config/cron/前端部署，也没有创建收费资源。只读元数据和无对象HTTP检查不能当成上传、容量或部署许可。
+- 原生**机制级**并发/取消及本地浏览器CORS不再笼统列为“完全未测”；仍需隔离的正式等价环境完成真实Storage上传/回读/冲突/取消/大文件、Edge网关与运行限额、全结构原生安装和SQL55/57/PostgREST完整路径的代表性规模/3秒容量。正式缺服务不能以往正式桶写测试文件或提高角色上限绕过；需额外隔离资源或后续明确授权的服务部署。
+- 同名员工专用完整备份/彻底替换、新UUID通知实际恢复、统一原生/迁入档案、共享头像图标、跨会话安全续接及容量多卷等既有pending不因本轮关闭，full_site_complete=false。正式部署仍逐项说明范围影响并单独确认；旧站仍由用户自行停用，不新增联网核验或跨站锁。
