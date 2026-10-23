@@ -17,6 +17,15 @@
 
 ---
 
+## 2026-10-23 · 修复部署前缺表兼容并识别正式触发器基线差异（未部署）
+- 需求：用户要求开始部署；只读检查发现阻断后，用户明确选择先修复并验证，再分别确认数据库和文件服务的正式部署。
+- 正式只读核对：AAA仍为96张根表、871列，列目录SHA256仍为`cc05ccfbec83f315554f6e598a80c4ca442169e8911089ce4fb081d5ae0db128`；没有`notification_automation_date_runs`、迁移任务表、放行RPC或媒体Edge。anon语句超时仍为3秒，前端120秒等待不能提高它。
+- 本地修复：仅修订尚未正式执行的SQL11，首次安装时只允许已审阅的日期辅助表缺省，并在安装守卫/固定身份前将该表从SQL函数字面量清单移除；之后不运行时过滤缺表，不补建业务表，不修改已有正式函数/触发器或放宽保护。安装后新增该表、删除既有表或篡改清单仍拒绝；SQL33扩展继续适用。SQL11当前SHA256为`015ee5670b75ae2bc6a6a7fce76de798a9d7c37abc00a4a5da4b69002d786425`。
+- 测试修正：正式列结构档案遗漏后来新增的通知/聊天备份技术表排除，现显式补齐、保持原正式指纹；SQL11阶段维护测试误引用后续三张表，现限定阶段库存。新增`production-transfer.mjs`及数据库专项；旧site-import通过显式`EMPLOYEE_TRANSFER_SCHEMA_PROFILE=production-columns`复用真实客户端、SQL、磁盘密文和放行测试，未知profile拒绝。
+- 验证：正式列结构/安装保护12/12、原foundation/scope/maintenance三文件255/255通过；正式列结构的严格清单/日常往返/冻结往返3项通过（31项skip不计），release专项24项通过（33项skip不计）。typecheck/lint/build、聊天6/稽核48/工时6通过，保留既有分包/体积警告。未跑完整employee-transfer总套件，本轮无界面改动或浏览器验收；早期正式profile和阶段夹具失败已修正后完整复跑，新增非可选缺表测试先因依赖视图不能DROP而失败，改用本地RENAME夹具后12/12完整通过，不使用CASCADE。
+- 仍阻断部署：列结构适配保留本地历史函数/触发器，不能当成正式定义验收。只读确认正式身份触发器16个、本地18个，正式缺订单审计触发器，聊天另缺来源同步触发器；正式postgres属主OID16384、非superuser，本地OID10、superuser，SQL15等固定摘要包含这些环境身份/ACL，不能直接匹配。仍须逐项审阅正式定义、建立严格且可移植的已审基线并回归，不能忽略检查或补装业务触发器迁就测试；未伪称58份已兼容正式函数基线。
+- 数据库/服务端：本轮只有正式只读元数据查询；**未执行正式迁移、数据修改、停站、Edge/Storage/权限/config/cron或前端部署**。未调用freeze/import/release，也未自行推送代码；前端仍待用户部署。完整功能及同名员工替换等既有pending不因此关闭。
+
 ## 2026-10-23 · 接通空站离线放行并同步七份既有文档（未部署）
 - 需求：用户确认完全离线，新站启用后旧站由用户自行停用/管理；不需要系统联网核验旧站、跨站交接锁或额外旧站checkbox，同意冻结与启用同一UTC日（UTC+8每日08:00换日）。继续先由现有worker排空再freeze，不做在线增量、不搬运行队列，日常备份只读。
 - 已实现：本轮SQL57 `20261102000057_release_imported_site.sql`新增cutoff bind/status/release；共享apply wrapper在取消清staging前冻结非超管来源is_active（含NULL）及source/role绑定，preflight保持v3并追加能力检查。target bind严格六字段/PG摘要/同source，已绑定不可改；冻结包dispatch末绑定、导入末尾返回闭包releaseSession（token不进报告），日常包无sourceCutover仍可维护态导入、releaseSession=null不能启用。

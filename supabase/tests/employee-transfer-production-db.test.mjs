@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
+import { readFile } from 'node:fs/promises';
 import { replayMigrations } from './support/replay-migrations.mjs';
 import { rows, scalar } from './support/transfer-harness.mjs';
 import { replayProductionTransferMigrations, PRODUCTION_TRANSFER_LAST } from './support/production-transfer.mjs';
@@ -80,6 +81,18 @@ for (const [name, ddl] of [
     await assert.rejects(assertGuards(production.db), /Unreviewed employee transfer maintenance inventory or guards/);
   });
   await assertGuards(production.db);
+});
+
+test('a missing required table still rejects the entire SQL11 installation without leaving partial guards', { timeout: 120000 }, async () => {
+  const result = await replayProductionTransferMigrations({ upTo: '20261102000010_prepare_dispatch_submission_import.sql' });
+  try {
+    await result.db.exec('ALTER TABLE public.valid_data_query_performance RENAME TO required_table_missing_fixture');
+    const sql = await readFile(new URL('../migrations/20261102000011_guard_transfer_maintenance.sql', import.meta.url), 'utf8');
+    await assert.rejects(result.db.exec(sql), /relation "public.valid_data_query_performance" does not exist/);
+    await result.db.exec('ROLLBACK');
+    assert.equal(await scalar(result.db, "SELECT to_regclass('private.employee_transfer_maintenance')"), null);
+    assert.equal(await scalar(result.db, "SELECT count(*)::int FROM pg_trigger WHERE tgname='zz_employee_transfer_maintenance'"), 0);
+  } finally { await result.db.close(); }
 });
 
 test('the ordinary present-table baseline still pins its date table and rejects deletion after installation', async () => {

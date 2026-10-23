@@ -17,6 +17,13 @@
 
 `private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；`anon` / `authenticated` 没有该 schema 的使用权限。
 
+## 资料迁移部署前核对（第57节，2026-10-23 UTC+8，正式未部署）
+- 用户要求部署后，已重新只读核对AAA：仍为96根表/871列，列目录SHA256与`production-2026-10-17`固定值一致；缺日期辅助表、迁移接口及媒体Edge。用户确认先修复验证，再分别确认正式上线，不包含停站、导入或删除正式资料。
+- 尚未正式执行的SQL11已本地修订：只在首次安装时精确冻结`notification_automation_date_runs`是否存在；缺省时从固定守卫SQL字面量清单移除。不是运行时跳过缺表，不补建业务表，后续drop/新增/函数改写仍被严格清单拒绝，SQL33扩展不变。当前SQL11 SHA256=`015ee5670b75ae2bc6a6a7fce76de798a9d7c37abc00a4a5da4b69002d786425`。
+- 新隔离测试按八处NULL差异和已知缺表恢复精确列目录，00–57全部安装、维护锁/放行指纹及安全负例通过。旧整站十一密文往返与release专项在`production-columns`下通过；**该夹具仍沿用本地业务函数/触发器，不是正式函数基线验收**。
+- 正式身份相关触发器16个，本地18个；正式缺`orders.trigger_audit_order_status`，聊天另缺`trg_sync_conversation_source_type`。正式postgres OID16384/rolsuper=false/bypassrls=true，本地10/true/true；SQL15等固定摘要包含owner OID、ACL和角色属性，直接安装仍会拒绝。必须审阅实际定义并修复摘要的可移植性，不得关闭检查、猜测补表或补装业务触发器。
+- 只读确认两项媒体保护函数SHA256仍符合现有审核常量；不代表其他函数全部一致。anon仍为3秒；真实PostgreSQL锁/取消、PostgREST性能、Storage/CORS和正式切站仍未验收。无正式SQL/Edge/Storage/权限/config/cron/前端写入或部署，详细结果见计划第57节。
+
 ## 资料迁移当前状态（第56节，2026-10-23 UTC+8，本地未部署）
 - 最新迁移为`20261102000057_release_imported_site.sql`，空站主线离线放行已接；不是所有迁移缺项完成，`full_site_complete=false`，其余pending不扩大关闭。用户确认完全离线，新站启用后旧站由用户自行停用/管理；无系统联网核验、跨站交接锁或额外旧站checkbox，同意freeze/release同UTC日（UTC+8每日08:00换日）。截止凭据/回执不是远程签名或旧站实时冻结证明。
 - 下列SQL55/56及更早章节保留各子阶段实现/测试事实；SQL55本身仍仅总核验，SQL56本身仍仅源冻结/恢复。它们的“最终放行待做”不代表当前空站主线，独立放行及当前证据见SQL57节/计划第56节，不能拿新能力解除新编号链等原阻断。
