@@ -121,6 +121,21 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
   ]::text[];
 $$;
 
+DO $install_guarded_tables$
+DECLARE v_definition text;
+  v_entry constant text := E'    ''public.notification_automation_date_runs'',\n';
+BEGIN
+  -- Freeze the reviewed absent-table capability before guard identities are pinned.
+  IF to_regclass('public.notification_automation_date_runs') IS NULL THEN
+    v_definition := pg_get_functiondef('private.employee_transfer_guarded_tables()'::regprocedure);
+    IF (length(v_definition)-length(replace(v_definition,v_entry,'')))/length(v_entry) <> 1 THEN
+      RAISE EXCEPTION 'Optional automation guard inventory anchor changed.';
+    END IF;
+    EXECUTE replace(v_definition,v_entry,'');
+  END IF;
+END;
+$install_guarded_tables$;
+
 CREATE FUNCTION private.employee_transfer_guard_write()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
