@@ -71,7 +71,9 @@
 
 **安装基线可移植子阶段（计划第58节，2026-10-23 UTC+8）**：仅修订未部署SQL04/15/18/20/27/32，五域75项旧审核常量经逐项验证后改用触发器/函数全文、属主名/BYPASSRLS与命名有效ACL的安装摘要（PUBLIC伪角色独立标记）；通过后仍固定本库原生OID/原ACL/rolsuper/模式，运行时保护不放宽。跨OID/NOSUPERUSER与五域异常负例59/59、旧基础/维护/旁路343/343、production-columns真实日常/冻结/strict分组3项、静态构建及聊天6/稽核48/工时6通过；skip不计，未跑总套件/release专项或浏览器。SQL15精确本地17/正式16，纠正旧18记录；资金另缺佣金审计、聊天缺来源同步，正文/search_path/ACL不同版本仍未审批，仍不能部署。实际安装不去空白/规范化函数正文、不采纳未知现场、不补业务trigger。正式仅只读查询、没有任何正式写入或部署；完整功能pending不变。
 
-**原生整站/容量最新验收（计划第61节，2026-10-23 UTC+8）**：自建独立PG17.6双站，各526历史回放后正常ALTER ROLE降级业务postgres为NOSUPERUSER/BYPASSRLS，再安装96表871列/45函数72trigger已审profile和SQL00–57；不是PGlite克隆，平台auth/Storage/cron仍为夹具，584文件各仍12旧失败。每桥接anon RPC真实3秒，十域11磁文/五备份/SQL55/SQL57真实COMMIT失响应小样本27通过32skip不计；最终release约2.49秒/94表。独立默认配置重复UUID误判仅改未部署SQL07：global整组UUID不相交、完整内容多重集相等/C序一一reuse，异内容/数量/部分占用/媒体仍拒；shared-replace85+其他正式profile134共219通过。原生机制17、旧PGlite同组27、聊天6/稽核48/工时6及静态构建通过。**一员工10002笔订单native-capacity仍真实3秒失败，不能上线**；局部SQL15性能实验未过端到端、已全撤回，不放宽时限/校验。PostgREST工具下载命令被ACL拦截未绕过，HTTP及托管Storage仍缺，未授权“bolt备用”、无正式访问写入部署或收费资源创建。full_site_complete=false及原pending不变；接下来先解决容量，不把小样本当生产容量证明。
+**首轮容量优化（计划第62节，2026-10-23 UTC+8）**：仅改未部署SQL15/17/19/21/23/28/41。身份每批UUID精确过滤、物化完整JSONB EXCEPT核对，全量每表一次集合处理（内部SQL NULL全量）；所有原字段/计数/禁用/会话/占位保护保留。SQL41同一STABLE/MVCC内identity 6→1、finance 3→1，五私有helper无业务角色执行权，独立导出仍实时重算，不信任跨请求缓存。本机10002订单身份块约0.04–0.62秒、完整身份约0.36秒、快照约2.81→0.52秒；十域分阶段恢复/核验完成，**最终SQL55仍真实3秒超时，容量未通过/不能上线**，未测更大样本或万笔启用。原生小样本27通过32skip、快照71+profile134共205完整通过、身份48通过124skip（含3新增负例不另计），聊天6/稽核48/工时6与静态构建通过；约571KiB chunk警告保留，未跑总套件/浏览器。新增可选脱敏RPC timing；临时计划探针移除。官方文档确认REST函数级超时，但未采用/未改3秒；无正式服务访问写入或部署/收费资源。下一步须同调用内复用真实重验前置或设计分批最终核验，不删域验证、不用GUC可信skip/跨请求回执替代；不新增员工累计数量限制，HTTP/Storage及完整pending/full_site_complete=false不变。第61节为历史实验撤回，本轮已验证的优化保留。
+
+**原生整站/容量历史验收（计划第61节，2026-10-23 UTC+8）**：自建独立PG17.6双站，各526历史回放后正常ALTER ROLE降级业务postgres为NOSUPERUSER/BYPASSRLS，再安装96表871列/45函数72trigger已审profile和SQL00–57；不是PGlite克隆，平台auth/Storage/cron仍为夹具，584文件各仍12旧失败。每桥接anon RPC真实3秒，十域11磁文/五备份/SQL55/SQL57真实COMMIT失响应小样本27通过32skip不计；最终release约2.49秒/94表。独立默认配置重复UUID误判仅改未部署SQL07：global整组UUID不相交、完整内容多重集相等/C序一一reuse，异内容/数量/部分占用/媒体仍拒；shared-replace85+其他正式profile134共219通过。原生机制17、旧PGlite同组27、聊天6/稽核48/工时6及静态构建通过。**一员工10002笔订单native-capacity仍真实3秒失败，不能上线**；局部SQL15性能实验未过端到端、已全撤回，不放宽时限/校验。PostgREST工具下载命令被ACL拦截未绕过，HTTP及托管Storage仍缺，未授权“bolt备用”、无正式访问写入部署或收费资源创建。full_site_complete=false及原pending不变；接下来先解决容量，不把小样本当生产容量证明。
 
 **原生机制/跨域验收（计划第60节，2026-10-23 UTC+8）**：新增PG17.6 x64自建socket三连接机制测试17/17（NOSUPERUSER/BYPASSRLS属主、原SQL00/04和SQL11两表/guard_write夹具，竞争/取消/3秒超时/真实许可回滚），Chromium/WebKit各11场景含父/配置25/25（双本地HTTP、六scope精确分派、真实预检/校验头、实名上传回读；RPC/Storage替身），旧trigger/媒体416、聊天6/稽核48/工时6及typecheck/lint/build通过。native/cors专用命令缺显式本地工具时失败，默认总套件skip不算验收；新工具只临时安装，不加依赖。正式只读7桶/策略/角色/Edge元数据与状态/OPTIONS，无业务行或真实对象读取，迁移媒体仍404、anon3秒、无任何写入部署。原生完整结构/SQL55/57/PostgREST代表性容量与托管Storage/网关实际上传仍缺，不能把机制测试当完整验收；full_site_complete=false及原pending不变。第59及以前为历史证据。
 
@@ -157,5 +159,5 @@
 | `docs/service-chat.md` | 「模擬客戶」「經理」聊天工作区、富卡与快捷消息、评分打赏、员工端聊天 |
 | `docs/content-audit.md` | 隐藏稽核页、「內容稽核總覽」与「已刪員工紀錄」、留证与永久删除流程 |
 | `docs/database.md` | 核心表、RPC 与安全约定、正式环境安全现状、迁移、定时任务、存储桶、Realtime、Edge Function、测试 |
-| `docs/employee-data-transfer-plan.md` | 全站业务迁移计划与进度：第56节离线放行，第57–59节安装兼容及已审正式版本，第60节原生PG17机制/双浏览器本地CORS，第61节原生独立双站完整安装与3秒小样本；万笔容量实测仍失败，PostgREST/托管Storage未验，完整功能未完成/未部署 |
+| `docs/employee-data-transfer-plan.md` | 全站业务迁移计划与进度：第56节离线放行，第57–59节安装兼容及已审正式版本，第60节原生PG17机制/双浏览器本地CORS，第61节原生双站安装与小样本，第62节批次/同快照目录去重；万笔已完成十域分阶段恢复但最终SQL55仍3秒失败，PostgREST/托管Storage未验，完整功能未完成/未部署 |
 | `docs/CHANGELOG.md` | 每次修改的更新记录（新的在最上面） |

@@ -136,6 +136,7 @@ RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$
 DECLARE v_query text; v_source text; v_bad boolean;
 BEGIN
+  -- SQL NULL selects all staged rows; arrays select only the current batch.
   v_source:=CASE WHEN p_rows IS NULL THEN 'SELECT id,body FROM private.employee_transfer_identity_input($4,$3)'
     ELSE 'SELECT (body->>''id'')::uuid AS id,body FROM jsonb_array_elements($1) AS source(body)' END;
   v_query:=private.employee_transfer_identity_query(p_key)||format(' AND src.%I IN (SELECT id FROM expected)',CASE WHEN p_key='credentials' THEN 'user_id' ELSE 'id' END);
