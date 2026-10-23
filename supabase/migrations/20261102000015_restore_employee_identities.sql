@@ -3,23 +3,23 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
 DO $install_identity_audit$
 DECLARE v_expected constant jsonb := '{
- "orders.prevent_delete_orders": "3e8619e0fa8049e42c18d6fc347d5bec5ed4a68337a9b6c3e8ba1ae8e2c08b64",
- "orders.protect_order_dispatch_rate_snapshots": "789b21d2a77683c92689710746f48c93d98a9a4e3a6a06a3d25d10cbff26cab6",
- "orders.queue_notification_automation_from_order": "77f84f741d0bdee48cf5ad1a24c6c8693b8618052753c9142ef6d8caca0dfeb3",
- "orders.snapshot_order_dispatch_rates": "615063d01bc6ccaa82d09826f8fe8af230951f0e7388326ecac08d864a391611",
- "orders.trg_set_order_scheduled_process_at": "3e224c285d2b553f1e17ef65e16e6cbe84d0f9c97e2023c5549b8fd94c584dab",
- "orders.trigger_audit_order_status": "782e51b233e38875ceb0b878c878e19e00166cf67f5d01ff7618f54f2af89f1f",
- "orders.trigger_sync_order_to_wallet": "b2a316d53b8185a473f26e12933b3df7e382c69872a6255b4455ec2f273ab90f",
- "orders.trigger_update_total_income": "99dd6074eef45a7f0c05807a6ef1d2cf2bf54027a3fe9c455d7abe4c25f541ff",
- "product_types.assign_product_type_sort_order": "9f3fe3703e57d769ed00165ed25a70ac4edf46f8ffa7024cff92788e0e63bda4",
- "users.archive_employee_before_delete": "f1bf8c6f075abde326e5c9b0412087714315f32cfeac914e65290c411e2fcc6d",
- "users.cleanup_user_data_trigger": "e9bc0a3c8fdb09d5c22a57a1a43d67dd0d89e1e14de255cab21ad83df8e29f32",
- "users.cleanup_user_storage_trigger": "6c6206c85224188a5b0583db4b63085151044f4ea097c2a6e5931951519a1614",
- "users.create_wallet_trigger": "abb588f348c6a3883bbdb94b6321874cb8817a09c17bf04afb2a8773d8b77a53",
- "users.guard_employee_archive": "d85e27ff7123fd733a8f5c4dd98a08507c5a055a4333df9ac1267a7ec26aed1f",
- "users.trigger_cleanup_user_data": "d4d803092b102402fe02b66864711ce3f997e2a8984adb66d6aff9364c3451fa",
- "wallets.prevent_delete_wallets": "7d493b1e1bc89f9acdfa68425055800aad773c3a2ed9b79504d7f93054340428",
- "wallets.trigger_enqueue_changed_wallet": "ee885054e5eca6816bba0edea92631df992e80f14e4a01d24e737ed98da072ae"
+ "orders.prevent_delete_orders": "c7dbdc534d81bad6c3a8194b8ca9931a5f49b9fd8514b360aedc0c521f09eaea",
+ "orders.protect_order_dispatch_rate_snapshots": "735e401b1a5a08569d42830a6287ab3a5d7489bcf36e8ad82145e5036e8a3098",
+ "orders.queue_notification_automation_from_order": "4ad467b9c996a61ab9775e867c84c519d105fb451b33c8b73d91d7f613d1259d",
+ "orders.snapshot_order_dispatch_rates": "c81ed0c91df581498abea3ef4df3b195a48b754491efa3e0e7ff0af5a081eac0",
+ "orders.trg_set_order_scheduled_process_at": "995f457e8beca3c694e4727444f99447a3e18da0fee7fa71fb718a3b119f4fb6",
+ "orders.trigger_audit_order_status": "220379724f642be8b79275ef5f6b198341c2cffbe261b99c0fc64035b487eccc",
+ "orders.trigger_sync_order_to_wallet": "8f36c09a1075c289e390e627b2c1132f22e1aa8bdab0e166f9305915ddf1c7c3",
+ "orders.trigger_update_total_income": "4fccb3a702490360eb4157d3ef3c99648a12ce07905faccc44900b09aeed3676",
+ "product_types.assign_product_type_sort_order": "fdc7b99ed529c8ce3d8625ff7cb8831116594ab4131fd2ba5129e107c8fee8e3",
+ "users.archive_employee_before_delete": "4ce0bf551fa8f0914dd942da845e99216af2b94c5b9565e83be753d3b29746fe",
+ "users.cleanup_user_data_trigger": "086ec06b1fcd9e05c26c98d121f6eeaf846b53771ceb6911d00b0e37c8a58d5c",
+ "users.cleanup_user_storage_trigger": "9a22da546010b5941f9eaabcef3c9427b2d88341f703a06b5c4e5938e570002e",
+ "users.create_wallet_trigger": "08aa2dd3d5c983f536de4fdfc2a9b15e7f17613f7982b093f66deeccdd91f943",
+ "users.guard_employee_archive": "944e975586bbfcbf828f6b1443fc2f95589a8fc1b3e976e4d006e50935977bd0",
+ "users.trigger_cleanup_user_data": "489017d87a5adb4215218e8a536071690534592f5d35de1d321ca9071816309d",
+ "wallets.prevent_delete_wallets": "d592e4870cadcfaae56331a7ac970d54c6c4762566b8745e25f4aca2ece75d6f",
+ "wallets.trigger_enqueue_changed_wallet": "e08a1c5297af0f42114e8891513b03d5b3c17a896c4d98da47da6a88f4c6e784"
 }'; v_native jsonb; v_actual jsonb; v_modes jsonb;
 BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),

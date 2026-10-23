@@ -3,13 +3,13 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
 DO $install_activity_audit$
 DECLARE v_expected constant jsonb:='{
- "employee_login_history.employee_login_history_emit_event": "3eca557bc066f7373ddededdcf035b0813517b280fd37487352f4705c7b97ffb",
- "employee_login_history.queue_notification_automation_from_employee_login": "96a3e49b584f73c6150f16d92d20091af65f9bf4b4821630b0b072439f2f605b",
- "work_sessions.queue_notification_automation_from_work_session": "ddda210253ec520b038d51ac23bfe816ffd1f9cb3fee37f40e30cc3f00c1e6a7",
- "work_sessions.trigger_check_overlapping": "d066318a9c7ee98165695da18de42a2af1a4b8593b6e29ffd20038e42cd7c3ed",
- "work_sessions.trigger_cleanup_duplicate_sessions": "d5016a4b12655f6f116df1c8dc7356e8dc0ae9cff0d7b8e1570a37c37167b540",
- "work_sessions.trigger_prevent_multiple_active_sessions": "9adf5a37a6e9cec49f94e40b46c9e243ab1c3934e79131d1423175fd547c5dbd",
- "work_sessions.trigger_validate_work_session": "1194d50aae166422c77231379352dec97887673e6542b3bf2cddfcc57361b7d1"
+ "employee_login_history.employee_login_history_emit_event": "851159bd703c8a5825feb88ad6cd0144722f32b53cdc07773fabd5a43077c6b5",
+ "employee_login_history.queue_notification_automation_from_employee_login": "29b9fc0cbcd22498e4af0cb161ce3dbc1c30f775e364fb1181be00e81e4b002c",
+ "work_sessions.queue_notification_automation_from_work_session": "7e55a0dea7e7301f741350e1cacd8bf9b6c78abc458f634dd5dfeb059f510ea5",
+ "work_sessions.trigger_check_overlapping": "e8bd082ce3faab4502d7e64b93e5bd9aebc04e3bdd20b372378ef766d784dfca",
+ "work_sessions.trigger_cleanup_duplicate_sessions": "7caa7848ebeed0617b0ea097a1492f0be5e7efcf757fa1a3a0ff68830f38b184",
+ "work_sessions.trigger_prevent_multiple_active_sessions": "0693efe8c7049f0e583a6ded11f8a7811dba1a76fb131eb803c59882e6a7a679",
+ "work_sessions.trigger_validate_work_session": "a4a555eb0c82b739e753718ecef8b8121acf3f50d2cc76ed789288ddecffd5e5"
 }';v_native jsonb; v_actual jsonb;v_modes jsonb;
 BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),

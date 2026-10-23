@@ -3,16 +3,16 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
 DO $install_finance_audit$
 DECLARE v_expected constant jsonb:='{
- "wallet_transactions.prevent_delete_wallet_transactions": "912c2e783c29bfbd67be268ac21aab57173378a0158bd685175e0b840c967bd7",
- "wallet_transactions.queue_notification_automation_from_wallet_transaction": "e31a28ee84b9b0155b90bbfb9e1ee8b73fb8c8c2aa9047ee6195f2342539e553",
- "wallet_transactions.trigger_audit_commission_transaction": "14ad25ce345fd06c401533c9333d17366614942f9257ce8dfaf35466adaf7f50",
- "wallet_transactions.trigger_reverse_deleted_wallet_transaction_ledger": "7cefef658c658bb991d984977d9442952f4253e27d9dd80b65ff05060b54ddeb",
- "wallet_transactions.trigger_track_wallet_transaction_ledger": "34eeddb69d09fcac7f1c92f8cd70e94e927e1b33b2ca2093ff58df4f538446b9",
- "wallets.prevent_delete_wallets": "7d493b1e1bc89f9acdfa68425055800aad773c3a2ed9b79504d7f93054340428",
- "wallets.trigger_enqueue_changed_wallet": "ee885054e5eca6816bba0edea92631df992e80f14e4a01d24e737ed98da072ae",
- "withdrawals.prevent_delete_withdrawals": "5c6c8c1c0906ee977fd09176c9a2f405676f1085f6681428ff36134dcaf338d8",
- "withdrawals.trigger_track_withdrawal_ledger": "b109dc28ab0ce522bdf703ab316d2eddf7265711b777548fa5dd57f031bd8dec",
- "withdrawals.withdrawals_emit_event": "9b00c2611c0d38629e5a74c240b2a5d11c5c7ee4163ac98eef1dfff05eaf51e7"
+ "wallet_transactions.prevent_delete_wallet_transactions": "fa405dd8096ad5f4293c1f66c035952414fe8811a738ee946f85becd0e7b8ce8",
+ "wallet_transactions.queue_notification_automation_from_wallet_transaction": "834423a55b00a6af07ef71b3685721f36854cd4ee99b49c059d964aa4a76386b",
+ "wallet_transactions.trigger_audit_commission_transaction": "d17e44bf5add68324ede813012c31d2d8a34c6389df449231d7ea5c11d04ca98",
+ "wallet_transactions.trigger_reverse_deleted_wallet_transaction_ledger": "fca809f11c5dffb9363ed484c4462333c08fd00970ec6c26139851280359a449",
+ "wallet_transactions.trigger_track_wallet_transaction_ledger": "4b42a378a35119b15f14936048a4d59a70015dede5d4b1112fe5f5f107a5ab04",
+ "wallets.prevent_delete_wallets": "d592e4870cadcfaae56331a7ac970d54c6c4762566b8745e25f4aca2ece75d6f",
+ "wallets.trigger_enqueue_changed_wallet": "e08a1c5297af0f42114e8891513b03d5b3c17a896c4d98da47da6a88f4c6e784",
+ "withdrawals.prevent_delete_withdrawals": "a630fc0e1769b79ff96333ef2aa1677913a5abe084f11c05eff44fdd09033a50",
+ "withdrawals.trigger_track_withdrawal_ledger": "16ee1df52ee04ba1b302511ec9044c03e09159cc100a57165c2ad95bd4e7039d",
+ "withdrawals.withdrawals_emit_event": "fc78bd1ac454093cf49470c630807384893134660de9f0a443e30a89fe0512cc"
 }';v_native jsonb; v_actual jsonb;v_modes jsonb;
 BEGIN
   SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),

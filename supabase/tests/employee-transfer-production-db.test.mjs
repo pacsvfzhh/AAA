@@ -77,6 +77,8 @@ for (const audit of triggerAudits) {
     ['changed function body', `ALTER FUNCTION ${audit.procedure} SET search_path = pg_catalog`],
     ['changed effective privileges', `REVOKE EXECUTE ON FUNCTION ${audit.procedure} FROM PUBLIC`],
     ['changed owner', `CREATE ROLE transfer_unreviewed_owner BYPASSRLS; ALTER FUNCTION ${audit.procedure} OWNER TO transfer_unreviewed_owner`],
+    ['a named PUBLIC role substituted for the public pseudo-role', `CREATE ROLE "PUBLIC";
+      REVOKE EXECUTE ON FUNCTION ${audit.procedure} FROM PUBLIC; GRANT EXECUTE ON FUNCTION ${audit.procedure} TO "PUBLIC"`],
   ]) test(`${audit.scope}: installation and runtime reject ${reason}`, async () => {
     const db = production.db;
     await transaction(db, async () => {
@@ -92,12 +94,20 @@ test('fresh installation baselines accept a different postgres OID and NOSUPERUS
   const db = await PGlite.create({ loadDataDir: await production.db.dumpDataDir('none'), extensions: { pgcrypto, pg_trgm, uuid_ossp } });
   try {
     const original = new Map(await Promise.all(triggerAudits.map(async audit => [audit.scope, await triggerDigests(db, audit)])));
+    const procedures = await rows(db, `SELECT DISTINCT p.oid::regprocedure::text AS name FROM pg_trigger t
+      JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_class c ON c.oid=t.tgrelid
+      WHERE c.relnamespace='public'::regnamespace AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance'`);
     await db.exec(`CREATE ROLE transfer_fixture_root SUPERUSER;
       SET SESSION AUTHORIZATION transfer_fixture_root;
       ALTER ROLE postgres RENAME TO transfer_fixture_original;
       CREATE ROLE postgres NOSUPERUSER BYPASSRLS;
-      REASSIGN OWNED BY transfer_fixture_original TO postgres;
-      SET ROLE postgres;`);
+      GRANT USAGE ON SCHEMA public,private TO postgres;
+      GRANT CREATE ON SCHEMA private TO postgres;`);
+    for (const procedure of procedures) await db.exec(`ALTER FUNCTION ${procedure.name} OWNER TO postgres`);
+    for (const procedure of ['employee_transfer_install_trigger_digest(oid)', 'employee_transfer_trigger_digest(oid)',
+      'employee_transfer_notifications_keys()', 'employee_transfer_chat_keys()']) {
+      await db.exec(`ALTER FUNCTION private.${procedure} OWNER TO postgres`);
+    }
     const role = (await rows(db, "SELECT oid::int,rolsuper,rolbypassrls FROM pg_roles WHERE rolname='postgres'"))[0];
     assert.notEqual(role.oid, 10);
     assert.equal(role.rolsuper, false);
@@ -107,8 +117,9 @@ test('fresh installation baselines accept a different postgres OID and NOSUPERUS
       assert.equal(changed.portable, original.get(audit.scope).portable);
       assert.notEqual(changed.native, original.get(audit.scope).native);
       await assert.rejects(scalar(db, `SELECT private.${audit.assertion}()`), /Unreviewed/);
-      await db.exec(`DROP FUNCTION private.${audit.assertion}()`);
-      await installAudit(db, audit);
+      await db.exec(`DROP FUNCTION private.${audit.assertion}(); SET ROLE postgres`);
+      try { await installAudit(db, audit); }
+      finally { await db.exec('RESET ROLE'); }
     }
   } finally { await db.close(); }
 });

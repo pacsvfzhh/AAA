@@ -49,6 +49,7 @@ before(async () => {
   await db.exec(`
     CREATE ROLE anon;
     CREATE ROLE authenticated;
+    CREATE ROLE service_role;
     CREATE SCHEMA private;
     REVOKE ALL ON SCHEMA private FROM PUBLIC, anon, authenticated;
     CREATE TABLE public.admins (id uuid, username text);

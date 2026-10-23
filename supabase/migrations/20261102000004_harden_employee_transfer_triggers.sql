@@ -119,10 +119,11 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
     pg_get_triggerdef(trigger.oid, false), pg_get_functiondef(procedure.oid),
     owner.rolname, owner.rolbypassrls,
     (SELECT jsonb_agg(jsonb_build_array(
-      pg_get_userbyid(acl.grantor), CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END,
+      pg_get_userbyid(acl.grantor), acl.grantee = 0,
+      CASE WHEN acl.grantee = 0 THEN NULL ELSE pg_get_userbyid(acl.grantee) END,
       acl.privilege_type, acl.is_grantable)
       ORDER BY pg_get_userbyid(acl.grantor) COLLATE "C",
-        (CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END) COLLATE "C",
+        acl.grantee = 0, pg_get_userbyid(acl.grantee) COLLATE "C",
         acl.privilege_type COLLATE "C", acl.is_grantable)
      FROM aclexplode(COALESCE(procedure.proacl, acldefault('f', procedure.proowner))) AS acl)
   )::text, 'UTF8')), 'hex')
