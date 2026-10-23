@@ -18,7 +18,7 @@ import { buildNewSite, NEW, PASSWORDS } from './support/transfer-fixtures.mjs';
 // are real disk files; temporary plaintext workspaces and Edge Storage are in memory.
 // Source fixture trigger changes finish BEFORE import; no importer error is bypassed.
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const LAST = '20261102000056_freeze_cutover_source.sql';
+const LAST = '20261102000057_release_imported_site.sql';
 const ORIGIN = 'https://offline.supabase.co';
 const ENDPOINT = ORIGIN + '/functions/v1/employee-transfer-media';
 const PASS = 'offline site import passphrase 合成';
@@ -49,6 +49,7 @@ const compiled = await build({
   stdin: { contents: `export {exportSiteBundleSet, inspectSiteBundleSet, withAuthenticatedSiteBundleSet} from './src/lib/employeeTransfer/siteTransfer.ts';
     export {freezeSourceCutover, getSourceCutoverStatus} from './src/lib/employeeTransfer/sourceCutover.ts';
     export {importSiteBundleSetToMaintenance} from './src/lib/employeeTransfer/siteImport.ts';
+    export {createSiteReleaseSession} from './src/lib/employeeTransfer/siteRelease.ts';
     export {readTransferMetadata} from './src/lib/employeeTransfer/crypto.ts';
     export {verifyEncryptedVolume, writeEncryptedVolume} from './src/lib/employeeTransfer/container.ts';
     export {setHarness} from 'site-import-test:state';`, resolveDir: root },
@@ -98,9 +99,10 @@ async function execAs(role, name, args) {
     return { data: null, error: { message: error.message } };
   }
 }
-async function isolated(db, token, use) {
+async function isolated(db, token, use, alreadyInTransaction = false) {
   active = db; session = token; inside = true; state.calls = []; state.afterSql = null;
-  api.setHarness({ session, rpc: bridge }); await db.exec('BEGIN');
+  api.setHarness({ session, rpc: bridge });
+  if (!alreadyInTransaction) await db.exec('BEGIN');
   try { return await use(); }
   finally { await queue; await db.exec('ROLLBACK'); inside = false; state.afterSql = null; edge.handler = null; }
 }
@@ -111,8 +113,14 @@ async function triggers(db) {
     FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1,2`);
 }
 // Trusted fixture only, same scoped savepoint/state restoration as existing support tests.
-async function fixtureChange(db, relation, sql, args = []) {
-  assert.equal(inside, false, 'never disable triggers while an importer/exporter is running');
+async function fixtureChange(db, relation, sql, args = [], completedImport = null) {
+  if (inside) {
+    assert.equal(db, target);
+    assert.equal(completedImport?.maintenance, true, 'only an already-returned importer result permits a corruption fixture');
+    assert.ok(callsOf('employee_import_site_verify').some(c => c.result?.job_id === completedImport.jobId && !c.error));
+  } else assert.equal(completedImport, null);
+  // With no completed result, keep the original pre-export/import-only fixture boundary.
+  // Corruption fixtures restore every trigger BEFORE the RPC under test; never bypass a failed importer.
   await db.exec('SAVEPOINT fixture_change');
   try {
     const modes = await rows(db, 'SELECT tgname,tgenabled FROM pg_trigger WHERE tgrelid=$1::regclass AND NOT tgisinternal', [relation]);
@@ -282,18 +290,19 @@ after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   const foreign = edge.foreign.slice(); mock.restoreAll(); assert.deepEqual(foreign, []);
 });
-test('strict latest 43–56 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
-  assert.equal(replay.files.length, 583);
-  assert.deepEqual(replay.files.slice(-14), ['20261102000043_preserve_transfer_announcements.sql',
+test('strict latest 43–57 replay and real adapters; no importer/driver/SQL receipt mocks', t => {
+  assert.equal(replay.files.length, 584);
+  assert.deepEqual(replay.files.slice(-15), ['20261102000043_preserve_transfer_announcements.sql',
     '20261102000044_preflight_site_restore.sql', '20261102000045_verify_site_prerequisites.sql',
     '20261102000046_backup_employee_before_restore.sql', '20261102000047_backup_employee_media.sql',
     '20261102000048_reserve_employee_identities.sql', '20261102000049_restore_mapped_employee_identities.sql',
     '20261102000050_restore_mapped_dispatch_dependencies.sql', '20261102000051_restore_mapped_employee_finance.sql',
     '20261102000052_restore_mapped_employee_activity.sql', '20261102000053_restore_mapped_employee_verification.sql',
-    '20261102000054_prepare_mapped_notifications.sql', '20261102000055_verify_site_restore.sql', LAST]);
+    '20261102000054_prepare_mapped_notifications.sql', '20261102000055_verify_site_restore.sql',
+    '20261102000056_freeze_cutover_source.sql', LAST]);
   assert.equal(replay.failures.length, 12);
   const paths = Object.keys(compiled.metafile.inputs);
-  for (const module of ['siteTransfer', 'sourceCutover', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
+  for (const module of ['siteTransfer', 'sourceCutover', 'siteRelease', 'siteImport', 'siteRestoreApi', 'siteExportApi', 'identityApi', 'financeApi', 'chatMergeApi', 'archiveBundle', 'crypto'])
     assert.ok(paths.some(p => p.endsWith(`/employeeTransfer/${module}.ts`)), module);
   assert.equal(paths.some(p => /src\/lib\/(?:auth|supabase)\.ts$|node_modules\/@supabase\//.test(p)), false);
   t.diagnostic(`${replay.files.length} real SQL files; exactly 12 historical failures; no clean-build/native-PG claim`);
@@ -387,6 +396,7 @@ test('real SQL ten-domain export -> 11 disk .edx -> empty distinct target import
   const result = await mustComplete(context, t);
   assert.deepEqual(result.verifiedDomains, DOMAINS); assert.equal(result.maintenance, true);
   assert.equal(result.fullSiteComplete, false); assert.equal(result.importReady, false);
+  assert.equal(result.sourceCutover, null); assert.equal(result.releaseSession, null);
   await assertMaintenance(result); await assertBackups(context); await assertBusiness();
   assert.deepEqual(result.serverVerification.verified_domains, DOMAINS);
   assert.deepEqual(result.serverVerification.counts, { employees: 1, pending_withdrawals: 1, pending_withdrawal_amount: '3' });
@@ -846,5 +856,303 @@ test('synthetic verification/notification/chat media: disk set -> real handler/S
       assert.equal(links[i].includes(mediaUrl(o)), false); assert.ok(links[i].includes('transfer-'));
     }
     assertProgress(c); allDead(c.w);
+  });
+});
+
+// Last on purpose: the final lost-response case crosses a REAL COMMIT. All earlier
+// negative cases share ONE real target import and roll back only their savepoints.
+test('release专项: real drained worker -> freeze -> eleven ciphertexts -> import -> SQL57 release, rollback gates and worker deduplication', { timeout: 600000 }, async t => {
+  const R = { active: id(600), disabled: id(601), nullable: id(602), adminNull: id(603),
+    plan: id(610), pausedPlan: id(611), archivedPlan: id(612), recurring: id(620),
+    draft: id(621), paused: id(622), pausedActive: id(623), archivedActive: id(624), branch: id(630) };
+  let frozenFiles, cutoff, expected, historicalExecution;
+  const now = Date.now();
+  const money = db => rows(db, `SELECT u.id,u.total_income::text,w.available_balance::text,w.frozen_balance::text
+    FROM public.users u JOIN public.wallets w ON w.user_id=u.id ORDER BY u.id`);
+  const sourceStates = db => rows(db, 'SELECT username,is_active FROM public.users ORDER BY username');
+  const automation = db => rows(db, `SELECT 'plan' AS kind,name,status,activated_at::text,NULL::int AS version FROM public.notification_automation_plans
+    UNION ALL SELECT 'task',name,status,activated_at::text,version FROM public.notification_automation_tasks ORDER BY kind,name`);
+  const worker = db => scalar(db, 'SELECT public.process_notification_automation_queue_fast(100)');
+  await source.exec('BEGIN');
+  try {
+    const modes = await triggers(source);
+    for (const [key, enabled] of [['active', true], ['disabled', false], ['nullable', null]]) {
+      await source.query(`INSERT INTO public.users(id,username,employee_id,password_hash,created_by,is_active)
+        VALUES($1,$2,$3,extensions.crypt($4,extensions.gen_salt('bf',4)),$5,$6)`,
+      [R[key], 'release_' + key, 'RELEASE-' + key, PASSWORDS.employee, NEW.root, enabled]);
+      await source.query('INSERT INTO public.financial_employee_credentials(user_id,password_hash) SELECT id,password_hash FROM public.users WHERE id=$1', [R[key]]);
+    }
+    await source.query('UPDATE public.admins SET is_active=false WHERE id=$1', [NEW.emergency]);
+    await source.query(`INSERT INTO public.admins(id,username,password_hash,role,is_active)
+      VALUES($1,'release_null_admin',extensions.crypt($2,extensions.gen_salt('bf',4)),'secondary_admin',NULL)`, [R.adminNull, PASSWORDS.branch]);
+    await source.query('INSERT INTO public.financial_admin_credentials(admin_id,password_hash) SELECT id,password_hash FROM public.admins WHERE id=$1', [R.adminNull]);
+    // Start each plan active, attach active tasks, then pause/archive the plan. This
+    // is legal under the real plan/task validation trigger, which remains enabled.
+    for (const [plan, name] of [[R.plan, 'Release active'], [R.pausedPlan, 'Release paused'], [R.archivedPlan, 'Release archived']]) {
+      await source.query(`INSERT INTO public.notification_automation_plans(id,owner_admin_id,name,status,activated_at)
+        VALUES($1,$2,$3,'active','2020-01-01T00:00:00Z')`, [plan, NEW.branch, name]);
+    }
+    await source.query(`INSERT INTO public.notification_automation_plan_members(plan_id,user_id,created_at)
+      VALUES($1,$2,'2020-01-01T00:00:00Z')`, [R.plan, I.employee]);
+    for (const [task, plan, name, status] of [
+      [R.recurring, R.plan, 'Release recurring reward', 'active'], [R.draft, R.plan, 'Release draft task', 'draft'],
+      [R.paused, R.plan, 'Release paused task', 'paused'], [R.pausedActive, R.pausedPlan, 'Release active under paused', 'active'],
+      [R.archivedActive, R.archivedPlan, 'Release active under archived', 'active'],
+    ]) await source.query(`INSERT INTO public.notification_automation_tasks(id,owner_admin_id,plan_id,name,status,trigger_type,
+      trigger_mode,threshold_value,recipient_scope,title_template,content_template,reward_enabled,reward_amount,version,activated_at,starts_at)
+      VALUES($1,$2,$3,$4,$5,'total_orders','recurring',$6,'selected','Release stage {{value}}','Local real worker reward',$7,$8,3,
+        '2020-01-01T00:00:00Z','2020-01-01T00:00:00Z')`,
+    [task, NEW.branch, plan, name, status, task === R.recurring ? 2 : 10000, task === R.recurring, task === R.recurring ? '7.25' : null]);
+    await source.query("UPDATE public.notification_automation_plans SET status='paused' WHERE id=$1", [R.pausedPlan]);
+    await source.query("UPDATE public.notification_automation_plans SET status='archived' WHERE id=$1", [R.archivedPlan]);
+    assert.deepEqual(await triggers(source), modes);
+    await isolated(source, sourceSession, async () => {
+      startEdge();
+      await t.test('real worker failure is retained and prevents source freeze; no delete-to-drain', async () => {
+        await source.exec('SAVEPOINT release_source_failure');
+        try {
+          await source.exec('ALTER TABLE public.messages ADD CONSTRAINT local_release_source_failure CHECK(automation_execution_id IS NULL) NOT VALID');
+          const ran = await worker(source);
+          assert.ok(ran.failed_tasks > 0 || await scalar(source, 'SELECT count(*)::int FROM public.notification_automation_failures') > 0, JSON.stringify(ran));
+          const denied = await execAs('anon', 'employee_export_cutover_freeze', {
+            p_admin_session_token: sourceSession, p_admin_password: PASSWORDS.root, p_confirmation: '確認暫停舊站業務並導出',
+          });
+          assert.equal(denied.error, null); assert.equal(denied.data.frozen, false);
+          assert.ok(denied.data.blockers.includes('failed_automation')); assert.ok(denied.data.counts.failed_automation > 0);
+          assert.ok(await scalar(source, 'SELECT count(*)::int FROM public.notification_automation_failures') > 0);
+          assert.equal(await scalar(source, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), 0);
+        } finally { await source.exec('ROLLBACK TO SAVEPOINT release_source_failure; RELEASE SAVEPOINT release_source_failure'); }
+      });
+      const drained = await worker(source);
+      assert.equal(drained.success, true);
+      for (const table of ['notification_automation_queue', 'notification_automation_failures'])
+        assert.equal(await scalar(source, `SELECT count(*)::int FROM public.${table}`), 0, table);
+      const executions = await rows(source, `SELECT id,task_version,stage::text,status,message_id,wallet_transaction_id FROM public.notification_automation_executions`);
+      assert.equal(executions.length, 1); historicalExecution = executions[0];
+      assert.equal(historicalExecution.status, 'succeeded'); assert.equal(historicalExecution.stage, '1'); assert.equal(historicalExecution.task_version, 3);
+      assert.equal(await scalar(source, "SELECT count(*)::int FROM public.wallet_transactions WHERE type='performance_bonus'"), 1);
+      expected = { money: await money(source), employees: await sourceStates(source), automation: await automation(source),
+        admins: await rows(source, "SELECT username,is_active FROM public.admins WHERE role<>'super_admin' ORDER BY username") };
+      assert.notEqual(expected.money.find(row => row.id === I.employee).available_balance, '7', 'the real bonus changes the original fixture balance');
+      const frozen = await api.freezeSourceCutover(PASSWORDS.root, '確認暫停舊站業務並導出');
+      assert.equal(frozen.frozen, true); cutoff = structuredClone(frozen.cutoff);
+      assert.deepEqual(frozen.counts, { pending_automation: 0, failed_automation: 0, processing_orders: 0 });
+      frozenFiles = await exportSet(result => assert.deepEqual(result.sourceCutover, cutoff));
+      assert.deepEqual(await triggers(source), modes);
+    }, true);
+  } catch (error) { if (!inside) await source.exec('ROLLBACK'); throw error; }
+  t.diagnostic(`release source seed/worker/freeze/11-file export: ${Date.now() - now}ms; real cutoff ${cutoff.frozen_at}`);
+
+  await isolated(target, targetSession, async () => {
+    // Authenticate a real secondary session BEFORE the importer disables it.
+    await target.query(`INSERT INTO public.admins(id,username,password_hash,role,is_active)
+      VALUES($1,'branch',extensions.crypt($2,extensions.gen_salt('bf',4)),'secondary_admin',true)`, [R.branch, PASSWORDS.branch]);
+    await target.query('INSERT INTO public.financial_admin_credentials(admin_id,password_hash) SELECT id,password_hash FROM public.admins WHERE id=$1', [R.branch]);
+    const branchSession = await adminLogin(target, 'branch', PASSWORDS.branch);
+    startEdge();
+    const excluded = await targetExcluded(), rootBefore = await rows(target, 'SELECT to_jsonb(a)::text AS body FROM public.admins a WHERE id=$1', [I.targetRoot]);
+    const modes = await triggers(target), c = startImport({ options: { files: fileList(frozenFiles) } }), result = await mustComplete(c, t);
+    assert.deepEqual(result.verifiedDomains, DOMAINS); assert.deepEqual(result.sourceCutover, cutoff); assert.ok(result.releaseSession);
+    await assertMaintenance(result); await assertBackups(c); allDead(c.w);
+    assert.deepEqual(await money(target), expected.money, 'real bonus and finance directory migrated together, not default assertBusiness balance');
+    assert.equal(callsOf('employee_import_site_bind_cutoff').length, 1);
+    const binding = callsOf('employee_import_site_bind_cutoff')[0]; assert.equal(binding.error, null);
+    assert.equal(binding.result.job_id, result.jobId); assert.deepEqual(binding.result.cutoff, cutoff);
+    const token = binding.args.p_job_token, hash = result.serverVerification.verification_hash;
+    const auth = { p_admin_session_token: targetSession, p_job_token: token };
+    const releaseArgs = { ...auth, p_admin_password: PASSWORDS.root, p_confirmation: '確認啟用新站', p_verification_hash: hash };
+    const release = (args = releaseArgs, role = 'anon') => execAs(role, 'employee_import_site_release', args);
+    const statusArgs = { p_admin_session_token: targetSession, p_job_id: result.jobId };
+    const guarded = await scalar(target, 'SELECT private.employee_transfer_guarded_tables()');
+    // Independent full-row rollback oracle; does not accept a saved verified flag or
+    // call the release implementation's own fingerprint as its expected result.
+    const snapshot = async () => {
+      const business = {};
+      for (const relation of guarded) business[relation] = sha(await scalar(target, `SELECT COALESCE(string_agg(to_jsonb(t)::text,E'\\n' ORDER BY to_jsonb(t)::text COLLATE "C"),'') FROM ${relation} t`));
+      const unchangedColumns = {};
+      for (const [relation, field] of [['public.users', 'is_active'], ['public.admins', 'is_active'],
+        ['public.notification_automation_plans', 'status'], ['public.notification_automation_tasks', 'status']])
+        unchangedColumns[relation] = sha(await scalar(target, `SELECT COALESCE(string_agg((to_jsonb(t)-$1::text)::text,E'\\n' ORDER BY (to_jsonb(t)-$1::text)::text COLLATE "C"),'') FROM ${relation} t`, [field]));
+      return { business, unchangedColumns, maintenance: await rows(target, 'SELECT to_jsonb(m)::text AS body FROM private.employee_transfer_maintenance m'),
+        permits: await rows(target, 'SELECT * FROM private.employee_transfer_write_permits'),
+        job: await rows(target, "SELECT status,finished_at,summary->'site_release' AS receipt FROM private.employee_transfer_jobs WHERE id=$1", [result.jobId]),
+        releasedEvents: await scalar(target, "SELECT count(*)::int FROM private.employee_transfer_events WHERE job_id=$1 AND action='site_released'", [result.jobId]) };
+    };
+    const original = await snapshot(); assert.deepEqual(original.permits, []);
+    const scenario = (name, use) => t.test(name, async () => {
+      await target.exec('SAVEPOINT release_case');
+      try { await use(); }
+      finally { await target.exec('ROLLBACK TO SAVEPOINT release_case; RELEASE SAVEPOINT release_case'); }
+      assert.deepEqual(await snapshot(), original, 'case rollback preserves the original paused import and five backups');
+    });
+    const denied = async (args = releaseArgs, pattern = null, role = 'anon') => {
+      const before = await snapshot(), response = await release(args, role);
+      assert.ok(response.error || response.data?.success === false, JSON.stringify(response.data));
+      if (pattern) assert.match(response.error?.message ?? JSON.stringify(response.data), pattern);
+      assert.deepEqual(await snapshot(), before, 'rejected release is fully atomic, with no leaked permit');
+      assert.equal(await scalar(target, 'SELECT dirty FROM private.employee_transfer_maintenance'), true);
+      return response;
+    };
+    const corrupt = (relation, sql, args = []) => fixtureChange(target, relation, sql, args, result);
+    const rehash = metadata => scalar(target, `SELECT $1::jsonb||jsonb_build_object('cutoff_hash',encode(extensions.digest(convert_to($1::jsonb::text,'UTF8'),'sha256'),'hex'))`, [JSON.stringify(Object.fromEntries(Object.entries(metadata).filter(([key]) => key !== 'cutoff_hash')))]);
+
+    await t.test('fresh client status matches authenticated cutoff and all ten real verified domains', async () => {
+      const s = await result.releaseSession.status();
+      assert.equal(s.can_release, true); assert.equal(s.released, false); assert.equal(s.maintenance, true); assert.deepEqual(s.blockers, []);
+      assert.equal(s.verification_hash, hash); assert.deepEqual(s.cutoff, cutoff);
+    });
+    for (const [name, args, pattern, role] of [
+      ['wrong administrator token', { ...releaseArgs, p_admin_session_token: id(9991) }, /session|expired|invalid/i],
+      ['wrong job token', { ...releaseArgs, p_job_token: id(9992) }, /task|expired|invalid/i],
+      ['wrong password', { ...releaseArgs, p_admin_password: 'Wrong-local-password' }, null],
+      ['wrong confirmation', { ...releaseArgs, p_confirmation: '確認啟用' }, /confirmation/i],
+      ['wrong verification hash', { ...releaseArgs, p_verification_hash: '0'.repeat(64) }, /digest differs/i],
+      ['service role cannot call browser release', releaseArgs, /permission denied/i, 'service_role'],
+    ]) await scenario(name, () => denied(args, pattern, role));
+    await scenario('real active secondary session cannot release or inspect super-admin import', async () => {
+      await corrupt('public.admins', 'UPDATE public.admins SET is_active=true WHERE id=$1', [R.branch]);
+      await denied({ ...releaseArgs, p_admin_session_token: branchSession }, /super|permission|administrator/i);
+      const s = await execAs('anon', 'get_employee_import_site_release_status', { ...statusArgs, p_admin_session_token: branchSession });
+      assert.ok(s.error); assert.equal(s.data, null);
+    });
+    await scenario('expired admin session', async () => {
+      await target.query("UPDATE public.admin_financial_sessions SET expires_at=now()-interval '1 minute' WHERE token_hash=private.hash_financial_token($1)", [targetSession]);
+      await denied(releaseArgs, /session|expired|invalid/i);
+    });
+    await scenario('missing cutoff is not inferred from completed verification', async () => {
+      await target.query("UPDATE private.employee_transfer_jobs SET summary=summary-'source_cutover' WHERE id=$1", [result.jobId]);
+      const s = await execAs('anon', 'get_employee_import_site_release_status', statusArgs);
+      assert.equal(s.error, null); assert.ok(s.data.blockers.includes('missing_cutoff')); assert.equal(s.data.can_release, false);
+      await denied(releaseArgs, /cutoff/i);
+    });
+    await scenario('cutoff digest tamper', async () => {
+      await target.query("UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,'{source_cutover,cutoff_hash}',to_jsonb($2::text)) WHERE id=$1", [result.jobId, 'f'.repeat(64)]);
+      await denied(releaseArgs, /digest/i);
+    });
+    await scenario('bound cutoff cannot change even with a correct PG digest', async () => {
+      const changed = await rehash({ ...cutoff, cutoff_id: id(9993) });
+      const response = await execAs('anon', 'employee_import_site_bind_cutoff', { ...auth, p_cutoff: changed });
+      assert.match(response.error?.message ?? '', /already bound|cannot change/i); assert.equal(response.data, null);
+    });
+    for (const [name, expression] of [['previous UTC date', "clock_timestamp()-interval '1 day'"], ['future cutoff', "clock_timestamp()+interval '1 hour'"]]) {
+      await scenario(name + ': valid PG metadata may bind for inspection but must not release', async () => {
+        const frozen_at = await scalar(target, `SELECT to_char((${expression}) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`);
+        const changed = await rehash({ ...cutoff, frozen_at });
+        // Negative-only corruption: remove the binding, then use the REAL bind RPC.
+        // No job/plan/catalog/verified success is fabricated or reset.
+        await target.query("UPDATE private.employee_transfer_jobs SET summary=summary-'source_cutover' WHERE id=$1", [result.jobId]);
+        const bound = await execAs('anon', 'employee_import_site_bind_cutoff', { ...auth, p_cutoff: changed });
+        assert.equal(bound.error, null); assert.equal(bound.data.success, true);
+        const s = await execAs('anon', 'get_employee_import_site_release_status', statusArgs);
+        assert.equal(s.error, null); assert.ok(s.data.blockers.includes('cutoff_expired')); assert.equal(s.data.can_release, false);
+        await denied(releaseArgs, /same UTC date/i);
+      });
+    }
+    for (const [name, relation, sql, args] of [
+      ['target queue', 'public.notification_automation_queue', 'INSERT INTO public.notification_automation_queue(user_id) VALUES($1)', [I.employee]],
+      ['target failure', 'public.notification_automation_failures', `INSERT INTO public.notification_automation_failures(task_id,user_id,owner_admin_id,last_error)
+        SELECT id,$1,owner_admin_id,'Local negative failure' FROM public.notification_automation_tasks WHERE name='Release recurring reward'`, [I.employee]],
+      ['wallet', 'public.wallets', 'UPDATE public.wallets SET available_balance=available_balance+1 WHERE user_id=$1', [I.employee]],
+      ['employee original activation', 'public.users', 'UPDATE public.users SET is_active=true WHERE id=$1', [I.employee]],
+    ]) await scenario(name + ' drift rejects even though historical status still reports verified', async () => {
+      await corrupt(relation, sql, args);
+      const s = await execAs('anon', 'get_employee_import_site_release_status', statusArgs);
+      assert.equal(s.error, null); assert.equal(s.data.released, false);
+      await denied();
+    });
+    await scenario('stored automation original statuses drift cannot authorize activation', async () => {
+      await target.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,
+        ARRAY['notification_restore','original_statuses','notification_automation_tasks',
+          (SELECT id::text FROM public.notification_automation_tasks WHERE name='Release draft task')], '"active"') WHERE id=$1`, [result.jobId]);
+      await denied(releaseArgs, /status|source|differ|changed/i);
+    });
+    await scenario('source administrator state binding drift is rejected', async () => {
+      await target.query(`UPDATE private.employee_transfer_jobs SET summary=jsonb_set(summary,
+        ARRAY['site_original_admin_bindings',$2::text,'source_id'],to_jsonb($3::text))
+        WHERE options->>'import_protocol'='shared-import-v1' AND options->'package_id'=(SELECT options->'package_id' FROM private.employee_transfer_jobs WHERE id=$1)`,
+      [result.jobId, R.branch, id(9994)]);
+      await denied(releaseArgs, /snapshot binding|states|mapping/i);
+    });
+    await scenario('late queue constraint failure rolls back account/task changes and clears every permit', async () => {
+      await target.exec('ALTER TABLE public.notification_automation_queue ADD CONSTRAINT local_release_late_failure CHECK(attempts<0) NOT VALID');
+      await denied(releaseArgs, /local_release_late_failure/i);
+      assert.deepEqual(await triggers(target), modes);
+    });
+
+    await t.test('actual client release COMMIT then lost response -> fresh historical status, never resend', async () => {
+      const utcDate = await scalar(target, "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD')");
+      assert.equal(utcDate, cutoff.frozen_at.slice(0, 10), 'ENVIRONMENT: actual freeze crossed UTC midnight; safe refusal is not a release implementation defect');
+      const before = await snapshot(), beforeAutomation = await automation(target), started = Date.now();
+      let committed = false;
+      state.afterSql = async (call, actual) => {
+        if (call.name !== 'employee_import_site_release' || actual.error || actual.data?.released !== true) return actual;
+        await target.exec('COMMIT; BEGIN'); committed = true;
+        return { data: null, error: { message: 'Local transport loss AFTER real release COMMIT' } };
+      };
+      await assert.rejects(result.releaseSession.release(PASSWORDS.root, '確認啟用新站'), /unconfirmed|fresh explicit status/i);
+      state.afterSql = null;
+      const actual = callsOf('employee_import_site_release').at(-1);
+      if (!committed) t.diagnostic(JSON.stringify({ actualError: actual?.error, actualResult: actual?.result }));
+      assert.equal(committed, true); assert.equal(actual.error, null); assert.equal(actual.result.released, true);
+      t.diagnostic(`SQL57 real release/full guarded fingerprint: ${Date.now() - started}ms; ${guarded.length} guarded tables`);
+      const count = callsOf('employee_import_site_release').length;
+      await assert.rejects(result.releaseSession.release(PASSWORDS.root, '確認啟用新站'));
+      assert.equal(callsOf('employee_import_site_release').length, count, 'unknown result must not cause a second write');
+      const fresh = api.createSiteReleaseSession({ jobId: result.jobId, jobToken: token, sourceSiteId: sourceId,
+        packageId: result.serverVerification.package_id, verificationHash: hash, cutoff });
+      const s = await fresh.status();
+      assert.equal(s.released, true); assert.equal(s.can_release, false); assert.equal(s.maintenance, false); assert.deepEqual(s.blockers, []);
+      assert.deepEqual(s.receipt, actual.result);
+      assert.deepEqual(s.receipt.counts, { employees: 4, active_employees: 2, active_admins: 1, active_plans: 1, active_tasks: 3, queued_employees: 2 });
+      assert.equal(await scalar(target, 'SELECT status FROM private.employee_transfer_jobs WHERE id=$1', [result.jobId]), 'finished');
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_maintenance'), 0);
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM private.employee_transfer_write_permits'), 0);
+      assert.deepEqual(await sourceStates(target), expected.employees);
+      assert.deepEqual(await rows(target, "SELECT username,is_active FROM public.admins WHERE role<>'super_admin' ORDER BY username"), expected.admins);
+      assert.deepEqual(await automation(target), expected.automation, 'original statuses, versions and activated_at survive paused/archived active-task combinations');
+      assert.notDeepEqual(beforeAutomation, expected.automation, 'import really paused automation before release');
+      assert.deepEqual(await money(target), expected.money);
+      assert.deepEqual(await targetExcluded(), excluded);
+      assert.deepEqual(await rows(target, 'SELECT to_jsonb(a)::text AS body FROM public.admins a WHERE id=$1', [I.targetRoot]), rootBefore);
+      await assertBackups(c); assert.deepEqual(await triggers(target), modes);
+      const after = await snapshot();
+      assert.deepEqual(after.unchangedColumns, before.unchangedColumns, 'only is_active/status may change, not timestamps, passwords, versions or other fields');
+      for (const relation of guarded.filter(name => !['public.users', 'public.admins', 'public.notification_automation_plans', 'public.notification_automation_tasks', 'public.notification_automation_queue'].includes(name)))
+        assert.equal(after.business[relation], before.business[relation], relation + ': release cannot change financial/history/progress/full rows');
+      assert.deepEqual(await rows(target, 'SELECT user_id,attempts,last_error,requested_at=next_attempt_at AS fresh FROM public.notification_automation_queue ORDER BY user_id'),
+        [I.employee, R.active].sort().map(user_id => ({ user_id, attempts: 0, last_error: null, fresh: true })));
+      await assert.rejects(fresh.release(PASSWORDS.root, '確認啟用新站')); assert.equal(callsOf('employee_import_site_release').length, count);
+      const duplicate = await release(); assert.ok(duplicate.error); assert.equal(duplicate.data, null);
+      assert.equal(await scalar(target, "SELECT count(*)::int FROM private.employee_transfer_events WHERE job_id=$1 AND action='site_released'", [result.jobId]), 1);
+      const first = await worker(target); assert.equal(first.success, true); assert.equal(first.created_notifications, 0, JSON.stringify(first));
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.notification_automation_failures'), 0);
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.notification_automation_queue'), 0);
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.notification_automation_executions'), 1);
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.messages WHERE automation_execution_id IS NOT NULL'), 1);
+      assert.equal(await scalar(target, "SELECT count(*)::int FROM public.wallet_transactions WHERE type='performance_bonus'"), 1);
+      assert.deepEqual(await money(target), expected.money, 'release queue evaluation does not duplicate the old reward');
+      // New final failure orders are legitimate business input. INSERT (not the
+      // known broken legacy UPDATE audit path), every trigger remains enabled.
+      for (let n = 0; n < 2; n++) await target.query(`INSERT INTO public.orders(id,user_id,username,product_type_id,product_value,order_number,transaction_id,status,processed_at)
+        SELECT $1,$2,'import_employee',id,100,$3,$4,'failure',clock_timestamp()-interval '1 second' FROM public.product_types WHERE name='Import product'`,
+      [id(640 + n), I.employee, 'RELEASE-NEXT-' + n, 'RELEASE-NEXT-TX-' + n]);
+      assert.equal(await scalar(target, "SELECT count(*)::int FROM public.orders WHERE user_id=$1 AND status IN ('success','failure')", [I.employee]), 4);
+      const next = await worker(target); assert.equal(next.success, true); assert.equal(next.created_notifications, 1, JSON.stringify(next));
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.notification_automation_failures'), 0);
+      assert.deepEqual(await rows(target, `SELECT stage::text,status FROM public.notification_automation_executions ORDER BY stage`), [{ stage: '1', status: 'succeeded' }, { stage: '2', status: 'succeeded' }]);
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.messages WHERE automation_execution_id IS NOT NULL'), 2);
+      assert.equal(await scalar(target, "SELECT count(*)::int FROM public.wallet_transactions WHERE type='performance_bonus'"), 2);
+      const expectedBalance = expected.money.find(row => row.id === I.employee).available_balance;
+      assert.equal(await scalar(target, 'SELECT available_balance=$2::numeric+7.25 FROM public.wallets WHERE user_id=$1', [I.employee, expectedBalance]), true);
+      const nextMoney = await money(target);
+      const again = await worker(target); assert.equal(again.created_notifications, 0, JSON.stringify(again));
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.notification_automation_executions'), 2);
+      assert.equal(await scalar(target, 'SELECT count(*)::int FROM public.messages WHERE automation_execution_id IS NOT NULL'), 2);
+      assert.equal(await scalar(target, "SELECT count(*)::int FROM public.wallet_transactions WHERE type='performance_bonus'"), 2);
+      assert.deepEqual(await money(target), nextMoney);
+      assert.equal(await scalar(target, 'SELECT stage::text FROM public.notification_automation_executions WHERE id=$1', [historicalExecution.id]), '1');
+      const history = await fresh.status(); assert.equal(history.released, true); assert.deepEqual(history.receipt, s.receipt);
+      await assertBackups(c); assert.deepEqual(await triggers(target), modes);
+    });
   });
 });

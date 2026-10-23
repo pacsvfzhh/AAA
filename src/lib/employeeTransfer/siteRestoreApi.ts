@@ -234,7 +234,7 @@ export async function runSiteRestore(
   try {
     checkAbort(signal);
     packageId = uuid(bundle.packageId); sourceSiteId = uuid(bundle.sourceSiteId);
-    sourceCutover = bundle.sourceCutover === null ? null : validateSourceCutoff(bundle.sourceCutover);
+    sourceCutover = bundle.sourceCutover === undefined ? null : validateSourceCutoff(bundle.sourceCutover);
     if (sourceCutover && sourceCutover.site_id !== sourceSiteId) blocked();
 
     await readDomain('shared', async input => {
