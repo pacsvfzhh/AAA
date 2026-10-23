@@ -312,7 +312,7 @@ for (const method of ['GET', 'HEAD', 'PUT', 'PATCH', 'DELETE']) {
 test('OPTIONS allows only POST and explicit request headers; exposes integrity headers', async () => {
   const h = harness();
   const headers = { 'access-control-request-method': 'POST', 'access-control-request-headers':
-    'X-Transfer-Action, X-Admin-Session-Token, X-Transfer-Job-Token, X-Transfer-Object-Key, Content-Type, authorization, apikey, x-client-info' };
+    'X-Transfer-Action, X-Transfer-Scope, X-Admin-Session-Token, X-Transfer-Job-Token, X-Transfer-Object-Key, Content-Type, authorization, apikey, x-client-info' };
   const res = await h.handler(request('download', undefined, headers, { method: 'OPTIONS' }));
   assert.equal(res.status, 204); assert.equal(await res.text(), ''); secured(res);
   assert.equal(res.headers.get('access-control-expose-headers'), 'x-transfer-sha256, x-transfer-content-type');

@@ -15,7 +15,8 @@
     "test:employee-transfer": "node --test --test-concurrency=1 supabase/tests/employee-transfer-*.test.mjs",
     "test:employee-transfer:crypto": "node --test supabase/tests/employee-transfer-crypto.test.mjs",
     "test:employee-transfer:foundation": "node --test supabase/tests/employee-transfer-foundation.test.mjs",
-    "test:employee-transfer:scope": "node --test supabase/tests/employee-transfer-scope.test.mjs"
+    "test:employee-transfer:scope": "node --test supabase/tests/employee-transfer-scope.test.mjs",
+    "test:employee-transfer:native": "EMPLOYEE_TRANSFER_NATIVE_REQUIRED=1 node --test supabase/tests/employee-transfer-native-db.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
