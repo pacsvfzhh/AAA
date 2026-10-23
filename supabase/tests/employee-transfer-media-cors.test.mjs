@@ -21,7 +21,14 @@ const KEY = createHash('sha256').update(SOURCE).digest('hex');
 const BYTES = Uint8Array.of(255, 216, 255, 224, 0, 3, 9, 255, 217);
 const SHA = createHash('sha256').update(BYTES).digest('hex');
 const FILE = { key: KEY, source_url: SOURCE, bytes: BYTES.length, sha256: SHA, content_type: 'image/jpeg' };
-const SCOPES = ['verification', 'mapped-verification', 'notifications', 'chat', 'archives', 'employee-safety'];
+const SCOPES = {
+  verification: 'employee_transfer_verification_media_authorize',
+  'mapped-verification': 'employee_transfer_mapped_verification_media_authorize',
+  notifications: 'employee_transfer_notification_media_authorize',
+  chat: 'employee_transfer_chat_media_authorize',
+  archives: 'employee_transfer_archive_media_authorize',
+  'employee-safety': 'employee_safety_backup_media_authorize',
+};
 const compiled = await build({ entryPoints: [new URL('../functions/employee-transfer-media/handler.ts', import.meta.url).pathname],
   bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2020' });
 const { createEmployeeTransferMediaHandler } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
@@ -44,6 +51,7 @@ for (const engine of engines) {
       rpc: async (name, args) => {
         calls.push({ name, args });
         assert.equal(args.p_admin_session_token, ADMIN); assert.equal(args.p_job_token, JOB);
+        if (mode === 'stall') return new Promise(() => {});
         if (mode === 'deny') return { error: { message: 'private fixture error must not escape' } };
         if (name === 'employee_transfer_verification_media_authorize') {
           return { data: { direction: mode === 'upload' ? 'import' : 'export', key: KEY, bucket: 'verification-documents',
@@ -81,6 +89,11 @@ for (const engine of engines) {
       } catch (error) { errors.push(error); res.writeHead(500); res.end(); }
     });
     let browser;
+    const abortTest = () => {
+      void browser?.close().catch(() => {});
+      mediaServer.closeAllConnections(); pageServer.closeAllConnections();
+    };
+    t.signal.addEventListener('abort', abortTest, { once: true });
     try {
       const pageOrigin = await local(pageServer), mediaOrigin = await local(mediaServer);
       browser = await playwright[engine].launch({ headless: true,
@@ -90,23 +103,25 @@ for (const engine of engines) {
         if (![pageOrigin, mediaOrigin].includes(new URL(request.url()).origin)) external.push(request.url());
       });
       const page = await context.newPage(); await page.goto(pageOrigin);
-      const send = (scope, action, bytes = null, extra = {}) => page.evaluate(async ({ endpoint, scope, action, bytes, extra, admin, job, key }) => {
+      const send = (scope, action, bytes = null, extra = {}, deadline = 5000) => page.evaluate(async ({ endpoint, scope, action, bytes, extra, deadline, admin, job, key }) => {
         try {
-          const response = await fetch(endpoint, { method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error',
+          const response = await fetch(endpoint, { method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(deadline),
             headers: { apikey: 'local-public-fixture-key', 'Content-Type': 'application/octet-stream', 'x-transfer-scope': scope,
               'x-transfer-action': action, 'x-admin-session-token': admin, 'x-transfer-job-token': job, 'x-transfer-object-key': key, ...extra },
             body: bytes === null ? undefined : new Uint8Array(bytes) });
           return { status: response.status, sha: response.headers.get('x-transfer-sha256'), type: response.headers.get('x-transfer-content-type'),
             bytes: Array.from(new Uint8Array(await response.arrayBuffer())) };
         } catch { return { rejected: true }; }
-      }, { endpoint: `${mediaOrigin}/media`, scope, action, bytes, extra, admin: ADMIN, job: JOB, key: KEY });
-      for (const scope of SCOPES) await t.test(`${scope}: CORS-readable authorization denial, no Storage access`, async () => {
+      }, { endpoint: `${mediaOrigin}/media`, scope, action, bytes, extra, deadline, admin: ADMIN, job: JOB, key: KEY });
+      for (const [scope, expectedRpc] of Object.entries(SCOPES)) await t.test(`${scope}: CORS-readable authorization denial, no Storage access`, async () => {
         const action = scope === 'mapped-verification' ? 'recheck-import' : 'download';
+        const callCount = calls.length;
         const result = await send(scope, action);
         assert.equal(result.status, 403);
         assert.deepEqual(JSON.parse(new TextDecoder().decode(Uint8Array.from(result.bytes))), { success: false, error: 'NOT_AUTHORIZED' });
         assert.equal(storage.length, 0);
-        assert.match(calls.at(-1).name, /_media_authorize$/);
+        assert.equal(calls.length, callCount + 1);
+        assert.equal(calls.at(-1).name, expectedRpc);
       });
       await t.test('browser emits a complete POST preflight including scope and both tokens', () => {
         const preflight = requests.find(request => request.method === 'OPTIONS'); assert.ok(preflight);
@@ -132,11 +147,17 @@ for (const engine of engines) {
         assert.equal(receipt.success, true); assert.equal(receipt.sha256, SHA); assert.equal(receipt.full_site_complete, false);
         assert.deepEqual(storage.slice(-2).map(call => call.action), ['upload', 'download']);
       });
+      await t.test('a stalled local RPC is bounded by the browser request deadline', async () => {
+        mode = 'stall'; const callCount = calls.length, storageCount = storage.length;
+        assert.deepEqual(await send('verification', 'download', null, {}, 250), { rejected: true });
+        assert.equal(calls.length, callCount + 1); assert.equal(storage.length, storageCount);
+      });
       assert.deepEqual(errors, []); assert.deepEqual(external, []);
       assert.ok(requests.filter(request => request.method === 'POST').every(request => request.headers.cookie === undefined && request.headers.authorization === undefined));
     } finally {
-      await browser?.close();
-      await Promise.all([close(mediaServer), close(pageServer)]);
+      t.signal.removeEventListener('abort', abortTest);
+      try { await browser?.close(); }
+      finally { await Promise.all([close(mediaServer), close(pageServer)]); }
     }
   });
 }
