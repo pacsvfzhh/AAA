@@ -74,6 +74,7 @@ const quickTimes = ['00:00', '02:00', '02:30', '03:00', '06:00'];
 
 export default function HistoryDataManagement({ isActive }: { isActive: boolean }) {
   const [showAudit, setShowAudit] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const auditActivations = useRef<number[]>([]);
   const [configs, setConfigs] = useState<CleanupConfig[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,6 +105,7 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
   useEffect(() => {
     if (!isActive) {
       setShowAudit(false);
+      setShowGuide(false);
       auditActivations.current = [];
     }
   }, [isActive]);
@@ -120,7 +122,7 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
   const isTimePickerOpen = timePicker !== null;
 
   useEffect(() => {
-    const anyModalOpen = showPreviewModal || showConfirmModal || isTimePickerOpen;
+    const anyModalOpen = showPreviewModal || showConfirmModal || isTimePickerOpen || showGuide;
     if (anyModalOpen) {
       const scrollY = window.scrollY;
       document.body.style.overflow = 'hidden';
@@ -135,16 +137,18 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
         window.scrollTo(0, scrollY);
       };
     }
-  }, [showPreviewModal, showConfirmModal, isTimePickerOpen]);
+  }, [showPreviewModal, showConfirmModal, isTimePickerOpen, showGuide]);
 
   useEffect(() => {
-    if (!isTimePickerOpen) return;
+    if (!isTimePickerOpen && !showGuide) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setTimePicker(null);
+      if (event.key !== 'Escape') return;
+      setTimePicker(null);
+      setShowGuide(false);
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [isTimePickerOpen]);
+  }, [isTimePickerOpen, showGuide]);
 
   const loadConfigs = async (silent = false): Promise<boolean> => {
     try {
@@ -463,16 +467,27 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
             </div>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              aria-busy={refreshing}
-              className="group inline-flex h-[38px] w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-cyan-300/60 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 px-2 text-xs font-bold text-white shadow-[0_8px_20px_-9px_rgba(34,211,238,0.65)] transition-all hover:brightness-110 hover:shadow-[0_10px_22px_-8px_rgba(34,211,238,0.75)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-wait disabled:opacity-70"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : 'transition-transform duration-300 group-hover:rotate-45'}`} aria-hidden="true" />
-              {refreshing ? '刷新中…' : '刷新'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowGuide(true)}
+                aria-label="查看歷史資料清理說明"
+                className="inline-flex h-[38px] w-[38px] items-center justify-center gap-1.5 rounded-lg border border-cyan-200/40 bg-white/10 text-xs font-bold text-cyan-50 transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 sm:w-[82px]"
+              >
+                <Info className="h-4 w-4" aria-hidden="true" />
+                <span className="hidden sm:inline">說明</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={refreshing}
+                aria-busy={refreshing}
+                className="group inline-flex h-[38px] w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-cyan-300/60 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 px-2 text-xs font-bold text-white shadow-[0_8px_20px_-9px_rgba(34,211,238,0.65)] transition-all hover:brightness-110 hover:shadow-[0_10px_22px_-8px_rgba(34,211,238,0.75)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-wait disabled:opacity-70"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : 'transition-transform duration-300 group-hover:rotate-45'}`} aria-hidden="true" />
+                {refreshing ? '刷新中…' : '刷新'}
+              </button>
+            </div>
             {lastRefreshedAt && <span role="status" className="text-[10px] text-cyan-200">上次刷新 {lastRefreshedAt}</span>}
           </div>
         </div>
@@ -484,16 +499,6 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
           {error}
         </div>
       )}
-
-      <section aria-labelledby="history-cleanup-guide" className="shrink-0 border-b border-blue-200 bg-blue-50/90 px-4 py-3 sm:px-6">
-        <h3 id="history-cleanup-guide" className="flex items-center gap-2 text-sm font-bold text-blue-950"><Info className="h-4 w-4" />功能與執行說明</h3>
-        <div className="mt-2 grid gap-x-5 gap-y-2 text-xs leading-5 text-slate-700 sm:grid-cols-2">
-          <p><strong>保留天數：</strong>每種資料按其對應時間欄位計算截止日，只處理早於截止日且符合該項條件的記錄；實際可設定天數不得低於列出的最低值。</p>
-          <p><strong>開啟自動清理：</strong>資料庫排程每分鐘檢查一次；若資料庫已啟用 pg_cron，會在所設 UTC 時間或之後每日最多成功執行一次，每次只處理一種到期資料，其他項目會在後續檢查時接續處理。關閉只停用自動執行，不會停用手動清理。</p>
-          <p><strong>手動清理：</strong>先按「清理」查看預覽，再確認執行。執行時會重新按當下資料條件判斷，實際筆數可能與預覽不同；除「驗證資料回流」外，刪除均不可復原。</p>
-          <p><strong>筆數與空間：</strong>預覽風險提示代表預計處理該類型超過 80% 的記錄。空間數字是資料表大小估算／執行前後差額，不保證資料庫磁碟空間會立即等量釋出。</p>
-        </div>
-      </section>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-dark">
         {configs.length === 0 && <p className="px-6 py-12 text-center text-sm text-slate-500">目前沒有可管理的歷史資料。</p>}
@@ -692,6 +697,50 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
           </section>
         ))}
       </div>
+
+      {showGuide && createPortal(
+        <div
+          className="fixed inset-0 z-[9997] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setShowGuide(false); }}
+        >
+          <section role="dialog" aria-modal="true" aria-labelledby="history-guide-title" className="flex max-h-[min(88vh,760px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl">
+            <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-gradient-to-r from-slate-900 to-blue-950 px-5 py-4 text-white sm:px-6">
+              <div>
+                <h3 id="history-guide-title" className="text-base font-bold">歷史資料清理說明</h3>
+                <p className="mt-1 text-xs leading-5 text-blue-100">查看保留期限、自動排程、手動預覽和執行結果的含義。</p>
+              </div>
+              <button type="button" onClick={() => setShowGuide(false)} aria-label="關閉說明" autoFocus className="rounded-lg p-1 text-blue-100 hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </header>
+            <div className="overflow-y-auto p-5 sm:p-6">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h4 className="text-sm font-bold text-slate-900">保留天數</h4>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">每種資料按其對應時間欄位計算截止日，只處理早於截止日且符合該項條件的記錄。設定值不得低於該項列出的最低天數；修改後按「儲存」才會生效。</p>
+                </article>
+                <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h4 className="text-sm font-bold text-slate-900">自動清理</h4>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">開啟後由資料庫排程每分鐘檢查一次；若資料庫已啟用 pg_cron，會在設定的 UTC 時間或之後每日最多成功執行一次，每次只處理一種到期資料。關閉自動清理不會停用手動操作。</p>
+                </article>
+                <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h4 className="text-sm font-bold text-slate-900">手動清理</h4>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">按「清理」先查看預覽，再確認執行。預覽不會鎖定資料；執行時會按當下資料重新判斷，因此實際筆數可能不同。除「訂單驗證資料回流」外，刪除均不可復原。</p>
+                </article>
+                <article className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <h4 className="text-sm font-bold text-amber-950">風險與空間數字</h4>
+                  <p className="mt-1 text-xs leading-5 text-amber-900">若預計處理超過此類資料的 80%，預覽會顯示高比例警告。空間是估算或資料表大小的前後差額，不保證資料庫磁碟空間立即等量釋出。佣金與資金稽核紀錄清理前，請確認符合你的留存要求。</p>
+                </article>
+              </div>
+              <p className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-950"><strong>重要：</strong>每個資料項目都有自己的清理範圍和時間欄位，請展開該列的「功能與清理範圍」查看。清理排程不會自動停用其他功能或清除未列出的資料類型。</p>
+            </div>
+            <footer className="flex justify-end border-t border-slate-200 bg-slate-50 px-5 py-3 sm:px-6">
+              <button type="button" onClick={() => setShowGuide(false)} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">知道了</button>
+            </footer>
+          </section>
+        </div>,
+        document.body
+      )}
 
       {timePicker && createPortal(
         <div
