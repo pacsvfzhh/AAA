@@ -44,27 +44,28 @@ interface CleanupResult {
   message: string;
 }
 
-const tableLabels: Record<string, { name: string; description: string }> = {
-  dispatch_assignments: { name: '派單分配紀錄', description: '員工訂單派送歷史紀錄，保留過久可能影響查詢效能。' },
-  dispatch_sessions: { name: '派單會話紀錄', description: '員工每次開始與結束派單的會話紀錄。' },
-  work_sessions: { name: '工作會話紀錄', description: '員工工作時長的統計會話。' },
-  customer_service_sessions: { name: '客服會話紀錄', description: '客服與客戶之間的會話歷史。' },
-  used_order_data: { name: '訂單派送使用紀錄', description: '清理使用紀錄後，對應驗證資料可回流至可用池。' },
-  valid_order_data: { name: '訂單驗證資料回流', description: '將符合條件的已用驗證資料重新啟用，供再次派送。' },
-  valid_data_audit_log: { name: '驗證資料稽核紀錄', description: '記錄驗證資料的變更與操作。' },
-  valid_data_error_log: { name: '驗證資料錯誤紀錄', description: '記錄驗證資料的異常與錯誤。' },
-  dispatch_system_logs: { name: '派單系統日誌', description: '派單系統的執行與錯誤紀錄。' },
-  commission_audit_log: { name: '佣金稽核紀錄', description: '佣金計算與發放的稽核資料。' },
-  money_data_protection_audit: { name: '資金保護稽核', description: '資金操作的安全稽核資料。' },
-  dispatch_performance_metrics: { name: '派單效能指標', description: '派單系統的效能監測資料。' },
-  valid_data_query_performance: { name: '查詢效能紀錄', description: '驗證資料的查詢效能監測紀錄。' },
-  orders_history: { name: '訂單歷史封存', description: '已封存的歷史訂單資料。' },
-  valid_order_data_archive: { name: '驗證資料封存', description: '已封存的訂單驗證資料。' },
-  bulk_import_log: { name: '批次匯入紀錄', description: '批次資料匯入的歷史紀錄。' },
+const tableLabels: Record<string, { name: string; description: string; details: string }> = {
+  dispatch_assignments: { name: '派單分配紀錄', description: '員工訂單派送歷史紀錄，保留過久可能影響查詢效能。', details: '只刪除指派時間早於截止日且狀態為已完成、錯誤、逾時或已取消的派單紀錄；待處理與已接受的派單會保留，訂單本身不會被刪除。' },
+  dispatch_sessions: { name: '派單會話紀錄', description: '員工每次開始與結束派單的會話紀錄。', details: '只刪除開始時間早於截止日、已結束且沒有待處理或已接受派單的會話。仍保留的歷史派單可能失去與該會話的關聯；派單紀錄本身不會被刪除。' },
+  work_sessions: { name: '工作會話紀錄', description: '員工工作時長的統計會話。', details: '只刪除開始時間早於截止日且已結束的工作會話；仍在進行中的會話不會被清理。清理後，這些舊會話不再能用於查閱工作時長歷史。' },
+  customer_service_sessions: { name: '客服會話紀錄', description: '客服與客戶之間已結束的會話歷史。', details: '只刪除建立時間早於截止日且已關閉的客服會話；未關閉的會話會保留。相關評分資料會保留，但與會話的連結可能被清空。' },
+  used_order_data: { name: '訂單派送使用紀錄', description: '記錄驗證資料曾被哪筆訂單使用。', details: '只刪除建立時間早於截止日且不屬於處理中訂單的使用紀錄。這項操作只刪除使用關聯，不會直接重新啟用驗證資料；要回流資料，請使用「訂單驗證資料回流」項目。' },
+  valid_order_data: { name: '訂單驗證資料回流', description: '重新啟用符合條件的已用驗證資料，供再次派送。', details: '只處理因「已使用」而停用、最後使用時間早於截止日、沒有較新或時間不明的使用紀錄，且沒有關聯處理中訂單的資料。符合條件後會刪除其過期使用關聯並重新啟用資料；資料本身不會被刪除。' },
+  valid_data_audit_log: { name: '驗證資料稽核紀錄', description: '記錄驗證資料的變更與操作。', details: '依操作時間刪除截止日前的驗證資料稽核紀錄。這只清除稽核歷史，不會還原或修改驗證資料本身；清除後不能從此表追溯該操作。' },
+  valid_data_error_log: { name: '驗證資料錯誤紀錄', description: '記錄驗證資料的異常與錯誤。', details: '只刪除發現時間早於截止日且已標記解決的錯誤紀錄；尚未解決的錯誤會保留。' },
+  dispatch_system_logs: { name: '派單系統日誌', description: '派單系統的執行與錯誤紀錄。', details: '依建立時間刪除截止日前的派單系統日誌。此項用來控制舊執行與錯誤紀錄的保留量，不會修改派單或訂單資料。' },
+  commission_audit_log: { name: '佣金稽核紀錄', description: '佣金計算與發放的稽核資料。', details: '依建立時間刪除截止日前的佣金稽核紀錄。佣金與錢包資料不會因此改變，但被清除的稽核紀錄不能再用來追查歷史佣金計算；請先確認符合所需的財務留存期限。' },
+  money_data_protection_audit: { name: '資金保護稽核', description: '資金操作的安全稽核資料。', details: '依嘗試時間刪除截止日前的資金保護稽核紀錄。這是安全稽核歷史的永久清理，不會回復或修改資金操作；請先確認符合所需的安全與財務留存期限。' },
+  dispatch_performance_metrics: { name: '派單效能指標', description: '派單系統的效能監測資料。', details: '依測量時間刪除截止日前的派單效能指標。派單功能不受影響，但清理後可供比較的歷史效能資料會減少。' },
+  valid_data_query_performance: { name: '查詢效能紀錄', description: '驗證資料的查詢效能監測紀錄。', details: '依記錄時間刪除截止日前的驗證資料查詢效能紀錄。驗證資料不會被更動，但較早的效能診斷資料將無法再查閱。' },
+  orders_history: { name: '訂單歷史封存', description: '已封存的歷史訂單資料。', details: '依建立時間永久刪除截止日前的封存訂單資料。這不會清理目前的訂單表，但已刪除的封存內容無法從此處復原。' },
+  valid_order_data_archive: { name: '驗證資料封存', description: '已封存的訂單驗證資料。', details: '依封存時間永久刪除截止日前的驗證資料封存紀錄。清理後無法從此封存表復原這些資料。' },
+  bulk_import_log: { name: '批次匯入紀錄', description: '批次資料匯入的歷史紀錄。', details: '只刪除完成時間早於截止日且狀態為已完成或失敗的批次匯入紀錄；其他狀態不會被此項清理。清理後不能再從此表查看該批次的歷史結果。' },
 };
 
 const getTableName = (config: CleanupConfig) => tableLabels[config.table_name]?.name ?? config.display_name;
 const getTableDescription = (config: CleanupConfig) => tableLabels[config.table_name]?.description ?? config.description;
+const getTableDetails = (config: CleanupConfig) => tableLabels[config.table_name]?.details ?? config.description;
 const formatSize = (size: string) => size.replace(/\bbytes?\b/gi, '位元組').replace(/\brecords?\b/gi, '筆紀錄').replace(/^N\/A$/i, '無資料');
 const utcTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const hourOptions = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'));
@@ -406,8 +407,8 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
     switch (tableName) {
       case 'used_order_data':
         return {
-          warning: '派送紀錄清理後，對應的驗證資料可回流至可用池，供員工再次使用。',
-          color: 'text-sky-700'
+          warning: '此項只刪除過期使用紀錄；驗證資料不會在這一步自動回流，請另行使用「訂單驗證資料回流」。',
+          color: 'text-amber-700'
         };
       case 'valid_order_data':
         return {
@@ -484,6 +485,16 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
         </div>
       )}
 
+      <section aria-labelledby="history-cleanup-guide" className="shrink-0 border-b border-blue-200 bg-blue-50/90 px-4 py-3 sm:px-6">
+        <h3 id="history-cleanup-guide" className="flex items-center gap-2 text-sm font-bold text-blue-950"><Info className="h-4 w-4" />功能與執行說明</h3>
+        <div className="mt-2 grid gap-x-5 gap-y-2 text-xs leading-5 text-slate-700 sm:grid-cols-2">
+          <p><strong>保留天數：</strong>每種資料按其對應時間欄位計算截止日，只處理早於截止日且符合該項條件的記錄；實際可設定天數不得低於列出的最低值。</p>
+          <p><strong>開啟自動清理：</strong>資料庫排程每分鐘檢查一次；若資料庫已啟用 pg_cron，會在所設 UTC 時間或之後每日最多成功執行一次，每次只處理一種到期資料，其他項目會在後續檢查時接續處理。關閉只停用自動執行，不會停用手動清理。</p>
+          <p><strong>手動清理：</strong>先按「清理」查看預覽，再確認執行。執行時會重新按當下資料條件判斷，實際筆數可能與預覽不同；除「驗證資料回流」外，刪除均不可復原。</p>
+          <p><strong>筆數與空間：</strong>預覽風險提示代表預計處理該類型超過 80% 的記錄。空間數字是資料表大小估算／執行前後差額，不保證資料庫磁碟空間會立即等量釋出。</p>
+        </div>
+      </section>
+
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-dark">
         {configs.length === 0 && <p className="px-6 py-12 text-center text-sm text-slate-500">目前沒有可管理的歷史資料。</p>}
         {Object.entries(groupedConfigs).map(([category, categoryConfigs]) => (
@@ -541,6 +552,11 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
                               {getTableWarning(config.table_name)!.warning}
                             </div>
                           )}
+                          <details className="mt-2 text-xs text-slate-600">
+                            <summary className="w-fit cursor-pointer font-semibold text-blue-700 hover:text-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">功能與清理範圍</summary>
+                            <p className="mt-1 max-w-2xl leading-5">{getTableDetails(config)}</p>
+                            <p className="mt-1 max-w-2xl leading-5"><strong>啟動方式：</strong>{scheduleItem?.enabled ? '自動清理已開啟，資料庫排程會按設定的 UTC 時間檢查並執行；也可手動預覽後清理。' : '自動清理目前關閉；需要時仍可手動預覽並清理。'}</p>
+                          </details>
                         </div>
                       </td>
                       <td className="px-5 py-4 whitespace-nowrap">
@@ -828,14 +844,22 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
                 </div>
               </div>
 
-              <p className="text-xs text-amber-700">手動清理使用此資料類型的保留期限（{previewResult.retention_days} 天），只處理到期且符合條件的資料；請確認預覽筆數。</p>
+              <p className="text-xs text-amber-700">手動清理使用此資料類型的保留期限（{previewResult.retention_days} 天），只處理到期且符合條件的資料；實際筆數可能因預覽後的資料變化而不同。</p>
+
+              {previewResult.risk_level === 'warning' && previewResult.records_to_delete > 0 && (
+                <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>預計處理此資料類型超過 80% 的記錄。請先確認資料類型、保留天數及筆數，再決定是否繼續。</span>
+                </div>
+              )}
 
               {selectedTable.table_name !== 'valid_order_data' && (
                 <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">預估釋出空間：</span>
+                    <span className="text-gray-600">估算資料表大小差額：</span>
                     <span className="font-medium text-blue-600">{formatSize(previewResult.estimated_space)}</span>
                   </div>
+                  <p className="text-xs leading-5 text-slate-500">這是依預計處理筆數推算的估值，不代表資料庫磁碟空間會立即等量釋出。</p>
                 </div>
               )}
 
@@ -930,8 +954,8 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
                   </div>
                   {selectedTable?.table_name !== 'valid_order_data' && (
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">釋出空間：</span>
-                      <span className="font-bold text-gray-900">{formatSize(cleanupResult.space_freed)}</span>
+                      <span className="text-gray-600">資料表大小差額：</span>
+                    <span className="font-bold text-gray-900">{formatSize(cleanupResult.space_freed)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-sm">
