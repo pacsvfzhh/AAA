@@ -63,7 +63,11 @@ for (const engine of engines) {
         download: async (bucket, path) => { storage.push({ action: 'download', bucket, path }); return { data: new Response(BYTES) }; },
       },
     });
-    const pageServer = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>Local media CORS acceptance</title>'); });
+    const pageServer = createServer((req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; connect-src http://127.0.0.1:*");
+      res.end('<!doctype html><title>Local media CORS acceptance</title>');
+    });
     const mediaServer = createServer(async (req, res) => {
       try {
         const headers = new Headers();
@@ -82,9 +86,8 @@ for (const engine of engines) {
       browser = await playwright[engine].launch({ headless: true,
         ...(engine === 'chromium' && process.env.EMPLOYEE_TRANSFER_CORS_CHROMIUM ? { executablePath: process.env.EMPLOYEE_TRANSFER_CORS_CHROMIUM } : {}) });
       const context = await browser.newContext();
-      await context.route('**/*', route => {
-        if ([pageOrigin, mediaOrigin].includes(new URL(route.request().url()).origin)) return route.continue();
-        external.push(route.request().url()); return route.abort();
+      context.on('request', request => {
+        if (![pageOrigin, mediaOrigin].includes(new URL(request.url()).origin)) external.push(request.url());
       });
       const page = await context.newPage(); await page.goto(pageOrigin);
       const send = (scope, action, bytes = null, extra = {}) => page.evaluate(async ({ endpoint, scope, action, bytes, extra, admin, job, key }) => {
