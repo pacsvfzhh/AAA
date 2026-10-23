@@ -1,8 +1,6 @@
 BEGIN;
 SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
--- Offline, operator-managed cutover only. This metadata is not a remote signature
--- or proof that the source is still stopped. No cross-site request or handoff lock.
 CREATE FUNCTION private.employee_transfer_import_cutoff(p_cutoff jsonb,p_source_site_id uuid)
 RETURNS timestamptz LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp
@@ -35,8 +33,7 @@ BEGIN
 END;
 $$;
 
--- Preserve SQL45 intact. SQL12 later removes shared staging on cancel/finish, so
--- capture the source booleans NOW, never infer them from the disabled target.
+-- Shared staging is removed on cancel, so source activation states must be captured before then.
 ALTER FUNCTION public.employee_import_shared_replace_apply(uuid,uuid,text) SET SCHEMA private;
 ALTER FUNCTION private.employee_import_shared_replace_apply(uuid,uuid,text) RENAME TO employee_import_shared_replace_apply_v45;
 CREATE FUNCTION public.employee_import_shared_replace_apply(p_admin_session_token uuid,p_job_token uuid,p_plan_hash text)
@@ -103,7 +100,6 @@ BEGIN
   v_result := jsonb_build_object('version',1,'success',true,'scope','site-cutover-binding','job_id',v_job.id,
     'source_site_id',v_job.options#>'{catalog,site_id}','package_id',v_job.options->'package_id',
     'cutoff',p_cutoff,'full_site_complete',false);
-  -- Old dates may be bound for inspection. Only release enforces today's UTC date.
   IF NOT (v_job.summary ? 'source_cutover') THEN
     UPDATE private.employee_transfer_jobs SET summary=summary||jsonb_build_object('source_cutover',p_cutoff) WHERE id=v_job.id;
     PERFORM private.employee_transfer_log(v_job.id,v_job.admin_id,v_job.admin_username,'import','site_cutoff_bound',v_result);
@@ -130,7 +126,6 @@ BEGIN
   v_hash := v_job.summary#>>'{site_verification,verification_hash}';
   IF v_hash !~ '^[0-9a-f]{64}$' THEN v_hash := NULL; END IF;
   SELECT EXISTS(SELECT 1 FROM private.employee_transfer_maintenance) INTO v_maintenance;
-  -- A committed receipt is historical evidence, not a promise about today's business.
   IF NOT v_released THEN
     IF v_cutoff IS NULL THEN v_blockers := v_blockers||'"missing_cutoff"'::jsonb;
     ELSE
@@ -160,10 +155,6 @@ BEGIN
 END;
 $$;
 
--- Reuse the reviewed SQL07/15/27 inventories without disabling any trigger.
--- Hash EVERY full guarded row, substituting only the four explicitly intended
--- state changes in the before-image. Row hashes bound aggregation memory; duplicate
--- rows remain duplicate hashes. The new queue is checked separately and exactly.
 CREATE FUNCTION private.employee_transfer_site_release_fingerprint(p_changes jsonb)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp
@@ -223,8 +214,7 @@ BEGIN
   v_check := private.employee_transfer_verify_password(v_admin,v_username,p_admin_password);
   IF v_check->'success' IS DISTINCT FROM 'true'::jsonb THEN RETURN v_check; END IF;
 
-  -- FIRST acquire SQL55's job -> queue advisory -> guarded relations -> maintenance
-  -- locks. Do not pre-acquire a maintenance/configuration lock in reverse order.
+  -- The verifier must acquire its locks first to avoid reversing the domain restorers' lock order.
   v_verified := public.employee_import_site_verify(p_admin_session_token,p_job_token);
   IF v_verified->'success' IS DISTINCT FROM 'true'::jsonb OR v_verified->>'verification_hash' IS DISTINCT FROM p_verification_hash THEN
     RAISE EXCEPTION 'The freshly verified site digest differs from the confirmed digest.';
@@ -327,8 +317,6 @@ BEGIN
   UPDATE public.notification_automation_plans p SET status=s.value#>>'{}'
     FROM jsonb_each(v_expected_statuses->'notification_automation_plans') s WHERE p.id=s.key::uuid AND p.status IS DISTINCT FROM s.value#>>'{}';
 
-  -- This schema calls queue creation time requested_at, NOT created_at. All active
-  -- imported employees get exactly one fresh request; no evaluation/send/bonus RPC.
   v_queued_at := clock_timestamp();
   INSERT INTO public.notification_automation_queue(user_id,requested_at,next_attempt_at,attempts,last_error)
     SELECT a.id,v_queued_at,v_queued_at,0,NULL FROM private.employee_transfer_identity_input(v_job.id,'accounts') a
@@ -350,8 +338,6 @@ BEGIN
       PERFORM private.employee_transfer_notification_restore_check_row(v_key,v_row);
     END LOOP;
   END LOOP;
-  -- Includes retired tasks, unimported administrators and every financial/history
-  -- row in the full-row fingerprint: no status reset, new baseline or hidden send.
   v_now := clock_timestamp();
   v_result := jsonb_build_object('version',1,'success',true,'scope','site-release','job_id',v_job.id,
     'source_site_id',v_job.options#>'{catalog,site_id}','package_id',v_job.options->'package_id',
@@ -365,7 +351,6 @@ BEGIN
     AND plan_hash=v_job.summary->>'dispatch_plan_hash';
   GET DIAGNOSTICS v_count=ROW_COUNT;
   IF v_count<>1 OR EXISTS(SELECT 1 FROM private.employee_transfer_maintenance) THEN RAISE EXCEPTION 'Original release maintenance ownership changed.'; END IF;
-  -- Do not call employee_transfer_finish(): all staging and sealed backups survive.
   UPDATE private.employee_transfer_jobs SET status='finished',finished_at=v_now,
     summary=summary||jsonb_build_object('site_release',v_result) WHERE id=v_job.id AND status='running';
   GET DIAGNOSTICS v_count=ROW_COUNT;
@@ -382,8 +367,6 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$;
 
--- Keep v3 and the original list/shape. Check the release RPCs AND that the public
--- shared apply really wraps SQL45 with source-state capture before first writes.
 ALTER FUNCTION public.get_employee_import_site_preflight(uuid,uuid) SET SCHEMA private;
 ALTER FUNCTION private.get_employee_import_site_preflight(uuid,uuid) RENAME TO employee_transfer_site_preflight_v3;
 CREATE FUNCTION public.get_employee_import_site_preflight(p_admin_session_token uuid,p_source_site_id uuid)

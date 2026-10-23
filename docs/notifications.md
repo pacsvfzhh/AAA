@@ -1,5 +1,9 @@
 # 通知、通知自动化与公告
 
+## 迁移当前决定（第56节，2026-10-23 UTC+8，本地未部署）
+- 空站主线的离线放行/来源自动化原状态续接已由SQL57接通；不是重建任务/基线或补发旧奖励，不扩大关闭新编号通知实际恢复等其他pending，`full_site_complete`始终false。用户确认完全离线，新站启用后旧站自行停用/管理；无系统联网核验、跨站交接锁或额外旧站checkbox，同意freeze/release同UTC日（UTC+8每日08:00换日）。cutoff/receipt不是远程签名或旧站当前仍冻结证明。
+- 下文第31–33/53/55节保留当时子阶段实现和测试事实，其中“最终续接/放行待做”不再代表当前空站主线；独立SQL57放行见第56节及本文新增章节，不代表新编号通知配置/备份/媒体/13表恢复已完成。
+
 ## 后台发送 `MessageManagement.tsx`（导航「通知」）
 - 收件人面板：二级只看到自己的员工；可按启用/已验证、姓名或员工 ID 筛选；多个标签之间是 **OR** 条件；已勾选的员工排到列表最前面；改变筛选不会取消已勾选。
 - 发送：`send_admin_message_with_delivery`，参数含 `delivery_mode`（`realtime_only` / `login_only` / `realtime_with_login_fallback`）、优先级、可选奖金和 `operation_id`。内容相同的请求复用同一个操作编号，避免重复发奖。
@@ -80,10 +84,21 @@
 - 用户最新决定采用停站切换，不做在线增量，不搬运行队列。由现有worker先排空待发自动化并处理失败，freeze时`notification_automation_queue`、`notification_automation_failures`及`processing`订单必须全部为零；非零即阻断，不通过清空记录、跳过失败或丢弃待发通知冒充排空。日常备份只读业务资料、不自动停站。
 - SQL56/sourceCutover.ts/SourceCutoverPanel通过超管密码及「確認暫停舊站業務並導出」建立持久source维护，不暂停/重启方案，不改账号/自动化原启停、基线、进度、activated_at或资金，不重新加入成员、重建基线或补发历史奖金。冻结为独立terminal技术任务，不占单活任务，十域导出正常；getlog保留旧子协议排除并排除freeze，不计作最近成功导出。
 - 取消/离开/过期不自动解除。本人超管可带当前cutoff_id、密码及「確認恢復舊站業務並放棄切站」明确恢复旧站，有running export阻断；不能解除dirty import。恢复旧站后不能再用旧切站文件启用新站，不能两站同时营业。
-- 来源截止凭据进入加密index，reader严格重算去掉cutoff_hash后的PG jsonb文本摘要并绑定来源站；合法重加密但摘要篡改也拒绝。它不是远程签名、旧站当前仍冻结的证明或新站启动worker/营业的许可；旧文件不会因旧站恢复而自动被删除或失效，不能以本机认证代替跨站放行。
+- 来源截止凭据进入加密index，reader严格重算去掉cutoff_hash后的PG jsonb文本摘要并绑定来源站；合法重加密但摘要篡改也拒绝。它不是远程签名、旧站当前仍冻结的证明或新站启动worker/营业的许可；旧文件不会因旧站恢复而自动被删除或失效，单凭本机认证不能启用；当前SQL57采用用户管理旧站的完全离线放行，不要求联网核验或交接锁，见第56节。
 - source屏障仅冻结受保护DB写，不代表停止cron、Storage上传/删除或原子跨DB文件快照。无新表，不改guard/cron/Storage/Edge，不改现有worker规则；最终自动化按截止点安全续接、账号启用/营业放行仍未完成。上文第31–33/53节的历史“截止点/队列待做”按当时事实保留；当前不搬运行队列的决定不代表自动化续接或新编号通知实际恢复已完成，其余pending不关闭。
 - 切站freeze/resume与状态读均不自动重试；模块级未知互锁及writeGeneration拒迟到旧status，父页所有导入/导出/备份互锁，保留显式状态刷新核对。新DB25/25、client74/74、Chromium/WebKit各25场景（含父组TAP52）、SQL56十域11磁文维护态整站61项五互斥组3+14+9+6+29已通过（原60+新frozen往返/合法重加密摘要篡改拒绝）；583份SQL仍12原历史失败、109表967列不变。主会话最终foundation/scope100/100、client74/74加双浏览器合计TAP126/126、旧导入UI28/28、旧备份UI110/110、transport security13/13、typecheck/lint/build及聊天6/稽核48/工时6通过；两轮复审修补完成，最终独立复审无新增高置信问题，详见计划第55节。
 - 本轮实际新增SQL56/source API/panel并修改父页、类型、网络及加密index（本文件仅同步说明），没有正式服务访问或SQL/Edge/Storage/权限/config/cron/前端部署；前端仍待用户另行部署。真实Storage、原生PG并发/容量、最终自动化续接及正式停站切换营业验收未完成，同名彻底替换及其他原pending仍未完成，不宣称完整功能完成。
+
+## 空站离线放行与自动化原状态续接（第56节，2026-10-23 UTC+8，本地未部署）
+- SQL57沿用SQL56的现有worker先排空再freeze，源queue/failures/processing必须全零，不删失败冒充排空、不搬运行队列。新站导入阶段方案/任务仍暂停、账号停用/dirty维护；日常包缺sourceCutover仍可维护态导入但releaseSession=null不能启用。冻结包dispatch末绑定六字段cutoff/PG摘要/同source，已有绑定不可改，末尾返回仅持于闭包的releaseSession，token不进报告。
+- 本人超管原任务/会话、密码、精确「確認啟用新站」及expected verification hash提交，SQL57实际调用SQL55重扫十域、最终媒体回执及五份密文备份；来源暂存failures及目标queue/failures/processing必须为零，同UTC日总复验后及事务末尾检查防跨界。status只是候选门槛或既有提交事实，不是新实物核验；截止凭据不是旧站实时状态证明，不增加跨站联网核验/交接锁。
+- 仅恢复来源员工与非超管is_active含NULL及原plan/task status，不是全员启用。非超管原启停和source/role绑定已由共享apply wrapper在取消清staging前冻结，不能从目标停用值反推。activated_at/version/updated_at/成员/基线/progress/executions及资金原文不改，不重新加入方案，不调用评估、发送或发奖函数；每个来源active员工只入队一次，由既有worker后续处理，旧执行唯一标记继续防重复。
+- 已有paused/archived plan可合法含active task：事务全程持评估锁，临时plan active→恢复task→plan原状态，不关trigger、不重置激活时间或进度。admins未知trigger审核仅限UPDATE，既有删除trigger保留。只发users/admins/plans/tasks/queue五表permit并最终清，完整受保护业务行前后指纹防隐藏发送/资金/基线/历史副作用。
+- 全部检查成功才清本人原dirty维护、job finished及summary receipt/audit，保留staging和五份备份；同事务失败全回滚，COMMIT失响应则fresh status读回执、不再release。preflight维持v3并追加release/wrapper能力检查，bind/status/release120秒单次请求、不自动重试；跨实例writeGeneration及未知互锁保留，兄弟功能锁住时仍可查status。
+- SiteReleasePanel接EmployeeSiteImport下方，显式「查詢啟用條件」→密码/确认语→「核對並啟用新站」，无额外旧站checkbox或联网。独立site-release-report.json，原site-import-report为历史维护回执不重写；报告失败不撤销放行/重发。刷新完整跨会话导入token恢复尚未实现，不用status冒充完整续接或新的总核验。
+- 主会话真实新release SQL24项（父+23）专项通过，33旧顶层skip不计；另strict/原十域golden/冻结golden3项通过，31skip不计，不称全文件。包含真实worker失败拒freeze→drain→11落盘密文→4员工true/false/NULL及三类admin原状态→active/paused/archived plan与active/draft/paused task→真实历史奖励→真实COMMIT失响应/fresh status不重发→首次worker不重复旧奖→真实新订单下一阶段7.25仅一次。新client187与3旧client合312通过；双浏览器各23场景含父组48/48主会话完整复跑、旧UI28/28由UIagent通过，reviewer重叠复验不加总，详见计划56.4。
+- **待主会话最终核对**：foundation/scope正在重跑（旧583 baseline初跑失败正在修正，不计通过）；584迁移仍12既有失败、109表967列，非干净建库。typecheck/lint/build此前通过、主会话最终重跑待核对；聊天6通过，audit/work待复跑，早期fail/aborted不算通过。95受保护表指纹约2.8秒只是小fixture，不证明生产anon3秒容量；预览仅登录、UI API/IO替身无外网，不代表真实Storage/CORS/原生PG并发/真实两站验收，未跑全employee-transfer总套件。
+- 本地已接离线放行，不等于完整迁移完成；同名彻底替换、新编号剩余引用/通知恢复、双包证明、统一档案/共享媒体、完整跨会话续接及容量多卷仍缺。无正式SQL/Edge/Storage/权限/config/cron/前端访问或部署，前端待用户部署；回退仅移除函数/还原包装，不清维护、不撤销已释放营业或资金，非数据回滚。上文第55节及以前历史测试记录不改写为本轮成绩。
 
 ## 公告 `AnnouncementManagement.tsx` + `TiptapEditor.tsx`
 - 表 `announcements`，直接表操作（不经稽核）。二级只管理自己的公告；超管可管理全部，并设置全局公告与轮播。支持发布时间、隐藏、置顶排序；正文上限 500KB。

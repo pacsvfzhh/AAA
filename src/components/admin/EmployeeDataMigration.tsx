@@ -93,7 +93,8 @@ const phaseLabels: Record<string, string> = {
   'dependencies-plan': '核對派單關聯', 'dependencies-begin': '開始恢復派單關聯', 'dependencies-chunk': '恢復成員與已用交單',
   'dependencies-verify': '核驗派單關聯', chunk: '分塊恢復紀錄', verify: '核驗實際恢復內容', verified: '本領域已核驗',
   'media-upload': '上傳並核對附件', 'media-recheck': '最後回讀附件', 'choose-roles': '等待角色對應', 'merge-plan': '確認聊天合併計畫',
-  'close-applied-shared': '結束已套用的共享階段', 'verify-maintenance': '確認持續維護保護', maintenance: '維護態核驗通過（不可營業）',
+  'close-applied-shared': '結束已套用的共享階段', 'bind-source-cutoff': '綁定來源切站截止點',
+  'verify-maintenance': '確認持續維護保護', maintenance: '維護態核驗通過（啟用前紀錄）',
   'backup-snapshot': '讀取獨立備份快照', 'backup-verify': '重新讀取並認證獨立備份',
   export: '讀取已認證紀錄或媒體', upload: '上傳並核對媒體', restore: '恢復檔案紀錄', 'target-recheck': '最後複核目標附件',
 };

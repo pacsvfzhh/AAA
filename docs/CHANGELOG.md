@@ -17,6 +17,18 @@
 
 ---
 
+## 2026-10-23 · 接通空站离线放行并同步七份既有文档（未部署）
+- 需求：用户确认完全离线，新站启用后旧站由用户自行停用/管理；不需要系统联网核验旧站、跨站交接锁或额外旧站checkbox，同意冻结与启用同一UTC日（UTC+8每日08:00换日）。继续先由现有worker排空再freeze，不做在线增量、不搬运行队列，日常备份只读。
+- 已实现：本轮SQL57 `20261102000057_release_imported_site.sql`新增cutoff bind/status/release；共享apply wrapper在取消清staging前冻结非超管来源is_active（含NULL）及source/role绑定，preflight保持v3并追加能力检查。target bind严格六字段/PG摘要/同source，已绑定不可改；冻结包dispatch末绑定、导入末尾返回闭包releaseSession（token不进报告），日常包无sourceCutover仍可维护态导入、releaseSession=null不能启用。
+- 原子放行：本人超管原task/session、密码、精确「確認啟用新站」及expected verification hash提交；调用真实SQL55重扫十域/最终媒体回执和五份实际密文备份，来源failures与目标queue/failures/processing零、同UTC日末尾复验防跨界。恢复users/非超管原is_active（不是全员启用）及plan/task原status，不改activated_at/version/updated_at/progress/executions或钱；只发五表permit并最终清除，active员工各入队一次、不现场发送/发奖，完整受保护业务行前后指纹防隐藏副作用。
+- 合法组合与事务：paused/archived plan可含active task，评估锁内临时plan active→恢复task→plan原状态，不关trigger；admins未知trigger审核仅限UPDATE事件，既有删除专用trigger保留。成功只清本人原dirty维护、job finished、summary receipt/audit，staging/备份保留；同事务失败全回滚，COMMIT失响应须查原回执而非重发。
+- 客户端与页面：siteRelease.ts严格回执/跨实例writeGeneration/未知结果fresh status，120秒不自动重试。SiteReleasePanel接EmployeeSiteImport结果下方「查詢啟用條件」→密码/确认语→「核對並啟用新站」；未知互锁兄弟功能但保留status按钮。独立site-release-report.json，原site-import-report保持历史维护回执不重写；刷新完整跨会话导入token恢复仍未实现，status不是新实物核验。回执非远程签名，不证明旧站当前状态。
+- 文件：新增SQL57、siteRelease.ts、SiteReleasePanel及客户端/界面专项，修改siteImport/siteRestoreApi、EmployeeSiteImport、请求时限、RPC类型、真实整站往返与严格回放测试；同步七份既有文档并新增计划第56节，第55节及以前历史实现/测试事实保留。
+- 数据库/服务端：最新本地迁移SQL57，无正式服务访问或SQL/Edge/Storage/权限/config/cron/前端部署；前端仍待用户另行部署。回退仅移除新函数/还原既有包装及权限，未执行，不是数据回滚、不清维护或staging/备份，不撤销已释放营业或队列/资金；不列大段DROP、不使用CASCADE清业务。
+- 当前已确认测试：主会话真实新release SQL专项24项（父+23）通过，33旧顶层skip不计；另strict/原十域golden/冻结golden3项通过，31skip不计，不称整文件。新client187与3旧client合312通过，reviewer新client187+旧cutover74为重叠复验不加总；主会话双浏览器各23场景含父组48/48完整复跑，旧UI28/28由UIagent通过。包含真实worker失败拒freeze→drain→11落盘密文→4员工true/false/NULL及三类admin来源状态→原自动化/历史奖励→真实COMMIT失响应/fresh status不重发→首次worker不重复旧奖→真实新订单下一阶段7.25仅一次，详见计划56.4。
+- 最终复核：foundation/scope修正显式清单后101/101通过，584迁移仍12既有失败、109表967列，非干净建库。新启用客户端187+旧cutover74+transport安全13的完整三文件274/274通过（与此前312部分重叠，不加总）；双浏览器48/48、typecheck/lint/build、聊天6/稽核48/工时6分别通过。构建保留迁移页约571KiB的chunk警告。旧583基线初跑失败及早期代理fail/aborted命令不计通过；未跑完整迁移总套件。
+- 修正与边界：review发现的admins删除专用trigger误判及paused plan/active task合法组合已修复，再审无新高置信问题；daily包sourceCutover undefined原判断bug由主会话修复后两golden通过（与上重叠不加总）。95受保护表指纹约2.8秒只是小fixture，不证明生产anon3秒容量。预览仅登录，隔离UI API/IO替身无外网，不代表真实Storage/CORS/原生PG并发/真实两站验收，主会话未跑全employee-transfer总套件。`full_site_complete`始终false，同名专用彻底替换、新编号剩余域/双包证明、统一档案/共享媒体、完整跨会话续接及容量多卷等其余pending不关闭。
+
 ## 2026-10-22 · 接通停站切换与加密截止凭据（未部署）
 - 需求：采用停站切换，由现有worker先排空待发自动化，冻结时queue/failures/processing订单全部为零；不做在线增量或搬运行队列，日常备份保持只读、不自动停站。
 - 改动：本轮实际新增本地SQL56/sourceCutover.ts/SourceCutoverPanel，并修改父页、类型、网络及加密index（不是仅文档），同步七份既有文档、新增计划第55节和顶部摘要：超管密码及精确确认语建立持久source维护，账号/自动化原状态、进度/activated_at/资金不改；source冻结为不占单活的terminal技术任务，十域导出正常。取消/离开/过期不自动解除；本人超管带当前cutoff_id/密码及明确放弃切站确认语才能恢复旧站，running export阻断，不能解除dirty import。

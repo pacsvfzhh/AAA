@@ -17,6 +17,10 @@
 
 `private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；`anon` / `authenticated` 没有该 schema 的使用权限。
 
+## 资料迁移当前状态（第56节，2026-10-23 UTC+8，本地未部署）
+- 最新迁移为`20261102000057_release_imported_site.sql`，空站主线离线放行已接；不是所有迁移缺项完成，`full_site_complete=false`，其余pending不扩大关闭。用户确认完全离线，新站启用后旧站由用户自行停用/管理；无系统联网核验、跨站交接锁或额外旧站checkbox，同意freeze/release同UTC日（UTC+8每日08:00换日）。截止凭据/回执不是远程签名或旧站实时冻结证明。
+- 下列SQL55/56及更早章节保留各子阶段实现/测试事实；SQL55本身仍仅总核验，SQL56本身仍仅源冻结/恢复。它们的“最终放行待做”不代表当前空站主线，独立放行及当前证据见SQL57节/计划第56节，不能拿新能力解除新编号链等原阻断。
+
 ## 资料迁移验证版新增接口（本地未部署）
 - SQL40 `20261102000040_close_shared_export.sql`：`employee_export_shared_close` 只结束已核验且关闭时源未变的共享导出，清技术暂存并释放单活任务；`get_employee_transfer_capabilities` 只检查固定RPC存在性，不代表媒体Edge已部署、数据预检或全站导入许可。
 - SQL41 `20261102000041_snapshot_site_export.sql`：`get_employee_export_site_snapshot` 为STABLE超管只读接口，在单次MVCC快照取十领域目录与JSONB文本SHA-256，返回无原文/密码/令牌的元数据。嵌套设备秘密键先拒绝；已有迁入档案时保留SQL33拒绝，不吞错、漏源或补空。开始/结束比较用于发现漂移，不冻结业务或Storage，也不是原子全站备份。
@@ -48,6 +52,18 @@
 - 包装`get_employee_transfer_log`时保留原products/dispatch/identity/finance/activity/verification/notifications/chat/archives子协议排除，再排除`source-cutover-v1`计算`last_export_at`；freeze的finished任务不算最近成功导出。source屏障仅冻结受保护DB写，不等于停止Storage/cron，也不是原子跨DB文件快照。
 - 现有证据：新DB25/25、client74/74、Chromium/WebKit各25场景（含父组TAP52）通过；SQL56下十域11磁文维护态整站61项按3+14+9+6+29互斥组全覆盖通过（原60+新frozen往返/合法重加密摘要篡改拒绝）。583份SQL仍12原历史失败、109表967列不变；主会话最终foundation/scope100/100、client74/74加双浏览器合计TAP126/126、旧导入UI28/28、旧备份UI110/110、transport security13/13、typecheck/lint/build及聊天6/稽核48/工时6通过；整站61项为实现agent完整覆盖，主会话重叠复验不加总。两轮复审修补完成，最终独立复审无新增高置信问题，详见计划第55节。
 - 本轮本地新增SQL56（`20261102000056_freeze_cutover_source.sql`，SHA256=8aab948902a2221119e847fb888da537b18fa775bdd172d21a271a38330d7b68）及客户端/页面，正式所有SQL/Edge/Storage/权限/config/cron/前端均未访问或部署；回滚须先明确源站放弃切站并完成本人resume，且无source/import维护及running任务，才可移除函数包装；不能直接DROP维护或停用guard，本次未执行；最终自动化续接、账号启用/营业放行、同名彻底替换及其他原pending不关闭。原生PG并发/PostgREST/容量、真实Storage和完整切站仍未验。
+
+## 空站离线放行（SQL57，2026-10-23 UTC+8，本地未部署）
+- 新迁移`20261102000057_release_imported_site.sql`无新表；新增`employee_import_site_bind_cutoff(uuid,uuid,jsonb)`、`get_employee_import_site_release_status(uuid,uuid)`（STABLE）和`employee_import_site_release(uuid,uuid,text,text,text)`，另包装共享apply/preflight。公共入口均SECURITY DEFINER、`SET search_path = pg_catalog, public, private, pg_temp`，默认权限撤销后仅给anon/authenticated并在函数内验证本人超管；private helper和被包装旧实现撤权，不能从浏览器直接调用。
+- `employee_import_shared_replace_apply`保留SQL45旧实现，冻结来源非超管`is_active`含NULL及`source_id/role`映射到原任务summary，避免取消清shared staging后丢失原状态。重复apply不能重置快照，历史已apply但无快照拒绝、不从目标停用状态反推。preflight协议保持v3，追加三个release接口及正确shared wrapper存在/能力检查，不改变旧响应形状或接受v1/v2。
+- cutoff bind要求本人原dispatch-import/包/dirty维护，仅接受`version/policy/site_id/cutoff_id/frozen_at/cutoff_hash`六字段及严格类型、UTC微秒、PG jsonb去hash SHA-256/同source，不能绑定目标本站；已绑定不可改。旧日期允许绑定供检查，但不能release。日常包无sourceCutover仍可维护态导入，releaseSession=null不能启用；冻结包dispatch末绑定、导入末返回闭包releaseSession，token不进报告。
+- release凭本人当前超管会话、原job token、密码、精确「確認啟用新站」及expected verification hash，先调用真实SQL55，按其NOWAIT/try-lock顺序重扫十域/最终媒体回执/五份实际备份密文，hash不符拒绝；再查来源暂存failures及目标queue/failures/processing为零、原任务/维护归属和同UTC日，事务末尾再用clock_timestamp防跨日，失败全部回滚。120秒客户端等待不改变数据库执行上限。
+- 事务内只向`users/admins/notification_automation_plans/notification_automation_tasks/notification_automation_queue`五表发精确permit并在正常/异常路径最终清除。按来源恢复员工及非超管is_active（true/false/NULL），保留新超管；按来源恢复plan/task status，不改activated_at/version/updated_at/成员/基线/progress/executions/资金。active员工各入队一次，由既有worker后续处理，不现场评估、发送或发奖。
+- paused/archived plan可合法含active task；持评估锁期间临时plan active→task恢复→plan原状态，不关trigger。admins未知trigger审核只限UPDATE事件，保留既有删除专用trigger。完整受保护业务行前后指纹只允许预期启停/status差异及精确新queue，防隐藏副作用，不以几列摘要替代全行核对。
+- 成功仅清本人原dirty maintenance、job finished、summary.site_release receipt及审计，不用会清staging的通用finish；原staging和五份备份保留。同事务错误全回滚；COMMIT失响应后必须fresh status读原回执、不自动重发release。status只查候选门槛/历史事实，不是新实物复验，已放行回执也不保证今日无新维护。
+- 当前证据：主会话新SQL专项24（父+23）通过/33旧顶层skip不计，另strict/原十域golden/冻结golden3项通过/31skip不计；新client187与3旧client合312、双浏览器各23场景含父组48/48通过，旧UI28/28由UIagent通过；reviewer重叠复验不加总。584迁移仍12既有失败、109表967列，非干净建库。**foundation/scope待主会话最终核对**（旧583 baseline初跑失败正在修正、不计通过）；typecheck/lint/build此前通过、主会话最终重跑待核对，聊天6通过，audit/work待复跑。详细真实worker/磁盘/COMMIT/一次7.25奖励链见计划56.4，不称全文件或总套件。
+- release本地95受保护表指纹约2.8秒，仅小fixture，不证明生产anon3秒容量/原生PG并发；UI API/IO替身无外网，不代表真实Storage/CORS/原生PG或真实两站验收。完整刷新/跨会话token恢复未实现；未跑全employee-transfer总套件。无正式SQL/Edge/Storage/权限/config/cron/前端访问或部署，前端待用户部署。
+- 回退（未执行）仅移除SQL57新增函数并还原共享apply/preflight函数包装/权限，须先停用对应前端入口并单独审核；不是数据回滚，不CASCADE清业务/staging/备份、不清维护、不撤销已释放营业或队列/资金，不能据此直接切回旧站。其余缺项和`full_site_complete=false`保留。
 
 ## 覆盖前独立员工记录备份（SQL46，本地未部署）
 - `20261102000046_backup_employee_before_restore.sql`新增`employee_safety_backup_begin`及catalog/page/verify/close/stop_owned六个RPC，不依赖共享或派单配置恢复，不建立维护、不写业务资料。旧SQL39仍保留原协议及不完整门禁，不能作为配置改动前的独立备份。
@@ -407,8 +423,8 @@ NOTIFY pgrst, 'reload schema';
 - `supabase/tests/audit-cleanup.test.mjs`：用 PGlite 加载缩减版 schema，再执行指定的真实迁移；每个测试在事务中执行后回滚。运行 `npm run test:audit-cleanup`。
 - `supabase/tests/service-chat-scale.test.mjs`：先装入正式库现行的会话摘要与分组 RPC（取自旧迁移），在混合数据（跨组旧会话、已归档员工、停用/紧急组、富卡、空时间消息、空聊天表）上记录结果，再执行 `20261101000002` 并逐行对比；另验证 `get_admin_chat_unread_counts` 的范围、无效/停用会话拒绝与执行权限。运行 `npm run test:service-chat`。
 - `supabase/tests/work-session-stop.test.mjs`：装入现行的开工/停工/恢复 RPC，先复现「主动停工后刷新被自动恢复」，再执行 `20261101000003` 验证主动停工不再恢复、刷新（beacon 停工）仍会恢复、停工后重新开工再刷新仍会恢复，以及权限。运行 `npm run test:work-session`。
-- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对迁移回放中的12项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名RPC和私有表权限；新增/变化/缺失失败阻断。SQL56当前库存583份SQL仍12原历史失败；主会话foundation/scope最终100/100通过。测试使用platform/baseline替身，**不是全部迁移成功或真实空库建库证明**。
-- `supabase/tests/support/transfer-scope.mjs` 与 `employee-transfer-scope.test.mjs`：固化本地109张根表、967列及业务迁移意图，拒绝未知/缺失表列、类型/空值性漂移；不是导出授权清单，也不表示转换已实现。SQL47阶段基础/范围三文件曾最终完整117/117通过；SQL56当前583份SQL仍同12项原历史失败、109表967列不变，本轮主会话foundation/scope最终100/100通过（该数不与历史117相加）。根表覆盖不含独立分区，实际目标库仍须重新核对。
+- `supabase/tests/employee-transfer-foundation.test.mjs`：严格核对迁移回放中的12项已知历史失败（文件和完整错误必须一致），验证迁移辅助的双库资源释放、同站保护、匿名RPC和私有表权限；新增/变化/缺失失败阻断。SQL56阶段583份SQL及foundation/scope100/100为历史通过记录；SQL57当前584份仍12项既有失败、109表967列，主会话foundation/scope重跑待最终核对（旧583 baseline初跑失败正在修正，不计通过），不提前填通过数。测试使用platform/baseline替身，**不是全部迁移成功或真实空库建库证明**。
+- `supabase/tests/support/transfer-scope.mjs` 与 `employee-transfer-scope.test.mjs`：固化本地109张根表、967列及业务迁移意图，拒绝未知/缺失表列、类型/空值性漂移；不是导出授权清单，也不表示转换已实现。SQL47阶段基础/范围三文件曾最终完整117/117通过；SQL56阶段583份SQL/12项旧失败及foundation/scope100/100保留历史事实，不与117相加；SQL57当前584份/12项既有失败、109表967列，foundation/scope待主会话最终核对，旧583 baseline初跑失败不计通过。根表覆盖不含独立分区，实际目标库仍须重新核对。
 - `employee-transfer-production-scope.test.mjs` 单独核对正式 96 根表/871 列及独立目录 SHA-256，与本地 109 表配置不可混用；`employee-transfer-triggers.test.mjs` 验证真实迁移 SQL 的精确状态恢复、回执和提交门禁（使用 PGlite，不是原生多连接测试）。
 - `npm run test:employee-transfer` 运行加密、ZIP 清单/容器、增量 SHA-256、基础回放、双结构库存、触发器、共享设置导出/导入、来源覆盖与备份/API、产品专用数据库/客户端、派单交单导出/目标预检及导入准备/独立备份、持续维护、派单配置、交单原文/使用计数及同包员工身份/精简订单及来源成员/used防双计数及资金六表、登录/工时/停工标记三表、实名15列及证件媒体SQL/API/客户端/Edge分层测试；本轮新增通知/广播/范本及自动化13表原文/关联预检；第31节曾对34文件分组覆盖6058项；第32节新增配置计划/独立通知记录备份后，本轮只对7文件分组覆盖1524项，其中activity-db236按46/44/60/86互斥名称组实际执行。单组跳过不计通过，合并无遗漏；不把历史总数当本轮完整总命令通过。全站往返、管理员/配置/自动化/真实Storage及界面验收尚未完成，不以fakeStorage替代实际媒体验收。专项命令为 `test:employee-transfer:crypto`、`:foundation`、`:scope`。
 - 聊天SQL28/29专项为`employee-transfer-chat-{api,client}.test.mjs`及activity-db的`chat transfer:`组：67+12项；本轮同时重验旧activity-db244项，五个迁移文件分组395项（67+256+72），通过名称集合无漏/重。通知旧断言修正后单独复验，不声称一次全文件或npm总命令零失败；详细组数及超时说明见计划第34节。无聊天业务apply或媒体/界面验收。
