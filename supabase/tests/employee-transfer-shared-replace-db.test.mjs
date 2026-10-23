@@ -264,6 +264,16 @@ const events = job => rows(db, 'SELECT action,details FROM private.employee_tran
 const backupState = job => scalar(db, 'SELECT to_jsonb(backup) FROM private.employee_transfer_shared_backups AS backup WHERE id=$1', [job.job_id]);
 const backupCount = job => scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_shared_backups WHERE id=$1', [job.job_id]);
 const stagingState = job => rows(db, 'SELECT to_jsonb(staged) AS value FROM private.employee_transfer_staging AS staged WHERE job_id=$1 ORDER BY table_key,chunk_no', [job.job_id]);
+// Public dry-run deliberately hides records; inspect the real STABLE SQL plan without granting browser access.
+async function readonlyReplacementPlan(job) {
+  await db.exec('SAVEPOINT readonly_replace_plan; SET LOCAL transaction_read_only=on');
+  try {
+    return await scalar(db, `SELECT private.employee_transfer_shared_replace_plan(task,
+      private.employee_transfer_shared_import_data(task)) FROM private.employee_transfer_jobs AS task WHERE id=$1`, [job.job_id]);
+  } finally {
+    await db.exec('ROLLBACK TO SAVEPOINT readonly_replace_plan; RELEASE SAVEPOINT readonly_replace_plan');
+  }
+}
 async function uploadGateChunks(job, plan, sealed) {
   const bytes = gateCipher();
   await append(job, plan, 0, bytes.subarray(0, 47));
@@ -296,11 +306,16 @@ async function* diskSource(path) {
   } finally { await handle.close(); }
 }
 
-test('real replacementBackup disk encryption, authenticated rereads, server append/seal and saved-cipher decrypt round trip',
+test('real replacementBackup disk encryption, authenticated rereads, server append/seal and saved-cipher decrypt round trip with independent duplicate globals',
   { timeout: 60000 }, async () => transaction(async () => {
+    const fixture = await independentCurrencyFixture([{ config_value: 'USDC' }, { config_value: 'USDC' }]);
+    const sourceBefore = await settingState(oldSite);
     const before = await businessState();
-    const { job, plan } = await prepared();
+    const targetTuples = await rows(db, `SELECT id,ctid::text AS tuple FROM public.admin_configs
+      WHERE admin_id IS NULL AND config_type='currency_unit' ORDER BY id`);
+    const { job, plan } = await prepared(currencyInput(fixture.source));
     applicable(plan);
+    assertCurrencyReuse(await readonlyReplacementPlan(job), fixture);
     const frozen = await descriptor(job);
     assert.equal(frozen.backup_id, job.job_id);
     assert.equal(frozen.plan_hash, plan.plan_hash);
@@ -395,8 +410,29 @@ test('real replacementBackup disk encryption, authenticated rereads, server appe
       assert.equal(values({ texts: expected }, 'admins').find(item => item.id === NEW.branch).password_hash,
         before.admins.find(item => item.id === NEW.branch).password_hash, 'backup contains pre-replacement target fields');
       assert.deepEqual(await businessState(), before, 'backup itself must not apply business changes');
+      await db.exec('SAVEPOINT independent_currency_drift');
+      try {
+        await db.query(`UPDATE public.admin_configs SET config_value='USDT' WHERE id=$1`, [fixture.target[0].id]);
+        const drifted = await businessState();
+        const task = await jobState(job);
+        const audit = await events(job);
+        await assert.rejects(apply(job, plan), /target changed/i);
+        await assert.rejects(dryRun(job), /target changed/i);
+        assert.deepEqual(await businessState(), drifted, 'real sealed backup must not authorize a drifted duplicate set');
+        assert.deepEqual(await jobState(job), task);
+        assert.deepEqual(await events(job), audit);
+        assert.deepEqual(await descriptor(job), frozen);
+      } finally {
+        await db.exec('ROLLBACK TO SAVEPOINT independent_currency_drift; RELEASE SAVEPOINT independent_currency_drift');
+      }
       assert.equal((await apply(job, plan)).success, true, 'real persisted backup unlocks replacement');
       const applied = await businessState();
+      assert.deepEqual(applied.admin_configs.filter(isGlobalCurrency), before.admin_configs.filter(isGlobalCurrency),
+        'reuse skips both target duplicate rows, including their original timestamps');
+      assert.deepEqual(await rows(db, `SELECT id,ctid::text AS tuple FROM public.admin_configs
+        WHERE admin_id IS NULL AND config_type='currency_unit' ORDER BY id`), targetTuples,
+      'no no-op UPDATE or delete/reinsert of reused target settings');
+      assert.deepEqual(await settingState(oldSite), sourceBefore, 'the source database remains read-only');
       await cancel(job);
       assert.deepEqual(await businessState(), applied, 'cancel must not pretend to undo already committed replacement');
       assert.equal(await scalar(db, 'SELECT count(*)::int FROM private.employee_transfer_staging WHERE job_id=$1', [job.job_id]), 0);
@@ -525,6 +561,174 @@ test('system keys and administrator/global settings use source values and mapped
     }
   }));
 
+const isGlobalCurrency = item => item.admin_id === null && item.config_type === 'currency_unit';
+const settingState = site => rows(site, 'SELECT to_jsonb(item) AS value FROM public.admin_configs AS item ORDER BY id');
+const settingContent = item => Object.fromEntries(Object.keys(item).sort()
+  .filter(key => !['id', 'created_at', 'updated_at'].includes(key)).map(key => [key, item[key]]));
+const currencyInput = source => changed('admin_configs', items => [...items.filter(item => !isGlobalCurrency(item)), ...source]
+  .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+async function independentCurrencyFixture(sourceBodies, targetBodies = sourceBodies) {
+  const seeded = (await settingState(db)).map(item => item.value).filter(isGlobalCurrency);
+  assert.equal(seeded.length, 2, 'retain the real historical duplicate-global seed');
+  const target = [];
+  for (const [index, body] of targetBodies.entries()) {
+    const item = { ...seeded[0], config_value: 'USDC', icon_type: 'default', icon_custom_url: null,
+      ...body, id: seeded[index]?.id ?? randomUUID(), created_at: sourceTime, updated_at: sourceTime };
+    await db.query(`INSERT INTO public.admin_configs
+      (id,admin_id,config_type,config_value,icon_type,icon_custom_url,created_at,updated_at)
+      VALUES ($1,NULL,'currency_unit',$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET
+        config_value=EXCLUDED.config_value,icon_type=EXCLUDED.icon_type,icon_custom_url=EXCLUDED.icon_custom_url,
+        created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at`,
+    [item.id, item.config_value, item.icon_type, item.icon_custom_url, item.created_at, item.updated_at]);
+    target.push(item);
+  }
+  const source = sourceBodies.map((body, index) => ({ ...seeded[0], config_value: 'USDC',
+    icon_type: 'default', icon_custom_url: null, ...body, id: randomUUID(),
+    created_at: index % 2 ? '2023-01-02T03:04:05.123456Z' : null, updated_at: null }));
+  assert.equal(await scalar(db, 'SELECT count(*)::int FROM public.admin_configs WHERE id=ANY($1::uuid[])',
+    [source.map(item => item.id)]), 0, 'model independent installs, not clone-preserved UUIDs');
+  return { source, target };
+}
+function assertCurrencyReuse(plan, { source, target }) {
+  applicable(plan);
+  assert.deepEqual(plan.conflicts, []);
+  const records = plan.records.filter(item => item.table_key === 'admin_configs' && source.some(row => row.id === item.source_id));
+  assert.equal(records.length, source.length);
+  assert.equal(new Set(records.map(item => item.target_id)).size, target.length, 'reuse must be one-to-one, not many-to-one');
+  assert.deepEqual(records.map(item => item.target_id).sort(), target.map(item => item.id).sort());
+  for (const row of source) {
+    const sameContent = item => JSON.stringify(settingContent(item)) === JSON.stringify(settingContent(row));
+    const ordinal = source.filter(sameContent).map(item => item.id).sort().indexOf(row.id);
+    const targetId = target.filter(sameContent).map(item => item.id).sort()[ordinal];
+    assert.deepEqual(records.find(item => item.source_id === row.id), {
+      table_key: 'admin_configs', source_id: row.id, target_id: targetId, action: 'reuse',
+    }, 'each complete-content group pairs UUIDs in C order');
+  }
+}
+
+for (const [name, sourceBodies, targetBodies] of [
+  ['two identical USDC defaults', [{ config_value: 'USDC' }, { config_value: 'USDC' }]],
+  ['mixed content with equal per-content frequencies', [
+    { config_value: 'USDC' }, { config_value: 'EUR', icon_type: 'preset_1' },
+    { config_value: 'USDC' }, { config_value: 'EUR', icon_type: 'preset_1' },
+  ], [
+    { config_value: 'EUR', icon_type: 'preset_1' }, { config_value: 'USDC' },
+    { config_value: 'EUR', icon_type: 'preset_1' }, { config_value: 'USDC' },
+  ]],
+]) {
+  test(`independent-UUID duplicate global settings reuse distinct C-ordered targets: ${name}`, async () => transaction(async () => {
+    const fixture = await independentCurrencyFixture(sourceBodies, targetBodies);
+    const sourceBefore = await settingState(oldSite);
+    const before = await businessState();
+    const input = currencyInput(fixture.source);
+    const inputBefore = structuredClone(input);
+    const { job, plan } = await prepared(input);
+    applicable(plan);
+    const staged = await stagingState(job);
+    const task = await jobState(job);
+    const audit = await events(job);
+    const backup = await backupState(job);
+    assert.equal(backup.sealed_at, null);
+    assert.deepEqual(backup.chunks, []);
+    const full = await readonlyReplacementPlan(job);
+    assertCurrencyReuse(full, fixture);
+    assert.equal(full.plan_hash, plan.plan_hash);
+    assert.deepEqual(await readonlyReplacementPlan(job), full);
+    assert.deepEqual(await dryRun(job), plan);
+    assert.deepEqual(await backupState(job), backup, 'stable planning does not rewrite the frozen backup');
+    assert.deepEqual(await stagingState(job), staged);
+    assert.deepEqual(await jobState(job), task);
+    assert.deepEqual(await events(job), audit);
+    await assert.rejects(apply(job, plan), /saved and sealed/, 'reuse is not permission to skip the independent backup');
+    assert.deepEqual(await businessState(), before);
+    assert.deepEqual(await settingState(oldSite), sourceBefore);
+    assert.deepEqual(input, inputBefore);
+  }));
+}
+
+for (const [name, sourceBodies, targetBodies, mutate, reason = 'ambiguous_target_setting'] of [
+  ['unequal content frequencies despite equal total/set',
+    [{ config_value: 'USDC' }, { config_value: 'USDC' }, { config_value: 'EUR' }],
+    [{ config_value: 'USDC' }, { config_value: 'EUR' }, { config_value: 'EUR' }]],
+  ['fewer source rows', [{ config_value: 'USDC' }], [{}, {}]],
+  ['more source rows', [{}, {}, {}], [{}, {}]],
+  ['different literal value', [{}, { config_value: 'USDC ' }], [{}, {}]],
+  ['different icon type', [{}, { icon_type: 'preset_1' }], [{}, {}]],
+  ['NULL icon is not default icon', [{}, { icon_type: null }], [{}, {}]],
+  ['empty icon URL is not NULL', [{}, { icon_custom_url: '' }], [{}, {}]],
+  ['one UUID overlaps the target set', [{}, {}], [{}, {}], fixture => { fixture.source[0].id = fixture.target[0].id; }],
+  ['source UUID occupies another natural key', [{}, {}], [{}, {}], async fixture => {
+    const occupied = (await settingState(db)).map(item => item.value).find(item => item.admin_id === null && item.config_type === 'company_name');
+    assert.ok(occupied);
+    fixture.source[0].id = occupied.id;
+  }],
+  ['non-global source duplicates', [{}, {}], [{}, {}], async fixture => {
+    await putSetting(db, NEW.root, 'currency_unit', 'USDC');
+    for (const item of fixture.source) item.admin_id = OLD.root;
+  }, 'mapped_source_identity_collision'],
+  ['matching custom media remains blocked', [{ icon_custom_url: 'https://source.invalid/icon.png' },
+    { icon_custom_url: 'https://source.invalid/icon.png' }], undefined, undefined, 'media_backup_and_rewrite_required'],
+  ['same IDs with a swapped content multiset', [{ config_value: 'EUR' }, { config_value: 'USDC' }],
+    [{ config_value: 'USDC' }, { config_value: 'EUR' }], fixture => {
+      fixture.source.forEach((item, index) => { item.id = fixture.target[index].id; });
+    }],
+  ['same IDs with one changed value', [{}, { config_value: 'EUR' }], [{}, {}], fixture => {
+    fixture.source.forEach((item, index) => { item.id = fixture.target[index].id; });
+  }],
+  ['same IDs with one changed icon', [{}, { icon_type: 'preset_1' }], [{}, {}], fixture => {
+    fixture.source.forEach((item, index) => { item.id = fixture.target[index].id; });
+  }],
+]) {
+  test(`duplicate global multiset exception stays restricted: ${name}`, async () => transaction(async () => {
+    const fixture = await independentCurrencyFixture(sourceBodies, targetBodies);
+    await mutate?.(fixture);
+    const sourceBefore = await settingState(oldSite);
+    const before = await businessState();
+    const { job, plan } = await prepared(currencyInput(fixture.source));
+    assert.equal(plan.can_apply, false, JSON.stringify(plan.conflicts));
+    assert.ok(plan.conflicts.some(item => item.table_key === 'admin_configs' && item.reason === reason &&
+      fixture.source.some(row => row.id === item.source_id)), JSON.stringify(plan.conflicts));
+    const staged = await stagingState(job);
+    assert.deepEqual(await dryRun(job), plan, 'refusal is deterministic');
+    assert.equal((await readonlyReplacementPlan(job)).plan_hash, plan.plan_hash);
+    await assert.rejects(descriptor(job), /conflict-free/);
+    await assert.rejects(apply(job, plan), /saved and sealed|conflicts/);
+    assert.equal(await backupCount(job), 0);
+    assert.deepEqual(await stagingState(job), staged);
+    assert.deepEqual(await businessState(), before);
+    assert.deepEqual(await settingState(oldSite), sourceBefore);
+  }));
+}
+
+for (const [name, mutate] of [
+  ['content', id => db.query(`UPDATE public.admin_configs SET config_value='USDT' WHERE id=$1`, [id])],
+  ['UUID', id => db.query('UPDATE public.admin_configs SET id=$2 WHERE id=$1', [id, randomUUID()])],
+  ['timestamp excluded only from content matching', id => db.query(`UPDATE public.admin_configs SET updated_at=$2 WHERE id=$1`, [id, '2025-02-03T04:05:06Z'])],
+]) {
+  test(`independent-UUID reuse plan refuses target drift: ${name}`, async () => transaction(async () => {
+    const fixture = await independentCurrencyFixture([{}, {}]);
+    const { job, plan } = await prepared(currencyInput(fixture.source));
+    assertCurrencyReuse(await readonlyReplacementPlan(job), fixture);
+    const frozen = await descriptor(job);
+    const frozenPage = await page(job, 'admin_configs');
+    const staged = await stagingState(job);
+    const backup = await backupState(job);
+    await mutate(fixture.target[0].id);
+    const drifted = await businessState();
+    const task = await jobState(job);
+    const audit = await events(job);
+    assert.notEqual((await readonlyReplacementPlan(job)).plan_hash, plan.plan_hash);
+    await assert.rejects(dryRun(job), /target changed/i);
+    assert.deepEqual(await descriptor(job), frozen);
+    assert.deepEqual(await page(job, 'admin_configs'), frozenPage);
+    assert.deepEqual(await backupState(job), backup);
+    assert.deepEqual(await stagingState(job), staged);
+    assert.deepEqual(await jobState(job), task);
+    assert.deepEqual(await events(job), audit);
+    assert.deepEqual(await businessState(), drifted, 'drift refusal must not repair or overwrite target rows');
+  }));
+}
+
 for (const retainedIndex of [0, 1]) {
   test(`one exact-ID source currency replacement cannot choose between two target globals (retained row ${retainedIndex + 1})`,
     async () => transaction(async () => {
@@ -559,6 +763,10 @@ test('the full exact-ID exact-content duplicate global currency set remains reus
     const { job, plan } = await prepared(input);
     applicable(plan);
     assert.deepEqual(plan.conflicts, []);
+    assertCurrencyReuse(await readonlyReplacementPlan(job), {
+      source: values(input, 'admin_configs'), target: before.map(item => item.value).filter(isGlobalCurrency),
+    });
+    assert.deepEqual(await dryRun(job), plan);
     await gateBackup(job, plan);
     assert.equal((await apply(job, plan)).success, true);
     assert.deepEqual(await rows(db, 'SELECT to_jsonb(item) AS value FROM public.admin_configs AS item ORDER BY id'), before,
