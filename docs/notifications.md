@@ -1,9 +1,5 @@
 # 通知、通知自动化与公告
 
-## 迁移当前决定（第56节，2026-10-23 UTC+8，本地未部署）
-- 空站主线的离线放行/来源自动化原状态续接已由SQL57接通；不是重建任务/基线或补发旧奖励，不扩大关闭新编号通知实际恢复等其他pending，`full_site_complete`始终false。用户确认完全离线，新站启用后旧站自行停用/管理；无系统联网核验、跨站交接锁或额外旧站checkbox，同意freeze/release同UTC日（UTC+8每日08:00换日）。cutoff/receipt不是远程签名或旧站当前仍冻结证明。
-- 下文第31–33/53/55节保留当时子阶段实现和测试事实，其中“最终续接/放行待做”不再代表当前空站主线；独立SQL57放行见第56节及本文新增章节，不代表新编号通知配置/备份/媒体/13表恢复已完成。
-
 ## 后台发送 `MessageManagement.tsx`（导航「通知」）
 - 收件人面板：二级只看到自己的员工；可按启用/已验证、姓名或员工 ID 筛选；多个标签之间是 **OR** 条件；已勾选的员工排到列表最前面；改变筛选不会取消已勾选。
 - 发送：`send_admin_message_with_delivery`，参数含 `delivery_mode`（`realtime_only` / `login_only` / `realtime_with_login_fallback`）、优先级、可选奖金和 `operation_id`。内容相同的请求复用同一个操作编号，避免重复发奖。
@@ -47,58 +43,6 @@
 - 旧「共享任务」（`is_shared_template=true`）：早期给二级管理员复制用的模板。迁移 `20260920126000_execute_enabled_shared_notification_tasks.sql` 让启用中的模板也会执行，但 v2 后台只列出 `is_shared_template=false` 的任务，也不能复制或管理模板。2026-10-09 先暂停了会造成重复祝贺的「46」「654」（`20261031000000_pause_hidden_shared_notification_tasks.sql`），随后按用户要求删除全部 4 个模板及其进度记录（`20261031000002_delete_hidden_shared_notification_tasks.sql`）；正式库已没有共享模板。表结构和旧的复制/保存 RPC 仍在，前端不再调用。
 - 未分组任务（`plan_id IS NULL`）：方案改版前建立的旧任务。新版页面在电脑版左侧只列方案，没有「未分組任務」入口（只有手机版下拉选单可选），新建任务也必须属于方案。bb 名下两条「654」（从旧模板复制，一条启用、一条草稿）因此在电脑版看不到，2026-10-09 按用户要求删除（`20261031000003_delete_legacy_ungrouped_notification_tasks.sql`）；正式库已没有未分组任务。如果以后又出现这类任务，需要先给电脑版补上入口。
 - 迁移：`20260918231458_create_notification_automation_system.sql`、`20260922001942_harden_all_notification_automation_triggers.sql`、`20260922185616_accelerate_notification_automation_queue.sql`、`20261101000000_scale_notification_automation_processing.sql`。
-
-## 资料迁移子阶段（2026-10-19，UTC+8，本地未部署）
-
-- 新SQL23/24与`employeeTransfer/notificationsTransfer.ts`、`notificationsApi.ts`仅完成原文导出、同包暂存和关联预检。固定13表：方案、任务、方案成员、任务指定收件人、进度、执行、年度标记、失败、通知、通知收件人、通知范本、广播、广播收件人。公告/分类不纳入；无收件历史的方案/任务/范本也导出，不静默过滤无法对应的历史记录。
-- NDJSON保留numeric、NULL与微秒；stage/last_stage/delivery_sequence用十进制字符串，组合主键附加虚拟id并按C顺序分页。四个投递领取/完成租约字段不导出，已读/展示/实际投递状态保留；失败只传固定脱敏文本或原NULL，不搬原始错误。触发快照仅审核过的五键及可选年度月/日。date_runs缺表时只声明空能力，不擅自建表，也不代表旧维护协议已兼容正式缺表。
-- 导入绑定原dispatch-import任务及完整identity_catalog/finance_catalog，要求真实独立备份、dirty维护、管理员映射、身份及资金前置。暂存不调用发送/发奖函数，不写业务表/队列或增加流水/账本/financial_operations；预检核对执行—通知—收件—performance_bonus的员工、金额、币种、引用与自动执行operation_id，以及成员归属/唯一键。被删除通知的旧奖励若需档案才能解释，当前显式报告冲突，不自动修钱或猜关联。
-- `get_employee_import_notifications_plan`为STABLE直接鉴权读取任务，同一快照核验，不续heartbeat或保存计划；本地READ ONLY事务验证通过。无冲突也can_restore=false，restore_pending/media_pending/automation_pending=true；checked只表示原文与关联预检完成。导出verify/close也明确media_pending、不推进全站导出时间，close前再次检查来源、身份和资金漂移。
-- 通知API/客户端710项、双站新增43项及原活动/实名回归分组通过，整体34文件6058项覆盖，详见迁移计划第31节。**本轮未访问或修改正式环境，未部署SQL/Edge/前端或调整Storage/权限/cron，无UI/导航或浏览器演练。** 同名配置备份/留证覆盖、真实通知媒体、实际恢复及执行去重/自动化续接仍待实现，不把本阶段当员工或全站完成。
-
-## 通知配置覆盖前独立备份（2026-10-19，UTC+8，本地未部署）
-
-- SQL25及`notificationsConfigurationApi.ts`提供同包配置对应计划：方案按映射管理员+大小写折叠名称，任务按管理员/方案/精确名称/共享标志，范本按管理员/精确名称；与现有方案唯一索引一致。列出需移出成员及目标多余任务，空来源名单不保留旧成员，只预览不改业务；范围外方案成员占用、歧义/ID冲突及已有相关通知/奖励/执行等真实历史均阻断，不删除历史证据。范围内成员允许按来源调整，不取并集。
-- 独立RLS私有`employee_transfer_notification_backups`避免覆盖原派单备份；冻结目标13表记录，`notificationsBackup.ts`独立加密保存、完整回读认证、密文重读上传与封存，原超管可在任务取消/过期后取回sealed密文。未封存记录与临时明文随任务结束清理，派单已封存备份不变。实际行指纹包含被排除的租约和原始错误，投影相同的漂移也拒绝。
-- 记录备份明文8MiB/密文9MiB上限，超限拒绝不截断；页200行/256KiB、行64KiB。**没有实际文件，media_included=false；备份不代表对象可完整还原，不能因此开放覆盖。** 配置apply、通知历史恢复与自动化续接尚未提供，can_apply_configuration=false，媒体/自动化pending保持；不发通知/奖金、不启用员工、不解除维护。
-- 本轮新备份/API510项通过，扩展双站增加46项，实际完整分组与限制见迁移计划第32节。测试修正多对一映射漏检和预取消验证残留上传权限等问题；未访问正式环境、未部署SQL/Edge/前端或调整Storage/权限/cron，无UI/浏览器或真实Storage验收。
-
-## 通知实际恢复与媒体（2026-10-20，UTC+8，本地未部署）
-
-- SQL26/27及`notificationsMedia.ts`、`notificationsRestoreApi.ts`在既有13表原文/配置计划/独立密文备份上增加实际恢复，不修改SQL23–25的旧响应或把原只读计划改成写入入口。显式流程：全卷认证→记录/媒体全量校验与暂存→受控上传/回读→无冲突配置计划及独立备份封存→begin→逐块chunk→全部文件按最终代次recheckImport→verify；进度仅来自确认回执，结果不明先status再显式继续，不自动重试写入。
-- 媒体覆盖`announcement-images`、`chat-images`、`template-images`中被通知/范本/自动化快照/广播引用的文件，不迁移仅供公告使用的素材。每件50MiB、最多3000件、记录加媒体1GiB；JPEG/PNG/GIF/WebP/PDF/MP4/WebM魔数校验不是完整解码或病毒扫描。外链、签名/编码/歧义链接、srcset和CSS媒体语法显式阻断，不漏文件；普通无实体编码的外链超链接保持原样。
-- 同名方案/任务/范本实际来源覆盖，管理员/父级对应仅用服务端同包映射；成员精确替换、多余任务暂停，其他范围配置不删除。原方案/任务状态记录在任务中，目标保持暂停直到未来全站放行，不能在本阶段恢复自动发送。
-- 恢复消息/收件/广播、执行唯一标记/进度/年度记录/失败记录，循环外键分先建执行→消息→补执行链接处理；投递编号重新分配且顺序保持，租约清空。奖励金额/引用来自既有资金恢复，不调用发送或入账函数，不复制财务幂等请求原文。人工通知收件留证由现有触发器生成并逐行核对，旧证据冲突阻断，避免后续编辑/封存员工丢收件快照。
-- 四客户端/服务文件902项、8项新增真实SQL恢复、foundation/scope70项及聊天/稽核专项通过；SQL使用合成Edge回执，服务使用fakeStorage，不能替代真实Storage或整站验收。无UI/导航、无线上部署，账号停用及dirty维护仍保留；跨站截止点、队列重建、恢复自动任务和最终全站放行仍待完成。详见计划第33节。
-
-## 新员工UUID通知、奖励与自动化准备（第53节，2026-10-22，UTC+8，本地未部署）
-
-- 用户已批准继续新编号通知/奖励/自动化阶段；SQL54 `20261102000054_prepare_mapped_notifications.sql`与`employeeMappedNotifications.ts`仅完成独立准备子阶段，**未完成候选UUID下的实际通知恢复**。10私有helper/4公共RPC为`employee_import_mapped_notifications_bind/stage/plan/status`，只写既有私有staging；无新表、不改旧迁移/函数/trigger，不发permit、不改summary、不发送或发奖，plan/status为STABLE无heartbeat且不固化恢复许可。
-- 每入口要求SQL53实名verified，并实物重验SQL48–53完整前置；通知目录精确匹配identity和mapped finance。固定13表原文NDJSON按C顺序、连续块、字节/字段/hash重扫，目录和原文不可变、同块幂等。这里只检查员工/管理员/父子/唯一键及执行—消息—收件—真实SQL51奖金关系，不建立配置对应或改写业务行。
-- 执行owner为NULL也直接检查task/plan/employee归属；奖金created_by非NULL时须与sender映射一致；所有非空execution.message_id均须消息反向回指，不限成功执行。合法all-NULL历史保留，不猜关联或补发奖金。候选员工残留及非配置UUID碰撞阻断；配置同UUID同归属同名同父仅留待后续配置plan，不同名/错归属/错父报冲突，不表示已对应或允许覆盖。
-- 客户端四显式方法使用当前会话和共享RPC类型，严格深冻结/不倒退。未知bind须显式status核对目录；未知stage须同table+chunk status核对原文SHA-256/行数/字节回执，部分stage亦可查；plan或其他块状态不能解锁。写不自动重试，取消后底层没结束仍互斥；120秒等待不提高服务端上限，无UI/协调器或媒体Edge修改。
-- `can_restore/complete_employee_backup/can_archive/can_replace/full_site_complete=false`，`configuration_pending/records_pending/media_pending/automation_pending=true`；员工停用、dirty维护保留，未开放同名覆盖或营业。上文第32–33节旧配置备份/实际恢复能力不能直接当作本轮新编号链已完成，下一步仍须通知配置对应+独立备份、媒体及13表实际候选UUID恢复；自动化截止点/队列续接、聊天映射、双密文完整证明/安全封存/总协调与放行仍缺。
-- 新DB72唯一场景按20/20/32互斥范围最终通过，新client38（含真实transport四RPC60组合及24伪前缀/后缀检查，不另拆计数）通过。foundation/scope98、SQL54下旧十域11密文维护态28分别通过；旧通知六文件与mapped verification逐项列于计划第53.3节，不加总。无正式访问或SQL/Edge/Storage/权限/config/cron/前端部署，无UI/浏览器测试，真实Storage/PG并发/容量未验；不作为实际通知恢复、干净建库或总套件证明。
-
-## 停站切换的自动化排空与截止点（第55节，2026-10-22 UTC+8，本地未部署）
-- 用户最新决定采用停站切换，不做在线增量，不搬运行队列。由现有worker先排空待发自动化并处理失败，freeze时`notification_automation_queue`、`notification_automation_failures`及`processing`订单必须全部为零；非零即阻断，不通过清空记录、跳过失败或丢弃待发通知冒充排空。日常备份只读业务资料、不自动停站。
-- SQL56/sourceCutover.ts/SourceCutoverPanel通过超管密码及「確認暫停舊站業務並導出」建立持久source维护，不暂停/重启方案，不改账号/自动化原启停、基线、进度、activated_at或资金，不重新加入成员、重建基线或补发历史奖金。冻结为独立terminal技术任务，不占单活任务，十域导出正常；getlog保留旧子协议排除并排除freeze，不计作最近成功导出。
-- 取消/离开/过期不自动解除。本人超管可带当前cutoff_id、密码及「確認恢復舊站業務並放棄切站」明确恢复旧站，有running export阻断；不能解除dirty import。恢复旧站后不能再用旧切站文件启用新站，不能两站同时营业。
-- 来源截止凭据进入加密index，reader严格重算去掉cutoff_hash后的PG jsonb文本摘要并绑定来源站；合法重加密但摘要篡改也拒绝。它不是远程签名、旧站当前仍冻结的证明或新站启动worker/营业的许可；旧文件不会因旧站恢复而自动被删除或失效，单凭本机认证不能启用；当前SQL57采用用户管理旧站的完全离线放行，不要求联网核验或交接锁，见第56节。
-- source屏障仅冻结受保护DB写，不代表停止cron、Storage上传/删除或原子跨DB文件快照。无新表，不改guard/cron/Storage/Edge，不改现有worker规则；最终自动化按截止点安全续接、账号启用/营业放行仍未完成。上文第31–33/53节的历史“截止点/队列待做”按当时事实保留；当前不搬运行队列的决定不代表自动化续接或新编号通知实际恢复已完成，其余pending不关闭。
-- 切站freeze/resume与状态读均不自动重试；模块级未知互锁及writeGeneration拒迟到旧status，父页所有导入/导出/备份互锁，保留显式状态刷新核对。新DB25/25、client74/74、Chromium/WebKit各25场景（含父组TAP52）、SQL56十域11磁文维护态整站61项五互斥组3+14+9+6+29已通过（原60+新frozen往返/合法重加密摘要篡改拒绝）；583份SQL仍12原历史失败、109表967列不变。主会话最终foundation/scope100/100、client74/74加双浏览器合计TAP126/126、旧导入UI28/28、旧备份UI110/110、transport security13/13、typecheck/lint/build及聊天6/稽核48/工时6通过；两轮复审修补完成，最终独立复审无新增高置信问题，详见计划第55节。
-- 本轮实际新增SQL56/source API/panel并修改父页、类型、网络及加密index（本文件仅同步说明），没有正式服务访问或SQL/Edge/Storage/权限/config/cron/前端部署；前端仍待用户另行部署。真实Storage、原生PG并发/容量、最终自动化续接及正式停站切换营业验收未完成，同名彻底替换及其他原pending仍未完成，不宣称完整功能完成。
-
-## 空站离线放行与自动化原状态续接（第56节，2026-10-23 UTC+8，本地未部署）
-- SQL57沿用SQL56的现有worker先排空再freeze，源queue/failures/processing必须全零，不删失败冒充排空、不搬运行队列。新站导入阶段方案/任务仍暂停、账号停用/dirty维护；日常包缺sourceCutover仍可维护态导入但releaseSession=null不能启用。冻结包dispatch末绑定六字段cutoff/PG摘要/同source，已有绑定不可改，末尾返回仅持于闭包的releaseSession，token不进报告。
-- 本人超管原任务/会话、密码、精确「確認啟用新站」及expected verification hash提交，SQL57实际调用SQL55重扫十域、最终媒体回执及五份密文备份；来源暂存failures及目标queue/failures/processing必须为零，同UTC日总复验后及事务末尾检查防跨界。status只是候选门槛或既有提交事实，不是新实物核验；截止凭据不是旧站实时状态证明，不增加跨站联网核验/交接锁。
-- 仅恢复来源员工与非超管is_active含NULL及原plan/task status，不是全员启用。非超管原启停和source/role绑定已由共享apply wrapper在取消清staging前冻结，不能从目标停用值反推。activated_at/version/updated_at/成员/基线/progress/executions及资金原文不改，不重新加入方案，不调用评估、发送或发奖函数；每个来源active员工只入队一次，由既有worker后续处理，旧执行唯一标记继续防重复。
-- 已有paused/archived plan可合法含active task：事务全程持评估锁，临时plan active→恢复task→plan原状态，不关trigger、不重置激活时间或进度。admins未知trigger审核仅限UPDATE，既有删除trigger保留。只发users/admins/plans/tasks/queue五表permit并最终清，完整受保护业务行前后指纹防隐藏发送/资金/基线/历史副作用。
-- 全部检查成功才清本人原dirty维护、job finished及summary receipt/audit，保留staging和五份备份；同事务失败全回滚，COMMIT失响应则fresh status读回执、不再release。preflight维持v3并追加release/wrapper能力检查，bind/status/release120秒单次请求、不自动重试；跨实例writeGeneration及未知互锁保留，兄弟功能锁住时仍可查status。
-- SiteReleasePanel接EmployeeSiteImport下方，显式「查詢啟用條件」→密码/确认语→「核對並啟用新站」，无额外旧站checkbox或联网。独立site-release-report.json，原site-import-report为历史维护回执不重写；报告失败不撤销放行/重发。刷新完整跨会话导入token恢复尚未实现，不用status冒充完整续接或新的总核验。
-- 主会话真实新release SQL24项（父+23）专项通过，33旧顶层skip不计；另strict/原十域golden/冻结golden3项通过，31skip不计，不称全文件。包含真实worker失败拒freeze→drain→11落盘密文→4员工true/false/NULL及三类admin原状态→active/paused/archived plan与active/draft/paused task→真实历史奖励→真实COMMIT失响应/fresh status不重发→首次worker不重复旧奖→真实新订单下一阶段7.25仅一次。新client187与3旧client合312通过；双浏览器各23场景含父组48/48主会话完整复跑、旧UI28/28由UIagent通过，reviewer重叠复验不加总，详见计划56.4。
-- 最终主会话复验：foundation/scope修正显式SQL57清单及584基线后完整101/101通过；584迁移仍12项原历史失败、109表967列，非干净建库。新release client187+旧cutover74+site-import-security13完整三文件274/274通过，与此前312及reviewer结果重叠不加总；Chromium/WebKit各23场景含父组48/48主会话完整复跑通过。typecheck/lint/build通过（保留迁移页约571KiB chunk警告），聊天6/稽核48/工时6分别通过；旧583基线初跑失败及早期fail/aborted不算通过。95受保护表指纹约2.8秒只是小fixture，不证明生产anon3秒容量；预览仅登录、UI API/IO替身无外网，不代表真实Storage/CORS/原生PG并发/真实两站验收，未跑全employee-transfer总套件。
-- 本地已接离线放行，不等于完整迁移完成；同名彻底替换、新编号剩余引用/通知恢复、双包证明、统一档案/共享媒体、完整跨会话续接及容量多卷仍缺。无正式SQL/Edge/Storage/权限/config/cron/前端访问或部署，前端待用户部署；回退仅移除函数/还原包装，不清维护、不撤销已释放营业或资金，非数据回滚。上文第55节及以前历史测试记录不改写为本轮成绩。
 
 ## 公告 `AnnouncementManagement.tsx` + `TiptapEditor.tsx`
 - 表 `announcements`，直接表操作（不经稽核）。二级只管理自己的公告；超管可管理全部，并设置全局公告与轮播。支持发布时间、隐藏、置顶排序；正文上限 500KB。
