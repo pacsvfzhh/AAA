@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -11,8 +11,6 @@ import { sanitizeHTML } from '../../lib/sanitizeHTML';
 import { formatSupabaseError, supabase } from '../../lib/supabase';
 import EmployeeNotificationDetailPanel from '../employee/EmployeeNotificationDetailPanel';
 import DeletedEmployeesPanel from './DeletedEmployeesPanel';
-
-const TransferredArchivesPanel = lazy(() => import('./TransferredArchivesPanel'));
 
 type AuditType = 'notification' | 'aaa_service' | 'ccc_service';
 type AuditAction = 'edit' | 'delete' | 'conversation_delete' | 'customer_delete' | 'employee_delete' | 'admin_delete' | 'source_edit' | 'source_delete';
@@ -501,7 +499,7 @@ function OwnerPicker({ selected, owners, total, loading, error, onRetry, onSelec
 }
 
 export default function ContentAuditPanel({ onBack }: { onBack: () => void }) {
-  const [view, setView] = useState<'content' | 'employees' | 'archives'>('content');
+  const [view, setView] = useState<'content' | 'employees'>('content');
   const [archiveEmployeeId, setArchiveEmployeeId] = useState<string | null>(null);
   const [archiveSection, setArchiveSection] = useState<'profile' | 'notifications' | 'aaa_service' | 'ccc_service'>('profile');
   const [draft, setDraft] = useState<AuditFilters>(emptyFilters);
@@ -838,7 +836,7 @@ export default function ContentAuditPanel({ onBack }: { onBack: () => void }) {
     if (conversation) conversationContentRef.current?.scrollTo({ top: 0 });
   }, [conversation]);
 
-  const switchView = (next: 'content' | 'employees' | 'archives') => {
+  const switchView = (next: 'content' | 'employees') => {
     if (view === next) return false;
     invalidateDeletionPreview();
     setError(null);
@@ -1023,8 +1021,8 @@ export default function ContentAuditPanel({ onBack }: { onBack: () => void }) {
     }
   };
 
-  const viewSwitch = <div role="group" aria-label="稽核面板" className="grid w-full grid-cols-3 gap-1 rounded-xl border border-white/10 bg-slate-950/80 p-1 shadow-inner">
-    {([['content', '內容稽核'], ['employees', '刪除員工'], ['archives', '遷入檔案']] as const).map(([mode, label]) => <button key={mode} type="button" aria-pressed={view === mode} onClick={() => switchView(mode)} className={`flex min-w-0 items-center justify-center gap-1 whitespace-nowrap rounded-lg px-0.5 py-1.5 text-[10px] font-bold transition-colors ${view === mode ? 'bg-gradient-to-br from-cyan-500 to-blue-700 text-white shadow-[0_4px_16px_rgba(8,145,178,0.35)]' : 'text-slate-400 hover:bg-white/[0.07] hover:text-white'} ${buttonFocus}`}>{mode === 'content' ? <ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> : mode === 'employees' ? <UserRoundX className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> : <Database className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}{label}</button>)}
+  const viewSwitch = <div role="group" aria-label="稽核面板" className="grid w-full grid-cols-2 gap-1 rounded-xl border border-white/10 bg-slate-950/80 p-1 shadow-inner">
+    {([['content', '內容稽核'], ['employees', '刪除員工']] as const).map(([mode, label]) => <button key={mode} type="button" aria-pressed={view === mode} onClick={() => switchView(mode)} className={`flex min-w-0 items-center justify-center gap-1 whitespace-nowrap rounded-lg px-0.5 py-1.5 text-[10px] font-bold transition-colors ${view === mode ? 'bg-gradient-to-br from-cyan-500 to-blue-700 text-white shadow-[0_4px_16px_rgba(8,145,178,0.35)]' : 'text-slate-400 hover:bg-white/[0.07] hover:text-white'} ${buttonFocus}`}>{mode === 'content' ? <ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> : <UserRoundX className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}{label}</button>)}
   </div>;
 
   const ownerOptions = filterCounts
@@ -1078,7 +1076,7 @@ export default function ContentAuditPanel({ onBack }: { onBack: () => void }) {
           <div className="flex min-w-0 items-center gap-3">
             <button type="button" onClick={() => { invalidateDeletionPreview(); onBack(); }} aria-label="返回歷史資料管理" className={`flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-rose-400/40 bg-rose-500/15 px-2.5 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:opacity-50 ${buttonFocus}`}><ArrowLeft className="h-4 w-4" aria-hidden="true" />返回</button>
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-500/10 text-cyan-300"><ShieldCheck className="h-5 w-5" aria-hidden="true" /></span>
-            <div className="min-w-0"><h1 className="text-lg font-black text-white sm:text-xl">{view === 'content' ? '內容稽核總覽' : view === 'employees' ? '已刪員工紀錄' : '遷入檔案'}</h1><p className="text-[11px] text-slate-400">{view === 'content' ? '單獨操作的通知、模擬客戶與經理對話異動' : view === 'employees' ? '員工帳戶刪除及連帶內容留證' : '來源站／包隔離的唯讀歷史檔案'} · 時間均為 UTC+8</p></div>
+            <div className="min-w-0"><h1 className="text-lg font-black text-white sm:text-xl">{view === 'content' ? '內容稽核總覽' : '已刪員工紀錄'}</h1><p className="text-[11px] text-slate-400">{view === 'content' ? '單獨操作的通知、模擬客戶與經理對話異動' : '員工帳戶刪除及連帶內容留證'} · 時間均為 UTC+8</p></div>
           </div>
           <button type="button" onClick={() => { setPage(0); setRefreshKey(key => key + 1); setDetailKey(key => key + 1); }} disabled={view === 'content' && loading} className={`inline-flex h-9 items-center gap-2 rounded-xl border border-cyan-300/35 bg-cyan-500/10 px-3 text-xs font-bold text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-50 ${buttonFocus}`}><RefreshCw className={`h-4 w-4 ${view === 'content' && loading ? 'animate-spin' : ''}`} aria-hidden="true" />刷新清單</button>
         </div>
@@ -1088,12 +1086,6 @@ export default function ContentAuditPanel({ onBack }: { onBack: () => void }) {
 
       {view === 'content' && <div className="relative z-30 shrink-0 border-b border-slate-700 bg-slate-900 px-3 py-2 lg:hidden">{viewSwitch}</div>}
       {view === 'employees' && <div className="flex min-h-0 flex-1 flex-col overflow-hidden"><DeletedEmployeesPanel switcher={viewSwitch} isActive refreshKey={refreshKey} onDeleted={() => setRefreshKey(key => key + 1)} onDeleteResult={setDeleteFeedback} initialSelectedId={archiveEmployeeId} initialSection={archiveSection} availableAdmins={availableAdmins} onSelectSection={setArchiveSection} onSelectEmployee={setArchiveEmployeeId} /></div>}
-      {view === 'archives' && <>
-        <div className="shrink-0 border-b border-slate-700 bg-slate-900 px-3 py-2">{viewSwitch}</div>
-        <Suspense fallback={<p role="status" className="p-5 text-sm text-cyan-200">正在載入遷入檔案…</p>}>
-          <TransferredArchivesPanel key={refreshKey} />
-        </Suspense>
-      </>}
       {view === 'content' && <>
       <div className="relative z-20 shrink-0 border-b border-slate-700 bg-slate-900 px-3 py-2 lg:hidden">
         <div className="mb-2 flex items-center justify-between gap-2"><div className="flex items-center gap-2"><Database className="h-4 w-4 text-cyan-300" aria-hidden="true" /><h2 className="text-xs font-black text-white">內容篩選</h2></div><OwnerPicker selected={filters.owner} owners={ownerOptions} total={filterCounts?.total ?? null} loading={filterCountsLoading} error={filterCountsError} onRetry={() => setFilterCountsRetryKey(key => key + 1)} onSelect={owner => selectQuickFilter({ owner })} /></div>
