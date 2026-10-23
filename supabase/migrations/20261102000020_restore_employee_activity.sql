@@ -3,17 +3,18 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
 DO $install_activity_audit$
 DECLARE v_expected constant jsonb:='{
- "employee_login_history.employee_login_history_emit_event":"d355a26b4c17f053843c3f77d7855d5123cd9e4cf67153b0a215375209db343b",
- "employee_login_history.queue_notification_automation_from_employee_login":"6e5e6695ee3ccf63feeebbf974d28c4c77d1da82875f577e8d8c72a61fb4748d",
- "work_sessions.queue_notification_automation_from_work_session":"571bfaf967a3bcf96af2f20c8c7ca1651084cf789d38c1805ba84fa45c5e885d",
- "work_sessions.trigger_check_overlapping":"6e432e763cc9f36fa47379e26261356b8d106b4f8f9f065378ae723aad63ba2f",
- "work_sessions.trigger_cleanup_duplicate_sessions":"139533eb4d44bf94a85da760e570727b831b4b91d6a2650ebd70adfb4e6f1b24",
- "work_sessions.trigger_prevent_multiple_active_sessions":"8ea968b2b466205e4a196f96ca4978e11a14605c994e76255b4e7b08287275b3",
- "work_sessions.trigger_validate_work_session":"1f3bfd24b51869e10e87ab8be9b14a89f9c6787a0d9ace219b1c13e1aca0ebe8"
-}';v_actual jsonb;v_modes jsonb;
+ "employee_login_history.employee_login_history_emit_event": "3eca557bc066f7373ddededdcf035b0813517b280fd37487352f4705c7b97ffb",
+ "employee_login_history.queue_notification_automation_from_employee_login": "96a3e49b584f73c6150f16d92d20091af65f9bf4b4821630b0b072439f2f605b",
+ "work_sessions.queue_notification_automation_from_work_session": "ddda210253ec520b038d51ac23bfe816ffd1f9cb3fee37f40e30cc3f00c1e6a7",
+ "work_sessions.trigger_check_overlapping": "d066318a9c7ee98165695da18de42a2af1a4b8593b6e29ffd20038e42cd7c3ed",
+ "work_sessions.trigger_cleanup_duplicate_sessions": "d5016a4b12655f6f116df1c8dc7356e8dc0ae9cff0d7b8e1570a37c37167b540",
+ "work_sessions.trigger_prevent_multiple_active_sessions": "9adf5a37a6e9cec49f94e40b46c9e243ab1c3934e79131d1423175fd547c5dbd",
+ "work_sessions.trigger_validate_work_session": "1194d50aae166422c77231379352dec97887673e6542b3bf2cddfcc57361b7d1"
+}';v_native jsonb; v_actual jsonb;v_modes jsonb;
 BEGIN
-  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)),jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text)
-    INTO v_actual,v_modes FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
+  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
+    jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid))
+    INTO v_actual,v_modes,v_native FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
     WHERE t.tgrelid IN ('public.employee_login_history'::regclass,'public.work_sessions'::regclass,'private.employee_work_stop_markers'::regclass)
       AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
   IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN RAISE EXCEPTION 'Unreviewed employee activity triggers.';END IF;
@@ -30,7 +31,7 @@ BEGIN
       IF v_actual IS DISTINCT FROM v_expected OR v_actual_modes IS DISTINCT FROM v_modes THEN RAISE EXCEPTION 'Unreviewed employee activity triggers.';END IF;
     END;
     $body$;
-  $definition$,v_expected::text,v_modes::text);
+  $definition$,v_native::text,v_modes::text);
 END;
 $install_activity_audit$;
 

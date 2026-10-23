@@ -3,20 +3,21 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
 DO $install_finance_audit$
 DECLARE v_expected constant jsonb:='{
- "wallet_transactions.prevent_delete_wallet_transactions":"4c831473bbe97a629374ba82b8a76b270d1603e268168c1724869bd05700b587",
- "wallet_transactions.queue_notification_automation_from_wallet_transaction":"2d17cb65a9a574f3a1ce60ede2b0f7203f4e8fa83c255c05261e2facd9c94cb6",
- "wallet_transactions.trigger_audit_commission_transaction":"90e634400b052cb121bda4130a16f83fa9dc8f9f299baea59817b1063d2cad7d",
- "wallet_transactions.trigger_reverse_deleted_wallet_transaction_ledger":"1c98542c894e02a1726966e7efd82d20c8ebdeeccf7ec40684b30ea3a5191705",
- "wallet_transactions.trigger_track_wallet_transaction_ledger":"f8938b13bec4f24d9218e324ed182363e0459b0dfa886c1bb9b3b8fa80d6f120",
- "wallets.prevent_delete_wallets":"b4e845ee352374502e2626dbc435a92a3fe8ee8f51839f1b7e6013c396fe6f89",
- "wallets.trigger_enqueue_changed_wallet":"7bc130e55ef8989252a8b2b325e6456460c08c92db9f9bbb0550c399b04c95b9",
- "withdrawals.prevent_delete_withdrawals":"5b6dc9d30400768e1bfbc871e98d8b4d859f59cb9bb2970ba26bf5ee8f9d9ba0",
- "withdrawals.trigger_track_withdrawal_ledger":"5a5c630a93649ef24a46405c9eca300f094610aa7a6eab70cee54bcb01d29010",
- "withdrawals.withdrawals_emit_event":"1cde54396478d742df4a0ba94f4339c4c0aa63443598b8c86c38925201bc8936"
-}';v_actual jsonb;v_modes jsonb;
+ "wallet_transactions.prevent_delete_wallet_transactions": "912c2e783c29bfbd67be268ac21aab57173378a0158bd685175e0b840c967bd7",
+ "wallet_transactions.queue_notification_automation_from_wallet_transaction": "e31a28ee84b9b0155b90bbfb9e1ee8b73fb8c8c2aa9047ee6195f2342539e553",
+ "wallet_transactions.trigger_audit_commission_transaction": "14ad25ce345fd06c401533c9333d17366614942f9257ce8dfaf35466adaf7f50",
+ "wallet_transactions.trigger_reverse_deleted_wallet_transaction_ledger": "7cefef658c658bb991d984977d9442952f4253e27d9dd80b65ff05060b54ddeb",
+ "wallet_transactions.trigger_track_wallet_transaction_ledger": "34eeddb69d09fcac7f1c92f8cd70e94e927e1b33b2ca2093ff58df4f538446b9",
+ "wallets.prevent_delete_wallets": "7d493b1e1bc89f9acdfa68425055800aad773c3a2ed9b79504d7f93054340428",
+ "wallets.trigger_enqueue_changed_wallet": "ee885054e5eca6816bba0edea92631df992e80f14e4a01d24e737ed98da072ae",
+ "withdrawals.prevent_delete_withdrawals": "5c6c8c1c0906ee977fd09176c9a2f405676f1085f6681428ff36134dcaf338d8",
+ "withdrawals.trigger_track_withdrawal_ledger": "b109dc28ab0ce522bdf703ab316d2eddf7265711b777548fa5dd57f031bd8dec",
+ "withdrawals.withdrawals_emit_event": "9b00c2611c0d38629e5a74c240b2a5d11c5c7ee4163ac98eef1dfff05eaf51e7"
+}';v_native jsonb; v_actual jsonb;v_modes jsonb;
 BEGIN
-  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)),jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text)
-    INTO v_actual,v_modes FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid WHERE c.relnamespace='public'::regnamespace
+  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
+    jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid))
+    INTO v_actual,v_modes,v_native FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid WHERE c.relnamespace='public'::regnamespace
       AND c.relname IN ('wallets','wallet_balance_baselines','wallet_ledger_entries','wallet_transactions','withdrawals','wallet_reconciliation_audit')
       AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
   IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN RAISE EXCEPTION 'Unreviewed employee finance triggers.';END IF;
@@ -33,7 +34,7 @@ BEGIN
       IF v_actual IS DISTINCT FROM v_expected OR v_actual_modes IS DISTINCT FROM v_modes THEN RAISE EXCEPTION 'Unreviewed employee finance triggers.';END IF;
     END;
     $body$;
-  $definition$,v_expected::text,v_modes::text);
+  $definition$,v_native::text,v_modes::text);
 END;
 $install_finance_audit$;
 

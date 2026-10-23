@@ -3,30 +3,31 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
 DO $audit$
 DECLARE v_expected constant jsonb := '{
- "cs_message_templates.audit_template_source":"62fb1ce5d1555a422e537ddf0a71e6b601aec1c28bf8f3025d03e3ef565961a9",
- "cs_message_templates.guard_content_audit_public_media_reference":"1504e2acc32d2ec1c1919a269bc755d802ed0c1d90342ed8564c7ef87d042e1f",
- "cs_message_templates.guard_employee_chat_image_reference":"3e9dd247fe51af232dca253c9327bd64d89705b0856eeb9e6814b56907b9ecda",
- "customer_auto_messages.audit_auto_source":"088b0935a02b5a28196f6e2691ebc06bf0e7831b2d53602c15c2bc74c8cca27e",
- "customer_auto_messages.guard_content_audit_public_media_reference":"aaea458fe3036ea4b3feda2c07fd8e834c8ebfbd16c8cc6570a7b9172c390a61",
- "customer_auto_messages.guard_employee_chat_image_reference":"75ad995945e908931c92f48e90da9beb908cb4513677221f133864d397a3fdc0",
- "customer_employee_conversations.aa_reject_archived_employee_chat":"1eecb815c60cb1d1aad9b285f485b9732783ff97d819b237c69b8e91b78db47e",
- "customer_employee_conversations.audit_chat_change":"3d1bbe90f61cfc405cc8267ebfc685bc9e2e2708705c9890881f35faaf066eaa",
- "customer_employee_conversations.freeze_service_rich_card_before_insert":"d6910867bf7a5d714087c71a71ed3ee9f273ee610aaa9a0a8e8d2fcbe3ab9f5c",
- "customer_employee_conversations.guard_content_audit_public_media_reference":"d6fda8c73abae6ec353879e8988d1d00a9af69009c44a55549a97ea60d6f2d17",
- "customer_employee_conversations.guard_employee_chat_image_reference":"875ce9d741c5631037ae3105d0e24fa5d188599e8fd04bca82dbfad4cdde2dfa",
- "customer_employee_conversations.trg_check_conversation_group_isolation":"a84eb58b943a84eea91be53745a6f0758519d75aca834f4967d9be1fde3aa9ef",
- "customer_employee_conversations.trg_sync_conversation_source_type":"8e205079490ff46b09b09448b977e3c8cb0a75fe9122b8b87c5f529b6c49c040",
- "customer_service_sessions.set_service_ticket_number_trigger":"2815497162abd17a98223494af1bbae34f9138939e6b4aead2672eb18de6dc24",
- "rich_card_contents.audit_card_source":"b56ed34fc795186b5bdac5938ce4422cdfd017293a9a07102accd262aa653c6d",
- "rich_card_contents.guard_content_audit_public_media_reference":"a7666345b1a3bae08752854b78e6d524b81eb9c1a599c69f56bce0064c350767",
- "rich_card_contents.guard_employee_chat_image_reference":"8b49f3ac1056ce730dc418b15b2b52c8d2cff48f781feaec1a1d5333db2af582",
- "simulated_customers.guard_content_audit_public_media_reference":"5d9d9f0611b8dfc43288fbc98aad4b1fb6b2808f9b06be3604b8f495362355a8",
- "simulated_customers.guard_employee_chat_image_reference":"ee178e1de9afbd3666cc07b35e3e8c7e0834391797d96802a5c645cbe6de7e80",
- "simulated_customers.set_customer_id_trigger":"0f654fdb060b7b4a0a89d3bb014d9466f9e006b13e891aaf657ad9b097b2647d"
-}';v_actual jsonb;v_modes jsonb;
+ "cs_message_templates.audit_template_source": "bea540e4f423873ca0d34c30f24a4babadbc2ac6493a1d2edaf37c0f43f93c0c",
+ "cs_message_templates.guard_content_audit_public_media_reference": "0628609ad2f5d38f8045e0654878b11a2b295f5d789c2263eaf3aea29b13f403",
+ "cs_message_templates.guard_employee_chat_image_reference": "9956aedbc4745a2f5a204a42a6ee211d5fd96eb07aacebe598b6d30afbf59f20",
+ "customer_auto_messages.audit_auto_source": "19fdcdcb2fb270ac7f6ba607273ff64eef42d155c2d9db542186d8cca7a48c5b",
+ "customer_auto_messages.guard_content_audit_public_media_reference": "ffdf66b47421c5e940ab47321edb1e3e0f5301a1928c832fa6d5ca8983746495",
+ "customer_auto_messages.guard_employee_chat_image_reference": "1b463f670c07702a8073c31129df06e08c442260194a2f58c0d91f0045a50efd",
+ "customer_employee_conversations.aa_reject_archived_employee_chat": "9d811cd251245e2a473905a9ff6c109d05f86c1e223d84124387658ef4a46ebf",
+ "customer_employee_conversations.audit_chat_change": "21bce479f00f35228da32dab73a051e2c4afca32d8b366309eb5ca30927e276b",
+ "customer_employee_conversations.freeze_service_rich_card_before_insert": "607c2d3dcf30951372ea55cd044b411e3bde36cd77d6efb54bd5244041152d3a",
+ "customer_employee_conversations.guard_content_audit_public_media_reference": "9e2b731afad12a045be59c7130e3bda81699f7438e20975aa696a40957303578",
+ "customer_employee_conversations.guard_employee_chat_image_reference": "4e5814fc880364d3b3e19b3c36aaeed2377592e02c40ca4dd813cfe9db5c6be9",
+ "customer_employee_conversations.trg_check_conversation_group_isolation": "8b1c39050bb05262c9dc2bc4a0556c1e042845b7c745a6d3e43c694891059c02",
+ "customer_employee_conversations.trg_sync_conversation_source_type": "2cf3eca6be3d48d5d91ace99c9fc410105120ccdb1d5700f06f43eb0c0a01c59",
+ "customer_service_sessions.set_service_ticket_number_trigger": "9d8ef4c3abbb82a5f80b6664a7bc98ed52e8539096b1532828dc1cfa7a85130f",
+ "rich_card_contents.audit_card_source": "c34179456478be2a8b78ea41afed0716b6264a9a2a440d11f330908ae7a31f8a",
+ "rich_card_contents.guard_content_audit_public_media_reference": "310c97382243f9ccf88a813fdc916cbfcf180f1451e493614830923102f26c83",
+ "rich_card_contents.guard_employee_chat_image_reference": "a7633eb83381e594602a43997a95a1500f331a9e0904f348f04034c09f4d805b",
+ "simulated_customers.guard_content_audit_public_media_reference": "a12917d4506a0f8edd6d0103bd6b5c21f56c708290b2a23d959b9042ccbab54f",
+ "simulated_customers.guard_employee_chat_image_reference": "c534dfb2d5a311048683e1578c173f89388a1df931861e397a669840be16fd83",
+ "simulated_customers.set_customer_id_trigger": "18cc5feaac6dbce7ee81bbc8168166ea943d1ae57806e4854d754f9835e1480b"
+}';v_native jsonb; v_actual jsonb;v_modes jsonb;
 BEGIN
-  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)),
-    jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text) INTO v_actual,v_modes
+  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),
+    jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
+    jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)) INTO v_actual,v_modes,v_native
     FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace='public'::regnamespace
       AND c.relname=ANY(private.employee_transfer_chat_keys()) AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
   IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN
@@ -51,7 +52,7 @@ BEGIN
       END IF;
     END;
     $body$;
-  $definition$,v_expected::text,v_modes::text);
+  $definition$,v_native::text,v_modes::text);
 END;
 $audit$;
 

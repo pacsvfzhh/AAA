@@ -1,10 +1,26 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { PGlite } from '@electric-sql/pglite';
+import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 import { replayMigrations } from './support/replay-migrations.mjs';
 import { rows, scalar } from './support/transfer-harness.mjs';
 import { replayProductionTransferMigrations, PRODUCTION_TRANSFER_LAST } from './support/production-transfer.mjs';
 
+const triggerAudits = [
+  ['identity', '15_restore_employee_identities', 'install_identity_audit', 'employee_transfer_assert_identity_triggers',
+    'product_types', 'assign_product_type_sort_order', 'private.assign_product_type_sort_order()'],
+  ['finance', '18_restore_employee_finance', 'install_finance_audit', 'employee_transfer_assert_finance_triggers',
+    'wallet_transactions', 'queue_notification_automation_from_wallet_transaction', 'private.queue_automation_from_wallet_transaction()'],
+  ['activity', '20_restore_employee_activity', 'install_activity_audit', 'employee_transfer_assert_activity_triggers',
+    'work_sessions', 'queue_notification_automation_from_work_session', 'private.queue_automation_from_work_session()'],
+  ['notifications', '27_restore_site_notifications', 'audit', 'employee_transfer_notification_restore_assert',
+    'messages', 'sync_messages_delivery_mode', 'private.sync_notification_delivery_mode()'],
+  ['chat', '32_restore_site_chat', 'audit', 'employee_transfer_chat_restore_assert',
+    'simulated_customers', 'set_customer_id_trigger', 'public.set_customer_id()'],
+].map(([scope, file, tag, assertion, table, trigger, procedure]) => ({ scope, file, tag, assertion, table, trigger, procedure }));
 let production, local;
 const assertGuards = db => scalar(db, 'SELECT private.employee_transfer_assert_maintenance_guards()');
 async function transaction(db, use) {
@@ -17,6 +33,92 @@ before(async () => {
   local = await replayMigrations({ upTo: '20261102000033_transfer_readonly_archives.sql', strict: true });
 }, { timeout: 300000 });
 after(async () => { await production?.db.close(); await local?.db.close(); });
+
+async function installAudit(db, audit) {
+  const source = await readFile(new URL(`../migrations/202611020000${audit.file}.sql`, import.meta.url), 'utf8');
+  const start = source.indexOf(`DO $${audit.tag}$`);
+  const end = source.indexOf(`$${audit.tag}$;`, start) + audit.tag.length + 3;
+  assert.ok(start >= 0 && end > start);
+  await db.exec(source.slice(start, end));
+}
+async function rejectAudit(db, use) {
+  await db.exec('SAVEPOINT rejected_audit');
+  try { await assert.rejects(use(), /Unreviewed/); }
+  finally { await db.exec('ROLLBACK TO SAVEPOINT rejected_audit; RELEASE SAVEPOINT rejected_audit'); }
+}
+async function triggerDigests(db, audit) {
+  return (await rows(db, `SELECT private.employee_transfer_install_trigger_digest(oid) AS portable,
+    private.employee_transfer_trigger_digest(oid) AS native FROM pg_trigger
+    WHERE tgrelid=to_regclass($1) AND tgname=$2`, [`public.${audit.table}`, audit.trigger]))[0];
+}
+
+for (const audit of triggerAudits) {
+  test(`${audit.scope}: equivalent default ACLs install portably but runtime still pins their native representation`, async () => {
+    const db = production.db;
+    await transaction(db, async () => {
+      const original = await triggerDigests(db, audit);
+      await db.exec(`GRANT EXECUTE ON FUNCTION ${audit.procedure} TO PUBLIC`);
+      const explicit = await triggerDigests(db, audit);
+      assert.equal(explicit.portable, original.portable);
+      assert.notEqual(explicit.native, original.native);
+      await rejectAudit(db, () => scalar(db, `SELECT private.${audit.assertion}()`));
+      await db.exec(`DROP FUNCTION private.${audit.assertion}()`);
+      await installAudit(db, audit);
+      await scalar(db, `SELECT private.${audit.assertion}()`);
+    });
+    await scalar(db, `SELECT private.${audit.assertion}()`);
+  });
+
+  for (const [reason, ddl] of [
+    ['missing trigger', `DROP TRIGGER ${audit.trigger} ON public.${audit.table}`],
+    ['unknown trigger', `CREATE TRIGGER unreviewed_transfer_trigger BEFORE INSERT ON public.${audit.table} FOR EACH ROW EXECUTE FUNCTION ${audit.procedure}`],
+    ['disabled trigger', `ALTER TABLE public.${audit.table} DISABLE TRIGGER ${audit.trigger}`],
+    ['changed trigger mode', `ALTER TABLE public.${audit.table} ENABLE REPLICA TRIGGER ${audit.trigger}`],
+    ['changed function body', `ALTER FUNCTION ${audit.procedure} SET search_path = pg_catalog`],
+    ['changed effective privileges', `REVOKE EXECUTE ON FUNCTION ${audit.procedure} FROM PUBLIC`],
+    ['changed owner', `CREATE ROLE transfer_unreviewed_owner BYPASSRLS; ALTER FUNCTION ${audit.procedure} OWNER TO transfer_unreviewed_owner`],
+  ]) test(`${audit.scope}: installation and runtime reject ${reason}`, async () => {
+    const db = production.db;
+    await transaction(db, async () => {
+      await db.exec(ddl);
+      await rejectAudit(db, () => scalar(db, `SELECT private.${audit.assertion}()`));
+      await rejectAudit(db, () => installAudit(db, audit));
+    });
+    await scalar(db, `SELECT private.${audit.assertion}()`);
+  });
+}
+
+test('fresh installation baselines accept a different postgres OID and NOSUPERUSER without accepting runtime drift', async () => {
+  const db = await PGlite.create({ loadDataDir: await production.db.dumpDataDir('none'), extensions: { pgcrypto, pg_trgm, uuid_ossp } });
+  try {
+    const original = new Map(await Promise.all(triggerAudits.map(async audit => [audit.scope, await triggerDigests(db, audit)])));
+    await db.exec(`CREATE ROLE transfer_fixture_root SUPERUSER;
+      SET SESSION AUTHORIZATION transfer_fixture_root;
+      ALTER ROLE postgres RENAME TO transfer_fixture_original;
+      CREATE ROLE postgres NOSUPERUSER BYPASSRLS;
+      REASSIGN OWNED BY transfer_fixture_original TO postgres;
+      SET ROLE postgres;`);
+    const role = (await rows(db, "SELECT oid::int,rolsuper,rolbypassrls FROM pg_roles WHERE rolname='postgres'"))[0];
+    assert.notEqual(role.oid, 10);
+    assert.equal(role.rolsuper, false);
+    assert.equal(role.rolbypassrls, true);
+    for (const audit of triggerAudits) {
+      const changed = await triggerDigests(db, audit);
+      assert.equal(changed.portable, original.get(audit.scope).portable);
+      assert.notEqual(changed.native, original.get(audit.scope).native);
+      await assert.rejects(scalar(db, `SELECT private.${audit.assertion}()`), /Unreviewed/);
+      await db.exec(`DROP FUNCTION private.${audit.assertion}()`);
+      await installAudit(db, audit);
+    }
+  } finally { await db.close(); }
+});
+
+test('the installation-only helper remains private to database owners', async () => {
+  for (const role of ['anon', 'authenticated', 'service_role']) {
+    assert.equal(await scalar(production.db, `SELECT has_function_privilege($1,
+      'private.employee_transfer_install_trigger_digest(oid)','EXECUTE')`, [role]), false);
+  }
+});
 
 test('all 58 transfer migrations install over the exact audited 96-table/871-column structural profile', async t => {
   assert.equal(production.files.length, 584);

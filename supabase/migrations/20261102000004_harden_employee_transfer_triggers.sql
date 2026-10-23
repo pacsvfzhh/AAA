@@ -111,6 +111,27 @@ SET search_path = pg_catalog, public, private, pg_temp AS $$
   WHERE trigger.oid = p_trigger AND NOT trigger.tgisinternal;
 $$;
 
+CREATE FUNCTION private.employee_transfer_install_trigger_digest(p_trigger oid)
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, private, pg_temp AS $$
+  -- Installation compares named privileges; runtime receipts still pin native OIDs, ACLs and role attributes.
+  SELECT encode(sha256(convert_to(jsonb_build_array(
+    pg_get_triggerdef(trigger.oid, false), pg_get_functiondef(procedure.oid),
+    owner.rolname, owner.rolbypassrls,
+    (SELECT jsonb_agg(jsonb_build_array(
+      pg_get_userbyid(acl.grantor), CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END,
+      acl.privilege_type, acl.is_grantable)
+      ORDER BY pg_get_userbyid(acl.grantor) COLLATE "C",
+        (CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END) COLLATE "C",
+        acl.privilege_type COLLATE "C", acl.is_grantable)
+     FROM aclexplode(COALESCE(procedure.proacl, acldefault('f', procedure.proowner))) AS acl)
+  )::text, 'UTF8')), 'hex')
+  FROM pg_trigger AS trigger JOIN pg_proc AS procedure ON procedure.oid = trigger.tgfoid
+    JOIN pg_roles AS owner ON owner.oid = procedure.proowner
+  WHERE trigger.oid = p_trigger AND NOT trigger.tgisinternal;
+$$;
+REVOKE ALL ON FUNCTION private.employee_transfer_install_trigger_digest(oid) FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE FUNCTION private.employee_transfer_pending_trigger_bypass()
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, private, pg_temp AS $$

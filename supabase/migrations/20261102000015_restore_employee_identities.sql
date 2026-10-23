@@ -3,27 +3,28 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 
 DO $install_identity_audit$
 DECLARE v_expected constant jsonb := '{
- "orders.prevent_delete_orders":"994e535f87554421904b247984feea3b6b32b35b86ad8ec7c07cf6e743288a2f",
- "orders.protect_order_dispatch_rate_snapshots":"6bdb81adab82f0c08260260d8b7d260e325d12e177e231300abb29ed81ad7a53",
- "orders.queue_notification_automation_from_order":"08f18dc84112a7a4a57a3c4757f8f761f51434ca1e294ef0c4051077f01b1c87",
- "orders.snapshot_order_dispatch_rates":"4c97d01d8eb134f3656d20a04e8fba6447687d61e71d06024ea6b267b83adbc8",
- "orders.trg_set_order_scheduled_process_at":"e13fd27b4d206ce70d7353d8b254daecd05109e38151da5ebca7e2625df6d616",
- "orders.trigger_audit_order_status":"70776be0b416e9008af919d32cb035f1a89de34e764fc7f85db67f7139086a3c",
- "orders.trigger_sync_order_to_wallet":"f76e2819a0148d355e4325bcdaa6066e14050946435f9627eb3b085fbff9d8a1",
- "orders.trigger_update_total_income":"fc5436fdce1aeb2bfccc5df02dbb695cfebf39e0632130d6001a1da39f956a77",
- "product_types.assign_product_type_sort_order":"2fbb2d78d75e49a217a66afaa6efee96c0eb293ccdff25fe407635b163d0e299",
- "users.archive_employee_before_delete":"4b22d283e8b5da9294af6f878801872b2528d4a3138139e997b1c75b8a3f4169",
- "users.cleanup_user_data_trigger":"063f1a9b0bca80589219dc705c28fb46911be409336f9ac089ce4fe5f8927783",
- "users.cleanup_user_storage_trigger":"4399f2d0bf29f2582b562ba62c2520c74606ba7a061fbe263e6d3fde83e71d1e",
- "users.create_wallet_trigger":"ac958e3dcc9d825b76283cdbe153ad47ceaf175df2b9a827a59a5f3beb390858",
- "users.guard_employee_archive":"90a001e7a2387465ca2b4ab8e1442cb4b0f26bc4163b20ed2dbc83c4499c73c7",
- "users.trigger_cleanup_user_data":"628eb60c25066d6eb4ed16804bd0c095aef8153817de3390d4bcc2a9413d6bf6",
- "wallets.prevent_delete_wallets":"b4e845ee352374502e2626dbc435a92a3fe8ee8f51839f1b7e6013c396fe6f89",
- "wallets.trigger_enqueue_changed_wallet":"7bc130e55ef8989252a8b2b325e6456460c08c92db9f9bbb0550c399b04c95b9"
-}'; v_actual jsonb; v_modes jsonb;
+ "orders.prevent_delete_orders": "3e8619e0fa8049e42c18d6fc347d5bec5ed4a68337a9b6c3e8ba1ae8e2c08b64",
+ "orders.protect_order_dispatch_rate_snapshots": "789b21d2a77683c92689710746f48c93d98a9a4e3a6a06a3d25d10cbff26cab6",
+ "orders.queue_notification_automation_from_order": "77f84f741d0bdee48cf5ad1a24c6c8693b8618052753c9142ef6d8caca0dfeb3",
+ "orders.snapshot_order_dispatch_rates": "615063d01bc6ccaa82d09826f8fe8af230951f0e7388326ecac08d864a391611",
+ "orders.trg_set_order_scheduled_process_at": "3e224c285d2b553f1e17ef65e16e6cbe84d0f9c97e2023c5549b8fd94c584dab",
+ "orders.trigger_audit_order_status": "782e51b233e38875ceb0b878c878e19e00166cf67f5d01ff7618f54f2af89f1f",
+ "orders.trigger_sync_order_to_wallet": "b2a316d53b8185a473f26e12933b3df7e382c69872a6255b4455ec2f273ab90f",
+ "orders.trigger_update_total_income": "99dd6074eef45a7f0c05807a6ef1d2cf2bf54027a3fe9c455d7abe4c25f541ff",
+ "product_types.assign_product_type_sort_order": "9f3fe3703e57d769ed00165ed25a70ac4edf46f8ffa7024cff92788e0e63bda4",
+ "users.archive_employee_before_delete": "f1bf8c6f075abde326e5c9b0412087714315f32cfeac914e65290c411e2fcc6d",
+ "users.cleanup_user_data_trigger": "e9bc0a3c8fdb09d5c22a57a1a43d67dd0d89e1e14de255cab21ad83df8e29f32",
+ "users.cleanup_user_storage_trigger": "6c6206c85224188a5b0583db4b63085151044f4ea097c2a6e5931951519a1614",
+ "users.create_wallet_trigger": "abb588f348c6a3883bbdb94b6321874cb8817a09c17bf04afb2a8773d8b77a53",
+ "users.guard_employee_archive": "d85e27ff7123fd733a8f5c4dd98a08507c5a055a4333df9ac1267a7ec26aed1f",
+ "users.trigger_cleanup_user_data": "d4d803092b102402fe02b66864711ce3f997e2a8984adb66d6aff9364c3451fa",
+ "wallets.prevent_delete_wallets": "7d493b1e1bc89f9acdfa68425055800aad773c3a2ed9b79504d7f93054340428",
+ "wallets.trigger_enqueue_changed_wallet": "ee885054e5eca6816bba0edea92631df992e80f14e4a01d24e737ed98da072ae"
+}'; v_native jsonb; v_actual jsonb; v_modes jsonb;
 BEGIN
-  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)),
-    jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text) INTO v_actual,v_modes
+  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),
+    jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
+    jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)) INTO v_actual,v_modes,v_native
     FROM pg_trigger AS t JOIN pg_class AS c ON c.oid=t.tgrelid
     WHERE c.relnamespace='public'::regnamespace AND c.relname IN ('users','financial_employee_credentials','wallets','orders','product_types')
       AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
@@ -47,7 +48,7 @@ BEGIN
       END IF;
     END;
     $body$;
-  $definition$,v_expected::text,v_modes::text);
+  $definition$,v_native::text,v_modes::text);
 END;
 $install_identity_audit$;
 

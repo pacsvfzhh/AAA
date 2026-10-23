@@ -5,31 +5,32 @@ SET LOCAL search_path = pg_catalog, public, private, pg_temp;
 -- financial DML, employee activation, or maintenance release is performed here.
 DO $audit$
 DECLARE v_expected constant jsonb := '{
- "messages.audit_notification_change":"a0f949e1959a7f8d1b1cdca13313576bd7610745231b1c4fa2c1c09a0f37595e",
- "messages.sync_messages_delivery_mode":"87e3c0fc18bebf22eebb41561d164cd9c964cc5e55c4d3b8ef68452f89ab4b87",
- "messages.classify_notification_origin":"850ce38a1226f9574611050a1466edd4d2b63c3e60bd93fb58a05b108b6b1cf4",
- "messages.guard_employee_chat_image_reference":"e2401e869d92911c2a3dea1ca3e9a116409832522d4d322898fd8323b103e532",
- "messages.inherit_automation_message_delivery_mode":"3b898b229bf2265028611ea9c0b3dff892f57a542b6e9f57d9210d35925f9c83",
- "messages.guard_content_audit_public_media_reference":"973c3a7349a8d73275b2a2d4bc80db80e01f5a8ae4a6ca7367278fbe075abf70",
- "message_recipients.remember_content_audit_recipient":"698d057997e546c252a9d28966665e10f16f3a6a40fa1c80bdda6ed66ca64979",
- "message_recipients.reject_archived_notification_recipient":"66f3c21548f22b8f0e8567862ddaf9497d673a7f9c5bf15bceaeecfc8ff06612",
- "message_templates.guard_employee_chat_image_reference":"eb1fe51e3a7bc56c7652bebd17f1b88a346e94879126ab9ceda2adb4392b22b1",
- "message_templates.sync_message_templates_delivery_mode":"40ebfb93b268a8172298e357991deb65429150b3d0a3e0aaa7cf1ae18474852e",
- "message_templates.guard_content_audit_public_media_reference":"48701cfd4bfe55c9471dc34fe7f647e248911d9c8ac8dd24bfcd712509b18a67",
- "broadcast_messages.guard_employee_chat_image_reference":"29eb02c8cf6957bec1c35bda5e5098f177224ed983d3cc389e1b757825f27ae4",
- "broadcast_messages.guard_content_audit_public_media_reference":"ee46c9a166afd4fa57a238cdfdce8b827c2687f8c15940109044761cfd94870d",
- "notification_automation_tasks.guard_employee_chat_image_reference":"3c28486a5c96acaaede2313d0bdf717956d82366cdb95473b8456ac350cb719c",
- "notification_automation_tasks.guard_content_audit_public_media_reference":"9ba4f5a6d856cf20108d356cb2abba3d6f7d7c0a204ba33fd8dc231f1a10ce26",
- "notification_automation_tasks.validate_notification_automation_task_plan":"4c436691a3a158ad767d3ef3f681a515835df16bc4d9a96fcb7f4a9b5c0c75b0",
- "notification_automation_tasks.sync_notification_automation_tasks_delivery_mode":"07e1151317b1949e3867c5c846d3a9888641b312b8cebf05ff13507d00713fce",
- "notification_automation_executions.guard_employee_chat_image_reference":"30853486e3f1c9a7bf10109136d1f6200417702f4001b6b44b14670d2cd14d8c",
- "notification_automation_executions.guard_content_audit_public_media_reference":"577a081b58b60fa386074208abc5b0e2980e093637249c1623abd1fd527c614d",
- "notification_automation_executions.snapshot_notification_automation_execution_plan":"d072fe198e43e734f8a12700f6853962c8b12c3545edcb5d8bf6d5cb95f533ed",
- "notification_automation_plan_members.validate_notification_automation_plan_member":"0d215db60d3cc538d23d2e6c49d0d8eb1f3c32cbe1f9d38f57b4b83d765c4e03"
-}'; v_actual jsonb; v_modes jsonb;
+ "messages.audit_notification_change": "f42728300d199cfec10bd81322d00b7a59d09ad9ec3821c080a2b06c9a4a8c2a",
+ "messages.sync_messages_delivery_mode": "09b750ca1be41a69464eda622a139d3da10714c54302f900094b6812f7f6b7dd",
+ "messages.classify_notification_origin": "b152eda73f57d6552c377f4c7b761ff9054b6df3223c18549aa46d481c4b1a0e",
+ "messages.guard_employee_chat_image_reference": "ce90a02b8a9b80a025f349c86dd4c7f5e4004f08ce97b37a302ab03c13586495",
+ "messages.inherit_automation_message_delivery_mode": "7d5fa924685f263c9861a8472db04fcee83b2d070b64132398ef64175908a76a",
+ "messages.guard_content_audit_public_media_reference": "54fb0974035bd104da891e715ba11e2dc4243d27e3ba72cd11b73d6ab50f52a9",
+ "message_recipients.remember_content_audit_recipient": "9cdf4f0a027313832e8b5646b77e1d9a12a79738bcfb7871d911d99ec5501e7d",
+ "message_recipients.reject_archived_notification_recipient": "f056b9be7b2af1a63f335fae1fe73d9883589507d7bbdea74bc40269de077012",
+ "message_templates.guard_employee_chat_image_reference": "7b1aa37d98d9e7d4516da928f729120a8a2a24434856b0c136e12fa4a1347500",
+ "message_templates.sync_message_templates_delivery_mode": "c35f682c336f68e285b527d0a15011e8679017775c59789a422b042bd1ac661b",
+ "message_templates.guard_content_audit_public_media_reference": "3516f4a370ac30825168ead26db41ae5b3f35c35eed8e309ae5e531beb53406b",
+ "broadcast_messages.guard_employee_chat_image_reference": "c1fab0eb447d6dd0dc609b16e487ec2fb121126a3dbd697f10089e9ee86c01fd",
+ "broadcast_messages.guard_content_audit_public_media_reference": "530b44fd255fb009c3f5ee3964f9b7ad35b86d91f0f7b6fcde13d5991406d765",
+ "notification_automation_tasks.guard_employee_chat_image_reference": "c40231187d220df8cf4bfa844de322552575f0267bf06bde23bc7f0e4cf55685",
+ "notification_automation_tasks.guard_content_audit_public_media_reference": "f701a0a595268865771d518865cd48cc7a40174ce4d6aa9164cd40700523f295",
+ "notification_automation_tasks.validate_notification_automation_task_plan": "16f2c09cc86fb36b8821f3aac7bf0f9897181d54919eb4a4be5e539dd868028e",
+ "notification_automation_tasks.sync_notification_automation_tasks_delivery_mode": "f35fdce02b8d0e1b0316515b5db2428d40f35a18d06d4d45f691ab9a45f75e6c",
+ "notification_automation_executions.guard_employee_chat_image_reference": "0aad1d91d9adbdc1dfa40d0ea08f7e51642ad54795d2c2c6d465d34fc3c837b8",
+ "notification_automation_executions.guard_content_audit_public_media_reference": "a1bd242c171412f56500208f785a25a338e5c8f49f1c8de2a1bc195a6bdb58e7",
+ "notification_automation_executions.snapshot_notification_automation_execution_plan": "9c08190e941a614188b2849c9885b6bc850f2080f42d536325528da775ac7c3a",
+ "notification_automation_plan_members.validate_notification_automation_plan_member": "7287725864598612686569eb1d24cb597f91ceca9c4beee0c254d0a8600531b9"
+}'; v_native jsonb; v_actual jsonb; v_modes jsonb;
 BEGIN
-  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)),
-    jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text) INTO v_actual,v_modes
+  SELECT jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_install_trigger_digest(t.oid)),
+    jsonb_object_agg(c.relname||'.'||t.tgname,t.tgenabled::text),
+    jsonb_object_agg(c.relname||'.'||t.tgname,private.employee_transfer_trigger_digest(t.oid)) INTO v_actual,v_modes,v_native
     FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace='public'::regnamespace
       AND c.relname=ANY(private.employee_transfer_notifications_keys()) AND NOT t.tgisinternal AND t.tgname<>'zz_employee_transfer_maintenance';
   IF v_actual IS DISTINCT FROM v_expected OR EXISTS(SELECT 1 FROM jsonb_each_text(v_modes) WHERE value NOT IN ('O','A')) THEN
@@ -54,7 +55,7 @@ BEGIN
           AND t.tgisinternal AND t.tgenabled NOT IN ('O','A')) THEN RAISE EXCEPTION 'Notification foreign key protection is disabled.'; END IF;
     END;
     $body$;
-  $definition$,v_expected::text,v_modes::text);
+  $definition$,v_native::text,v_modes::text);
 END;
 $audit$;
 
