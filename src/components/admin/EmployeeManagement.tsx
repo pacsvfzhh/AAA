@@ -4086,7 +4086,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     if (!showCreateForm || selectedAdminForCreate !== targetAdminId) return null;
     const isSuperGroup = groupAdmin?.role === 'super_admin';
     const activePlansForGroup = automationPlans.filter(plan => plan.status === 'active' && plan.owner_admin_id === targetAdminId);
-    const fieldClasses = 'mt-2 w-full rounded-xl border border-slate-600/50 bg-slate-950/60 px-3.5 py-3 text-sm text-slate-100 shadow-inner outline-none transition-colors placeholder:text-slate-600 focus:border-slate-300/60 focus:ring-2 focus:ring-slate-300/10 disabled:cursor-not-allowed disabled:opacity-50';
+    const fieldClasses = 'mt-2 w-full rounded-xl border border-indigo-200/90 bg-white/95 px-3.5 py-3 text-sm text-indigo-950 shadow-[0_2px_5px_rgba(79,70,229,0.035),inset_0_1px_0_#fff] outline-none transition-all placeholder:text-slate-400 hover:border-indigo-300 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-400/10 disabled:cursor-not-allowed disabled:opacity-50';
 
     return createPortal(
       <div
@@ -4164,62 +4164,62 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
           <div className="dark-panel-scroll min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
             <div className="grid items-start gap-4 md:grid-cols-[1fr_1.04fr]">
-              <section aria-labelledby="create-basic-title" className="min-w-0 rounded-2xl border border-white/[0.08] bg-gradient-to-br from-slate-800/40 to-slate-950/60 p-4 sm:p-5">
+              <section aria-labelledby="create-basic-title" className="relative min-w-0 overflow-hidden rounded-2xl border border-indigo-100 bg-[linear-gradient(145deg,#fdfcff,#f1f4ff_55%,#f8eff9)] p-4 shadow-[0_8px_32px_rgba(30,27,75,0.12),inset_0_1px_0_rgba(255,255,255,0.9)] sm:p-5">
                 <div className="mb-5 flex items-center gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-500/30 bg-slate-400/10 text-slate-300"><Key className="h-4 w-4" /></span>
-                  <div><h4 id="create-basic-title" className="text-sm font-bold text-slate-100">基本資料</h4><p className="mt-1 text-[10px] text-slate-500">建立員工專屬的登入識別資訊</p></div>
-                  <span className="ml-auto text-[10px] font-bold tracking-widest text-slate-600">01</span>
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/90 bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-md shadow-indigo-500/20"><Key className="h-4 w-4" /></span>
+                  <div><h4 id="create-basic-title" className="text-sm font-bold text-indigo-950">基本資料</h4><p className="mt-1 text-[10px] text-indigo-500/80">建立員工專屬的登入識別資訊</p></div>
+                  <span className="ml-auto text-[10px] font-bold tracking-widest text-indigo-300">01</span>
                 </div>
                 <div className="space-y-4">
-                  <label htmlFor="create-employee-username" className="block text-[11px] font-semibold text-slate-400">使用者名稱 <span className="text-rose-400">*</span>
+                  <label htmlFor="create-employee-username" className="block text-[11px] font-semibold text-indigo-900/80">使用者名稱 <span className="text-rose-400">*</span>
                     <input id="create-employee-username" type="text" value={formData.username} onChange={event => setFormData(prev => ({ ...prev, username: event.target.value }))} disabled={creating} required autoComplete="off" placeholder="輸入使用者名稱" className={fieldClasses} />
                   </label>
                   <div>
-                    <label htmlFor="create-employee-password" className="block text-[11px] font-semibold text-slate-400">密碼 <span className="text-rose-400">*</span></label>
+                    <label htmlFor="create-employee-password" className="block text-[11px] font-semibold text-indigo-900/80">密碼 <span className="text-rose-400">*</span></label>
                     <div className="relative">
                       <input id="create-employee-password" type={showCreatePassword ? 'text' : 'password'} value={formData.password} onChange={event => setFormData(prev => ({ ...prev, password: event.target.value }))} disabled={creating} required minLength={6} autoComplete="new-password" placeholder="至少 6 個字元" className={`${fieldClasses} pr-[76px]`} />
                       <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5">
-                        <button type="button" disabled={creating} onClick={() => setShowCreatePassword(prev => !prev)} aria-label={showCreatePassword ? '隱藏密碼' : '顯示密碼'} className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50">{showCreatePassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button>
+                        <button type="button" disabled={creating} onClick={() => setShowCreatePassword(prev => !prev)} aria-label={showCreatePassword ? '隱藏密碼' : '顯示密碼'} className="rounded-lg p-2 text-indigo-400 transition-colors hover:bg-indigo-50 hover:text-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60">{showCreatePassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button>
                         <button type="button" disabled={creating} aria-label="產生高強度密碼" title="產生高強度密碼" onClick={() => {
                           const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%';
                           const bytes = crypto.getRandomValues(new Uint8Array(16));
                           setFormData(prev => ({ ...prev, password: Array.from(bytes, byte => chars[byte % chars.length]).join('') }));
-                        }} className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50"><RefreshCw className="h-3.5 w-3.5" /></button>
+                        }} className="rounded-lg p-2 text-indigo-400 transition-colors hover:bg-indigo-50 hover:text-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60"><RefreshCw className="h-3.5 w-3.5" /></button>
                       </div>
                     </div>
                   </div>
-                  <label htmlFor="create-employee-id" className="block text-[11px] font-semibold text-slate-400">員工 ID <span className="text-rose-400">*</span>
+                  <label htmlFor="create-employee-id" className="block text-[11px] font-semibold text-indigo-900/80">員工 ID <span className="text-rose-400">*</span>
                     <input id="create-employee-id" type="text" value={formData.employeeId} onChange={event => setFormData(prev => ({ ...prev, employeeId: event.target.value }))} disabled={creating} required placeholder="輸入員工 ID" className={fieldClasses} />
                   </label>
-                  <label htmlFor="create-employee-remarks" className="block text-[11px] font-semibold text-slate-400">備註 <span className="font-normal text-slate-600">（選填）</span>
+                  <label htmlFor="create-employee-remarks" className="block text-[11px] font-semibold text-indigo-900/80">備註 <span className="font-normal text-indigo-400">（選填）</span>
                     <textarea id="create-employee-remarks" value={formData.remarks} onChange={event => setFormData(prev => ({ ...prev, remarks: event.target.value }))} disabled={creating} rows={3} placeholder="新增內部備註…" className={`${fieldClasses} resize-y`} />
                   </label>
                 </div>
               </section>
 
               <div className="min-w-0 space-y-3">
-                <section aria-labelledby="create-region-title" className="relative min-w-0 overflow-hidden rounded-2xl border border-violet-400/20 bg-[linear-gradient(125deg,rgba(88,28,135,0.2),rgba(15,13,28,0.7))] p-4">
-                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-violet-400/70" />
-                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-violet-400/60">02</span><h4 id="create-region-title" className="flex-1 text-xs font-bold text-violet-100">所在地區</h4><span className="rounded-md border border-violet-300/15 bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-300">必填</span></div>
+                <section aria-labelledby="create-region-title" className="relative min-w-0 overflow-hidden rounded-2xl border border-violet-300/30 bg-[radial-gradient(ellipse_at_top_right,rgba(216,180,254,0.16),transparent_65%),linear-gradient(120deg,#302348,#1d2440)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-fuchsia-300 to-indigo-400" />
+                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-violet-300/70">02</span><h4 id="create-region-title" className="flex-1 text-xs font-bold text-violet-100">所在地區</h4><span className="rounded-md border border-violet-300/15 bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-300">必填</span></div>
                   <EmployeeRegionPicker id={`create-employee-region-${targetAdminId}`} appearance="setup" groupLabel={groupAdmin?.username || admin.username} regions={regionsByAdmin.get(targetAdminId) || []} counts={getGroupRegionCounts(targetAdminId).counts} value={formData.regionId} onChange={regionId => {
                     setFormData(prev => ({ ...prev, regionId }));
                     setCreateError(current => current === REGION_REQUIRED_MESSAGE ? null : current);
                   }} actions={getRegionActions(targetAdminId)} invalid={createError === REGION_REQUIRED_MESSAGE} disabled={creating} />
-                  <p className="mt-2.5 text-[10px] leading-4 text-violet-300/65">依管理群組設定，可在選單中新增與編輯地區。</p>
+                  <p className="mt-2.5 text-[10px] leading-4 text-violet-200/75">依管理群組設定，可在選單中新增與編輯地區。</p>
                 </section>
 
-                <section aria-labelledby="create-dispatch-title" className="relative min-w-0 overflow-hidden rounded-2xl border border-cyan-400/20 bg-[linear-gradient(125deg,rgba(8,145,178,0.14),rgba(8,20,32,0.7))] p-4">
-                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-cyan-400/70" />
-                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-cyan-400/60">03</span><h4 id="create-dispatch-title" className="flex-1 text-xs font-bold text-cyan-100">派單分組</h4><span className="rounded-md border border-cyan-300/15 bg-cyan-400/10 px-1.5 py-0.5 text-[9px] font-medium text-cyan-300">必填</span></div>
-                  <EmployeeSetupSelect id={`create-dispatch-group-${targetAdminId}`} label="派單分組" placeholder={dispatchGroupsLoading ? '載入派單分組中…' : '請選擇派單分組'} value={formData.dispatchGroupId} options={dispatchGroups.map(group => ({ id: group.id, label: group.group_name, description: group.description }))} tone="cyan" icon={Layers} required disabled={creating || dispatchGroupsLoading || Boolean(dispatchGroupsError) || dispatchGroups.length === 0} onChange={dispatchGroupId => setFormData(prev => ({ ...prev, dispatchGroupId }))} />
-                  {dispatchGroupsError ? <p role="alert" className="mt-2.5 text-[10px] leading-4 text-rose-300">{dispatchGroupsError}</p> : <p className="mt-2.5 text-[10px] leading-4 text-cyan-300/65">{dispatchGroupsLoading ? '正在載入可用分組…' : dispatchGroups.length === 0 ? '目前沒有可用分組，請先建立或啟用分組。' : '建立後加入所選分組 · 長說明可懸停查看'}</p>}
+                <section aria-labelledby="create-dispatch-title" className="relative min-w-0 overflow-hidden rounded-2xl border border-teal-300/30 bg-[radial-gradient(ellipse_at_top_right,rgba(125,211,252,0.13),transparent_65%),linear-gradient(120deg,#173c3b,#182b40)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-teal-200 to-sky-400" />
+                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-teal-300/70">03</span><h4 id="create-dispatch-title" className="flex-1 text-xs font-bold text-teal-50">派單分組</h4><span className="rounded-md border border-teal-200/20 bg-teal-300/10 px-1.5 py-0.5 text-[9px] font-medium text-teal-200">必填</span></div>
+                  <EmployeeSetupSelect id={`create-dispatch-group-${targetAdminId}`} label="派單分組" placeholder={dispatchGroupsLoading ? '載入派單分組中…' : '請選擇派單分組'} value={formData.dispatchGroupId} options={dispatchGroups.map(group => ({ id: group.id, label: group.group_name, description: group.description }))} tone="teal" icon={Layers} required disabled={creating || dispatchGroupsLoading || Boolean(dispatchGroupsError) || dispatchGroups.length === 0} onChange={dispatchGroupId => setFormData(prev => ({ ...prev, dispatchGroupId }))} />
+                  {dispatchGroupsError ? <p role="alert" className="mt-2.5 text-[10px] leading-4 text-rose-300">{dispatchGroupsError}</p> : <p className="mt-2.5 text-[10px] leading-4 text-teal-100/75">{dispatchGroupsLoading ? '正在載入可用分組…' : dispatchGroups.length === 0 ? '目前沒有可用分組，請先建立或啟用分組。' : '建立後加入所選分組 · 長說明可懸停查看'}</p>}
                 </section>
 
-                <section aria-labelledby="create-automation-title" className="relative min-w-0 overflow-hidden rounded-2xl border border-emerald-400/20 bg-[linear-gradient(125deg,rgba(5,150,105,0.14),rgba(8,25,23,0.7))] p-4">
-                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-emerald-400/70" />
-                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-emerald-400/60">04</span><h4 id="create-automation-title" className="flex-1 text-xs font-bold text-emerald-100">自動化通知方案</h4><span className="rounded-md border border-emerald-300/10 bg-emerald-400/5 px-1.5 py-0.5 text-[9px] font-medium text-emerald-300/60">選填</span></div>
-                  <EmployeeSetupSelect id={`create-automation-plan-${targetAdminId}`} label="自動化通知方案" placeholder="不指定方案" value={formData.automationPlanId} options={[{ id: '', label: '不指定方案', meta: '稍後可在員工資料中設定' }, ...activePlansForGroup.map(plan => ({ id: plan.id, label: plan.name, description: plan.description, meta: `${Number(plan.selected_task_count) || 0} 個任務 · 啟用中` }))]} tone="emerald" icon={Bell} disabled={creating} onChange={automationPlanId => setFormData(prev => ({ ...prev, automationPlanId }))} />
-                  <p className="mt-2.5 text-[10px] leading-4 text-emerald-300/65">{activePlansForGroup.length ? '選擇方案後，員工建立時立即套用通知任務。' : '此群組目前沒有啟用中的方案，可稍後設定。'}</p>
+                <section aria-labelledby="create-automation-title" className="relative min-w-0 overflow-hidden rounded-2xl border border-amber-200/25 bg-[radial-gradient(ellipse_at_top_right,rgba(253,164,175,0.12),transparent_65%),linear-gradient(120deg,#403322,#35252e)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-amber-200 to-rose-300" />
+                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-amber-200/70">04</span><h4 id="create-automation-title" className="flex-1 text-xs font-bold text-amber-50">自動化通知方案</h4><span className="rounded-md border border-amber-100/20 bg-amber-200/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-100/80">選填</span></div>
+                  <EmployeeSetupSelect id={`create-automation-plan-${targetAdminId}`} label="自動化通知方案" placeholder="不指定方案" value={formData.automationPlanId} options={[{ id: '', label: '不指定方案', meta: '暫不套用', unassigned: true }, ...activePlansForGroup.map(plan => ({ id: plan.id, label: plan.name, description: plan.description, meta: `${Number(plan.selected_task_count) || 0} 個任務` }))]} tone="amber" icon={Bell} disabled={creating} onChange={automationPlanId => setFormData(prev => ({ ...prev, automationPlanId }))} />
+                  <p className="mt-2.5 text-[10px] leading-4 text-amber-100/75">{activePlansForGroup.length ? '選擇方案後，員工建立時立即套用通知任務。' : '此群組目前沒有啟用中的方案，可稍後設定。'}</p>
                 </section>
               </div>
             </div>

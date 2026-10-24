@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Check, ChevronRight, Pin, Settings, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronRight, CircleOff, Pin, Settings, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 interface SetupOption {
@@ -11,6 +11,7 @@ interface SetupOption {
   count?: number;
   pinned?: boolean;
   meta?: string;
+  unassigned?: boolean;
 }
 
 interface EmployeeSetupSelectProps {
@@ -19,7 +20,7 @@ interface EmployeeSetupSelectProps {
   placeholder: string;
   value: string;
   options: SetupOption[];
-  tone: 'violet' | 'cyan' | 'emerald';
+  tone: 'violet' | 'teal' | 'amber';
   icon: LucideIcon;
   onChange: (value: string) => void;
   required?: boolean;
@@ -31,47 +32,50 @@ interface EmployeeSetupSelectProps {
 
 const tones = {
   violet: {
-    button: 'border-violet-300/25 bg-violet-950/40 text-violet-100 hover:border-violet-300/60 hover:bg-violet-900/45 focus-visible:ring-violet-300/50',
-    active: '!border-violet-300/70 !bg-violet-900/65 ring-2 ring-violet-400/20',
-    icon: 'border-violet-300/25 bg-violet-400/15 text-violet-200',
-    surface: 'border-violet-300/30 bg-[linear-gradient(145deg,#201331,#0e0b1c)]',
-    header: 'border-violet-300/15 bg-violet-400/10 text-violet-100',
-    option: 'hover:border-violet-300/35 hover:bg-violet-400/10 focus-visible:ring-violet-300/60',
-    selected: 'border-violet-300/55 bg-gradient-to-r from-violet-600/35 to-fuchsia-500/10 text-violet-50',
-    accent: 'text-violet-300',
+    button: 'border-violet-200 bg-[linear-gradient(115deg,#faf5ff,#ede9fe_60%,#e8edff)] text-violet-950 hover:border-violet-400 hover:shadow-violet-950/20 focus-visible:ring-violet-300/60',
+    active: '!border-violet-400 ring-2 ring-violet-300/30',
+    icon: 'border-violet-200/80 bg-white/75 text-violet-600',
+    surface: 'border-violet-200 bg-[linear-gradient(145deg,#fdfaff,#f0edfa_65%,#edf1ff)]',
+    header: 'border-violet-200/70 bg-gradient-to-r from-violet-100/80 to-indigo-50/60 text-violet-950',
+    option: 'hover:border-violet-200 hover:bg-violet-50 focus-visible:ring-violet-400',
+    selected: 'border-violet-300 bg-gradient-to-r from-violet-100 to-indigo-100/70 text-violet-950',
+    accent: 'text-violet-700',
+    scrollbar: '#b2a0d9 #ece7f5',
   },
-  cyan: {
-    button: 'border-cyan-300/25 bg-cyan-950/35 text-cyan-100 hover:border-cyan-300/60 hover:bg-cyan-900/40 focus-visible:ring-cyan-300/50',
-    active: '!border-cyan-300/70 !bg-cyan-900/60 ring-2 ring-cyan-400/20',
-    icon: 'border-cyan-300/25 bg-cyan-400/15 text-cyan-200',
-    surface: 'border-cyan-300/30 bg-[linear-gradient(145deg,#0e2838,#08141e)]',
-    header: 'border-cyan-300/15 bg-cyan-400/10 text-cyan-100',
-    option: 'hover:border-cyan-300/35 hover:bg-cyan-400/10 focus-visible:ring-cyan-300/60',
-    selected: 'border-cyan-300/55 bg-gradient-to-r from-cyan-600/35 to-blue-500/10 text-cyan-50',
-    accent: 'text-cyan-300',
+  teal: {
+    button: 'border-teal-200 bg-[linear-gradient(115deg,#f0fdf7,#dff5ee_60%,#e3f0fc)] text-teal-950 hover:border-teal-400 hover:shadow-teal-950/20 focus-visible:ring-teal-300/60',
+    active: '!border-teal-400 ring-2 ring-teal-300/30',
+    icon: 'border-teal-200/80 bg-white/75 text-teal-700',
+    surface: 'border-teal-200 bg-[linear-gradient(145deg,#f7fefa,#eaf6f3_65%,#edf4fc)]',
+    header: 'border-teal-200/70 bg-gradient-to-r from-teal-100/80 to-sky-50/60 text-teal-950',
+    option: 'hover:border-teal-200 hover:bg-teal-50 focus-visible:ring-teal-500',
+    selected: 'border-teal-300 bg-gradient-to-r from-teal-100 to-sky-100/70 text-teal-950',
+    accent: 'text-teal-700',
+    scrollbar: '#7eb4aa #e3f0ed',
   },
-  emerald: {
-    button: 'border-emerald-300/25 bg-emerald-950/35 text-emerald-100 hover:border-emerald-300/60 hover:bg-emerald-900/40 focus-visible:ring-emerald-300/50',
-    active: '!border-emerald-300/70 !bg-emerald-900/60 ring-2 ring-emerald-400/20',
-    icon: 'border-emerald-300/25 bg-emerald-400/15 text-emerald-200',
-    surface: 'border-emerald-300/30 bg-[linear-gradient(145deg,#102c29,#081815)]',
-    header: 'border-emerald-300/15 bg-emerald-400/10 text-emerald-100',
-    option: 'hover:border-emerald-300/35 hover:bg-emerald-400/10 focus-visible:ring-emerald-300/60',
-    selected: 'border-emerald-300/55 bg-gradient-to-r from-emerald-600/35 to-teal-500/10 text-emerald-50',
-    accent: 'text-emerald-300',
+  amber: {
+    button: 'border-amber-200 bg-[linear-gradient(115deg,#fff9eb,#ffedce_60%,#ffe7e0)] text-amber-950 hover:border-amber-400 hover:shadow-amber-950/20 focus-visible:ring-amber-300/60',
+    active: '!border-amber-400 ring-2 ring-amber-300/30',
+    icon: 'border-amber-200/80 bg-white/75 text-amber-700',
+    surface: 'border-amber-200 bg-[linear-gradient(145deg,#fffcf5,#fbf1e4_65%,#fff0ec)]',
+    header: 'border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-rose-50/60 text-amber-950',
+    option: 'hover:border-amber-200 hover:bg-amber-50 focus-visible:ring-amber-500',
+    selected: 'border-amber-300 bg-gradient-to-r from-amber-100 to-orange-100/70 text-amber-950',
+    accent: 'text-amber-800',
+    scrollbar: '#c9a573 #f4e9d9',
   },
 };
 
 function menuPosition(rect: DOMRect, optionCount: number) {
   const padding = 12;
-  const gap = 12;
+  const gap = 10;
   const availableRight = window.innerWidth - rect.right - padding - gap;
-  const height = Math.min(414, 66 + Math.max(1, optionCount) * 60, window.innerHeight - padding * 2);
+  const height = Math.min(326, 58 + Math.max(1, optionCount) * 42, window.innerHeight - padding * 2);
   if (availableRight >= 230) {
     const top = Math.max(padding, Math.min(rect.top - 44, window.innerHeight - height - padding));
-    return { left: rect.right + gap, top, width: Math.min(340, availableRight), maxHeight: height, side: 'right', transformOrigin: `left ${rect.top + rect.height / 2 - top}px` };
+    return { left: rect.right + gap, top, width: Math.min(296, availableRight), maxHeight: height, side: 'right', transformOrigin: `left ${rect.top + rect.height / 2 - top}px` };
   }
-  const width = Math.min(340, window.innerWidth - padding * 2);
+  const width = Math.min(296, window.innerWidth - padding * 2);
   const below = window.innerHeight - rect.bottom - padding - 8;
   const above = rect.top - padding - 8;
   const openBelow = below >= height || below >= above;
@@ -98,6 +102,8 @@ export default function EmployeeSetupSelect({
   const [position, setPosition] = useState<ReturnType<typeof menuPosition> | null>(null);
   const [details, setDetails] = useState<{ option: SetupOption; left: number; top: number; width: number } | null>(null);
   const selected = options.find(option => option.id === value);
+  const unassigned = selected?.unassigned === true;
+  const SelectedIcon = unassigned ? CircleOff : Icon;
   const detailsOpen = Boolean(details);
   const theme = tones[tone];
 
@@ -220,33 +226,37 @@ export default function EmployeeSetupSelect({
         onKeyDown={event => {
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); if (!position) toggle(); }
         }}
-        className={`group flex min-h-[58px] w-full items-center gap-3 rounded-xl border p-2.5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-45 ${theme.button} ${position ? theme.active : ''} ${invalid ? '!border-rose-400' : ''}`}
+        data-unassigned={unassigned || undefined}
+        className={`group flex min-h-[54px] w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left shadow-[0_3px_12px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.8)] transition-all duration-200 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-45 ${unassigned ? 'border-dashed border-slate-400/70 bg-[linear-gradient(115deg,#f8fafc,#eef1f6)] text-slate-600 hover:border-slate-300 hover:bg-white focus-visible:ring-slate-300/60' : theme.button} ${position ? unassigned ? '!border-slate-300 ring-2 ring-slate-300/25' : theme.active : ''} ${invalid ? '!border-rose-400' : ''}`}
       >
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${theme.icon}`}><Icon className="h-4 w-4" /></span>
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${unassigned ? 'border-slate-200 bg-white/80 text-slate-500' : theme.icon}`}><SelectedIcon className="h-4 w-4" /></span>
         <span className="min-w-0 flex-1">
           <span data-option-label className={`block truncate text-xs font-bold ${selected ? '' : 'opacity-65'}`}>{selected ? <>{selected.label}{selected.description ? <span className="ml-1 font-normal opacity-65">（{selected.description}）</span> : null}</> : placeholder}</span>
-          <span className="mt-1 block text-[9px] font-medium tracking-wide opacity-45">{selected?.meta || (selected ? '已選擇 · 點擊更換' : '點擊選擇')}</span>
+          <span className="mt-0.5 block truncate text-[10px] font-medium opacity-70">{unassigned ? '不建立自動通知 · 可稍後設定' : selected?.meta || (selected ? '已選擇 · 點擊更換' : '點擊選擇')}</span>
         </span>
+        {unassigned && <span className="shrink-0 rounded-md border border-slate-300 bg-white/70 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">未套用</span>}
         <ChevronRight className={`h-4 w-4 shrink-0 transition-transform duration-200 ${position ? 'translate-x-0.5' : 'opacity-55 group-hover:translate-x-0.5 group-hover:opacity-100'}`} />
       </button>
       {position && createPortal(
         <div ref={menuRef} className="fixed z-[10050]" data-side={position.side} style={{ left: position.left, top: position.top, width: position.width }} onPointerDown={stopPortalEvent} onPointerUp={stopPortalEvent} onMouseDown={stopPortalEvent} onClick={stopPortalEvent} onKeyDown={event => { event.stopPropagation(); navigate(event); }}>
-          <div data-tone={tone} className={`employee-setup-menu flex flex-col overflow-hidden rounded-2xl border shadow-[0_24px_70px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.03)] ${theme.surface}`} style={{ maxHeight: position.maxHeight, transformOrigin: position.transformOrigin }}>
-            <div className={`flex shrink-0 items-center gap-2 border-b px-3.5 py-3 ${theme.header}`}>
+          <div data-tone={tone} className={`employee-setup-menu flex flex-col overflow-hidden rounded-xl border shadow-[0_18px_48px_rgba(2,6,23,0.28),0_2px_8px_rgba(2,6,23,0.12)] ${theme.surface}`} style={{ maxHeight: position.maxHeight, transformOrigin: position.transformOrigin }}>
+            <div className={`flex shrink-0 items-center gap-2 border-b px-3 py-2 ${theme.header}`}>
               <Icon className="h-4 w-4" /><span className="flex-1 text-xs font-bold">{label}</span><span className="text-[10px] opacity-50">{options.length} 個選項</span>
-              {onOpenSettings && <button type="button" aria-label="地區設定" title="編輯或新增地區" onClick={() => { close(); onOpenSettings(); }} className="rounded-md border border-current/20 bg-white/5 p-1.5 transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"><Settings className="h-3.5 w-3.5" /></button>}
-              <button type="button" aria-label={`關閉${label}選單`} onClick={() => close(true)} className="rounded-md p-1 text-current opacity-60 transition-colors hover:bg-white/10 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"><X className="h-3.5 w-3.5" /></button>
+              {onOpenSettings && <button type="button" aria-label="地區設定" title="編輯或新增地區" onClick={() => { close(); onOpenSettings(); }} className="rounded-md border border-current/20 bg-white/50 p-1.5 transition-colors hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"><Settings className="h-3.5 w-3.5" /></button>}
+              <button type="button" aria-label={`關閉${label}選單`} onClick={() => close(true)} className="rounded-md p-1 text-current opacity-60 transition-colors hover:bg-black/5 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"><X className="h-3.5 w-3.5" /></button>
             </div>
-            <div id={listId} role="listbox" aria-label={label} className="employee-region-scrollbar min-h-0 space-y-1.5 overflow-y-auto overscroll-contain p-2" style={{ scrollbarColor: tone === 'cyan' ? '#3f9eae #102633' : tone === 'emerald' ? '#439b80 #102a23' : undefined }}>
+            <div id={listId} role="listbox" aria-label={label} className="employee-setup-scrollbar min-h-0 space-y-1 overflow-y-auto overscroll-contain p-1.5" style={{ scrollbarColor: theme.scrollbar }}>
               {options.map(option => (
                 <button key={option.id} type="button" role="option" aria-selected={value === option.id} aria-describedby={details?.option.id === option.id ? detailsId : undefined}
                   onClick={() => { onChange(option.id); close(true); }} onMouseEnter={event => showDetails(event.currentTarget, option)} onMouseLeave={hideDetails} onFocus={event => showDetails(event.currentTarget, option)} onBlur={() => setDetails(null)}
-                  className={`group/option flex min-h-[52px] w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${value === option.id ? theme.selected : `border-white/[0.045] bg-white/[0.025] text-slate-200 ${theme.option}`}`}
+                  data-unassigned={option.unassigned || undefined}
+                  className={`group/option flex min-h-[38px] w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${option.unassigned ? `!mb-2 border-dashed text-slate-600 hover:bg-slate-100 focus-visible:ring-slate-400 ${value === option.id ? 'border-slate-400 bg-slate-100' : 'border-slate-300 bg-slate-50/80'}` : value === option.id ? theme.selected : `border-white/70 bg-white/65 text-slate-700 ${theme.option}`}`}
                 >
-                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${theme.icon}`}>{option.pinned ? <Pin className="h-3 w-3" /> : <Icon className="h-3 w-3" />}</span>
-                  <span className="min-w-0 flex-1"><span data-option-label className="block truncate text-xs font-semibold">{option.label}{option.description ? <span className="ml-1 font-normal text-slate-400">（{option.description}）</span> : null}</span>{option.meta && <span className={`mt-1 block text-[9px] ${theme.accent}`}>{option.meta}</span>}</span>
+                  <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${option.unassigned ? 'border-slate-200 bg-white text-slate-500' : theme.icon}`}>{option.unassigned ? <CircleOff className="h-3 w-3" /> : option.pinned ? <Pin className="h-3 w-3" /> : <Icon className="h-3 w-3" />}</span>
+                  <span className="min-w-0 flex-1"><span data-option-label className="block truncate text-[11px] font-semibold">{option.label}{option.description ? <span className="ml-1 font-normal text-slate-500">（{option.description}）</span> : null}</span></span>
+                  {option.meta && <span className={`shrink-0 rounded border px-1 py-0.5 text-[9px] ${option.unassigned ? 'border-slate-200 bg-white/80 text-slate-500' : `border-black/5 bg-white/60 ${theme.accent}`}`}>{option.meta}</span>}
                   {option.count !== undefined && <span className={`shrink-0 text-[10px] tabular-nums ${theme.accent}`}>{option.count} 人</span>}
-                  {value === option.id ? <Check className={`h-4 w-4 shrink-0 ${theme.accent}`} /> : <ArrowRight className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/option:opacity-50" />}
+                  {value === option.id ? <Check className={`h-3.5 w-3.5 shrink-0 ${option.unassigned ? 'text-slate-500' : theme.accent}`} /> : <ArrowRight className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/option:opacity-50" />}
                 </button>
               ))}
               {options.length === 0 && <p className="px-3 py-6 text-center text-xs leading-5 text-slate-400">{emptyMessage}</p>}
@@ -254,7 +264,7 @@ export default function EmployeeSetupSelect({
           </div>
         </div>, document.body,
       )}
-      {details && createPortal(<div id={detailsId} role="tooltip" onPointerDown={stopPortalEvent} onPointerUp={stopPortalEvent} onMouseDown={stopPortalEvent} onClick={stopPortalEvent} onMouseEnter={() => { if (hideTimer.current) clearTimeout(hideTimer.current); }} onMouseLeave={hideDetails} className={`employee-setup-details fixed z-[10060] rounded-xl border p-3.5 shadow-[0_18px_50px_rgba(0,0,0,0.65)] ${theme.surface}`} style={{ left: details.left, top: details.top, width: details.width }}><p className={`mb-2 break-words text-xs font-bold ${theme.accent}`}>{details.option.label}</p><p className="employee-region-scrollbar max-h-[156px] overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-slate-200">{details.option.description}</p></div>, document.body)}
+      {details && createPortal(<div id={detailsId} role="tooltip" onPointerDown={stopPortalEvent} onPointerUp={stopPortalEvent} onMouseDown={stopPortalEvent} onClick={stopPortalEvent} onMouseEnter={() => { if (hideTimer.current) clearTimeout(hideTimer.current); }} onMouseLeave={hideDetails} className={`employee-setup-details fixed z-[10060] rounded-xl border p-3.5 shadow-[0_18px_50px_rgba(0,0,0,0.65)] ${theme.surface}`} style={{ left: details.left, top: details.top, width: details.width }}><p className={`mb-2 break-words text-xs font-bold ${theme.accent}`}>{details.option.label}</p><p className="employee-setup-scrollbar max-h-[156px] overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-slate-700" style={{ scrollbarColor: theme.scrollbar }}>{details.option.description}</p></div>, document.body)}
     </>
   );
 }

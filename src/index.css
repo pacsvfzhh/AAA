@@ -734,16 +734,37 @@
   animation: employee-setup-details-in 140ms ease-out both;
 }
 
-.employee-setup-menu[data-tone="cyan"] .employee-region-scrollbar::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #67c9d9, #277f99);
-  border-color: #102633;
-  box-shadow: none;
+.employee-setup-scrollbar {
+  color-scheme: light;
+  scrollbar-width: thin;
 }
 
-.employee-setup-menu[data-tone="emerald"] .employee-region-scrollbar::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #6acbae, #28765f);
-  border-color: #102a23;
-  box-shadow: none;
+.employee-setup-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.employee-setup-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.employee-setup-scrollbar::-webkit-scrollbar-thumb {
+  border: 1px solid #f5f1fa;
+  border-radius: 999px;
+  background: #b2a0d9;
+}
+
+.employee-setup-menu[data-tone="teal"] .employee-setup-scrollbar::-webkit-scrollbar-thumb {
+  border-color: #eaf6f3;
+  background: #7eb4aa;
+}
+
+.employee-setup-menu[data-tone="amber"] .employee-setup-scrollbar::-webkit-scrollbar-thumb {
+  border-color: #fbf1e4;
+  background: #c9a573;
+}
+
+.employee-setup-scrollbar::-webkit-scrollbar-thumb:hover {
+  filter: brightness(0.9);
 }
 
 @keyframes employee-setup-expand {
