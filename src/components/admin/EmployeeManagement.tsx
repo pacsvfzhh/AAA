@@ -434,6 +434,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const [selectedTagsByGroup, setSelectedTagsByGroup] = useState<Map<string, string[]>>(new Map());
   const [editingTags, setEditingTags] = useState<EmployeeWithAdmin | null>(null);
   const [newTag, setNewTag] = useState('');
+  const [savingTags, setSavingTags] = useState(false);
+  const [tagError, setTagError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     username: '',
     password: '',
@@ -2199,16 +2201,25 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     }
   };
 
-  const handleAddTag = async (employee: EmployeeWithAdmin) => {
-    if (!newTag.trim()) return;
-    const updatedTags = [...(employee.tags || []), newTag.trim()];
-    const tagToAdd = newTag.trim();
+  const closeTagEditor = () => {
+    if (savingTags) return;
+    setEditingTags(null);
+    setNewTag('');
+    setTagError(null);
+  };
+
+  const handleAddTag = async (employee: EmployeeWithAdmin, existingTag?: string) => {
+    const tagToAdd = existingTag ?? newTag.trim();
+    if (savingTags || !tagToAdd.trim() || employee.tags?.includes(tagToAdd)) return;
+    const updatedTags = [...(employee.tags || []), tagToAdd];
+    setSavingTags(true);
+    setTagError(null);
     setEmployeeGroups(prev => prev.map(g => ({
       ...g,
       employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: updatedTags } : emp)
     })));
-    if (editingTags && editingTags.id === employee.id) setEditingTags({ ...editingTags, tags: updatedTags });
-    setNewTag('');
+    setEditingTags(current => current?.id === employee.id ? { ...current, tags: updatedTags } : current);
+    if (existingTag === undefined) setNewTag('');
     try {
       const { error } = await supabase.rpc('admin_update_employee_account', {
         p_admin_session_token: getAdminFinancialSessionToken(),
@@ -2222,19 +2233,25 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         ...g,
         employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: originalTags } : emp)
       })));
-      if (editingTags && editingTags.id === employee.id) setEditingTags({ ...editingTags, tags: originalTags });
-      setNewTag(tagToAdd);
+      setEditingTags(current => current?.id === employee.id ? { ...current, tags: originalTags } : current);
+      if (existingTag === undefined) setNewTag(tagToAdd);
+      setTagError('儲存標籤失敗，請重試。');
+    } finally {
+      setSavingTags(false);
     }
   };
 
   const handleRemoveTag = async (employee: EmployeeWithAdmin, tagToRemove: string) => {
+    if (savingTags) return;
     const updatedTags = (employee.tags || []).filter(tag => tag !== tagToRemove);
     const originalTags = employee.tags || [];
+    setSavingTags(true);
+    setTagError(null);
     setEmployeeGroups(prev => prev.map(g => ({
       ...g,
       employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: updatedTags } : emp)
     })));
-    if (editingTags && editingTags.id === employee.id) setEditingTags({ ...editingTags, tags: updatedTags });
+    setEditingTags(current => current?.id === employee.id ? { ...current, tags: updatedTags } : current);
     try {
       const { error } = await supabase.rpc('admin_update_employee_account', {
         p_admin_session_token: getAdminFinancialSessionToken(),
@@ -2247,7 +2264,10 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         ...g,
         employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: originalTags } : emp)
       })));
-      if (editingTags && editingTags.id === employee.id) setEditingTags({ ...editingTags, tags: originalTags });
+      setEditingTags(current => current?.id === employee.id ? { ...current, tags: originalTags } : current);
+      setTagError('儲存標籤失敗，請重試。');
+    } finally {
+      setSavingTags(false);
     }
   };
 
@@ -2258,6 +2278,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     group.employees.forEach(emp => (emp.tags || []).forEach(tag => tagsSet.add(tag)));
     return Array.from(tagsSet).sort();
   };
+
+  const existingTagOptions = editingTags ? getGroupTags(editingTags.created_by).filter(tag => tag.trim()) : [];
 
   const getSelectedTagsForGroup = (groupId: string): string[] => selectedTagsByGroup.get(groupId) || [];
 
@@ -4002,7 +4024,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
             </span>
           )}
           {(employee.tags || []).length > 1 && <span className="flex-shrink-0 text-[10px] text-slate-500">+{(employee.tags || []).length - 1}</span>}
-          <button onClick={() => setEditingTags(employee)} className="ml-1 flex-shrink-0 rounded-full border border-transparent bg-slate-700 px-1 py-0 text-[10px] text-slate-400 transition-all hover:border-amber-400/75 hover:bg-amber-500/15 hover:text-amber-400 hover:shadow-[0_0_8px_rgba(245,158,11,0.28)]">
+          <button type="button" aria-label={`管理 ${employee.username} 的標籤`} onClick={() => { setEditingTags(employee); setNewTag(''); setTagError(null); }} className="ml-1 flex-shrink-0 rounded-full border border-transparent bg-slate-700 px-1 py-0 text-[10px] text-slate-400 transition-all hover:border-amber-400/75 hover:bg-amber-500/15 hover:text-amber-400 hover:shadow-[0_0_8px_rgba(245,158,11,0.28)]">
             <Tag className="inline h-2.5 w-2.5 text-current" />+
           </button>
         </div>
@@ -5752,39 +5774,60 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       )}
 
       {editingTags && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={() => { setEditingTags(null); setNewTag(''); }}>
-          <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-amber-400/30 bg-slate-900 shadow-[0_24px_80px_rgba(2,6,23,0.65)]" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={closeTagEditor} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeTagEditor(); } }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="employee-tags-heading" aria-busy={savingTags} className="flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-amber-400/30 bg-slate-900 shadow-[0_24px_80px_rgba(2,6,23,0.65)]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between gap-4 border-b border-amber-400/20 bg-gradient-to-r from-amber-950/70 via-slate-900 to-slate-900 px-5 py-4">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-300/35 bg-amber-500/15 text-amber-200">
                   <Tag className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">員工標籤</p>
+                  <p id="employee-tags-heading" className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">員工標籤</p>
                   <h3 title={editingTags.username} className="truncate text-lg font-bold text-white">{editingTags.username}</h3>
                   <p className="truncate text-xs text-slate-400">Employee ID: {editingTags.employee_id}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded-full border border-amber-400/25 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200">{(editingTags.tags || []).length} 個啟用</span>
-                <button type="button" onClick={() => { setEditingTags(null); setNewTag(''); }} aria-label="關閉標籤管理" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-700/80 hover:text-white">
+                <button type="button" onClick={closeTagEditor} disabled={savingTags} aria-label="關閉標籤管理" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-700/80 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50">
                   <X className="h-5 w-5" />
                 </button>
               </div>
             </div>
-            <div className="space-y-4 p-5">
-              <div className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-4">
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-amber-200">新增標籤</label>
+            <div className="min-h-0 space-y-4 overflow-y-auto p-5 dark-panel-scroll">
+              {tagError && <p role="alert" className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{tagError}</p>}
+              <section aria-labelledby="existing-employee-tags-heading" className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-4">
+                <h4 id="existing-employee-tags-heading" className="text-xs font-semibold tracking-wide text-amber-200">選用已有標籤</h4>
+                <p className="mt-1 text-[11px] text-slate-400">同群組使用過的標籤，點選即可套用並儲存。</p>
+                {existingTagOptions.length > 0 ? (
+                  <div className="mt-3 flex max-h-40 flex-wrap gap-2 overflow-y-auto p-0.5 dark-panel-scroll">
+                    {existingTagOptions.map(tag => {
+                      const applied = (editingTags.tags || []).includes(tag);
+                      return (
+                        <button key={tag} type="button" aria-pressed={applied} aria-label={`${applied ? '已套用' : '套用'} ${tag}`} disabled={savingTags || applied} onClick={() => void handleAddTag(editingTags, tag)} className={`inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed ${applied ? 'border-amber-400/30 bg-amber-500/15 text-amber-200' : 'border-slate-600 bg-slate-800/70 text-slate-300 hover:border-amber-400/60 hover:bg-amber-500/10 hover:text-amber-100 disabled:opacity-50'}`}>
+                          {applied ? <CheckCircle className="h-3.5 w-3.5 shrink-0" /> : <Tag className="h-3.5 w-3.5 shrink-0 text-amber-400" />}
+                          <span className="min-w-0 break-all">{tag}</span>
+                          {applied && <span className="shrink-0 text-[10px] font-normal text-amber-300/70">已套用</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : <p className="mt-3 text-xs text-slate-500">此群組尚無標籤，可在下方新增。</p>}
+              </section>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/45 p-4">
+                <label htmlFor="new-employee-tag" className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">新增標籤</label>
                 <div className="flex gap-2">
                   <input
+                    id="new-employee-tag"
                     type="text"
                     value={newTag}
+                    disabled={savingTags}
                     onChange={(e) => setNewTag(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleAddTag(editingTags); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void handleAddTag(editingTags); } }}
                     placeholder="輸入標籤名稱……"
                     className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15"
                   />
-                  <button type="button" onClick={() => handleAddTag(editingTags)} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-amber-400/60 bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-amber-950/30 transition-all hover:bg-amber-500 active:bg-amber-700">
+                  <button type="button" onClick={() => void handleAddTag(editingTags)} disabled={savingTags || !newTag.trim() || (editingTags.tags || []).includes(newTag.trim())} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-amber-400/60 bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-amber-950/30 transition-all hover:bg-amber-500 active:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50">
                     <Tag className="h-4 w-4" />
                     新增
                   </button>
@@ -5793,7 +5836,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               <div className="rounded-xl border border-slate-700/80 bg-slate-950/45 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <label className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">目前標籤</label>
-                  <span className="text-[11px] text-slate-500">變更會立即儲存</span>
+                  <span role="status" className="inline-flex items-center gap-1.5 text-[11px] text-slate-500">{savingTags && <Loader2 className="h-3 w-3 animate-spin" />}{savingTags ? '正在儲存…' : '變更會立即儲存'}</span>
                 </div>
                 <div className="flex min-h-[92px] flex-wrap content-start gap-2">
                   {(editingTags.tags || []).length === 0 ? (
@@ -5803,9 +5846,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                     </div>
                   ) : (
                     (editingTags.tags || []).map((tag, idx) => (
-                      <span key={idx} className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-sm font-semibold text-amber-200">
-                        {tag}
-                        <button type="button" onClick={() => handleRemoveTag(editingTags, tag)} aria-label={`移除 ${tag}`} className="rounded-md p-0.5 text-amber-300 transition-colors hover:bg-amber-400/25 hover:text-white">
+                      <span key={idx} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-sm font-semibold text-amber-200">
+                        <span className="min-w-0 break-all">{tag}</span>
+                        <button type="button" onClick={() => void handleRemoveTag(editingTags, tag)} disabled={savingTags} aria-label={`移除 ${tag}`} className="shrink-0 rounded-md p-0.5 text-amber-300 transition-colors hover:bg-amber-400/25 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50">
                           <X className="h-3.5 w-3.5" />
                         </button>
                       </span>
@@ -5814,7 +5857,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                 </div>
               </div>
               <div className="flex justify-end border-t border-slate-700/70 pt-4">
-                <button type="button" onClick={() => { setEditingTags(null); setNewTag(''); }} className="rounded-lg border border-slate-600 bg-slate-800 px-5 py-2 text-sm font-semibold text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-700 hover:text-white">關閉</button>
+                <button type="button" onClick={closeTagEditor} disabled={savingTags} className="rounded-lg border border-slate-600 bg-slate-800 px-5 py-2 text-sm font-semibold text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50">關閉</button>
               </div>
             </div>
           </div>
