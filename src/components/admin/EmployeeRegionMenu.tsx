@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject, SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, CheckCircle, ChevronDown, Loader2, MapPin, Pencil, Pin, PinOff, Plus, Settings, Trash2, X } from 'lucide-react';
+import EmployeeSetupSelect from './EmployeeSetupSelect';
 
 export const UNASSIGNED_REGION_FILTER = '__unassigned__';
 const REGION_NAME_MAX_LENGTH = 30;
@@ -815,7 +816,8 @@ interface EmployeeRegionPickerProps {
   actions: EmployeeRegionActions;
   disabled?: boolean;
   invalid?: boolean;
-  className: string;
+  appearance?: 'default' | 'setup';
+  className?: string;
 }
 
 export function EmployeeRegionPicker({
@@ -828,7 +830,8 @@ export function EmployeeRegionPicker({
   actions,
   disabled = false,
   invalid = false,
-  className,
+  appearance = 'default',
+  className = '',
 }: EmployeeRegionPickerProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -861,6 +864,24 @@ export function EmployeeRegionPicker({
     const rect = buttonRef.current?.getBoundingClientRect();
     if (rect) setPosition(getAnchoredMenuPosition(rect, estimateMenuHeight(options.length, false)));
   };
+
+  if (appearance === 'setup') {
+    return (
+      <>
+        <EmployeeSetupSelect
+          id={id} label="所在地區" placeholder="請選擇地區" value={value}
+          options={options.map(option => ({ id: option.id, label: option.name, count: option.count, pinned: option.pinned }))}
+          tone="violet" icon={MapPin} onChange={onChange} required disabled={disabled} invalid={invalid}
+          onOpenSettings={() => setSettingsOpen(true)} emptyMessage="尚未建立地區，請點右上角齒輪新增。"
+        />
+        {settingsOpen && <EmployeeRegionSettingsDialog
+          groupLabel={groupLabel} regions={regions} counts={counts} actions={actions}
+          onCreated={region => { if (!valueRef.current) onChange(region.id); }}
+          onClose={() => { setSettingsOpen(false); document.getElementById(id)?.focus({ preventScroll: true }); }}
+        />}
+      </>
+    );
+  }
 
   return (
     <>
