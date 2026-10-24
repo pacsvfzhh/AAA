@@ -32,37 +32,37 @@ interface EmployeeSetupSelectProps {
 
 const tones = {
   violet: {
-    button: 'border-violet-200 bg-[linear-gradient(115deg,#faf5ff,#ede9fe_60%,#e8edff)] text-violet-950 hover:border-violet-400 hover:shadow-violet-950/20 focus-visible:ring-violet-300/60',
-    active: '!border-violet-400 ring-2 ring-violet-300/30',
-    icon: 'border-violet-200/80 bg-white/75 text-violet-600',
-    surface: 'border-violet-200 bg-[linear-gradient(145deg,#fdfaff,#f0edfa_65%,#edf1ff)]',
-    header: 'border-violet-200/70 bg-gradient-to-r from-violet-100/80 to-indigo-50/60 text-violet-950',
-    option: 'hover:border-violet-200 hover:bg-violet-50 focus-visible:ring-violet-400',
-    selected: 'border-violet-300 bg-gradient-to-r from-violet-100 to-indigo-100/70 text-violet-950',
-    accent: 'text-violet-700',
-    scrollbar: '#b2a0d9 #ece7f5',
+    button: 'border-violet-300/25 bg-gradient-to-r from-violet-300/[0.09] to-indigo-300/[0.03] text-violet-100 hover:border-violet-300/50 hover:from-violet-300/15 focus-visible:ring-violet-300/40',
+    active: '!border-violet-300/60 ring-2 ring-violet-300/10',
+    icon: 'border-violet-300/20 bg-violet-300/10 text-violet-200',
+    surface: 'border-violet-300/25',
+    header: 'border-violet-300/15 bg-gradient-to-r from-violet-300/[0.08] to-transparent text-violet-100',
+    option: 'hover:border-violet-300/25 hover:bg-violet-300/[0.08] focus-visible:ring-violet-300/60',
+    selected: 'border-violet-300/40 bg-gradient-to-r from-violet-300/15 to-indigo-300/5 text-violet-50',
+    accent: 'text-violet-200',
+    scrollbar: '#7c7095 #1b1d26',
   },
   teal: {
-    button: 'border-teal-200 bg-[linear-gradient(115deg,#f0fdf7,#dff5ee_60%,#e3f0fc)] text-teal-950 hover:border-teal-400 hover:shadow-teal-950/20 focus-visible:ring-teal-300/60',
-    active: '!border-teal-400 ring-2 ring-teal-300/30',
-    icon: 'border-teal-200/80 bg-white/75 text-teal-700',
-    surface: 'border-teal-200 bg-[linear-gradient(145deg,#f7fefa,#eaf6f3_65%,#edf4fc)]',
-    header: 'border-teal-200/70 bg-gradient-to-r from-teal-100/80 to-sky-50/60 text-teal-950',
-    option: 'hover:border-teal-200 hover:bg-teal-50 focus-visible:ring-teal-500',
-    selected: 'border-teal-300 bg-gradient-to-r from-teal-100 to-sky-100/70 text-teal-950',
-    accent: 'text-teal-700',
-    scrollbar: '#7eb4aa #e3f0ed',
+    button: 'border-teal-200/25 bg-gradient-to-r from-teal-200/[0.08] to-sky-300/[0.03] text-teal-50 hover:border-teal-200/50 hover:from-teal-200/[0.14] focus-visible:ring-teal-200/40',
+    active: '!border-teal-200/60 ring-2 ring-teal-200/10',
+    icon: 'border-teal-200/20 bg-teal-200/10 text-teal-200',
+    surface: 'border-teal-200/25',
+    header: 'border-teal-200/15 bg-gradient-to-r from-teal-200/[0.08] to-transparent text-teal-50',
+    option: 'hover:border-teal-200/25 hover:bg-teal-200/[0.08] focus-visible:ring-teal-200/60',
+    selected: 'border-teal-200/40 bg-gradient-to-r from-teal-200/15 to-sky-300/5 text-teal-50',
+    accent: 'text-teal-200',
+    scrollbar: '#5c837e #1b2226',
   },
   amber: {
-    button: 'border-amber-200 bg-[linear-gradient(115deg,#fff9eb,#ffedce_60%,#ffe7e0)] text-amber-950 hover:border-amber-400 hover:shadow-amber-950/20 focus-visible:ring-amber-300/60',
-    active: '!border-amber-400 ring-2 ring-amber-300/30',
-    icon: 'border-amber-200/80 bg-white/75 text-amber-700',
-    surface: 'border-amber-200 bg-[linear-gradient(145deg,#fffcf5,#fbf1e4_65%,#fff0ec)]',
-    header: 'border-amber-200/70 bg-gradient-to-r from-amber-100/80 to-rose-50/60 text-amber-950',
-    option: 'hover:border-amber-200 hover:bg-amber-50 focus-visible:ring-amber-500',
-    selected: 'border-amber-300 bg-gradient-to-r from-amber-100 to-orange-100/70 text-amber-950',
-    accent: 'text-amber-800',
-    scrollbar: '#c9a573 #f4e9d9',
+    button: 'border-amber-200/25 bg-gradient-to-r from-amber-200/[0.09] to-rose-300/[0.03] text-amber-50 hover:border-amber-200/50 hover:from-amber-200/15 focus-visible:ring-amber-200/40',
+    active: '!border-amber-200/60 ring-2 ring-amber-200/10',
+    icon: 'border-amber-200/20 bg-amber-200/10 text-amber-200',
+    surface: 'border-amber-200/25',
+    header: 'border-amber-200/15 bg-gradient-to-r from-amber-200/[0.08] to-transparent text-amber-50',
+    option: 'hover:border-amber-200/25 hover:bg-amber-200/[0.08] focus-visible:ring-amber-200/60',
+    selected: 'border-amber-200/40 bg-gradient-to-r from-amber-200/15 to-rose-300/5 text-amber-50',
+    accent: 'text-amber-200',
+    scrollbar: '#958364 #24211b',
   },
 };
 
@@ -227,14 +227,14 @@ export default function EmployeeSetupSelect({
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); if (!position) toggle(); }
         }}
         data-unassigned={unassigned || undefined}
-        className={`group flex min-h-[54px] w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left shadow-[0_3px_12px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.8)] transition-all duration-200 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-45 ${unassigned ? 'border-dashed border-slate-400/70 bg-[linear-gradient(115deg,#f8fafc,#eef1f6)] text-slate-600 hover:border-slate-300 hover:bg-white focus-visible:ring-slate-300/60' : theme.button} ${position ? unassigned ? '!border-slate-300 ring-2 ring-slate-300/25' : theme.active : ''} ${invalid ? '!border-rose-400' : ''}`}
+        className={`group flex min-h-[54px] w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left shadow-[0_2px_8px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.025)] transition-all duration-200 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-45 ${unassigned ? 'border-dashed border-stone-500/60 bg-black/15 text-stone-300 hover:border-stone-400 hover:bg-white/[0.03] focus-visible:ring-stone-400/40' : theme.button} ${position ? unassigned ? '!border-stone-400 ring-2 ring-stone-400/10' : theme.active : ''} ${invalid ? '!border-rose-400' : ''}`}
       >
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${unassigned ? 'border-slate-200 bg-white/80 text-slate-500' : theme.icon}`}><SelectedIcon className="h-4 w-4" /></span>
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${unassigned ? 'border-stone-500/25 bg-white/[0.03] text-stone-400' : theme.icon}`}><SelectedIcon className="h-4 w-4" /></span>
         <span className="min-w-0 flex-1">
           <span data-option-label className={`block truncate text-xs font-bold ${selected ? '' : 'opacity-65'}`}>{selected ? <>{selected.label}{selected.description ? <span className="ml-1 font-normal opacity-65">（{selected.description}）</span> : null}</> : placeholder}</span>
           <span className="mt-0.5 block truncate text-[10px] font-medium opacity-70">{unassigned ? '不建立自動通知 · 可稍後設定' : selected?.meta || (selected ? '已選擇 · 點擊更換' : '點擊選擇')}</span>
         </span>
-        {unassigned && <span className="shrink-0 rounded-md border border-slate-300 bg-white/70 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">未套用</span>}
+        {unassigned && <span className="shrink-0 rounded-md border border-stone-500/25 bg-white/[0.03] px-1.5 py-0.5 text-[9px] font-semibold text-stone-400">未套用</span>}
         <ChevronRight className={`h-4 w-4 shrink-0 transition-transform duration-200 ${position ? 'translate-x-0.5' : 'opacity-55 group-hover:translate-x-0.5 group-hover:opacity-100'}`} />
       </button>
       {position && createPortal(
@@ -242,21 +242,21 @@ export default function EmployeeSetupSelect({
           <div data-tone={tone} className={`employee-setup-menu flex flex-col overflow-hidden rounded-xl border shadow-[0_18px_48px_rgba(2,6,23,0.28),0_2px_8px_rgba(2,6,23,0.12)] ${theme.surface}`} style={{ maxHeight: position.maxHeight, transformOrigin: position.transformOrigin }}>
             <div className={`flex shrink-0 items-center gap-2 border-b px-3 py-2 ${theme.header}`}>
               <Icon className="h-4 w-4" /><span className="flex-1 text-xs font-bold">{label}</span><span className="text-[10px] opacity-50">{options.length} 個選項</span>
-              {onOpenSettings && <button type="button" aria-label="地區設定" title="編輯或新增地區" onClick={() => { close(); onOpenSettings(); }} className="rounded-md border border-current/20 bg-white/50 p-1.5 transition-colors hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"><Settings className="h-3.5 w-3.5" /></button>}
-              <button type="button" aria-label={`關閉${label}選單`} onClick={() => close(true)} className="rounded-md p-1 text-current opacity-60 transition-colors hover:bg-black/5 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"><X className="h-3.5 w-3.5" /></button>
+              {onOpenSettings && <button type="button" aria-label="地區設定" title="編輯或新增地區" onClick={() => { close(); onOpenSettings(); }} className="rounded-md border border-current/20 bg-white/5 p-1.5 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"><Settings className="h-3.5 w-3.5" /></button>}
+              <button type="button" aria-label={`關閉${label}選單`} onClick={() => close(true)} className="rounded-md p-1 text-current opacity-60 transition-colors hover:bg-white/10 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"><X className="h-3.5 w-3.5" /></button>
             </div>
             <div id={listId} role="listbox" aria-label={label} className="employee-setup-scrollbar min-h-0 space-y-1 overflow-y-auto overscroll-contain p-1.5" style={{ scrollbarColor: theme.scrollbar }}>
               {options.map(option => (
                 <button key={option.id} type="button" role="option" aria-selected={value === option.id} aria-describedby={details?.option.id === option.id ? detailsId : undefined}
                   onClick={() => { onChange(option.id); close(true); }} onMouseEnter={event => showDetails(event.currentTarget, option)} onMouseLeave={hideDetails} onFocus={event => showDetails(event.currentTarget, option)} onBlur={() => setDetails(null)}
                   data-unassigned={option.unassigned || undefined}
-                  className={`group/option flex min-h-[38px] w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${option.unassigned ? `!mb-2 border-dashed text-slate-600 hover:bg-slate-100 focus-visible:ring-slate-400 ${value === option.id ? 'border-slate-400 bg-slate-100' : 'border-slate-300 bg-slate-50/80'}` : value === option.id ? theme.selected : `border-white/70 bg-white/65 text-slate-700 ${theme.option}`}`}
+                  className={`group/option flex min-h-[38px] w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${option.unassigned ? `!mb-2 border-dashed text-stone-300 hover:bg-white/5 focus-visible:ring-stone-400 ${value === option.id ? 'border-stone-400/60 bg-white/5' : 'border-stone-500/40 bg-black/10'}` : value === option.id ? theme.selected : `border-white/[0.04] bg-white/[0.025] text-stone-200 ${theme.option}`}`}
                 >
-                  <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${option.unassigned ? 'border-slate-200 bg-white text-slate-500' : theme.icon}`}>{option.unassigned ? <CircleOff className="h-3 w-3" /> : option.pinned ? <Pin className="h-3 w-3" /> : <Icon className="h-3 w-3" />}</span>
-                  <span className="min-w-0 flex-1"><span data-option-label className="block truncate text-[11px] font-semibold">{option.label}{option.description ? <span className="ml-1 font-normal text-slate-500">（{option.description}）</span> : null}</span></span>
-                  {option.meta && <span className={`shrink-0 rounded border px-1 py-0.5 text-[9px] ${option.unassigned ? 'border-slate-200 bg-white/80 text-slate-500' : `border-black/5 bg-white/60 ${theme.accent}`}`}>{option.meta}</span>}
+                  <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${option.unassigned ? 'border-stone-500/25 bg-white/[0.03] text-stone-400' : theme.icon}`}>{option.unassigned ? <CircleOff className="h-3 w-3" /> : option.pinned ? <Pin className="h-3 w-3" /> : <Icon className="h-3 w-3" />}</span>
+                  <span className="min-w-0 flex-1"><span data-option-label className="block truncate text-[11px] font-semibold">{option.label}{option.description ? <span className="ml-1 font-normal text-stone-400">（{option.description}）</span> : null}</span></span>
+                  {option.meta && <span className={`shrink-0 rounded border px-1 py-0.5 text-[9px] ${option.unassigned ? 'border-stone-500/25 bg-white/[0.03] text-stone-400' : `border-white/10 bg-white/5 ${theme.accent}`}`}>{option.meta}</span>}
                   {option.count !== undefined && <span className={`shrink-0 text-[10px] tabular-nums ${theme.accent}`}>{option.count} 人</span>}
-                  {value === option.id ? <Check className={`h-3.5 w-3.5 shrink-0 ${option.unassigned ? 'text-slate-500' : theme.accent}`} /> : <ArrowRight className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/option:opacity-50" />}
+                  {value === option.id ? <Check className={`h-3.5 w-3.5 shrink-0 ${option.unassigned ? 'text-stone-400' : theme.accent}`} /> : <ArrowRight className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover/option:opacity-50" />}
                 </button>
               ))}
               {options.length === 0 && <p className="px-3 py-6 text-center text-xs leading-5 text-slate-400">{emptyMessage}</p>}
@@ -264,7 +264,7 @@ export default function EmployeeSetupSelect({
           </div>
         </div>, document.body,
       )}
-      {details && createPortal(<div id={detailsId} role="tooltip" onPointerDown={stopPortalEvent} onPointerUp={stopPortalEvent} onMouseDown={stopPortalEvent} onClick={stopPortalEvent} onMouseEnter={() => { if (hideTimer.current) clearTimeout(hideTimer.current); }} onMouseLeave={hideDetails} className={`employee-setup-details fixed z-[10060] rounded-xl border p-3.5 shadow-[0_18px_50px_rgba(0,0,0,0.65)] ${theme.surface}`} style={{ left: details.left, top: details.top, width: details.width }}><p className={`mb-2 break-words text-xs font-bold ${theme.accent}`}>{details.option.label}</p><p className="employee-setup-scrollbar max-h-[156px] overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-slate-700" style={{ scrollbarColor: theme.scrollbar }}>{details.option.description}</p></div>, document.body)}
+      {details && createPortal(<div id={detailsId} role="tooltip" onPointerDown={stopPortalEvent} onPointerUp={stopPortalEvent} onMouseDown={stopPortalEvent} onClick={stopPortalEvent} onMouseEnter={() => { if (hideTimer.current) clearTimeout(hideTimer.current); }} onMouseLeave={hideDetails} className={`employee-setup-details fixed z-[10060] rounded-xl border p-3.5 shadow-[0_18px_50px_rgba(0,0,0,0.65)] ${theme.surface}`} style={{ left: details.left, top: details.top, width: details.width }}><p className={`mb-2 break-words text-xs font-bold ${theme.accent}`}>{details.option.label}</p><p className="employee-setup-scrollbar max-h-[156px] overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-stone-200" style={{ scrollbarColor: theme.scrollbar }}>{details.option.description}</p></div>, document.body)}
     </>
   );
 }
