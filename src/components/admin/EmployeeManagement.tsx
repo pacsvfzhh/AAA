@@ -122,7 +122,7 @@ function EmployeeTableScroll({ label, className, children }: {
           </div>
         </div>
       )}
-      <div ref={viewportRef} id={viewportId} role="region" aria-label={`${label}，可左右捲動`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60" style={{ touchAction: 'pan-x pan-y' }}>
+      <div ref={viewportRef} id={viewportId} role="region" aria-label={`${label}，可左右捲動`} tabIndex={0} className="employee-table-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60" style={{ touchAction: 'pan-x pan-y' }}>
         {children}
       </div>
     </div>
