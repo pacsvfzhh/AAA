@@ -710,6 +710,13 @@ const zh = {
   },
   // Login page
   login: {
+    maintenanceTitle: '系统维护与升级',
+    maintenanceMessage: '系统正在进行维护与升级，员工登录暂时不可用。请在维护完成后重新尝试。',
+    maintenanceContact: '如有疑问或需紧急协助，请直接联系您的部门经理。',
+    maintenanceAction: '回到登录',
+    maintenanceStatus: '员工登录已暂停',
+    maintenanceLanguage: '显示语言',
+    maintenanceClose: '关闭维护提示',
     employeeWorkPlatform: '员工工作平台',
     welcomeBack: '欢迎回来',
     signInToAccess: '登录以访问您的工作空间',

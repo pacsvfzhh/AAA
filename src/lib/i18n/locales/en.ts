@@ -784,6 +784,13 @@ const en = {
 
   // Login page
   login: {
+    maintenanceTitle: 'System maintenance & upgrades',
+    maintenanceMessage: 'The system is undergoing maintenance and upgrades. Employee sign-in is temporarily unavailable. Please try again once maintenance is complete.',
+    maintenanceContact: 'If you have any questions or need urgent assistance, please contact your department manager directly.',
+    maintenanceAction: 'Back to sign in',
+    maintenanceStatus: 'Employee sign-in paused',
+    maintenanceLanguage: 'Display language',
+    maintenanceClose: 'Close maintenance notice',
     employeeWorkPlatform: 'Employee Work Platform',
     welcomeBack: 'Welcome Back',
     signInToAccess: 'Sign in to access your workspace',

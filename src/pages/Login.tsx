@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Shield, Lock, Globe, Package, ClipboardCheck, ArrowRight, AlertTriangle, ShieldAlert, Clock, Info, Check, Eye, EyeOff } from 'lucide-react';
 import {
   AccountLockedError,
+  EmployeeLoginMaintenanceError,
   clearOpenedElsewhereNotice,
   getRememberedUsername,
   hasOpenedElsewhereNotice,
@@ -19,6 +20,7 @@ import { LANGUAGES } from '../lib/i18n/types';
 import { LanguageModal } from '../components/LanguageSwitcher';
 import type { Language } from '../lib/i18n/types';
 import LoginDecorations from '../components/LoginDecorations';
+import EmployeeMaintenanceDialog from '../components/EmployeeMaintenanceDialog';
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -74,6 +76,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [rememberMe, setRememberMe] = useState(() => getRememberedUsername() !== '');
   const [openedElsewhere, setOpenedElsewhere] = useState(hasOpenedElsewhereNotice);
   const [loading, setLoading] = useState(false);
+  const [showMaintenance, setShowMaintenance] = useState(false);
   const [error, setError] = useState<LoginErrorKind | null>(null);
   const [warning, setWarning] = useState<{ attempts?: number } | null>(null);
   const [lockInfo, setLockInfo] = useState<{
@@ -206,6 +209,14 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       onLoginSuccess();
     } catch (err) {
       if (isSupabaseAbortError(err)) return;
+
+      if (err instanceof EmployeeLoginMaintenanceError) {
+        setWarning(null);
+        setLockInfo(null);
+        setError(null);
+        setShowMaintenance(true);
+        return;
+      }
 
       if (err instanceof AccountLockedError) {
         const remainingSeconds = err.lockedUntil
@@ -364,6 +375,10 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       </>
     );
   };
+
+  const maintenanceDialog = showMaintenance && (
+    <EmployeeMaintenanceDialog onClose={() => setShowMaintenance(false)} />
+  );
 
   // Phone layout (phones and narrow portrait tablets)
   if (phoneLayout) {
@@ -545,6 +560,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           </div>
         </div>
 
+        {maintenanceDialog}
         {showLanguageModal && (
           <LanguageModal
             currentLanguage={language}
@@ -758,6 +774,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           </div>
         </div>
 
+        {maintenanceDialog}
         {showLanguageModal && (
           <LanguageModal
             currentLanguage={language}
@@ -991,6 +1008,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
         </div>
       </div>
 
+      {maintenanceDialog}
       {showLanguageModal && (
         <LanguageModal
           currentLanguage={language}

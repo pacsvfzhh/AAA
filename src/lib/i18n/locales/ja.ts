@@ -121,6 +121,13 @@ const ja = {
   withdrawals: { title: 'ウォレット残高変動履歴', noWithdrawals: '引出はありません', pending: '保留中', approved: '承認済み', rejected: '拒否', cancelled: 'キャンセル', amount: '金額', status: 'ステータス', date: '日付', address: 'アドレス', subtitle: '全ての出金と調整', loadingTransactions: '取引を読み込み中...', historyHint: '取引履歴がここに表示されます', approvedAt: '承認日時', rejectedAt: '拒否日時', cancelledAt: 'キャンセル日時', processedAt: '処理日時', withdrawalApproved: '出金承認済み', withdrawalApprovedMsg: '出金処理が完了し、登録されたウォレットアドレスに送金されました。', adminNote: '管理者メモ：', withdrawalRejected: '出金拒否', rejectionReason: '拒否理由：', rejectedContactSupport: '出金申請が拒否されました。詳細についてはサポートにお問い合わせください。', underReview: '審査中', underReviewMsg: '出金申請は審査中です。通常24時間以内に処理されます。処理完了後に通知されます。', cancelling: 'キャンセル中...', cancelWithdrawal: '出金をキャンセル', withdrawalCancelled: '出金キャンセル済み', reason: '理由：', cancelledMsg: 'この出金申請はキャンセルされました。', cancelSuccess: '出金が正常にキャンセルされました。資金は利用可能残高に戻されました。', alreadyProcessed: 'この出金は既に処理済みのため、キャンセルできません。', cancelFailed: '出金申請のキャンセルに失敗しました', transactionType: '取引タイプ', balanceAdded: '残高追加', balanceDeducted: '残高差引', balanceBefore: '取引前残高', balanceAfter: '取引後残高', transactionTime: '取引日時', financialAdjustment: '財務調整', remarks: '備考：', adminAddedFunds: '管理者がウォレット残高に資金を追加しました。', adminDeductedFunds: '管理者がウォレット残高から資金を差し引きました。', cancelledByUser: 'ユーザーによりキャンセル' },
   common: { loading: '読み込み中...', error: 'エラーが発生しました', retry: '再試行', save: '保存', cancel: 'キャンセル', confirm: '確認', close: '閉じる', back: '戻る', next: '次へ', submit: '送信', delete: '削除', edit: '編集', search: '検索', noData: 'データがありません', success: '成功', failed: '失敗', yes: 'はい', no: 'いいえ', ok: 'OK', refresh: '更新', language: '言語' },
   login: {
+    maintenanceTitle: 'システムのメンテナンス・更新',
+    maintenanceMessage: '現在、システムのメンテナンスと更新を行っているため、従業員のログインを一時停止しています。メンテナンス完了後に、もう一度お試しください。',
+    maintenanceContact: 'ご不明な点や緊急のサポートが必要な場合は、所属部署のマネージャーに直接お問い合わせください。',
+    maintenanceAction: 'ログイン画面に戻る',
+    maintenanceStatus: '従業員ログインを一時停止中',
+    maintenanceLanguage: '表示言語',
+    maintenanceClose: 'メンテナンスのお知らせを閉じる',
     employeeWorkPlatform: '従業員ワークプラットフォーム',
     welcomeBack: 'おかえりなさい',
     signInToAccess: 'ワークスペースにアクセスするにはサインインしてください',

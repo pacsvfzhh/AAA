@@ -43,6 +43,7 @@ export type StoredAuth =
 type FinancialLoginResult<T> = {
   success?: boolean;
   error?: string;
+  code?: string;
   locked_until?: string;
   session_token?: string;
   session_marker?: string;
@@ -56,6 +57,13 @@ export class AccountLockedError extends Error {
     super('Account is temporarily locked.');
     this.name = 'AccountLockedError';
     this.lockedUntil = lockedUntil;
+  }
+}
+
+export class EmployeeLoginMaintenanceError extends Error {
+  constructor() {
+    super('Employee login is temporarily unavailable during maintenance.');
+    this.name = 'EmployeeLoginMaintenanceError';
   }
 }
 
@@ -118,6 +126,9 @@ export async function login(credentials: LoginCredentials): Promise<StoredAuth> 
     if (error) throw error;
 
     const result = data as FinancialLoginResult<Employee>;
+    if (result.code === 'employee_login_maintenance') {
+      throw new EmployeeLoginMaintenanceError();
+    }
     if (!result.success || !result.session_token || !result.session_marker || !result.user) {
       if (result.error === 'Account is temporarily locked.') {
         throw new AccountLockedError(result.locked_until);

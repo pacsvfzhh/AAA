@@ -60,6 +60,13 @@ const fr = {
   common: { loading: 'Chargement...', error: 'Une erreur est survenue', retry: 'Reessayer', save: 'Enregistrer', cancel: 'Annuler', confirm: 'Confirmer', close: 'Fermer', back: 'Retour', next: 'Suivant', submit: 'Soumettre', delete: 'Supprimer', edit: 'Modifier', search: 'Rechercher', noData: 'Aucune donnee disponible', success: 'Succes', failed: 'Echoue', yes: 'Oui', no: 'Non', ok: 'OK', refresh: 'Actualiser', language: 'Langue' },
   // Login page
   login: {
+    maintenanceTitle: 'Maintenance et mise à niveau du système',
+    maintenanceMessage: 'Le système est en cours de maintenance et de mise à niveau. La connexion des employés est temporairement indisponible. Veuillez réessayer une fois la maintenance terminée.',
+    maintenanceContact: 'Pour toute question ou assistance urgente, veuillez contacter directement votre responsable de département.',
+    maintenanceAction: 'Retour à la connexion',
+    maintenanceStatus: 'Connexion des employés suspendue',
+    maintenanceLanguage: 'Langue d’affichage',
+    maintenanceClose: 'Fermer l’avis de maintenance',
     employeeWorkPlatform: 'Plateforme de Travail',
     welcomeBack: 'Bienvenue',
     signInToAccess: 'Connectez-vous pour accéder à votre espace de travail',

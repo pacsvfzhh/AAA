@@ -121,6 +121,13 @@ const ko = {
   withdrawals: { title: '지갑 잔액 변동 내역', noWithdrawals: '출금 없음', pending: '대기 중', approved: '승인됨', rejected: '거부됨', cancelled: '취소됨', amount: '금액', status: '상태', date: '날짜', address: '주소', subtitle: '모든 출금 및 조정', loadingTransactions: '거래 로딩 중...', historyHint: '거래 내역이 여기에 표시됩니다', approvedAt: '승인 일시', rejectedAt: '거부 일시', cancelledAt: '취소 일시', processedAt: '처리 일시', withdrawalApproved: '출금 승인됨', withdrawalApprovedMsg: '출금이 처리되었으며 등록된 지갑 주소로 자금이 이체되었습니다.', adminNote: '관리자 메모:', withdrawalRejected: '출금 거부됨', rejectionReason: '거부 사유:', rejectedContactSupport: '출금 요청이 거부되었습니다. 자세한 내용은 고객 지원에 문의하세요.', underReview: '심사 중', underReviewMsg: '출금 요청이 심사 중입니다. 이 과정은 보통 24시간 이내에 완료됩니다. 처리가 완료되면 알림을 받게 됩니다.', cancelling: '취소 중...', cancelWithdrawal: '출금 취소', withdrawalCancelled: '출금 취소됨', reason: '사유:', cancelledMsg: '이 출금 요청은 취소되었습니다.', cancelSuccess: '출금이 성공적으로 취소되었습니다. 자금이 사용 가능 잔액으로 반환되었습니다.', alreadyProcessed: '이 출금은 이미 처리되었으므로 취소할 수 없습니다.', cancelFailed: '출금 요청 취소 실패', transactionType: '거래 유형', balanceAdded: '잔액 추가', balanceDeducted: '잔액 차감', balanceBefore: '거래 전 잔액', balanceAfter: '거래 후 잔액', transactionTime: '거래 시간', financialAdjustment: '재무 조정', remarks: '비고:', adminAddedFunds: '관리자가 지갑 잔액에 자금을 추가했습니다.', adminDeductedFunds: '관리자가 지갑 잔액에서 자금을 차감했습니다.', cancelledByUser: '사용자가 취소함' },
   common: { loading: '로딩 중...', error: '오류가 발생했습니다', retry: '재시도', save: '저장', cancel: '취소', confirm: '확인', close: '닫기', back: '뒤로', next: '다음', submit: '제출', delete: '삭제', edit: '편집', search: '검색', noData: '데이터 없음', success: '성공', failed: '실패', yes: '예', no: '아니오', ok: '확인', refresh: '새로고침', language: '언어' },
   login: {
+    maintenanceTitle: '시스템 점검 및 업그레이드',
+    maintenanceMessage: '시스템 점검 및 업그레이드가 진행 중이므로 직원 로그인을 일시적으로 사용할 수 없습니다. 점검이 완료된 후 다시 시도해 주세요.',
+    maintenanceContact: '문의 사항이 있거나 긴급한 지원이 필요한 경우 소속 부서 관리자에게 직접 연락해 주세요.',
+    maintenanceAction: '로그인 화면으로 돌아가기',
+    maintenanceStatus: '직원 로그인 일시 중지',
+    maintenanceLanguage: '표시 언어',
+    maintenanceClose: '점검 안내 닫기',
     employeeWorkPlatform: '직원 업무 플랫폼',
     welcomeBack: '환영합니다',
     signInToAccess: '작업 공간에 접근하려면 로그인하세요',

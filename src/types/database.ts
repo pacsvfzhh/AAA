@@ -2388,6 +2388,21 @@ export interface Database {
       };
     };
     Functions: {
+      get_employee_login_maintenance: {
+        Args: { p_admin_session_token: string; p_owner_admin_id: string };
+        Returns: { owner_admin_id: string; enabled: boolean; updated_at: string | null };
+      };
+      set_employee_login_maintenance: {
+        Args: { p_admin_session_token: string; p_owner_admin_id: string; p_admin_password: string; p_enabled: boolean };
+        Returns: {
+          success: boolean;
+          error?: 'invalid_password' | 'confirmation_locked';
+          locked_until?: string;
+          owner_admin_id?: string;
+          enabled?: boolean;
+          updated_at?: string;
+        };
+      };
       cancel_audit_deletion_confirmation: {
         Args: { p_admin_session_token: string; p_job_kind: 'content' | 'employee'; p_job_id: string };
         Returns: { success: boolean; cancelled: boolean };

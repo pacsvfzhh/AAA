@@ -640,6 +640,13 @@ const es = {
   },
   // Login page
   login: {
+    maintenanceTitle: 'Mantenimiento y actualización del sistema',
+    maintenanceMessage: 'El sistema está en mantenimiento y actualización. El acceso de empleados no está disponible temporalmente. Vuelve a intentarlo cuando finalice el mantenimiento.',
+    maintenanceContact: 'Si tienes alguna pregunta o necesitas ayuda urgente, contacta directamente con el responsable de tu departamento.',
+    maintenanceAction: 'Volver al inicio de sesión',
+    maintenanceStatus: 'Acceso de empleados en pausa',
+    maintenanceLanguage: 'Idioma de visualización',
+    maintenanceClose: 'Cerrar aviso de mantenimiento',
     employeeWorkPlatform: 'Plataforma de Trabajo',
     welcomeBack: 'Bienvenido',
     signInToAccess: 'Inicia sesión para acceder a tu espacio de trabajo',
