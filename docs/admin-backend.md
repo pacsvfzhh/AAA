@@ -64,6 +64,9 @@
 ### 設定
 - `AdminGroupConfiguration.tsx`（超管）：管理各管理员 `admin_configs` 的 `company_name`、`currency_unit`、`branding_mode`；登录页标题与副标题存于 `system_configs`。这里是品牌设置，不是员工分组。
 - `SecondaryAdminConfiguration.tsx`（二级）：只改自己的品牌配置（全局/自定义），登录文案只读。
+- 员工新登录维护：`EmployeeLoginMaintenanceSettings.tsx` 独立保存。超管在各管理员的「編輯管理員設定」面板顶部操作，二级在「我的設定」顶部操作自己团队；不在修改导航文字／排序的「導航設定」对话框。每个管理员（含超管自己的团队）独立，默认关闭，不继承超管或品牌设置来源。
+- 开启／关闭都须输入**当前操作者**的管理员密码（超管操作二级团队时输入超管自己的密码），服务端以会话确认身份及范围。密码错误不变更状态，连续5次错误将该操作者的维护密码确认锁定15分钟，不锁管理员登录；成功后清空确认失败计数，并写私有审计。保存中禁用编辑关闭、Esc及品牌保存，密码Enter不提交品牌表单；取消清空密码，读取失败显示未确认状态，写入结果不确定时须重读，不自动重送。
+- 开启后，只阻止 `users.created_by` 属于该管理员的员工**新登录**，正确验证密码后在服务器返回维护标记，不创建／替换会话、不累计登录失败；管理员登录、其他团队、已在线及「记住我」仍有效的会话均不受影响。员工登录页显示十语言维护弹窗。配置 RPC 为 `get_employee_login_maintenance` / `set_employee_login_maintenance`；迁移 `20261103000000_employee_login_maintenance.sql`，正式库尚未部署，测试 `npm run test:employee-login-maintenance`。
 
 ### 提款 `WithdrawalReview.tsx`
 - `get_withdrawal_review_data`：超管看全部，二级只看自己的员工。

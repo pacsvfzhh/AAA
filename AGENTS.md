@@ -16,7 +16,7 @@
 |---|---|
 | `src/components/admin/` | 管理员后台各页面；`EmployeeSetupSelect.tsx` 为新增员工的彩色侧展选择菜单（`docs/admin-backend.md`） |
 | `src/components/employee/` | 员工端各页面（`docs/employee-portal.md`） |
-| `src/components/*.tsx` | 共用组件：ErrorBoundary、LanguageSwitcher、AnnouncementDetailModal、背景装饰 |
+| `src/components/*.tsx` | 共用组件：ErrorBoundary、LanguageSwitcher、AnnouncementDetailModal、EmployeeMaintenanceDialog（员工维护登录提示）、背景装饰 |
 | `src/lib/` | 登录会话、Supabase client、上传/净化/设备等工具（`docs/architecture.md`） |
 | `src/lib/i18n/` | 员工端与登录页的 10 种语言 |
 | `src/types/database.ts` | 手工维护的 Supabase 类型（新增表/RPC 要同步） |

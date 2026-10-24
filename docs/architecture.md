@@ -9,6 +9,7 @@
 ## 登录与会话（自建，不用 Supabase Auth）
 `src/lib/auth.ts`
 - `login()`：按用户名同时查 `admins` 与 `users`，管理员优先。管理员调 `create_admin_financial_session`，员工调 `create_employee_financial_session`。
+- 团队维护（迁移 `20261103000000_employee_login_maintenance.sql`，尚未部署）：员工登录RPC在验证正确密码后、创建或撤销会话前，按 `users.created_by` 查询私有维护状态；返回 `{success:false,code:'employee_login_maintenance'}` 时，`auth.login` 抛 `EmployeeLoginMaintenanceError`。登录页只弹十语言维护面板，不写成功会话／记住我，也不记录失败尝试；错误密码仍走原校验／锁定路径。管理员登录函数与现有会话验证不改，已在线及记住的有效会话不会因维护退出。
 - 会话存于 `sessionStorage['work_platform_auth']`（每个浏览器分页独立）：
   - 管理员：`{ user, userType: 'admin', adminSessionToken }`
   - 员工：`{ user, userType: 'employee', sessionToken, financialSessionToken, tabId, expiresAt }`（`expiresAt` 为登录请求时间 + 24 小时，前端估计值，以服务器为准；旧会话可能没有）

@@ -17,6 +17,14 @@
 
 ---
 
+## 2026-10-25 · 按管理员团队独立的员工新登录维护（数据库／前端待部署）
+- 需求：后台配置员工维护登录提示，二级管理员各自独立，超管在指定管理员编辑面板操作；开启／关闭都需管理员密码，员工提示适配语言及三端，管理员不受影响。
+- 改动：按用户选中的「設定」页面，在超管管理员编辑面板及二级「我的設定」顶部加入「員工新登入維護」卡片，说明仅限制所属员工新登录，不继承品牌来源、不踢现有有效会话。每次用当前操作者密码独立确认，支持取消、错误重试、确认锁定及未确认结果重读；维护保存与品牌保存互相保护。修正超管编辑面板品牌autoFocus导致短屏跳过维护卡片，改为顶部聚焦及关闭后恢复焦点。
+- 登录提示：服务器在正确验证员工密码后、创建／替换会话前按团队维护状态阻止新登录；前端抛独立维护错误，展示蓝白／深蓝青色维护弹窗，不累计密码失败或写登录会话／记住我。专业提示文案、状态、按钮及语言选择支持全部十语言，弹窗内即时切换；Tab焦点循环、底层inert、滚动锁及Esc／返回恢复。管理员登录、其他团队、已在线及记住的有效会话不受影响。
+- 文件：`supabase/migrations/20261103000000_employee_login_maintenance.sql`、`supabase/tests/employee-login-maintenance.test.mjs`、`src/components/admin/EmployeeLoginMaintenanceSettings.tsx`、`AdminGroupConfiguration.tsx`、`SecondaryAdminConfiguration.tsx`、`src/components/EmployeeMaintenanceDialog.tsx`、`src/pages/Login.tsx`、`src/lib/auth.ts`、十语言文件、`src/types/database.ts`、`package.json`、相关说明与`AGENTS.md`。
+- 数据库/服务端：本地新增三张私有RLS表（配置／确认限流／操作审计）、两支会话及权限校验RPC，写入再验当前操作者bcrypt密码；连续5次错误仅锁该操作者的维护确认15分钟，不锁管理员登录。新迁移替换员工登录函数加入维护拦截，管理员登录及现有会话验证函数未改。**尚未部署正式数据库，未访问正式资料；无Edge Function改动，前端待用户部署。** 新配置默认全部关闭，部署须另获确认。
+- 验证：typecheck、lint、build通过；`test:employee-login-maintenance`8项、现有`test:employee-regions`13项与`test:work-session`6项通过。Chromium使用真实完整登录页／auth及真实超管、二级父子组件，仅替换Supabase为隔离模拟；覆盖三端与十语言、维护时无成功登录／失败计数副作用、管理员优先／他组登录／关闭维护后恢复、弹窗焦点／背景／返回／Esc，以及16项完整后台开关密码／取消／错密／锁定／请求失败／品牌保存／窄屏短屏检查；查看截图，无页面错误或外部请求。正式账号、Safari及其他浏览器未实测；临时脚本与截图已清理，构建保留既有依赖及大分块提示。
+
 ## 2026-10-25 · 关闭按钮小幅放大（前端待部署）
 - 需求：关闭按钮再大一点，不要过度增加。
 - 改动：三端可见底色直径各增加2px、X图标各增加1px；手机为28／15px、平板30／16px、桌面32／17px。无外圈样式、主题配色、44px透明点击区、右上角定位和关闭逻辑不变。

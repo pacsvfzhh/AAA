@@ -43,6 +43,16 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
   const [savingLoginSettings, setSavingLoginSettings] = useState(false);
   const loginTitleRef = useRef<HTMLTextAreaElement>(null);
   const loginSubtitleRef = useRef<HTMLTextAreaElement>(null);
+  const editDialogRef = useRef<HTMLFormElement>(null);
+
+  useLayoutEffect(() => {
+    if (!editingGroupId) return;
+    const previousFocus = document.activeElement;
+    editDialogRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+    };
+  }, [editingGroupId]);
 
   useLayoutEffect(() => {
     const resizeTextareas = () => {
@@ -427,6 +437,8 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
       {editingGroup && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm sm:p-5">
           <form
+            ref={editDialogRef}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-labelledby="edit-group-title"
@@ -435,7 +447,7 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
               void handleSave(event, editingGroup.id);
             }}
             onKeyDown={(event) => { if (event.key === 'Escape' && savingGroupId === null && !maintenanceSaving) setEditingGroupId(null); }}
-            className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-cyan-300/25 bg-[#17283d] shadow-2xl shadow-slate-950/70"
+            className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-cyan-300/25 bg-[#17283d] shadow-2xl shadow-slate-950/70 outline-none"
           >
             <div className="flex items-start justify-between gap-4 border-b border-cyan-300/20 bg-gradient-to-r from-[#253565] via-[#215075] to-[#155867] px-5 py-4 sm:px-6">
               <div className="flex min-w-0 items-center gap-3">
@@ -478,7 +490,7 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
                 {editingGroup.role !== 'super_admin' && <p className="mt-1 text-xs leading-5 text-blue-200/80">自己的品牌與幣別會保留，切換設定來源也不會刪除。</p>}
                 <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,2.5fr)_minmax(150px,1fr)]">
                   <label className="block min-w-0 text-xs font-semibold text-slate-200">品牌名稱
-                    <input type="text" autoFocus value={editValues.company_name} onChange={(event) => setEditValues(current => ({ ...current, company_name: event.target.value }))} required={editingGroup.role === 'super_admin' || editBrandingMode === 'custom'} maxLength={50} disabled={savingGroupId !== null || maintenanceSaving} placeholder="輸入品牌名稱" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-60" />
+                    <input type="text" value={editValues.company_name} onChange={(event) => setEditValues(current => ({ ...current, company_name: event.target.value }))} required={editingGroup.role === 'super_admin' || editBrandingMode === 'custom'} maxLength={50} disabled={savingGroupId !== null || maintenanceSaving} placeholder="輸入品牌名稱" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-60" />
                   </label>
                   <label className="block min-w-0 text-xs font-semibold text-slate-200">顯示幣別
                     <input type="text" value={editValues.currency_unit} onChange={(event) => setEditValues(current => ({ ...current, currency_unit: event.target.value.replace(/\s+/g, '') }))} required={editingGroup.role === 'super_admin' || editBrandingMode === 'custom'} maxLength={10} disabled={savingGroupId !== null || maintenanceSaving} placeholder="例如 USDC" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-60" />
