@@ -5161,9 +5161,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                   </section>
 
                   <div className="min-w-0 space-y-3">
-                    <section aria-labelledby="edit-region-title" className={sectionClasses}>
-                      <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-fuchsia-300 to-indigo-400" />
-                      <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-violet-300/70">02</span><h4 id="edit-region-title" className="flex-1 text-xs font-bold text-violet-100">所在地區</h4><span className="rounded-md border border-violet-300/15 bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-300">必填</span></div>
+                    <section aria-labelledby="edit-region-title" data-setup-tone="violet" className={`${sectionClasses} employee-edit-setup-card`}>
+                      <div aria-hidden="true" className="employee-edit-setup-rail absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-fuchsia-300 to-indigo-400" />
+                      <div className="mb-3 flex items-center gap-2"><span className="employee-edit-setup-step text-[9px] font-bold tracking-[0.18em] text-violet-300/70">02</span><h4 id="edit-region-title" className="flex-1 text-xs font-bold text-violet-100">所在地區</h4><span className="rounded-md border border-violet-300/15 bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-300">必填</span></div>
                       <EmployeeRegionPicker
                         id="edit-employee-region"
                         appearance="setup"
@@ -5182,9 +5182,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                       <p className="mt-2.5 text-[10px] leading-4 text-stone-400">依管理群組設定，可在選單中新增與編輯地區。</p>
                     </section>
 
-                    <section aria-labelledby="edit-dispatch-title" className={sectionClasses}>
-                      <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-teal-200 to-sky-400" />
-                      <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-teal-300/70">03</span><h4 id="edit-dispatch-title" className="flex-1 text-xs font-bold text-teal-50">派單分組</h4><span className="rounded-md border border-teal-200/20 bg-teal-300/10 px-1.5 py-0.5 text-[9px] font-medium text-teal-200">可保留現況</span></div>
+                    <section aria-labelledby="edit-dispatch-title" data-setup-tone="teal" className={`${sectionClasses} employee-edit-setup-card`}>
+                      <div aria-hidden="true" className="employee-edit-setup-rail absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-teal-200 to-sky-400" />
+                      <div className="mb-3 flex items-center gap-2"><span className="employee-edit-setup-step text-[9px] font-bold tracking-[0.18em] text-teal-300/70">03</span><h4 id="edit-dispatch-title" className="flex-1 text-xs font-bold text-teal-50">派單分組</h4><span className="rounded-md border border-teal-200/20 bg-teal-300/10 px-1.5 py-0.5 text-[9px] font-medium text-teal-200">可保留現況</span></div>
                       <EmployeeSetupSelect
                         id="edit-employee-dispatch-group"
                         label="派單分組"
@@ -5203,9 +5203,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                       )}
                     </section>
 
-                    <section aria-labelledby="edit-automation-title" className={sectionClasses}>
-                      <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-amber-200 to-rose-300" />
-                      <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-amber-200/70">04</span><h4 id="edit-automation-title" className="flex-1 text-xs font-bold text-amber-50">自動化通知方案</h4><span className="rounded-md border border-amber-100/20 bg-amber-200/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-100/80">選填</span></div>
+                    <section aria-labelledby="edit-automation-title" data-setup-tone="amber" className={`${sectionClasses} employee-edit-setup-card`}>
+                      <div aria-hidden="true" className="employee-edit-setup-rail absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-amber-200 to-rose-300" />
+                      <div className="mb-3 flex items-center gap-2"><span className="employee-edit-setup-step text-[9px] font-bold tracking-[0.18em] text-amber-200/70">04</span><h4 id="edit-automation-title" className="flex-1 text-xs font-bold text-amber-50">自動化通知方案</h4><span className="rounded-md border border-amber-100/20 bg-amber-200/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-100/80">選填</span></div>
                       <EmployeeSetupSelect
                         id="edit-employee-automation-plan"
                         label="自動化通知方案"
