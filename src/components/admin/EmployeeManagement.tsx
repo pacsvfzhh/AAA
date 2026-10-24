@@ -80,7 +80,7 @@ function EmployeeTableScroll({ label, className, children }: {
             aria-valuemax={Math.ceil(maxScroll)}
             aria-valuenow={Math.round(scroll.left)}
             tabIndex={0}
-            className="employee-table-scrollbar relative h-full min-w-0 flex-1 touch-none select-none rounded-sm cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-300/60"
+            className="employee-table-scrollbar relative h-full min-w-0 flex-1 touch-none select-none rounded-sm cursor-pointer focus:outline-none"
             onPointerDown={event => {
               if (event.button !== 0 || !thumbRef.current) return;
               event.preventDefault();
@@ -4177,13 +4177,13 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     <thead className="sticky top-0 z-20 isolate bg-blue-900 shadow-[0_2px_4px_rgba(0,0,0,0.35)] border-b-2 border-blue-300/40">
       <tr className="h-[40px]">
         <th className="w-[40px] pl-1.5 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">#</th>
-        <th className="h-[40px] w-[46px] px-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">工作</th>
+        <th className="h-[40px] w-[46px] pl-0.5 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">工作</th>
         <th className="w-[116px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">使用者</th>
         <th className="w-[84px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">員工 ID</th>
         <th className="w-[68px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">地區</th>
         {renderSortableHeader(adminId, 'created_at', '建立日期', 'w-[72px]')}
         <th className="h-[40px] w-[44px] px-1 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">驗證</th>
-        <th className="h-[40px] w-[48px] pl-0 pr-3 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">狀態</th>
+        <th className="h-[40px] w-[48px] pl-0 pr-4 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">狀態</th>
         <th className="h-[40px] w-[72px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">備註</th>
         <th className="h-[40px] w-[88px] pl-3 pr-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">標籤</th>
         {renderSortableHeader(adminId, 'totalOrders', '總數', 'w-[41px]')}
