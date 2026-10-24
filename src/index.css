@@ -3572,8 +3572,8 @@ html.perf-lite .pointer-events-none[class*="blur-"] {
 
 .dispatch-notice {
   --dispatch-notice-accent: #0284c7;
-  --dispatch-notice-close-size: 26px;
-  --dispatch-notice-close-glyph: 14px;
+  --dispatch-notice-close-size: 28px;
+  --dispatch-notice-close-glyph: 15px;
   --dispatch-notice-close-ink: #426784;
   --dispatch-notice-close-fill: #edf5fb;
   --dispatch-notice-close-hover: #dcecf7;
@@ -3725,7 +3725,7 @@ button.dispatch-notice-close svg {
 
 @media (min-width: 600px) {
   .dispatch-notice-stack { --dispatch-notice-edge: 20px; }
-  .dispatch-notice { --dispatch-notice-close-size: 28px; --dispatch-notice-close-glyph: 15px; }
+  .dispatch-notice { --dispatch-notice-close-size: 30px; --dispatch-notice-close-glyph: 16px; }
   .dispatch-notice-title { font-size: 16px; }
   .dispatch-notice-message { font-size: 14px; }
 }
@@ -3736,7 +3736,7 @@ button.dispatch-notice-close svg {
 
 @media (min-width: 1025px) {
   .dispatch-notice-stack { --dispatch-notice-header: calc(104px + env(safe-area-inset-top, 0px)); --dispatch-notice-bottom: 16px; }
-  .dispatch-notice { --dispatch-notice-close-size: 30px; --dispatch-notice-close-glyph: 16px; }
+  .dispatch-notice { --dispatch-notice-close-size: 32px; --dispatch-notice-close-glyph: 17px; }
 }
 
 @keyframes dispatchNoticeIn {
