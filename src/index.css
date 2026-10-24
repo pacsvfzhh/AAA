@@ -456,8 +456,10 @@
   scrollbar-color: #3b82f6 transparent;
 }
 
-.employee-table-viewport {
+.employee-table-viewport.dark-panel-scroll,
+.employee-table-viewport.dark-panel-scroll:hover {
   scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 
 .employee-table-viewport::-webkit-scrollbar {
@@ -849,6 +851,56 @@
 body:has([data-employee-create-theme="warm"]) {
   --employee-setup-surface: #252117;
   --employee-setup-base: #171612;
+}
+
+body:has([data-employee-edit-theme="plum"]) {
+  --employee-setup-surface: #2c2135;
+  --employee-setup-base: #1e1727;
+}
+
+[data-employee-edit-theme] .dark-panel-scroll {
+  scrollbar-color: #a78bfa transparent;
+}
+
+.employee-setup-selection-badge {
+  display: none;
+}
+
+[data-employee-edit-theme] [data-setup-tone="violet"] {
+  --employee-selection-accent: #c4b5fd;
+  --employee-selection-tint: 167 139 250;
+}
+
+[data-employee-edit-theme] [data-setup-tone="teal"] {
+  --employee-selection-accent: #99f6e4;
+  --employee-selection-tint: 94 234 212;
+}
+
+[data-employee-edit-theme] [data-setup-tone="amber"] {
+  --employee-selection-accent: #fde68a;
+  --employee-selection-tint: 252 211 77;
+}
+
+[data-employee-edit-theme] [data-configured="true"] {
+  border-color: rgb(var(--employee-selection-tint) / 0.65);
+  background: linear-gradient(110deg, rgb(var(--employee-selection-tint) / 0.22), rgb(var(--employee-selection-tint) / 0.07));
+  box-shadow: inset 3px 0 0 var(--employee-selection-accent), 0 0 0 1px rgb(var(--employee-selection-tint) / 0.09), 0 4px 14px rgb(0 0 0 / 0.16);
+}
+
+[data-employee-edit-theme] [data-configured="true"]:hover {
+  border-color: var(--employee-selection-accent);
+  background: linear-gradient(110deg, rgb(var(--employee-selection-tint) / 0.28), rgb(var(--employee-selection-tint) / 0.1));
+}
+
+[data-employee-edit-theme] [data-configured="true"] .employee-setup-icon,
+[data-employee-edit-theme] [data-configured="true"] .employee-setup-selection-badge {
+  border-color: rgb(var(--employee-selection-tint) / 0.4);
+  background: rgb(var(--employee-selection-tint) / 0.16);
+  color: var(--employee-selection-accent);
+}
+
+[data-employee-edit-theme] [data-configured="true"] .employee-setup-selection-badge {
+  display: inline-flex;
 }
 
 .employee-setup-menu,

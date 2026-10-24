@@ -227,13 +227,16 @@ export default function EmployeeSetupSelect({
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); if (!position) toggle(); }
         }}
         data-unassigned={unassigned || undefined}
+        data-setup-tone={tone}
+        data-configured={Boolean(selected && !unassigned)}
         className={`group flex min-h-[54px] w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left shadow-[0_2px_8px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.025)] transition-all duration-200 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-45 ${unassigned ? 'border-dashed border-stone-500/60 bg-black/15 text-stone-300 hover:border-stone-400 hover:bg-white/[0.03] focus-visible:ring-stone-400/40' : theme.button} ${position ? unassigned ? '!border-stone-400 ring-2 ring-stone-400/10' : theme.active : ''} ${invalid ? '!border-rose-400' : ''}`}
       >
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${unassigned ? 'border-stone-500/25 bg-white/[0.03] text-stone-400' : theme.icon}`}><SelectedIcon className="h-4 w-4" /></span>
+        <span className={`employee-setup-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${unassigned ? 'border-stone-500/25 bg-white/[0.03] text-stone-400' : theme.icon}`}><SelectedIcon className="h-4 w-4" /></span>
         <span className="min-w-0 flex-1">
           <span data-option-label className={`block truncate text-xs font-bold ${selected ? '' : 'opacity-65'}`}>{selected ? <>{selected.label}{selected.description ? <span className="ml-1 font-normal opacity-65">（{selected.description}）</span> : null}</> : placeholder}</span>
           <span className="mt-0.5 block truncate text-[10px] font-medium opacity-70">{unassigned ? '不建立自動通知 · 可稍後設定' : selected?.meta || (selected ? '已選擇 · 點擊更換' : '點擊選擇')}</span>
         </span>
+        {selected && !unassigned && <span className="employee-setup-selection-badge shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[9px] font-semibold"><Check className="h-3 w-3" />已選擇</span>}
         {unassigned && <span className="shrink-0 rounded-md border border-stone-500/25 bg-white/[0.03] px-1.5 py-0.5 text-[9px] font-semibold text-stone-400">未套用</span>}
         <ChevronRight className={`h-4 w-4 shrink-0 transition-transform duration-200 ${position ? 'translate-x-0.5' : 'opacity-55 group-hover:translate-x-0.5 group-hover:opacity-100'}`} />
       </button>

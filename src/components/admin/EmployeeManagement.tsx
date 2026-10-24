@@ -4602,7 +4602,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
       <div
         ref={employeeGroupsScrollRef}
-        className={`${admin.role === 'super_admin' ? 'employee-super-admin-scrollbar overflow-y-auto' : 'dark-panel-scroll overflow-hidden'} flex min-h-0 min-w-0 w-full flex-1 flex-col overscroll-contain`}
+        className={`${admin.role === 'super_admin' ? 'employee-super-admin-scrollbar overflow-x-hidden overflow-y-auto' : 'dark-panel-scroll overflow-hidden'} flex min-h-0 min-w-0 w-full flex-1 flex-col overscroll-contain`}
         style={{ scrollbarGutter: 'stable' }}
       >
         {/* Content */}
@@ -4842,7 +4842,6 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                     )}
                   </div>
                 )}
-                <div aria-hidden="true" className="h-4 shrink-0 border-t border-blue-300/35 bg-gradient-to-r from-blue-950/10 via-blue-500/35 to-blue-950/10 shadow-[inset_0_1px_0_rgba(96,165,250,0.55),0_-4px_14px_rgba(59,130,246,0.18)]" />
               </EmployeeTableScroll>
             </div>
       ) : filteredGroups.length === 0 ? (
@@ -5036,7 +5035,6 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                             </EmployeeRegionNamesContext.Provider>
                           </tbody>
                         </table>
-                        <div aria-hidden="true" className="h-4 shrink-0 border-t border-blue-300/35 bg-gradient-to-r from-blue-950/10 via-blue-500/35 to-blue-950/10 shadow-[inset_0_1px_0_rgba(96,165,250,0.55),0_-4px_14px_rgba(59,130,246,0.18)]" />
                       </EmployeeTableScroll>
                     ) : (
                       <div className={`py-8 text-center ${selectedAdminFilter !== 'all' ? `flex flex-1 flex-col items-center justify-center ${isSuperGroup ? 'bg-yellow-500/5' : 'bg-blue-500/5'}` : isSuperGroup ? 'bg-yellow-500/5' : 'bg-blue-500/5'}`}>
@@ -5063,9 +5061,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
       {editingEmployee && (() => {
         const group = employeeGroups.find(group => group.admin.id === editingEmployee.created_by);
-        const isSuperGroup = (editingEmployee.admin?.role || group?.admin.role) === 'super_admin';
-        const sectionClasses = `relative min-w-0 overflow-hidden rounded-2xl border p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] ${isSuperGroup ? 'border-amber-200/10 bg-[linear-gradient(145deg,#211d16,#171613)]' : 'border-blue-200/10 bg-[linear-gradient(145deg,#122238,#0c1828)]'}`;
-        const fieldClasses = `mt-2 w-full rounded-xl border px-3.5 py-3 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none transition-all placeholder:text-slate-500 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${isSuperGroup ? 'border-amber-100/60 bg-[#f5f1e8] hover:border-amber-200 focus:border-amber-400 focus:bg-[#fffcf5] focus:ring-amber-300/20' : 'border-blue-100/60 bg-[#edf3f9] hover:border-blue-200 focus:border-sky-400 focus:bg-[#f8fbff] focus:ring-sky-300/20'}`;
+        const sectionClasses = 'relative min-w-0 overflow-hidden rounded-2xl border border-purple-200/10 bg-[linear-gradient(145deg,#241c2c,#19141f)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]';
+        const fieldClasses = 'mt-2 w-full rounded-xl border border-purple-100/60 bg-[#f5eff8] px-3.5 py-3 text-sm text-[#25152f] shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none transition-all placeholder:text-slate-500 hover:border-purple-200 focus:border-purple-400 focus:bg-[#fcf8ff] focus:ring-2 focus:ring-purple-300/20 disabled:cursor-not-allowed disabled:opacity-50';
         const activeOwnerPlans = automationPlans.filter(plan => (
           plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
         ));
@@ -5102,31 +5099,31 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               }
             }}
           >
-            <div aria-hidden="true" className={`pointer-events-none absolute -left-32 top-[-10rem] h-[32rem] w-[32rem] rounded-full blur-[100px] ${isSuperGroup ? 'bg-amber-500/10' : 'bg-blue-500/15'}`} />
-            <div aria-hidden="true" className={`pointer-events-none absolute -bottom-48 right-[-8rem] h-[36rem] w-[36rem] rounded-full blur-[120px] ${isSuperGroup ? 'bg-yellow-700/10' : 'bg-cyan-500/10'}`} />
+            <div aria-hidden="true" className="pointer-events-none absolute -left-32 top-[-10rem] h-[32rem] w-[32rem] rounded-full bg-purple-500/10 blur-[100px]" />
+            <div aria-hidden="true" className="pointer-events-none absolute -bottom-48 right-[-8rem] h-[36rem] w-[36rem] rounded-full bg-fuchsia-700/10 blur-[120px]" />
             <div
               role="dialog"
               aria-modal="true"
               aria-labelledby="edit-employee-title"
               aria-busy={savingEmployeeEdit}
-              data-employee-create-theme={isSuperGroup ? 'warm' : 'cool'}
+              data-employee-edit-theme="plum"
               onClick={event => event.stopPropagation()}
-              className={`relative flex max-h-[calc(100vh-2rem)] w-full max-w-[800px] flex-col overflow-hidden rounded-[1.75rem] border shadow-[0_36px_120px_rgba(0,0,0,0.72)] ring-1 ring-inset ring-white/[0.08] animate-in zoom-in-95 duration-200 ${isSuperGroup ? 'border-amber-300/35 bg-[#11100e]' : 'border-cyan-300/30 bg-[#08111f]'}`}
+              className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-[800px] flex-col overflow-hidden rounded-[1.75rem] border border-purple-300/35 bg-[#16111e] shadow-[0_36px_120px_rgba(0,0,0,0.72)] ring-1 ring-inset ring-purple-100/[0.08] animate-in zoom-in-95 duration-200"
             >
-              <div className={`relative flex shrink-0 items-start justify-between gap-4 overflow-hidden border-b px-5 py-4 sm:px-6 ${isSuperGroup ? 'border-amber-300/15 bg-[linear-gradient(110deg,#2a1b07_0%,#17140f_48%,#111827_100%)]' : 'border-cyan-300/15 bg-[linear-gradient(110deg,#0b2b4a_0%,#0b1f36_48%,#101827_100%)]'}`}>
-                <div className={`absolute inset-x-0 top-0 h-1 ${isSuperGroup ? 'bg-gradient-to-r from-amber-700 via-yellow-300 to-amber-600' : 'bg-gradient-to-r from-blue-700 via-cyan-300 to-blue-600'}`} />
-                <div aria-hidden="true" className={`absolute right-16 top-[-5rem] h-44 w-44 rounded-full blur-3xl ${isSuperGroup ? 'bg-amber-400/10' : 'bg-cyan-400/10'}`} />
+              <div className="relative flex shrink-0 items-start justify-between gap-4 overflow-hidden border-b border-purple-300/15 bg-[linear-gradient(110deg,#362046_0%,#21172f_48%,#17121e_100%)] px-5 py-4 sm:px-6">
+                <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-purple-700 via-fuchsia-300 to-purple-600" />
+                <div aria-hidden="true" className="absolute right-16 top-[-5rem] h-44 w-44 rounded-full bg-fuchsia-400/10 blur-3xl" />
                 <div className="relative flex min-w-0 items-center gap-4">
-                  <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border shadow-lg ring-1 ring-inset ring-white/10 ${isSuperGroup ? 'border-amber-300/35 bg-gradient-to-br from-amber-400/25 to-amber-800/20 text-amber-100 shadow-amber-950/40' : 'border-cyan-300/35 bg-gradient-to-br from-cyan-400/25 to-blue-700/20 text-cyan-100 shadow-blue-950/50'}`}>
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-purple-300/35 bg-gradient-to-br from-purple-400/25 to-fuchsia-800/20 text-purple-100 shadow-lg shadow-purple-950/40 ring-1 ring-inset ring-white/10">
                     <Pencil className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
                     <div className="mb-1.5 flex items-center gap-2">
-                      <span className={`h-1.5 w-1.5 rounded-full ${isSuperGroup ? 'bg-amber-300 shadow-[0_0_10px_rgba(252,211,77,0.9)]' : 'bg-cyan-300 shadow-[0_0_10px_rgba(103,232,249,0.9)]'}`} />
-                      <p className={`text-[10px] font-bold uppercase tracking-[0.22em] ${isSuperGroup ? 'text-amber-300/85' : 'text-cyan-300/85'}`}>帳戶資料</p>
+                      <span className="h-1.5 w-1.5 rounded-full bg-fuchsia-300 shadow-[0_0_10px_rgba(232,121,249,0.65)]" />
+                      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-purple-300/85">帳戶資料</p>
                     </div>
                     <h3 id="edit-employee-title" className="text-xl font-black tracking-tight text-white">編輯員工</h3>
-                    <p className={`mt-1 truncate text-xs ${isSuperGroup ? 'text-amber-100/60' : 'text-cyan-100/60'}`}>
+                    <p className="mt-1 truncate text-xs text-purple-100/60">
                       更新帳戶資料、派單分組與自動化通知方案
                     </p>
                   </div>
@@ -5136,7 +5133,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                   onClick={closeEmployeeEditor}
                   disabled={savingEmployeeEdit}
                   aria-label="關閉編輯員工"
-                  className={`rounded-xl border bg-slate-950/35 p-2 text-slate-400 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:cursor-not-allowed disabled:opacity-50 ${isSuperGroup ? 'border-yellow-300/15 hover:border-yellow-300/40 hover:bg-yellow-400/10' : 'border-blue-300/15 hover:border-blue-300/40 hover:bg-blue-400/10'}`}
+                  className="rounded-xl border border-purple-300/15 bg-purple-950/20 p-2 text-purple-200/65 transition-colors hover:border-purple-300/40 hover:bg-purple-400/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-200/50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -5146,9 +5143,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                 <div className="grid items-start gap-4 md:grid-cols-[1fr_1.04fr]">
                   <section aria-labelledby="edit-basic-title" className={`${sectionClasses} sm:p-5`}>
                     <div className="mb-5 flex items-center gap-3">
-                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${isSuperGroup ? 'border-amber-200/20 bg-gradient-to-br from-amber-300/15 to-amber-600/5 text-amber-200' : 'border-sky-200/20 bg-gradient-to-br from-sky-300/15 to-blue-600/5 text-sky-200'}`}><Key className="h-4 w-4" /></span>
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-purple-200/20 bg-gradient-to-br from-purple-300/15 to-fuchsia-600/5 text-purple-200"><Key className="h-4 w-4" /></span>
                       <div><h4 id="edit-basic-title" className="text-sm font-bold text-stone-100">基本資料</h4><p className="mt-1 text-[10px] text-stone-400">更新員工專屬的登入識別資訊</p></div>
-                      <span className={`ml-auto text-[10px] font-bold tracking-widest ${isSuperGroup ? 'text-amber-200/45' : 'text-sky-200/45'}`}>01</span>
+                      <span className="ml-auto text-[10px] font-bold tracking-widest text-purple-200/45">01</span>
                     </div>
                     <div className="space-y-4">
                       <label htmlFor="edit-employee-username" className="block text-[11px] font-semibold text-stone-200/90">使用者名稱 <span className="text-rose-400">*</span>
@@ -5241,7 +5238,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-white/[0.07] bg-slate-950/35 px-5 py-4">
                 <span className="mr-auto hidden text-[10px] text-slate-500 sm:block">確認資料與分組設定後儲存變更</span>
                 <button type="button" disabled={savingEmployeeEdit} onClick={closeEmployeeEditor} className="rounded-xl border border-slate-600/50 bg-slate-800/50 px-4 py-2.5 text-xs font-semibold text-slate-300 transition-colors hover:border-slate-400/60 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50 disabled:cursor-not-allowed disabled:opacity-50">取消</button>
-                <button type="button" onClick={() => void handleSaveEmployeeEdit()} disabled={savingEmployeeEdit || !editingEmployee.username.trim() || !editingEmployee.employee_id.trim() || !editingEmployee.region_id || dispatchGroupsLoading || Boolean(dispatchGroupsError)} className={`inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl border px-5 py-2.5 text-xs font-bold shadow-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-not-allowed disabled:opacity-35 ${isSuperGroup ? 'border-amber-300/50 bg-gradient-to-r from-amber-500 to-yellow-400 text-amber-950 shadow-amber-950/30 hover:from-amber-400 hover:to-yellow-300' : 'border-cyan-300/50 bg-gradient-to-r from-blue-500 to-cyan-400 text-white shadow-cyan-950/30 hover:from-blue-400 hover:to-cyan-300'}`}>
+                <button type="button" onClick={() => void handleSaveEmployeeEdit()} disabled={savingEmployeeEdit || !editingEmployee.username.trim() || !editingEmployee.employee_id.trim() || !editingEmployee.region_id || dispatchGroupsLoading || Boolean(dispatchGroupsError)} className="inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl border border-purple-300/50 bg-gradient-to-r from-purple-600 to-fuchsia-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-purple-950/30 transition-all hover:from-purple-500 hover:to-fuchsia-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-100/60 disabled:cursor-not-allowed disabled:opacity-35">
                   {savingEmployeeEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
                   {savingEmployeeEdit ? '儲存中…' : '儲存變更'}
                 </button>
