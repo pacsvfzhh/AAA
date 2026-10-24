@@ -5,7 +5,7 @@ const REQUEST_TIMEOUT_MS = 8000;
 const AUDIT_REQUEST_TIMEOUT_MS = 120000;
 const getRequestTimeout = (input: RequestInfo | URL) => {
   const url = input instanceof Request ? input.url : input.toString();
-  return /\/functions\/v1\/content-audit(?:[/?#]|$)|\/rest\/v1\/rpc\/archive_employee_without_media(?:[/?#]|$)/i.test(url)
+  return /\/functions\/v1\/content-audit(?:[/?#]|$)|\/rest\/v1\/rpc\/(?:archive_employee_without_media|set_employee_login_maintenance)(?:[/?#]|$)/i.test(url)
     ? AUDIT_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
 };
 const MAX_NETWORK_RETRIES = 2;

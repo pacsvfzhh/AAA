@@ -785,6 +785,8 @@ const en = {
   // Login page
   login: {
     maintenanceTitle: 'System maintenance & upgrades',
+    maintenanceSessionMessage: 'Your team is undergoing system maintenance and upgrades. Your work has been stopped and this session has ended. Confirm below to sign out, then sign in again once maintenance is complete.',
+    maintenanceSessionAction: 'Confirm and sign out',
     maintenanceMessage: 'The system is undergoing maintenance and upgrades. Employee sign-in is temporarily unavailable. Please try again once maintenance is complete.',
     maintenanceContact: 'If you have any questions or need urgent assistance, please contact your department manager directly.',
     maintenanceAction: 'Back to sign in',

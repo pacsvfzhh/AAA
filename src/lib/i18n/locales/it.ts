@@ -128,6 +128,8 @@ const it = {
   common: { loading: 'Caricamento...', error: 'Si e verificato un errore', retry: 'Riprova', save: 'Salva', cancel: 'Annulla', confirm: 'Conferma', close: 'Chiudi', back: 'Indietro', next: 'Avanti', submit: 'Invia', delete: 'Elimina', edit: 'Modifica', search: 'Cerca', noData: 'Nessun dato disponibile', success: 'Successo', failed: 'Fallito', yes: 'Si', no: 'No', ok: 'OK', refresh: 'Aggiorna', language: 'Lingua' },
   login: {
     maintenanceTitle: 'Manutenzione e aggiornamento del sistema',
+    maintenanceSessionMessage: 'È in corso la manutenzione e l’aggiornamento del sistema del tuo team. Il tuo lavoro è stato interrotto e questa sessione è terminata. Conferma qui sotto per uscire e accedi nuovamente al termine della manutenzione.',
+    maintenanceSessionAction: 'Conferma ed esci',
     maintenanceMessage: 'Il sistema è in fase di manutenzione e aggiornamento. L’accesso dei dipendenti è temporaneamente sospeso. Riprova al termine della manutenzione.',
     maintenanceContact: 'Per domande o assistenza urgente, contatta direttamente il responsabile del tuo reparto.',
     maintenanceAction: 'Torna al login',

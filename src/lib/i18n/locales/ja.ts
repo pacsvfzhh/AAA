@@ -122,6 +122,8 @@ const ja = {
   common: { loading: '読み込み中...', error: 'エラーが発生しました', retry: '再試行', save: '保存', cancel: 'キャンセル', confirm: '確認', close: '閉じる', back: '戻る', next: '次へ', submit: '送信', delete: '削除', edit: '編集', search: '検索', noData: 'データがありません', success: '成功', failed: '失敗', yes: 'はい', no: 'いいえ', ok: 'OK', refresh: '更新', language: '言語' },
   login: {
     maintenanceTitle: 'システムのメンテナンス・更新',
+    maintenanceSessionMessage: '所属チームのシステムメンテナンス・更新を実施しています。作業は自動的に停止され、現在のログインは無効になりました。下のボタンで確認してログアウトし、メンテナンス完了後に再度ログインしてください。',
+    maintenanceSessionAction: '確認してログアウト',
     maintenanceMessage: '現在、システムのメンテナンスと更新を行っているため、従業員のログインを一時停止しています。メンテナンス完了後に、もう一度お試しください。',
     maintenanceContact: 'ご不明な点や緊急のサポートが必要な場合は、所属部署のマネージャーに直接お問い合わせください。',
     maintenanceAction: 'ログイン画面に戻る',

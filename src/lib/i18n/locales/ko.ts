@@ -122,6 +122,8 @@ const ko = {
   common: { loading: '로딩 중...', error: '오류가 발생했습니다', retry: '재시도', save: '저장', cancel: '취소', confirm: '확인', close: '닫기', back: '뒤로', next: '다음', submit: '제출', delete: '삭제', edit: '편집', search: '검색', noData: '데이터 없음', success: '성공', failed: '실패', yes: '예', no: '아니오', ok: '확인', refresh: '새로고침', language: '언어' },
   login: {
     maintenanceTitle: '시스템 점검 및 업그레이드',
+    maintenanceSessionMessage: '소속 팀의 시스템 점검 및 업그레이드가 진행 중입니다. 작업이 자동으로 중지되었으며 현재 로그인은 무효화되었습니다. 아래 버튼을 눌러 로그아웃을 확인하고 점검이 완료된 후 다시 로그인해 주세요.',
+    maintenanceSessionAction: '확인 후 로그아웃',
     maintenanceMessage: '시스템 점검 및 업그레이드가 진행 중이므로 직원 로그인을 일시적으로 사용할 수 없습니다. 점검이 완료된 후 다시 시도해 주세요.',
     maintenanceContact: '문의 사항이 있거나 긴급한 지원이 필요한 경우 소속 부서 관리자에게 직접 연락해 주세요.',
     maintenanceAction: '로그인 화면으로 돌아가기',

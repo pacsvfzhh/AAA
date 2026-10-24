@@ -7,9 +7,11 @@ import { LANGUAGES } from '../lib/i18n/types';
 
 interface EmployeeMaintenanceDialogProps {
   onClose: () => void;
+  sessionEnded?: boolean;
+  busy?: boolean;
 }
 
-export default function EmployeeMaintenanceDialog({ onClose }: EmployeeMaintenanceDialogProps) {
+export default function EmployeeMaintenanceDialog({ onClose, sessionEnded = false, busy = false }: EmployeeMaintenanceDialogProps) {
   const { t, language, setLanguage, dateLocale } = useLanguage();
   const dialogRef = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -67,7 +69,7 @@ export default function EmployeeMaintenanceDialog({ onClose }: EmployeeMaintenan
     if (event.key === 'Escape' && !event.nativeEvent.isComposing) {
       event.preventDefault();
       event.stopPropagation();
-      onClose();
+      if (!sessionEnded && !busy) onClose();
       return;
     }
     if (event.key !== 'Tab') return;
@@ -131,14 +133,14 @@ export default function EmployeeMaintenanceDialog({ onClose }: EmployeeMaintenan
               <PauseCircle aria-hidden="true" className="h-[15px] w-[15px] shrink-0" />
               <span>{t.login.maintenanceStatus}</span>
             </span>
-            <button
+            {!sessionEnded && <button
               type="button"
               onClick={onClose}
               aria-label={t.login.maintenanceClose}
               className="-mr-[10px] flex h-[44px] w-[44px] !min-h-[44px] shrink-0 items-center justify-center rounded-[12px] !p-0 text-blue-100 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-200"
             >
               <X aria-hidden="true" className="h-[20px] w-[20px]" />
-            </button>
+            </button>}
           </div>
           <div className="relative mt-[22px] flex items-start gap-[14px]">
             <span aria-hidden="true" className="flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-[16px] border border-cyan-200/25 bg-gradient-to-br from-cyan-300/20 to-blue-400/10 text-cyan-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]">
@@ -154,7 +156,7 @@ export default function EmployeeMaintenanceDialog({ onClose }: EmployeeMaintenan
 
         <div className="px-[24px] pb-[26px] pt-[24px] sm:px-[32px]">
           <p id={`${id}-message`} className="break-words text-[15px] leading-[26px] text-slate-600">
-            {t.login.maintenanceMessage}
+            {sessionEnded ? t.login.maintenanceSessionMessage : t.login.maintenanceMessage}
           </p>
           <div className="mt-[18px] flex items-start gap-[12px] rounded-[16px] border border-sky-100 bg-gradient-to-br from-blue-50 to-white p-[16px]">
             <Shield aria-hidden="true" className="mt-[3px] h-[20px] w-[20px] shrink-0 text-sky-700" strokeWidth={1.75} />
@@ -171,6 +173,7 @@ export default function EmployeeMaintenanceDialog({ onClose }: EmployeeMaintenan
             <select
               id={`${id}-language`}
               value={language}
+              disabled={busy}
               onChange={event => {
                 const selected = LANGUAGES.find(option => option.code === event.target.value);
                 if (selected) setLanguage(selected.code);
@@ -187,10 +190,11 @@ export default function EmployeeMaintenanceDialog({ onClose }: EmployeeMaintenan
             <button
               type="button"
               onClick={onClose}
-              className="mt-[16px] flex w-full !min-h-[44px] items-center justify-center gap-[10px] rounded-[12px] bg-gradient-to-r from-blue-700 to-blue-600 !px-[16px] !py-[12px] !text-[15px] font-semibold leading-[22px] text-white shadow-[0_8px_18px_-10px_rgba(37,99,235,0.6)] transition-colors hover:from-blue-800 hover:to-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              disabled={busy}
+              className="mt-[16px] disabled:opacity-60 flex w-full !min-h-[44px] items-center justify-center gap-[10px] rounded-[12px] bg-gradient-to-r from-blue-700 to-blue-600 !px-[16px] !py-[12px] !text-[15px] font-semibold leading-[22px] text-white shadow-[0_8px_18px_-10px_rgba(37,99,235,0.6)] transition-colors hover:from-blue-800 hover:to-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
             >
               <ArrowLeft aria-hidden="true" className="h-[18px] w-[18px] shrink-0" />
-              <span>{t.login.maintenanceAction}</span>
+              <span>{busy ? t.common.loading : sessionEnded ? t.login.maintenanceSessionAction : t.login.maintenanceAction}</span>
             </button>
           </div>
         </div>

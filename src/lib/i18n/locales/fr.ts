@@ -61,6 +61,8 @@ const fr = {
   // Login page
   login: {
     maintenanceTitle: 'Maintenance et mise à niveau du système',
+    maintenanceSessionMessage: 'Votre équipe fait l’objet d’une maintenance et d’une mise à niveau du système. Votre travail a été arrêté et cette session a pris fin. Confirmez ci-dessous pour vous déconnecter, puis reconnectez-vous une fois la maintenance terminée.',
+    maintenanceSessionAction: 'Confirmer et se déconnecter',
     maintenanceMessage: 'Le système est en cours de maintenance et de mise à niveau. La connexion des employés est temporairement indisponible. Veuillez réessayer une fois la maintenance terminée.',
     maintenanceContact: 'Pour toute question ou assistance urgente, veuillez contacter directement votre responsable de département.',
     maintenanceAction: 'Retour à la connexion',

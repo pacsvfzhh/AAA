@@ -15,7 +15,6 @@ import type { Language } from '../../lib/i18n/types';
 import type { Database } from '../../types/database';
 import LanguageSwitcher, { LanguageModal } from '../LanguageSwitcher';
 import PhoneLandscapeGuard from '../PhoneLandscapeGuard';
-import SessionExpiredModal from './SessionExpiredModal';
 import MessageCenter from './MessageCenter';
 import LoginPopupMessages from './LoginPopupMessages';
 import PasswordChange from './PasswordChange';
@@ -39,6 +38,7 @@ const CustomerServiceChat = lazy(() => import('./CustomerServiceChat'));
 
 interface EmployeeDashboardProps {
   employee: Employee;
+  onSessionInvalid: () => void;
 }
 
 type RealtimeNotificationClaim = {
@@ -69,7 +69,7 @@ function isExpiredEmployeeSession(error: unknown) {
     || message.includes('employee session has expired');
 }
 
-export default function EmployeeDashboard({ employee: initialEmployee }: EmployeeDashboardProps) {
+export default function EmployeeDashboard({ employee: initialEmployee, onSessionInvalid }: EmployeeDashboardProps) {
   const [employee, setEmployee] = useState<Employee>(initialEmployee);
   const [activeTab, setActiveTab] = useState<'announcements' | 'orders' | 'wallet' | 'statistics' | 'dispatch'>('announcements');
   const [loadedTabs, setLoadedTabs] = useState<Set<string>>(new Set(['announcements']));
@@ -351,12 +351,9 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     };
   }, [employee.id]);
 
-  // Handle session expired modal close
-  const handleSessionExpiredClose = async () => {
-    setShowSessionExpired(false);
-    // Pass false to indicate this is NOT user-initiated logout (kicked out by another tab)
-    await logout(false);
-  };
+  useEffect(() => {
+    if (showSessionExpired) onSessionInvalid();
+  }, [showSessionExpired, onSessionInvalid]);
 
   // Unlock the shared notification audio context from real user gestures
   useEffect(() => installNotificationAudioUnlock(), []);
@@ -1697,11 +1694,6 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
         <CustomerServiceChat employeeId={employee.id} />
       </Suspense>
 
-      {/* Session Expired Modal */}
-      <SessionExpiredModal
-        isOpen={showSessionExpired}
-        onClose={handleSessionExpiredClose}
-      />
 
       {bootPhase !== 'done' && <EmployeeBootScreen exiting={bootPhase === 'exit'} />}
 

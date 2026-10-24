@@ -5,6 +5,7 @@ import BlockchainBackground from './components/BlockchainBackground';
 import ErrorBoundary from './components/ErrorBoundary';
 import PhoneLandscapeGuard from './components/PhoneLandscapeGuard';
 import EmployeeBootScreen from './components/employee/EmployeeBootScreen';
+import EmployeeSessionGuard from './components/employee/EmployeeSessionGuard';
 import { LanguageProvider } from './lib/i18n';
 import {
   AUTH_HANDOVER_EVENT,
@@ -169,12 +170,17 @@ function App() {
   }
 
   if (authState.userType === 'employee') {
+    const employee = authState.user;
     return (
       <LanguageProvider>
         <ErrorBoundary>
-          <Suspense fallback={<EmployeeBootScreen />}>
-            <EmployeeDashboard employee={authState.user} />
-          </Suspense>
+          <EmployeeSessionGuard key={employee.id} employeeId={employee.id}>
+            {onSessionInvalid => (
+              <Suspense fallback={<EmployeeBootScreen />}>
+                <EmployeeDashboard employee={employee} onSessionInvalid={onSessionInvalid} />
+              </Suspense>
+            )}
+          </EmployeeSessionGuard>
         </ErrorBoundary>
       </LanguageProvider>
     );

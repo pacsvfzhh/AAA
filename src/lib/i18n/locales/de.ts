@@ -122,6 +122,8 @@ const de = {
   common: { loading: 'Laden...', error: 'Ein Fehler ist aufgetreten', retry: 'Erneut versuchen', save: 'Speichern', cancel: 'Abbrechen', confirm: 'Bestaetigen', close: 'Schliessen', back: 'Zurueck', next: 'Weiter', submit: 'Einreichen', delete: 'Loeschen', edit: 'Bearbeiten', search: 'Suchen', noData: 'Keine Daten verfuegbar', success: 'Erfolgreich', failed: 'Fehlgeschlagen', yes: 'Ja', no: 'Nein', ok: 'OK', refresh: 'Aktualisieren', language: 'Sprache' },
   login: {
     maintenanceTitle: 'Systemwartung und Aktualisierung',
+    maintenanceSessionMessage: 'Für Ihr Team wird eine Systemwartung und Aktualisierung durchgeführt. Ihre Arbeit wurde gestoppt und diese Sitzung beendet. Bestätigen Sie unten die Abmeldung und melden Sie sich nach Abschluss der Wartung erneut an.',
+    maintenanceSessionAction: 'Bestätigen und abmelden',
     maintenanceMessage: 'Das System wird derzeit gewartet und aktualisiert. Die Mitarbeiter-Anmeldung ist vorübergehend nicht verfügbar. Bitte versuchen Sie es nach Abschluss der Wartung erneut.',
     maintenanceContact: 'Bei Fragen oder dringendem Unterstützungsbedarf wenden Sie sich bitte direkt an Ihre Abteilungsleitung.',
     maintenanceAction: 'Zurück zur Anmeldung',

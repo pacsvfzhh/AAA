@@ -641,6 +641,8 @@ const es = {
   // Login page
   login: {
     maintenanceTitle: 'Mantenimiento y actualización del sistema',
+    maintenanceSessionMessage: 'Tu equipo está en mantenimiento y actualización del sistema. Tu trabajo se ha detenido y esta sesión ha finalizado. Confirma abajo para cerrar sesión y vuelve a iniciarla cuando termine el mantenimiento.',
+    maintenanceSessionAction: 'Confirmar y cerrar sesión',
     maintenanceMessage: 'El sistema está en mantenimiento y actualización. El acceso de empleados no está disponible temporalmente. Vuelve a intentarlo cuando finalice el mantenimiento.',
     maintenanceContact: 'Si tienes alguna pregunta o necesitas ayuda urgente, contacta directamente con el responsable de tu departamento.',
     maintenanceAction: 'Volver al inicio de sesión',

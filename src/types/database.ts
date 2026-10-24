@@ -2392,6 +2392,10 @@ export interface Database {
         Args: { p_admin_session_token: string; p_owner_admin_id: string };
         Returns: { owner_admin_id: string; enabled: boolean; updated_at: string | null };
       };
+      get_employee_maintenance_status: {
+        Args: { p_user_id: string; p_session_token: string; p_tab_id: string };
+        Returns: { maintenance: boolean; session_valid: boolean };
+      };
       set_employee_login_maintenance: {
         Args: { p_admin_session_token: string; p_owner_admin_id: string; p_admin_password: string; p_enabled: boolean };
         Returns: {

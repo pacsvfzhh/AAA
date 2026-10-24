@@ -711,6 +711,8 @@ const zh = {
   // Login page
   login: {
     maintenanceTitle: '系统维护与升级',
+    maintenanceSessionMessage: '您所属的团队正在进行系统维护与升级，工作已自动停止，当前登录已失效。请点击下方按钮确认退出，并在维护完成后重新登录。',
+    maintenanceSessionAction: '确认并退出登录',
     maintenanceMessage: '系统正在进行维护与升级，员工登录暂时不可用。请在维护完成后重新尝试。',
     maintenanceContact: '如有疑问或需紧急协助，请直接联系您的部门经理。',
     maintenanceAction: '回到登录',

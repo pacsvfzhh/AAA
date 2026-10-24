@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle, Loader2, LockKeyhole, RefreshCw, Shield } from 'lucide-react';
 import { getAdminFinancialSessionToken } from '../../lib/auth';
-import { supabase } from '../../lib/supabase';
+import { isFinancialAdminSessionError, isSupabaseTransientError, supabase } from '../../lib/supabase';
 
 interface EmployeeLoginMaintenanceSettingsProps {
   ownerAdminId: string;
@@ -74,13 +74,24 @@ export default function EmployeeLoginMaintenanceSettings({
       const { data, error } = await supabase.rpc('get_employee_login_maintenance', {
         p_admin_session_token: getAdminFinancialSessionToken(), p_owner_admin_id: ownerAdminId,
       });
+      if (error) throw error;
       const result = asRecord(data);
-      if (error || !result || result.owner_admin_id !== ownerAdminId || typeof result.enabled !== 'boolean'
+      if (!result || result.owner_admin_id !== ownerAdminId || typeof result.enabled !== 'boolean'
         || !(result.updated_at === null || typeof result.updated_at === 'string')) throw new Error('Unavailable');
       if (!isCurrent()) return;
       setMaintenance({ ownerAdminId, enabled: result.enabled, updatedAt: result.updated_at });
-    } catch {
-      if (isCurrent()) setReadError('無法讀取此團隊的維護狀態，請確認登入狀態、管理權限及網路連線後重試。');
+    } catch (error) {
+      if (!isCurrent()) return;
+      const code = asRecord(error)?.code;
+      setReadError(['PGRST202', '42883', '42P01'].includes(String(code))
+        ? '維護功能的資料庫更新尚未部署，或伺服器介面尚未重新載入。請先完成後端更新，再重新讀取狀態；目前無法開啟維護。'
+        : isFinancialAdminSessionError(error)
+          ? '管理員登入已失效，請重新登入後讀取維護狀態。'
+          : code === '42501'
+            ? '目前管理員沒有讀取此團隊維護狀態的權限。'
+            : isSupabaseTransientError(error)
+              ? '暫時無法連線至伺服器，請檢查網路後重新讀取維護狀態。'
+              : '無法讀取此團隊的維護狀態，請確認團隊是否仍存在及後端更新是否完整，再重試。');
     } finally {
       if (isCurrent()) setLoading(false);
     }
@@ -180,7 +191,7 @@ export default function EmployeeLoginMaintenanceSettings({
       setLockedUntil(null);
       restoreActionRef.current = true;
       setConfirmationTarget(null);
-      setNotice(result.enabled ? '已開啟此團隊的員工新登入維護。' : '已關閉此團隊的員工新登入維護。');
+      setNotice(result.enabled ? '已開啟此團隊維護，員工工作已停止，舊會話已失效。' : '已關閉此團隊維護，員工可重新登入；不會自動恢復舊會話或工作。');
     } catch {
       if (isCurrent()) {
         setConfirmationTarget(null);
@@ -221,17 +232,17 @@ export default function EmployeeLoginMaintenanceSettings({
         <div className="flex min-w-0 flex-1 items-start gap-2.5">
           <Shield className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" aria-hidden="true" />
           <div className="min-w-0">
-            <h3 id={`${id}-title`} className="text-sm font-semibold text-cyan-50">員工新登入維護</h3>
+            <h3 id={`${id}-title`} className="text-sm font-semibold text-cyan-50">員工團隊維護</h3>
             <p className="mt-1 break-all text-xs text-slate-300">所屬管理員：{ownerName}</p>
           </div>
         </div>
         <span role="status" className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${enabled === true ? 'border-amber-300/50 bg-amber-400/15 text-amber-200' : enabled === false ? 'border-emerald-300/40 bg-emerald-400/10 text-emerald-200' : 'border-slate-500/50 bg-slate-800 text-slate-300'}`}>
           {enabled === true ? <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> : enabled === false ? <CheckCircle className="h-3.5 w-3.5" aria-hidden="true" /> : loading ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-          {enabled === true ? '維護中 · 限制新登入' : enabled === false ? '正常 · 允許新登入' : loading ? '正在讀取狀態…' : '狀態未確認'}
+          {enabled === true ? '維護中 · 全員停工' : enabled === false ? '正常 · 允許登入與工作' : loading ? '正在讀取狀態…' : '狀態未確認'}
         </span>
       </div>
-      <p id={`${id}-scope`} className="mt-3 text-xs leading-6 text-slate-300">只限制此管理員名下員工的新登入，不影響管理員、其他團隊及已登入的有效會話；與品牌設定來源無關。</p>
-      <p className="text-xs leading-6 text-slate-400">已在線員工與「記住我」仍有效的會話不會被登出。每次開啟或關閉皆須重新輸入目前操作者的管理員密碼，獨立儲存，不需按品牌的「儲存設定」。</p>
+      <p id={`${id}-scope`} className="mt-3 text-xs leading-6 text-slate-300">開啟後，此管理員名下所有員工（包含已在線及「記住我」會話）立即停止工作，舊登入失效；在線員工收到維護提示，確認後退出。維護期間重新登入也會顯示提示。管理員及其他團隊不受影響，與品牌設定來源無關。</p>
+      <p className="text-xs leading-6 text-slate-400">已提交的訂單繼續正常結算，不刪除訂單或資金紀錄。關閉維護後，員工須重新登入並手動開工。每次開啟或關閉皆須輸入目前操作者的管理員密碼，獨立儲存，不需按品牌的「儲存設定」。</p>
       {updatedAt && <p className="mt-1 text-[11px] text-slate-400">最近更新：{updatedAt}</p>}
 
       {readError && (
@@ -259,13 +270,14 @@ export default function EmployeeLoginMaintenanceSettings({
           disabled={saving}
           className={`mt-3 inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50 ${enabled ? 'border-emerald-300/40 bg-emerald-400/10 text-emerald-100 hover:bg-emerald-400/20' : 'border-amber-300/40 bg-amber-400/10 text-amber-100 hover:bg-amber-400/20'} ${focusClass}`}
         >
-          <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />{enabled ? '關閉維護，恢復新登入' : '開啟維護，限制新登入'}
+          <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />{enabled ? '關閉維護，恢復登入' : '開啟維護，停止團隊工作'}
         </button>
       )}
 
       {ready && confirmationTarget !== null && (
         <div id={`${id}-confirmation`} className="mt-4 space-y-3 rounded-lg border border-cyan-300/25 bg-slate-950/60 p-3 sm:p-4">
           <p className="text-sm font-semibold text-slate-100">確認{confirmationTarget ? '開啟' : '關閉'}「{ownerName}」團隊維護</p>
+          {confirmationTarget && <p className="text-xs leading-6 text-amber-200">此操作會立即停止本團隊所有員工的工作並使舊登入失效，包含在線及「記住我」會話；關閉維護不會自動恢復工作。請確認後再繼續。</p>}
           <label htmlFor={`${id}-password`} className="block text-xs font-medium text-cyan-100">目前操作者的管理員密碼（不是目標管理員的密碼）</label>
           <input
             ref={passwordRef}

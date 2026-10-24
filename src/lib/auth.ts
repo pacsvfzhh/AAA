@@ -348,7 +348,7 @@ export async function resumeRememberedSession(): Promise<StoredAuth | null> {
   });
   const [validation, profile] = await Promise.all([
     Promise.race([
-      supabase.rpc('validate_employee_session', {
+      supabase.rpc('get_employee_maintenance_status', {
         p_user_id: remembered.user.id,
         p_session_token: remembered.financialSessionToken,
         p_tab_id: remembered.tabId,
@@ -367,7 +367,7 @@ export async function resumeRememberedSession(): Promise<StoredAuth | null> {
   window.clearTimeout(timer);
 
   // Only a definite "invalid" answer drops the session; network trouble lets the dashboard recover on its own.
-  if (validation && !validation.error && validation.data !== true) {
+  if (validation && !validation.error && !validation.data.maintenance && !validation.data.session_valid) {
     forgetRememberedSession(remembered.sessionToken);
     return null;
   }

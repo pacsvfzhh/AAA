@@ -61,6 +61,8 @@ const pt = {
   common: { loading: 'Carregando...', error: 'Ocorreu um erro', retry: 'Tentar novamente', save: 'Salvar', cancel: 'Cancelar', confirm: 'Confirmar', close: 'Fechar', back: 'Voltar', next: 'Proximo', submit: 'Enviar', delete: 'Excluir', edit: 'Editar', search: 'Pesquisar', noData: 'Sem dados disponiveis', success: 'Sucesso', failed: 'Falhou', yes: 'Sim', no: 'Nao', ok: 'OK', refresh: 'Atualizar', language: 'Idioma' },
   login: {
     maintenanceTitle: 'Manutenção e atualização do sistema',
+    maintenanceSessionMessage: 'Sua equipe está passando por manutenção e atualização do sistema. Seu trabalho foi interrompido e esta sessão foi encerrada. Confirme abaixo para sair e entre novamente após a conclusão da manutenção.',
+    maintenanceSessionAction: 'Confirmar e sair',
     maintenanceMessage: 'O sistema está em manutenção e atualização. O login de funcionários está temporariamente indisponível. Tente novamente após a conclusão da manutenção.',
     maintenanceContact: 'Se tiver dúvidas ou precisar de assistência urgente, entre em contato diretamente com o gerente do seu departamento.',
     maintenanceAction: 'Voltar ao login',
