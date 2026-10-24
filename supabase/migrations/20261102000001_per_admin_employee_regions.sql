@@ -5,7 +5,7 @@ ALTER TABLE public.employee_regions
   ADD COLUMN IF NOT EXISTS admin_id uuid REFERENCES public.admins(id) ON DELETE CASCADE;
 
 -- Shared regions in use by several groups are copied into each group so no employee loses a region.
-CREATE TEMP TABLE employee_region_split ON COMMIT DROP AS
+CREATE TEMP TABLE employee_region_split AS
 SELECT pair.old_id, pair.admin_id, gen_random_uuid() AS new_id
 FROM (
   SELECT DISTINCT u.region_id AS old_id, u.created_by AS admin_id

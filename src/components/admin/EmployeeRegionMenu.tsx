@@ -98,7 +98,6 @@ const portalEventGuards = {
 
 interface EmployeeRegionMenuProps {
   subtitle: string;
-  regionCount: number;
   options: RegionMenuOption[];
   selectedId: string;
   listRole: 'menu' | 'listbox';
@@ -110,7 +109,6 @@ interface EmployeeRegionMenuProps {
 
 function EmployeeRegionMenu({
   subtitle,
-  regionCount,
   options,
   selectedId,
   listRole,
@@ -155,7 +153,6 @@ function EmployeeRegionMenu({
           <p className="truncate text-[11px] font-bold leading-none tracking-wide text-violet-100">所在地區</p>
           <p className="mt-1 truncate text-[9px] leading-none text-violet-300/60">{subtitle}</p>
         </div>
-        <span className="shrink-0 text-[9px] font-semibold tabular-nums text-violet-300/65">{regionCount} 個</span>
         <button
           type="button"
           onClick={onOpenSettings}
@@ -275,6 +272,7 @@ function EmployeeRegionSettingsDialog({
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; replacementId: string } | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const addRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLInputElement>(null);
   const stateRef = useRef({ busy, editing, deleting, onClose });
@@ -296,9 +294,24 @@ function EmployeeRegionSettingsDialog({
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  // Escape steps back one level (edit/delete → list → closed) and never reaches the panel behind.
+  // Escape steps back one level (edit/delete → list → closed) and never reaches the panel behind; Tab stays inside.
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Tab') {
+        const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled)',
+        ) || []);
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement as HTMLElement | null;
+        const inside = Boolean(active && dialogRef.current?.contains(active));
+        if (!inside || (event.shiftKey ? active === first : active === last)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        }
+        return;
+      }
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
@@ -395,6 +408,7 @@ function EmployeeRegionSettingsDialog({
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -742,8 +756,7 @@ export function EmployeeRegionFilter({
           style={{ left: position.left, width: position.width, top: position.top, bottom: position.bottom, maxHeight: position.maxHeight }}
         >
           <EmployeeRegionMenu
-            subtitle="按地區篩選員工"
-            regionCount={regions.length}
+            subtitle={`${regions.length} 個地區`}
             options={options}
             selectedId={selectedId || ''}
             listRole="menu"
@@ -873,8 +886,7 @@ export function EmployeeRegionPicker({
           {...portalEventGuards}
         >
           <EmployeeRegionMenu
-            subtitle="選擇員工所在地區（必填）"
-            regionCount={regions.length}
+            subtitle={`必填 · ${regions.length} 個地區`}
             options={options}
             selectedId={value}
             listRole="listbox"
