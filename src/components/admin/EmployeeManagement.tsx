@@ -4182,8 +4182,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         <th className="w-[84px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">員工 ID</th>
         <th className="w-[68px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">地區</th>
         {renderSortableHeader(adminId, 'created_at', '建立日期', 'w-[72px]')}
-        <th className="h-[40px] w-[44px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">驗證</th>
-        <th className="h-[40px] w-[48px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">狀態</th>
+        <th className="h-[40px] w-[44px] px-1 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">驗證</th>
+        <th className="h-[40px] w-[48px] px-1 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">狀態</th>
         <th className="h-[40px] w-[72px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">備註</th>
         <th className="h-[40px] w-[88px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">標籤</th>
         {renderSortableHeader(adminId, 'totalOrders', '總數', 'w-[41px]')}
