@@ -80,7 +80,7 @@ function EmployeeTableScroll({ label, className, children }: {
             aria-valuemax={Math.ceil(maxScroll)}
             aria-valuenow={Math.round(scroll.left)}
             tabIndex={0}
-            className="group/scrollbar relative h-full min-w-0 flex-1 touch-none select-none rounded-sm cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-slate-400/70"
+            className="employee-table-scrollbar relative h-full min-w-0 flex-1 touch-none select-none rounded-sm cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-300/60"
             onPointerDown={event => {
               if (event.button !== 0 || !thumbRef.current) return;
               event.preventDefault();
@@ -117,8 +117,8 @@ function EmployeeTableScroll({ label, className, children }: {
               }
             }}
           >
-            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-slate-700/50" />
-            <div ref={thumbRef} aria-hidden="true" className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-slate-500/80 transition-colors hover:bg-slate-400 group-active/scrollbar:bg-slate-400" style={{ width: `${thumbWidth}%`, left: `${thumbLeft}%` }} />
+            <div aria-hidden="true" className="employee-table-scroll-track pointer-events-none absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full" />
+            <div ref={thumbRef} aria-hidden="true" className="employee-table-scroll-thumb absolute top-1/2 h-1 -translate-y-1/2 rounded-full" style={{ width: `${thumbWidth}%`, left: `${thumbLeft}%` }} />
           </div>
         </div>
       )}
