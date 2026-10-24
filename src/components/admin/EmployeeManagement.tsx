@@ -5061,242 +5061,196 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
       {/* ===== MODALS ===== */}
 
-      {editingEmployee && createPortal(
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md animate-in fade-in duration-200"
-          onPointerDown={(event) => {
-            editBackdropPressRef.current = event.target === event.currentTarget
-              ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
-              : null;
-          }}
-          onPointerUp={(event) => {
-            const press = editBackdropPressRef.current;
-            editBackdropPressRef.current = null;
-            if (
-              !press
-              || press.pointerId !== event.pointerId
-              || event.target !== event.currentTarget
-              || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6
-            ) return;
-            closeEmployeeEditor();
-          }}
-          onPointerCancel={() => {
-            editBackdropPressRef.current = null;
-          }}
-        >
-          <div className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-[820px] flex-col overflow-hidden rounded-[1.75rem] border border-blue-300/25 bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950/35 shadow-[0_30px_110px_rgba(2,6,23,0.82)] ring-1 ring-inset ring-white/10 animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
-            <div className="relative shrink-0 overflow-hidden rounded-t-[1.75rem] border-b border-blue-300/15 bg-gradient-to-r from-blue-950/80 via-cyan-950/35 to-slate-900/80 px-5 py-4 sm:px-6">
-              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-500 via-cyan-300 to-blue-500" />
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-blue-300/35 bg-blue-400/15 text-blue-100 shadow-lg shadow-blue-950/35 ring-1 ring-inset ring-white/10">
+      {editingEmployee && (() => {
+        const group = employeeGroups.find(group => group.admin.id === editingEmployee.created_by);
+        const isSuperGroup = (editingEmployee.admin?.role || group?.admin.role) === 'super_admin';
+        const sectionClasses = `relative min-w-0 overflow-hidden rounded-2xl border p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] ${isSuperGroup ? 'border-amber-200/10 bg-[linear-gradient(145deg,#211d16,#171613)]' : 'border-blue-200/10 bg-[linear-gradient(145deg,#122238,#0c1828)]'}`;
+        const fieldClasses = `mt-2 w-full rounded-xl border px-3.5 py-3 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none transition-all placeholder:text-slate-500 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${isSuperGroup ? 'border-amber-100/60 bg-[#f5f1e8] hover:border-amber-200 focus:border-amber-400 focus:bg-[#fffcf5] focus:ring-amber-300/20' : 'border-blue-100/60 bg-[#edf3f9] hover:border-blue-200 focus:border-sky-400 focus:bg-[#f8fbff] focus:ring-sky-300/20'}`;
+        const activeOwnerPlans = automationPlans.filter(plan => (
+          plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
+        ));
+        const currentAssignment = automationAssignmentsByEmployee.get(editingEmployee.id);
+        const selectedActivePlan = activeOwnerPlans.find(plan => plan.id === editingAutomationPlanId);
+        const selectedDispatchGroup = dispatchGroups.find(group => group.id === editingDispatchGroupId);
+
+        return createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-[#020617]/88 p-3 backdrop-blur-xl sm:p-6 animate-in fade-in duration-200"
+            onPointerDown={(event) => {
+              editBackdropPressRef.current = event.target === event.currentTarget
+                ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+                : null;
+            }}
+            onPointerUp={(event) => {
+              const press = editBackdropPressRef.current;
+              editBackdropPressRef.current = null;
+              if (
+                !press
+                || press.pointerId !== event.pointerId
+                || event.target !== event.currentTarget
+                || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6
+              ) return;
+              closeEmployeeEditor();
+            }}
+            onPointerCancel={() => {
+              editBackdropPressRef.current = null;
+            }}
+            onKeyDown={event => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                closeEmployeeEditor();
+              }
+            }}
+          >
+            <div aria-hidden="true" className={`pointer-events-none absolute -left-32 top-[-10rem] h-[32rem] w-[32rem] rounded-full blur-[100px] ${isSuperGroup ? 'bg-amber-500/10' : 'bg-blue-500/15'}`} />
+            <div aria-hidden="true" className={`pointer-events-none absolute -bottom-48 right-[-8rem] h-[36rem] w-[36rem] rounded-full blur-[120px] ${isSuperGroup ? 'bg-yellow-700/10' : 'bg-cyan-500/10'}`} />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="edit-employee-title"
+              aria-busy={savingEmployeeEdit}
+              data-employee-create-theme={isSuperGroup ? 'warm' : 'cool'}
+              onClick={event => event.stopPropagation()}
+              className={`relative flex max-h-[calc(100vh-2rem)] w-full max-w-[800px] flex-col overflow-hidden rounded-[1.75rem] border shadow-[0_36px_120px_rgba(0,0,0,0.72)] ring-1 ring-inset ring-white/[0.08] animate-in zoom-in-95 duration-200 ${isSuperGroup ? 'border-amber-300/35 bg-[#11100e]' : 'border-cyan-300/30 bg-[#08111f]'}`}
+            >
+              <div className={`relative flex shrink-0 items-start justify-between gap-4 overflow-hidden border-b px-5 py-4 sm:px-6 ${isSuperGroup ? 'border-amber-300/15 bg-[linear-gradient(110deg,#2a1b07_0%,#17140f_48%,#111827_100%)]' : 'border-cyan-300/15 bg-[linear-gradient(110deg,#0b2b4a_0%,#0b1f36_48%,#101827_100%)]'}`}>
+                <div className={`absolute inset-x-0 top-0 h-1 ${isSuperGroup ? 'bg-gradient-to-r from-amber-700 via-yellow-300 to-amber-600' : 'bg-gradient-to-r from-blue-700 via-cyan-300 to-blue-600'}`} />
+                <div aria-hidden="true" className={`absolute right-16 top-[-5rem] h-44 w-44 rounded-full blur-3xl ${isSuperGroup ? 'bg-amber-400/10' : 'bg-cyan-400/10'}`} />
+                <div className="relative flex min-w-0 items-center gap-4">
+                  <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border shadow-lg ring-1 ring-inset ring-white/10 ${isSuperGroup ? 'border-amber-300/35 bg-gradient-to-br from-amber-400/25 to-amber-800/20 text-amber-100 shadow-amber-950/40' : 'border-cyan-300/35 bg-gradient-to-br from-cyan-400/25 to-blue-700/20 text-cyan-100 shadow-blue-950/50'}`}>
                     <Pencil className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-300">帳戶資料</p>
-                    <h3 className="mt-1 text-xl font-bold tracking-tight text-white">編輯員工</h3>
-                    <p className="mt-1 text-xs text-blue-100/60">更新帳戶資料與自動化通知方案。</p>
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <span className={`h-1.5 w-1.5 rounded-full ${isSuperGroup ? 'bg-amber-300 shadow-[0_0_10px_rgba(252,211,77,0.9)]' : 'bg-cyan-300 shadow-[0_0_10px_rgba(103,232,249,0.9)]'}`} />
+                      <p className={`text-[10px] font-bold uppercase tracking-[0.22em] ${isSuperGroup ? 'text-amber-300/85' : 'text-cyan-300/85'}`}>帳戶資料</p>
+                    </div>
+                    <h3 id="edit-employee-title" className="text-xl font-black tracking-tight text-white">編輯員工</h3>
+                    <p className={`mt-1 truncate text-xs ${isSuperGroup ? 'text-amber-100/60' : 'text-cyan-100/60'}`}>
+                      更新帳戶資料、派單分組與自動化通知方案
+                    </p>
                   </div>
                 </div>
-                <button type="button" onClick={closeEmployeeEditor} disabled={savingEmployeeEdit} aria-label="關閉編輯員工" className="rounded-xl border border-blue-300/15 bg-slate-950/35 p-2 text-slate-400 transition-colors hover:border-blue-300/40 hover:bg-blue-400/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">
+                <button
+                  type="button"
+                  onClick={closeEmployeeEditor}
+                  disabled={savingEmployeeEdit}
+                  aria-label="關閉編輯員工"
+                  className={`rounded-xl border bg-slate-950/35 p-2 text-slate-400 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 disabled:cursor-not-allowed disabled:opacity-50 ${isSuperGroup ? 'border-yellow-300/15 hover:border-yellow-300/40 hover:bg-yellow-400/10' : 'border-blue-300/15 hover:border-blue-300/40 hover:bg-blue-400/10'}`}
+                >
                   <X className="h-4 w-4" />
                 </button>
               </div>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5 dark-panel-scroll">
-              <div className="grid items-start gap-4 md:grid-cols-[1.08fr_0.92fr]">
-                <div className="rounded-2xl border border-blue-300/15 bg-gradient-to-br from-blue-950/30 to-slate-950/50 p-4 shadow-inner shadow-black/20">
-                  <div className="mb-4 flex items-center gap-3 rounded-xl border border-blue-300/15 bg-slate-950/45 px-3 py-2.5">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-300/25 bg-cyan-400/10 text-cyan-200">
-                  <Users className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-cyan-300/75">01 · 基本資料</p>
-                  <p className="mt-1 truncate text-sm font-bold text-white" title={editingEmployee.username}>{editingEmployee.username}</p>
-                  <p className="mt-0.5 truncate text-[11px] font-medium tracking-wide text-cyan-200/70">目前 ID：{editingEmployee.employee_id}</p>
-                </div>
-                  </div>
-                  <div className="space-y-3">
-                <div>
-                  <label className="mb-2 flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-username">
-                    使用者名稱
-                    <span className="rounded-full border border-blue-300/20 bg-blue-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-blue-200">登入識別</span>
-                  </label>
-                  <input id="edit-employee-username" type="text" value={editingEmployee.username} onChange={(e) => setEditingEmployee({ ...editingEmployee, username: e.target.value })} disabled={savingEmployeeEdit} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
-                </div>
-                <div>
-                  <label className="mb-2 flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-id">
-                    員工 ID
-                    <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-cyan-200">內部識別</span>
-                  </label>
-                  <input id="edit-employee-id" type="text" value={editingEmployee.employee_id} onChange={(e) => setEditingEmployee({ ...editingEmployee, employee_id: e.target.value })} disabled={savingEmployeeEdit} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 font-mono text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
-                </div>
-                <div>
-                  <label className="mb-2 flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-region">
-                    所在地區
-                    <span className="rounded-full border border-rose-300/30 bg-rose-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-rose-200">必填</span>
-                  </label>
-                  <EmployeeRegionPicker
-                    id="edit-employee-region"
-                    groupLabel={editingEmployee.admin?.username || ''}
-                    regions={regionsByAdmin.get(editingEmployee.created_by) || []}
-                    counts={getGroupRegionCounts(editingEmployee.created_by).counts}
-                    value={editingEmployee.region_id || ''}
-                    onChange={regionId => {
-                      setEditingEmployee(current => (current ? { ...current, region_id: regionId || null } : current));
-                      setEditEmployeeError(current => (current === `${REGION_REQUIRED_MESSAGE}。` ? null : current));
-                    }}
-                    actions={getRegionActions(editingEmployee.created_by)}
-                    invalid={editEmployeeError === `${REGION_REQUIRED_MESSAGE}。`}
-                    disabled={savingEmployeeEdit}
-                    className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors focus:border-blue-500 focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                  />
-                </div>
-                <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-remarks">備註</label>
-                  <input id="edit-employee-remarks" type="text" value={editingEmployee.remarks || ''} onChange={(e) => setEditingEmployee({ ...editingEmployee, remarks: e.target.value })} disabled={savingEmployeeEdit} placeholder="輸入管理員備註……" className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
-                </div>
-                  </div>
-                </div>
-              {(() => {
-                const currentAssignment = automationAssignmentsByEmployee.get(editingEmployee.id);
-                const activeOwnerPlans = automationPlans.filter(plan => (
-                  plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
-                ));
-                const selectedActivePlan = activeOwnerPlans.find(plan => plan.id === editingAutomationPlanId);
-                const selectedPlanName = selectedActivePlan?.name || '不指定方案';
-                const selectedPlanTaskCount = selectedActivePlan
-                  ? Number(selectedActivePlan.selected_task_count) || 0
-                  : null;
-                const planOptions = [
-                  { id: '', name: '不指定方案', meta: '不加入', disabled: false },
-                  ...activeOwnerPlans.map(plan => ({
-                    id: plan.id,
-                    name: plan.name,
-                    meta: `${Number(plan.selected_task_count) || 0} 個任務`,
-                    disabled: false,
-                  })),
-                ];
 
-                return (
-                  <div className="rounded-2xl border border-cyan-300/20 bg-gradient-to-br from-cyan-950/30 to-slate-950/55 p-4 shadow-inner shadow-black/20">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <label htmlFor="edit-employee-automation-plan" className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300/80">02 · 自動化通知方案</label>
-                        <p className="mt-2 truncate text-[11px] font-medium text-slate-400">
-                          目前方案：
-                          <span className="ml-1 font-bold text-cyan-100">{currentAssignment ? currentAssignment.plan_name : '不指定方案'}</span>
-                        </p>
-                      </div>
-                      <Bell className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
+              <div className="dark-panel-scroll min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+                <div className="grid items-start gap-4 md:grid-cols-[1fr_1.04fr]">
+                  <section aria-labelledby="edit-basic-title" className={`${sectionClasses} sm:p-5`}>
+                    <div className="mb-5 flex items-center gap-3">
+                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${isSuperGroup ? 'border-amber-200/20 bg-gradient-to-br from-amber-300/15 to-amber-600/5 text-amber-200' : 'border-sky-200/20 bg-gradient-to-br from-sky-300/15 to-blue-600/5 text-sky-200'}`}><Key className="h-4 w-4" /></span>
+                      <div><h4 id="edit-basic-title" className="text-sm font-bold text-stone-100">基本資料</h4><p className="mt-1 text-[10px] text-stone-400">更新員工專屬的登入識別資訊</p></div>
+                      <span className={`ml-auto text-[10px] font-bold tracking-widest ${isSuperGroup ? 'text-amber-200/45' : 'text-sky-200/45'}`}>01</span>
                     </div>
-                    <button
-                      ref={editPlanButtonRef}
-                      id="edit-employee-automation-plan"
-                      type="button"
-                      aria-haspopup="listbox"
-                      aria-expanded={editPlanMenuOpen}
-                      onClick={() => toggleEditPlanMenu(planOptions.length)}
-                      disabled={savingEmployeeEdit}
-                      className={`group mt-3 flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left shadow-lg outline-none transition-all disabled:cursor-not-allowed disabled:opacity-50 ${editPlanMenuOpen ? 'border-cyan-200/90 bg-cyan-400/20 ring-2 ring-cyan-300/20' : selectedActivePlan ? 'border-cyan-300/75 bg-gradient-to-r from-cyan-500/25 via-cyan-400/15 to-blue-500/10 shadow-cyan-950/50 ring-1 ring-cyan-200/20 hover:border-cyan-200' : 'border-slate-600/80 bg-slate-900/90 hover:border-slate-400 hover:bg-slate-800/95'}`}
-                    >
-                      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${selectedActivePlan ? 'border-cyan-200/60 bg-cyan-300/20 text-cyan-100 shadow-sm shadow-cyan-950/40' : 'border-slate-600 bg-slate-800 text-slate-400'}`}>
-                        <Bell className="h-3.5 w-3.5" />
-                      </span>
-                      <span className={`min-w-0 flex-1 truncate text-[11px] font-extrabold ${selectedActivePlan ? 'text-cyan-50' : 'text-white'}`}>{selectedPlanName}</span>
-                      {selectedPlanTaskCount !== null && (
-                        <>
-                          <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-300/35 bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-bold text-emerald-100">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_7px_rgba(110,231,183,0.9)]" />
-                            啟用中
-                          </span>
-                          <span className="shrink-0 rounded-md border border-cyan-200/35 bg-cyan-300/15 px-1.5 py-0.5 text-[9px] font-bold text-cyan-100">{selectedPlanTaskCount} 個任務</span>
-                        </>
+                    <div className="space-y-4">
+                      <label htmlFor="edit-employee-username" className="block text-[11px] font-semibold text-stone-200/90">使用者名稱 <span className="text-rose-400">*</span>
+                        <input id="edit-employee-username" type="text" value={editingEmployee.username} onChange={event => setEditingEmployee({ ...editingEmployee, username: event.target.value })} disabled={savingEmployeeEdit} required autoComplete="off" placeholder="輸入使用者名稱" className={fieldClasses} />
+                      </label>
+                      <label htmlFor="edit-employee-id" className="block text-[11px] font-semibold text-stone-200/90">員工 ID <span className="text-rose-400">*</span>
+                        <input id="edit-employee-id" type="text" value={editingEmployee.employee_id} onChange={event => setEditingEmployee({ ...editingEmployee, employee_id: event.target.value })} disabled={savingEmployeeEdit} required placeholder="輸入員工 ID" className={fieldClasses} />
+                      </label>
+                      <label htmlFor="edit-employee-remarks" className="block text-[11px] font-semibold text-stone-200/90">備註 <span className="font-normal text-stone-500">（選填）</span>
+                        <textarea id="edit-employee-remarks" value={editingEmployee.remarks || ''} onChange={event => setEditingEmployee({ ...editingEmployee, remarks: event.target.value })} disabled={savingEmployeeEdit} rows={3} placeholder="輸入管理員備註……" className={`${fieldClasses} resize-y`} />
+                      </label>
+                    </div>
+                  </section>
+
+                  <div className="min-w-0 space-y-3">
+                    <section aria-labelledby="edit-region-title" className={sectionClasses}>
+                      <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-fuchsia-300 to-indigo-400" />
+                      <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-violet-300/70">02</span><h4 id="edit-region-title" className="flex-1 text-xs font-bold text-violet-100">所在地區</h4><span className="rounded-md border border-violet-300/15 bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-300">必填</span></div>
+                      <EmployeeRegionPicker
+                        id="edit-employee-region"
+                        appearance="setup"
+                        groupLabel={editingEmployee.admin?.username || group?.admin.username || ''}
+                        regions={regionsByAdmin.get(editingEmployee.created_by) || []}
+                        counts={getGroupRegionCounts(editingEmployee.created_by).counts}
+                        value={editingEmployee.region_id || ''}
+                        onChange={regionId => {
+                          setEditingEmployee(current => (current ? { ...current, region_id: regionId || null } : current));
+                          setEditEmployeeError(current => (current === `${REGION_REQUIRED_MESSAGE}。` ? null : current));
+                        }}
+                        actions={getRegionActions(editingEmployee.created_by)}
+                        invalid={editEmployeeError === `${REGION_REQUIRED_MESSAGE}。`}
+                        disabled={savingEmployeeEdit}
+                      />
+                      <p className="mt-2.5 text-[10px] leading-4 text-stone-400">依管理群組設定，可在選單中新增與編輯地區。</p>
+                    </section>
+
+                    <section aria-labelledby="edit-dispatch-title" className={sectionClasses}>
+                      <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-teal-200 to-sky-400" />
+                      <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-teal-300/70">03</span><h4 id="edit-dispatch-title" className="flex-1 text-xs font-bold text-teal-50">派單分組</h4><span className="rounded-md border border-teal-200/20 bg-teal-300/10 px-1.5 py-0.5 text-[9px] font-medium text-teal-200">可保留現況</span></div>
+                      <EmployeeSetupSelect
+                        id="edit-employee-dispatch-group"
+                        label="派單分組"
+                        placeholder={currentDispatchGroup?.name || (dispatchGroupsLoading ? '載入派單分組中…' : '未分組')}
+                        value={editingDispatchGroupId}
+                        options={dispatchGroups.map(group => ({ id: group.id, label: group.group_name, description: group.description }))}
+                        tone="teal"
+                        icon={Layers}
+                        disabled={savingEmployeeEdit || dispatchGroupsLoading || Boolean(dispatchGroupsError) || dispatchGroups.length === 0}
+                        onChange={setEditingDispatchGroupId}
+                      />
+                      {dispatchGroupsError ? <p role="alert" className="mt-2.5 text-[10px] leading-4 text-rose-300">{dispatchGroupsError}</p> : (
+                        <p className="mt-2.5 text-[10px] leading-4 text-stone-400">
+                          {dispatchGroupsLoading ? '正在載入可用分組…' : currentDispatchGroup && !selectedDispatchGroup ? '目前分組已停用或封存，僅保留、不改動；可改選啟用中的分組。' : dispatchGroups.length === 0 ? '目前沒有可用分組，可保留未分組狀態。' : selectedDispatchGroup ? '儲存後同步所選分組 · 長說明可懸停查看' : '可保持未分組，或選擇啟用中的派單分組。'}
+                        </p>
                       )}
-                      <ChevronDown className={`h-4 w-4 shrink-0 transition-transform duration-200 ${editPlanMenuOpen ? 'rotate-180 text-white' : selectedActivePlan ? 'text-cyan-200' : 'text-slate-400 group-hover:text-white'}`} />
-                    </button>
-                    {activeOwnerPlans.length === 0 && !currentAssignment && (
-                      <p className="mt-2 text-[11px] text-slate-500">此員工所屬群組目前沒有可指定的啟用方案。</p>
-                    )}
-                    {selectedActivePlan && (
-                      <p className="mt-2 flex items-center gap-1.5 rounded-lg border border-cyan-300/25 bg-cyan-400/10 px-2 py-1.5 text-[10px] font-bold text-cyan-100">
-                        <CheckCircle className="h-3.5 w-3.5 shrink-0 text-cyan-300" />
-                        儲存後直接加入此方案
+                    </section>
+
+                    <section aria-labelledby="edit-automation-title" className={sectionClasses}>
+                      <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-amber-200 to-rose-300" />
+                      <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-amber-200/70">04</span><h4 id="edit-automation-title" className="flex-1 text-xs font-bold text-amber-50">自動化通知方案</h4><span className="rounded-md border border-amber-100/20 bg-amber-200/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-100/80">選填</span></div>
+                      <EmployeeSetupSelect
+                        id="edit-employee-automation-plan"
+                        label="自動化通知方案"
+                        placeholder={editingAutomationPlanId ? `${currentAssignment?.plan_name || '目前方案'}（保留原方案）` : '不指定方案'}
+                        value={editingAutomationPlanId}
+                        options={[{ id: '', label: '不指定方案', meta: '暫不套用', unassigned: true }, ...activeOwnerPlans.map(plan => ({ id: plan.id, label: plan.name, description: plan.description, meta: `${Number(plan.selected_task_count) || 0} 個任務` }))]}
+                        tone="amber"
+                        icon={Bell}
+                        disabled={savingEmployeeEdit}
+                        onChange={planId => {
+                          setEditingAutomationPlanId(planId);
+                          setEditingAutomationPlanTouched(true);
+                        }}
+                      />
+                      <p className="mt-2.5 text-[10px] leading-4 text-stone-400">
+                        {editingAutomationPlanId && !selectedActivePlan ? '目前方案已暫停、封存或不可用；不更換時保留原方案，無法重新選用。' : activeOwnerPlans.length ? '儲存後套用所選方案；既有發送與執行歷史保留。' : '此群組目前沒有啟用中的方案，可保留不指定方案。'}
                       </p>
-                    )}
-                    <p className="mt-3 border-t border-cyan-300/10 pt-3 text-[11px] leading-5 text-slate-400">變更會同步方案員工名單並影響後續通知任務；既有發送與執行歷史都會保留。</p>
-                    {editPlanMenuOpen && editPlanMenuPosition && createPortal(
-                      <div
-                        ref={editPlanMenuRef}
-                        role="listbox"
-                        aria-label="編輯員工自動化通知方案"
-                        className="fixed z-[10050] overflow-hidden rounded-2xl border border-cyan-300/35 bg-[#08111f]/98 p-1.5 shadow-[0_24px_70px_rgba(0,0,0,0.72)] backdrop-blur-xl ring-1 ring-inset ring-white/[0.08] animate-in fade-in zoom-in-95 duration-150"
-                        style={{ top: editPlanMenuPosition.top, left: editPlanMenuPosition.left, width: editPlanMenuPosition.width }}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <div className="max-h-[264px] space-y-0.5 overflow-y-auto dark-panel-scroll">
-                          {planOptions.map(option => {
-                            const selected = editingAutomationPlanId === option.id;
-                            return (
-                              <button
-                                key={option.id || 'none'}
-                                type="button"
-                                role="option"
-                                aria-selected={selected}
-                                disabled={option.disabled || savingEmployeeEdit}
-                                onClick={() => {
-                                  setEditingAutomationPlanId(option.id);
-                                  setEditingAutomationPlanTouched(true);
-                                  setEditPlanMenuOpen(false);
-                                  setEditPlanMenuPosition(null);
-                                }}
-                                className={`flex h-8 w-full items-center gap-2 rounded-lg border px-2 text-left transition-all disabled:cursor-not-allowed ${selected ? 'border-cyan-300/45 bg-gradient-to-r from-cyan-500/20 to-blue-500/5' : option.disabled ? 'border-transparent bg-slate-900/45 opacity-60' : 'border-transparent hover:border-slate-600 hover:bg-slate-800/90'}`}
-                              >
-                                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${selected ? 'border-cyan-300/35 bg-cyan-400/15 text-cyan-200' : 'border-slate-700 bg-slate-900 text-slate-500'}`}>
-                                  {option.id ? <Bell className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                                </span>
-                                <span className={`min-w-0 flex-1 truncate text-[11px] font-bold ${selected ? 'text-white' : 'text-slate-300'}`}>{option.name}</span>
-                                {option.id && (
-                                  <span className="inline-flex shrink-0 items-center gap-1 text-[9px] font-bold text-emerald-200">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                                    啟用
-                                  </span>
-                                )}
-                                <span className={`shrink-0 text-[9px] font-bold ${selected ? 'text-cyan-200' : 'text-slate-300'}`}>{option.meta}</span>
-                                {selected && <CheckCircle className="h-3.5 w-3.5 shrink-0 text-cyan-300" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>,
-                      document.body,
-                    )}
+                    </section>
                   </div>
-                );
-              })()}
-              </div>
-              {editEmployeeError && (
-                <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-xl border border-red-400/35 bg-red-500/10 px-3.5 py-2.5 text-xs leading-5 text-red-200">
-                  <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span>{editEmployeeError}</span>
                 </div>
-              )}
-              <div className="mt-3 flex items-start gap-2.5 rounded-xl border border-blue-300/15 bg-blue-500/5 px-3.5 py-2.5 text-[11px] leading-5 text-slate-400">
-                <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-300" />
-                <span>儲存後，員工清單與相關管理檢視會從伺服器重新載入最新資料。</span>
+                {editEmployeeError && (
+                  <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-xl border border-red-400/35 bg-red-500/10 px-3.5 py-2.5 text-xs leading-5 text-red-200">
+                    <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span className="whitespace-pre-line">{editEmployeeError}</span>
+                  </div>
+                )}
+                <p className="mt-3 text-[10px] leading-4 text-stone-400">儲存會同步派單分組與方案員工名單，無須到其他頁面再次分派；員工清單與相關管理檢視將重新載入最新資料。</p>
+              </div>
+
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-white/[0.07] bg-slate-950/35 px-5 py-4">
+                <span className="mr-auto hidden text-[10px] text-slate-500 sm:block">確認資料與分組設定後儲存變更</span>
+                <button type="button" disabled={savingEmployeeEdit} onClick={closeEmployeeEditor} className="rounded-xl border border-slate-600/50 bg-slate-800/50 px-4 py-2.5 text-xs font-semibold text-slate-300 transition-colors hover:border-slate-400/60 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50 disabled:cursor-not-allowed disabled:opacity-50">取消</button>
+                <button type="button" onClick={() => void handleSaveEmployeeEdit()} disabled={savingEmployeeEdit || !editingEmployee.username.trim() || !editingEmployee.employee_id.trim() || !editingEmployee.region_id || dispatchGroupsLoading || Boolean(dispatchGroupsError)} className={`inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl border px-5 py-2.5 text-xs font-bold shadow-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-not-allowed disabled:opacity-35 ${isSuperGroup ? 'border-amber-300/50 bg-gradient-to-r from-amber-500 to-yellow-400 text-amber-950 shadow-amber-950/30 hover:from-amber-400 hover:to-yellow-300' : 'border-cyan-300/50 bg-gradient-to-r from-blue-500 to-cyan-400 text-white shadow-cyan-950/30 hover:from-blue-400 hover:to-cyan-300'}`}>
+                  {savingEmployeeEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                  {savingEmployeeEdit ? '儲存中…' : '儲存變更'}
+                </button>
               </div>
             </div>
-            <div className="flex shrink-0 flex-col-reverse gap-2 overflow-hidden rounded-b-[1.75rem] border-t border-blue-300/15 bg-gradient-to-r from-slate-950/70 via-blue-950/25 to-slate-950/70 px-5 py-3.5 sm:flex-row sm:justify-end sm:px-6">
-              <button type="button" onClick={closeEmployeeEditor} disabled={savingEmployeeEdit} className="rounded-xl border border-slate-600/80 bg-slate-800/70 px-5 py-2.5 text-sm font-semibold text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">取消</button>
-              <button type="button" onClick={() => void handleSaveEmployeeEdit()} disabled={savingEmployeeEdit || !editingEmployee.username.trim() || !editingEmployee.employee_id.trim()} className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/45 bg-gradient-to-r from-blue-600 to-cyan-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-950/40 transition-all hover:-translate-y-0.5 hover:from-blue-500 hover:to-cyan-500 active:translate-y-0 disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-50">
-                {savingEmployeeEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                {savingEmployeeEdit ? '儲存中…' : '儲存變更'}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+          </div>,
+          document.body,
+        );
+      })()}
 
       {editingRemarksOnly && createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={() => setEditingRemarksOnly(null)}>
