@@ -3764,7 +3764,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       <td className="w-[46px] py-0.5 px-0 text-center whitespace-nowrap">
         <span className="-ml-1 inline-flex">{employee.statsLoaded ? renderWorkStatusBadge(employee.workStatus) : <span className="text-xs text-slate-500" title="統計資料載入中">—</span>}</span>
       </td>
-      <td className="group/withdrawal relative w-[104px] overflow-visible py-0.5 px-1 whitespace-nowrap cursor-pointer sm:w-[116px]" onClick={() => setViewingEmployee(employee)}>
+      <td className="group/withdrawal relative w-[116px] overflow-visible py-0.5 px-1 whitespace-nowrap cursor-pointer" onClick={() => setViewingEmployee(employee)}>
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-0.5">
             <span title={employee.username} className={`block max-w-full truncate text-xs font-medium ${!employee.is_active ? 'text-red-400' : employee.workStatus === 'online' ? 'text-green-400' : employee.hasPendingWithdrawal ? 'text-orange-400' : 'text-white'}`}>{employee.username}</span>
@@ -3809,11 +3809,11 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           )}
         </div>
       </td>
-      <td title={employee.employee_id} className="hidden w-[84px] max-w-[84px] overflow-hidden text-ellipsis py-0.5 px-1 text-xs text-slate-300 font-mono whitespace-nowrap cursor-pointer lg:table-cell" onClick={() => setViewingEmployee(employee)}>{employee.employee_id}</td>
-      <td className="hidden w-[68px] max-w-[68px] py-0.5 px-1 whitespace-nowrap lg:table-cell">
+      <td title={employee.employee_id} className="w-[84px] max-w-[84px] overflow-hidden text-ellipsis py-0.5 px-1 text-xs text-slate-300 font-mono whitespace-nowrap cursor-pointer" onClick={() => setViewingEmployee(employee)}>{employee.employee_id}</td>
+      <td className="w-[68px] max-w-[68px] py-0.5 px-1 whitespace-nowrap">
         <EmployeeRegionName regionId={employee.region_id || null} />
       </td>
-      <td className="hidden w-[72px] py-0.5 px-1 text-[10px] text-emerald-400 whitespace-nowrap xl:table-cell" onClick={(e) => e.stopPropagation()}>
+      <td className="w-[72px] py-0.5 px-1 text-[10px] text-emerald-400 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
         <span>{employee.created_at ? new Date(employee.created_at).toLocaleDateString('en-CA') : '-'}</span>
         <button
           onClick={() => {
@@ -3830,7 +3830,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           <Pencil className="w-2.5 h-2.5" />
         </button>
       </td>
-      <td className="hidden w-[44px] py-0.5 pl-1 pr-0 align-middle relative group/ver xl:table-cell">
+      <td className="w-[44px] py-0.5 pl-1 pr-0 align-middle relative group/ver">
         <button
           onClick={(e) => { e.stopPropagation(); toggleVerification(employee.id, employee.is_verified, employee.username, employee.employee_id); }}
           className={`inline-flex h-5 items-center justify-center gap-0.5 px-1.5 py-0.5 align-middle leading-none rounded text-[10px] font-medium ${
@@ -3862,7 +3862,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           {employee.is_active ? '啟用' : '停用'}
         </button>
       </td>
-      <td className="hidden w-[72px] py-0.5 px-1 relative group/remarks 2xl:table-cell" onClick={(e) => e.stopPropagation()}>
+      <td className="w-[72px] py-0.5 px-1 relative group/remarks" onClick={(e) => e.stopPropagation()}>
         <div className="flex min-w-0 items-center gap-0.5 max-w-[72px]">
           <span className="text-xs text-blue-400 truncate flex-1">{employee.remarks || '-'}</span>
           <button onClick={() => setEditingRemarksOnly(employee)} className="flex-shrink-0 rounded p-0.5 text-blue-400 opacity-0 transition-all hover:bg-blue-500/15 hover:text-cyan-300 group-hover/remarks:opacity-100">
@@ -3875,7 +3875,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           </div>
         )}
       </td>
-      <td className="hidden w-[88px] py-0.5 px-1 relative group/tags 2xl:table-cell" onClick={(e) => e.stopPropagation()}>
+      <td className="w-[88px] py-0.5 px-1 relative group/tags" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-0.5 max-w-[88px] min-w-0 overflow-hidden whitespace-nowrap">
           {(employee.tags || []).length > 0 && (
             <span className="min-w-0 flex-1 px-1.5 py-0 bg-amber-500/20 text-amber-400 text-[10px] font-medium rounded-full border border-amber-500/30 truncate">
@@ -3911,10 +3911,10 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         {renderEmployeeStat(employee, <span className="text-red-400">{employee.failedOrders}</span>)}
       </td>
       {/* Money group */}
-      <td className="hidden py-0.5 px-1 text-[10px] text-center whitespace-nowrap xl:table-cell">
+      <td className="py-0.5 px-1 text-[10px] text-center whitespace-nowrap">
         {renderEmployeeStat(employee, <span className="text-white font-medium">${(employee.walletBalance || 0).toFixed(2)}</span>)}
       </td>
-      <td className="hidden py-0.5 px-1 text-[10px] text-center whitespace-nowrap lg:table-cell">
+      <td className="py-0.5 px-1 text-[10px] text-center whitespace-nowrap">
         {renderEmployeeStat(employee, <span className="text-blue-400 font-medium">${employee.accountBalance.toFixed(2)}</span>)}
       </td>
       <td className="py-0.5 px-1 text-[10px] text-center whitespace-nowrap">
@@ -4059,20 +4059,20 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       <tr className="h-[40px]">
         <th className="w-[40px] pl-1.5 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">#</th>
         <th className="h-[40px] w-[46px] px-0 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">工作狀態</th>
-        <th className="w-[104px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider sm:w-[116px]">使用者</th>
-        <th className="hidden w-[84px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider lg:table-cell">員工 ID</th>
-        <th className="hidden w-[68px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider lg:table-cell">地區</th>
-        {renderSortableHeader(adminId, 'created_at', '建立日期', 'hidden w-[72px] xl:table-cell')}
-        <th className="hidden h-[40px] w-[44px] pl-1 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider xl:table-cell">驗證</th>
+        <th className="w-[116px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">使用者</th>
+        <th className="w-[84px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">員工 ID</th>
+        <th className="w-[68px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">地區</th>
+        {renderSortableHeader(adminId, 'created_at', '建立日期', 'w-[72px]')}
+        <th className="h-[40px] w-[44px] pl-1 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">驗證</th>
         <th className="h-[40px] w-[48px] pl-0 pr-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">狀態</th>
-        <th className="hidden h-[40px] w-[72px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider 2xl:table-cell">備註</th>
-        <th className="hidden h-[40px] w-[88px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider 2xl:table-cell">標籤</th>
+        <th className="h-[40px] w-[72px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">備註</th>
+        <th className="h-[40px] w-[88px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">標籤</th>
         {renderSortableHeader(adminId, 'totalOrders', '總數', 'w-[41px]')}
         {renderSortableHeader(adminId, 'todayOrders', '今日', 'w-[41px]')}
         {renderSortableHeader(adminId, 'todayCompletedOrders', '成功', 'w-[45px]')}
         {renderSortableHeader(adminId, 'failedOrders', '失敗', 'w-[43px]')}
-        {renderSortableHeader(adminId, 'walletBalance', '錢包餘額', 'hidden w-[59px] xl:table-cell')}
-        {renderSortableHeader(adminId, 'accountBalance', '可用餘額', 'hidden w-[59px] lg:table-cell')}
+        {renderSortableHeader(adminId, 'walletBalance', '錢包餘額', 'w-[59px]')}
+        {renderSortableHeader(adminId, 'accountBalance', '可用餘額', 'w-[59px]')}
         {renderSortableHeader(adminId, 'todayCommission', '今日佣金', 'w-[58px]')}
         {renderSortableHeader(adminId, 'totalWorkMinutes', '總工時', 'w-[54px]')}
         {renderSortableHeader(adminId, 'todayWorkMinutes', '今日工時', 'w-[54px]')}
@@ -4690,8 +4690,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               {renderCreateForm(admin.id)}
 
               {/* Table - fixed ~22 rows */}
-              <div className="-ml-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 pl-1 dark-panel-scroll">
-                <table className="w-full min-w-0 shrink-0 table-fixed">
+              <div role="region" aria-label="員工資料列表，可左右捲動" tabIndex={0} className="-ml-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 pl-1 dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60">
+                <table className="w-full min-w-[1320px] shrink-0 table-fixed">
                   {renderTableHeader(flatAdminId)}
                   <tbody>
                     <EmployeeRegionNamesContext.Provider value={regionNameById}>
@@ -4907,8 +4907,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                       </div>
                     </div>
                     {group.employees.length > 0 ? (
-                      <div className={`-ml-1 pl-1 overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 min-h-[300px] dark-panel-scroll ${selectedAdminFilter !== 'all' ? 'min-h-0 flex-1' : 'max-h-[calc(100vh-160px)]'}`}>
-                        <table className="w-full min-w-0 table-fixed">
+                      <div role="region" aria-label={`${group.admin.username} 員工資料列表，可左右捲動`} tabIndex={0} className={`-ml-1 min-w-0 pl-1 overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 min-h-[300px] dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60 ${selectedAdminFilter !== 'all' ? 'min-h-0 flex-1' : 'max-h-[calc(100vh-160px)]'}`}>
+                        <table className="w-full min-w-[1320px] table-fixed">
                           {renderTableHeader(group.admin.id)}
                           <tbody>
                             <EmployeeRegionNamesContext.Provider value={regionNameById}>
