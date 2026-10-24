@@ -98,6 +98,7 @@ export default function EmployeeSetupSelect({
   const [position, setPosition] = useState<ReturnType<typeof menuPosition> | null>(null);
   const [details, setDetails] = useState<{ option: SetupOption; left: number; top: number; width: number } | null>(null);
   const selected = options.find(option => option.id === value);
+  const detailsOpen = Boolean(details);
   const theme = tones[tone];
 
   const close = useCallback((restoreFocus = false) => {
@@ -113,7 +114,8 @@ export default function EmployeeSetupSelect({
   useLayoutEffect(() => {
     if (!position) return;
     const option = menuRef.current?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]')
-      || menuRef.current?.querySelector<HTMLButtonElement>('[role="option"]');
+      || menuRef.current?.querySelector<HTMLButtonElement>('[role="option"]')
+      || menuRef.current?.querySelector<HTMLButtonElement>('button');
     option?.focus({ preventScroll: true });
   }, [position]);
 
@@ -152,6 +154,20 @@ export default function EmployeeSetupSelect({
     };
   }, [position, close]);
 
+  useEffect(() => {
+    if (position || !detailsOpen) return;
+    const dismiss = (event: Event) => {
+      if (event.type === 'scroll' && event.target instanceof Element && event.target.closest('[role="tooltip"]')) return;
+      setDetails(null);
+    };
+    window.addEventListener('resize', dismiss);
+    window.addEventListener('scroll', dismiss, true);
+    return () => {
+      window.removeEventListener('resize', dismiss);
+      window.removeEventListener('scroll', dismiss, true);
+    };
+  }, [position, detailsOpen]);
+
   useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
 
   const toggle = () => {
@@ -175,7 +191,12 @@ export default function EmployeeSetupSelect({
     hideTimer.current = setTimeout(() => setDetails(null), 120);
   };
   const navigate = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Tab') return close(true);
+    if (event.key === 'Tab') {
+      const focusable = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []);
+      const boundary = event.shiftKey ? focusable[0] : focusable[focusable.length - 1];
+      if (document.activeElement === boundary) { event.preventDefault(); close(true); }
+      return;
+    }
     const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') || []);
     const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
