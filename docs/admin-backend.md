@@ -67,7 +67,7 @@
 - 员工团队维护：`EmployeeLoginMaintenanceSettings.tsx` 独立保存。超管在各管理员的「編輯管理員設定」面板顶部操作，二级在「我的設定」顶部操作自己团队；不在修改导航文字／排序的「導航設定」对话框。每个管理员（含超管自己的团队）独立，默认关闭，不继承超管或品牌设置来源。
 - 开启／关闭都须输入**当前操作者**的管理员密码（超管操作二级团队时输入超管自己的密码），服务端以会话确认身份及范围。密码错误不变更状态，连续5次错误将该操作者的维护密码确认锁定15分钟，不锁管理员登录；成功后清空确认失败计数，并写私有审计。保存中禁用编辑关闭、Esc及品牌保存，密码Enter不提交品牌表单；取消清空密码，读取失败显示未确认状态，写入结果不确定时须重读，不自动重送。
 - 开启后，`users.created_by` 属于该管理员的**全部员工**立即由服务器停工：结束派单与工时、撤销旧登录及记住我会话；取消尚未交单的派单，已保存的订单保留并继续由原系统结算，资金记录不变。在线页面收到信号后卸载工作区，弹十语言维护提示，只能确认退出；断线／后台页面恢复时补查。维护期间正确密码登录仍弹提示，不累计密码错误。管理员与其他团队不受影响。关闭维护后必须重新登录并手动开工，不自动恢复旧会话或已停工作。
-- 配置 RPC 为 `get_employee_login_maintenance` / `set_employee_login_maintenance`，员工会话检查为 `get_employee_maintenance_status`。正式库只读确认尚无维护表及配置RPC，原读取报错是后端未部署；现在分别提示未部署／会话失效／权限／网络问题，绝不把读取失败当成关闭。须先经用户确认依次部署 `20261103000000_employee_login_maintenance.sql` 与 `20261103000001_team_employee_maintenance.sql`，再部署前端；新员工会话边界依赖新增接口，不能只部署前端。迁移默认关闭，不会自行启用任何团队；测试 `npm run test:employee-login-maintenance`。
+- 配置 RPC 为 `get_employee_login_maintenance` / `set_employee_login_maintenance`，员工会话检查为 `get_employee_maintenance_status`。原读取报错是后端未部署；现在分别提示未部署／会话失效／权限／网络问题，绝不把读取失败当成关闭。两份迁移已获用户确认并于2026-10-25（UTC+8）依次部署，正式版本为 `20261024200433 employee_login_maintenance`、`20261024200605 team_employee_maintenance`；接口已刷新，部署后配置／启用／维护撤销／维护审计均为0，没有自动停工。前端仍待用户上线；须部署新版前端后再实际开启团队维护，旧前端不含专用确认退出流程。测试 `npm run test:employee-login-maintenance`。
 
 ### 提款 `WithdrawalReview.tsx`
 - `get_withdrawal_review_data`：超管看全部，二级只看自己的员工。

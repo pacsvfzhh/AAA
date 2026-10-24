@@ -9,7 +9,7 @@
 ## 登录与会话（自建，不用 Supabase Auth）
 `src/lib/auth.ts`
 - `login()`：按用户名同时查 `admins` 与 `users`，管理员优先。管理员调 `create_admin_financial_session`，员工调 `create_employee_financial_session`。
-- 团队维护（迁移 `20261103000000_employee_login_maintenance.sql` + `20261103000001_team_employee_maintenance.sql`，尚未部署）：员工登录RPC在正确密码后持有团队共享锁并查维护；维护返回专用code，由 `auth.login` 抛 `EmployeeLoginMaintenanceError`，只弹十语言提示，不写会话／记住我或失败尝试。管理员开启维护时同事务结束该团队派单／工时、撤销旧financial会话并标注maintenance_revoked_at、清空users会话标记和取消未提交派单；共享／独占团队锁协调同时登录及交单。
+- 团队维护（迁移 `20261103000000_employee_login_maintenance.sql` + `20261103000001_team_employee_maintenance.sql`，后端已获准部署，前端待用户上线）：员工登录RPC在正确密码后持有团队共享锁并查维护；维护返回专用code，由 `auth.login` 抛 `EmployeeLoginMaintenanceError`，只弹十语言提示，不写会话／记住我或失败尝试。管理员开启维护时同事务结束该团队派单／工时、撤销旧financial会话并标注maintenance_revoked_at、清空users会话标记和取消未提交派单；共享／独占团队锁协调同时登录及交单。
 - `EmployeeSessionGuard.tsx` 在员工工作区挂载前验证 `get_employee_maintenance_status`，仅真实financial token+user+tab可查维护原因（允许尚未过期的维护撤销token查原因，不授业务权限）。用户更新Realtime、可见时15秒兜底及焦点／恢复事件重查；维护后卸载工作区，专用弹窗确认才执行logout(false)，不走普通失效的自动倒计时。Dashboard各失效入口交给边界再分类。维护关闭不复活旧token；需重新登录手动开工。管理员登录与原validate_employee_session函数定义保持不变，但原validate会因会话被撤销而返回false。
 - 会话存于 `sessionStorage['work_platform_auth']`（每个浏览器分页独立）：
   - 管理员：`{ user, userType: 'admin', adminSessionToken }`
@@ -20,7 +20,7 @@
   - 管理员：`private.get_financial_admin_context(token)` → `admin_id`、`admin_role`（检查 hash、过期/撤销、管理员是否启用）。
   - 员工：`private.get_financial_employee_id(user_id, token, tab_id)`；另有可调用的 `validate_employee_session` RPC。
   - 部分旧 RPC 的参数名叫 `p_admin_id`，实际传的是会话 token。
-- 后端部署顺序：先部署两份维护迁移，再上线含EmployeeSessionGuard的前端；旧库缺少状态接口时员工页面将停在验证／重试，不可单独部署前端。
+- 部署顺序：后端两份维护迁移已按用户确认部署（正式版本20261024200433、20261024200605），仍未开启任何团队。前端待用户上线；先上线含EmployeeSessionGuard的新版前端，再实际开启团队维护，确保在线员工使用专用确认退出提示。
 - `src/lib/TabSessionManager.ts`：用 BroadcastChannel 广播 `NEW_LOGIN` / `LOGOUT`（附带 `sessionMarker`）；浏览器不支持时每 30 秒向服务器核对（用登录时的 `auth.tabId`，不是本次页面载入的 tabId）。前端时限：有 `expiresAt` 时按它计算，否则员工 24 小时、管理员 7 天。
   - 不同登录标记的 `NEW_LOGIN`：沿用原逻辑，本分页弹「Session Expired」后登出。
   - 同一登录标记（「记住我」或复制分页带来的同一会话）：最后启动的分页写入 `localStorage['work_platform_session_owner'] = { marker, tabId }` 成为拥有者；其他分页收到广播、`storage` 事件或回到前台时发现拥有者不是自己，就调用 `leaveSessionForAnotherTab()` 安静让出：只清本分页 sessionStorage，不撤销服务器会话、不停派单会话、不写登出纪录，登录页显示「账号已在另一个页面中打开」。回到前台的检查专门处理手机后台冻结、错过广播的页面。

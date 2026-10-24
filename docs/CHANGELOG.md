@@ -23,7 +23,7 @@
 - 改动：追加迁移，使开启维护在同事务内撤销旧financial会话并标记原因、清空用户会话标记触发Realtime、按心跳截止停工、写停工标记、取消未提交派单；保留已保存订单／已交派单与资金。团队锁协调登录与新交单，恢复函数统一锁序并阻止关闭后自动恢复旧工作；真实订单使用记录可补写。前端交单标记因维护失败不误删已保存订单，未知结果也不做删除补偿。
 - 员工提示：新增EmployeeSessionGuard在工作区挂载前核对状态，在线通过Realtime、可见时15秒兜底及焦点／网络／前台恢复检查；维护后卸载工作区，显示十语言专用停工提示，没有倒计时／Esc／关闭绕过，确认才清除本页及匹配记住我会话退出。记住我与刷新同样拦截，普通过期仍保留原提示。
 - 文件：`supabase/migrations/20261103000001_team_employee_maintenance.sql`、`supabase/tests/employee-login-maintenance.test.mjs`、`src/components/employee/EmployeeSessionGuard.tsx`、`EmployeeDashboard.tsx`、`OrderSubmission.tsx`、`src/App.tsx`、`EmployeeMaintenanceDialog.tsx`、`EmployeeLoginMaintenanceSettings.tsx`、`auth.ts`、`supabase.ts`、RPC类型、十语言及相关文档。
-- 数据库/服务端：**两份维护迁移均未部署正式库，未开启任何团队维护；无Edge Function改动。须用户另行确认，依序部署20261103000000与20261103000001后再部署前端，不能仅上线前端（员工挂载前验证依赖新接口）。** 原迁移文件未修改。
+- 数据库/服务端：**用户在部署确认中明确选择「确认部署」后，两份迁移已依序部署AAA正式库**：`20261024200433 employee_login_maintenance`、`20261024200605 team_employee_maintenance`。六个函数体哈希与本地一致，管理员登录与原validate定义未变；私有表RLS／权限、两张提交表guard及新增字段核对通过；空身份只读探测HTTP200且session_valid=false，PostgREST已刷新。部署后维护配置／启用／审计／撤销均为0，未开启任何团队、未测试真实登录或交单，无Edge Function改动。**前端仍待用户部署，新版前端上线后再开启维护**；旧迁移文件未修改。Advisor的私有RLS无策略和anon可执行SECURITY DEFINER提示是此自建会话架构的预期，链接与核对说明见database文档，既有其他提示未越界处理。
 - 验证：typecheck、lint、build通过；维护数据库17项、既有工时6项回归通过；Chromium真实App／auth／Dashboard／后台组件+隔离Supabase模拟14项通过，覆盖在线提示停工卸载／确认退出／再次登录、记住我与刷新、十语言、手机平板矮屏、焦点／Esc／背景／无自动倒计时、快速开关、断线补查、启动失败重试、普通过期、四类后台错误及密码错误无自动重送；已检查桌面和手机截图。未使用真实账号实测，Safari与原生多连接并发未实测。回放531份迁移仍有12项既有历史失败，不代表空库完整建库验证；历史结算审计缺列导致完整结算未能在回放库验证，未绕过触发器，正式库只读清单不含该旧审计触发器。构建保留既有大分块与依赖数据提示。
 
 ## 2026-10-25 · 按管理员团队独立的员工新登录维护（数据库／前端待部署）
