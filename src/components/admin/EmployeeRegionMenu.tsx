@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode, RefObject, SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, CheckCircle, ChevronDown, Loader2, MapPin, Pencil, Plus, Search, Settings, Trash2, X } from 'lucide-react';
+import { Check, CheckCircle, ChevronDown, Loader2, MapPin, Pencil, Plus, Settings, Trash2, X } from 'lucide-react';
 
 export const UNASSIGNED_REGION_FILTER = '__unassigned__';
 const REGION_NAME_MAX_LENGTH = 30;
@@ -35,7 +35,6 @@ interface MenuPosition {
 
 const errorMessage = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
 
-// Opening upwards anchors the bottom edge, so typing never pushes the menu off the button.
 const getAnchoredMenuPosition = (rect: DOMRect, estimatedHeight: number): MenuPosition => {
   const padding = 8;
   const gap = 6;
@@ -50,7 +49,7 @@ const getAnchoredMenuPosition = (rect: DOMRect, estimatedHeight: number): MenuPo
 };
 
 const estimateMenuHeight = (optionCount: number, hasFooter: boolean) => (
-  46 + 41 + Math.min(210, 12 + Math.max(1, optionCount) * 30) + (hasFooter ? 34 : 0)
+  46 + Math.min(210, 12 + Math.max(1, optionCount) * 30) + (hasFooter ? 34 : 0)
 );
 
 function useCloseOnOutsideOrViewportChange(
@@ -117,19 +116,8 @@ function EmployeeRegionMenu({
   onClose,
   footer,
 }: EmployeeRegionMenuProps) {
-  const [query, setQuery] = useState('');
-  const searchRef = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-
-  const keyword = query.trim().toLowerCase();
-  const visibleOptions = keyword
-    ? options.filter(option => option.name.toLowerCase().includes(keyword))
-    : options;
-
-  useEffect(() => {
-    searchRef.current?.focus({ preventScroll: true });
-  }, []);
 
   // Captured on window so Escape only closes this menu and never the dialog behind it.
   useEffect(() => {
@@ -164,46 +152,12 @@ function EmployeeRegionMenu({
         </button>
       </div>
 
-      <div className="shrink-0 border-b border-violet-400/10 p-1.5">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-violet-300/70" />
-          <input
-            ref={searchRef}
-            type="text"
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            onKeyDown={event => {
-              if (event.key !== 'Enter') return;
-              event.preventDefault();
-              if (visibleOptions[0]) onSelect(visibleOptions[0].id);
-            }}
-            placeholder="搜尋地區……"
-            aria-label="搜尋地區"
-            autoComplete="off"
-            className="h-7 w-full rounded-md border border-violet-400/20 bg-slate-950/60 pl-6 pr-6 text-[11px] font-medium text-violet-50 outline-none transition-colors placeholder:text-slate-500 focus:border-violet-300/60 focus:bg-slate-950/85"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => {
-                setQuery('');
-                searchRef.current?.focus({ preventScroll: true });
-              }}
-              aria-label="清除地區搜尋"
-              className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-violet-300/70 transition-colors hover:bg-violet-400/15 hover:text-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/60"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-      </div>
-
       <div
         role={listRole}
         aria-label="所在地區"
         className="employee-date-menu-scrollbar max-h-[210px] min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain p-1.5 pr-1"
       >
-        {visibleOptions.length > 0 ? visibleOptions.map(option => {
+        {options.length > 0 ? options.map(option => {
           const isSelected = option.id === selectedId;
           return (
             <button
@@ -238,7 +192,7 @@ function EmployeeRegionMenu({
           );
         }) : (
           <p className="px-2 py-4 text-center text-[10px] leading-4 text-slate-500">
-            {options.length > 0 ? '找不到符合的地區' : <>尚未建立地區<br />請點右上角齒輪新增</>}
+            尚未建立地區<br />請點右上角齒輪新增
           </p>
         )}
       </div>
