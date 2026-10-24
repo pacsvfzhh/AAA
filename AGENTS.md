@@ -53,6 +53,7 @@
 ## 4. 验证
 - 每次改动后：`npm run typecheck`、`npm run lint`；较大改动加 `npm run build`。
 - 改到聊天摘要、分组会话数、后台未读计数 RPC 或聊天表索引：`npm run test:service-chat`。
+- 改到员工建立/编辑 RPC、`get_employee_management_snapshot` 或员工地区：`npm run test:employee-regions`（回放全部迁移）。
 - 改到内容稽核/已删员工相关迁移或 Edge Function：`npm run test:audit-cleanup`；Edge Function 语法检查：`npx esbuild supabase/functions/content-audit/index.ts --format=esm --log-level=warning > /dev/null`。
 - 界面改动要在预览中实际操作。Chromium已可用于本地隔离替身测试；正式预览需登录，不能为测试调用正式资料。无法实测的路径要明确说明。
 

@@ -34,13 +34,15 @@
 
 ## 各页面
 ### 員工詳情數據 `EmployeeManagement.tsx`
-- 加载：`get_employee_management_snapshot`（排除已归档员工）、`get_notification_automation_plan_assignments`、`get_withdrawals_for_admin`。加载途中若有实时变动或页面重新初始化，这次结果会作废并排队重载；首次加载作废时继续显示载入状态，不会先闪出「找不到員工」。
-- 建立：`admin_create_employee_account_with_automation_plan`（用户名、密码 ≥6 位、员工 ID、派单组、可选自动化方案）。二级建立的员工 `created_by` 是自己，超管可选目标管理员。
-- 编辑：`admin_update_employee_account`（用户名、员工 ID、备注、标签、启停、验证、置顶、注册时间）；自动化方案用 `set_notification_automation_plan_for_employee`；重设密码 `admin_reset_employee_password`（旧会话随即失效）。
+- 加载：`get_employee_management_snapshot`（排除已归档员工；另返回共用地区清单 `regions` 与每位员工的 `region_id`）、`get_notification_automation_plan_assignments`、`get_withdrawals_for_admin`。加载途中若有实时变动或页面重新初始化，这次结果会作废并排队重载；首次加载作废时继续显示载入状态，不会先闪出「找不到員工」。
+- 建立：`admin_create_employee_account_with_automation_plan`（用户名、密码 ≥6 位、员工 ID、选填所在地区 `p_region_id`、派单组、可选自动化方案）。没选地区时前端不传 `p_region_id`。二级建立的员工 `created_by` 是自己，超管可选目标管理员。
+- 编辑：`admin_update_employee_account`（用户名、员工 ID、所在地区 `region_id`（只在改动时传）、备注、标签、启停、验证、置顶、注册时间）；自动化方案用 `set_notification_automation_plan_for_employee`；重设密码 `admin_reset_employee_password`（旧会话随即失效）。
 - 删除：先走 `archive_employee_without_media` 快速路径；需要留证或返回 evidence changed 时，改走 `mutateAuditedContent('employee_delete', [id])`。删除后员工进入「已刪員工紀錄」（见 `docs/content-audit.md`）。
 - 钱包调整：`admin_adjust_wallet_balance_atomic`（正负金额表示增减、必填备注、`createFinancialOperationId()`；失败重试沿用同一编号）。
 - 详情弹窗 `EmployeeDetailModal.tsx`：`get_employee_detail_summary_for_admin`、`get_employee_transaction_page_for_admin`（每页 100）、`get_employee_transaction_date_counts_for_admin`、`get_employee_withdrawal_page_for_admin`（每页 10）。
 - `EmployeeMetadataPopover.tsx`：只读的标签/备注弹层。
+- 所在地区（`EmployeeRegionMenu.tsx`）：表格在「員工 ID」右侧有「地區」列（lg 以上显示，未设定显示「-」）。筛选列「入职日期」右侧的「地區」按钮（四个筛选按钮宽度调为 172/164/160/160px，屏宽 1536 时与「取消全部选中」排成一行）打开同宽下拉菜单：按建立顺序列出所有地区和本组人数，有人未设定时最后多一项「未設定地區」；顶部可搜索（Enter 选第一项），底部「新增地區」。选中后与其他筛选同时生效，按钮右侧红色 × 或菜单底部「清除」取消，「取消全部选中」和选择「提現中」也会清除。新建员工与编辑员工弹窗的「所在地區（選填）」使用同一菜单，另有「不指定地區」，在弹窗里新增的地区会直接选上。Esc 先退出新增输入，再关闭菜单，不会关掉弹窗。
+- 新增地区：`admin_create_employee_region`（超管与二级都可用；地区清单所有管理员共用；名称去首尾空白、1～30 字、不分大小写重复时返回已有地区并提示「已存在」）。目前没有删除或改名地区的功能。
 
 ### 員工搜尋 `EmployeeSearch.tsx`
 - `search_all_employees_for_admin`：按用户名、员工 ID、已批准验证资料精确匹配，`p_limit: 100`。

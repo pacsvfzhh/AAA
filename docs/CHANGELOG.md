@@ -17,6 +17,14 @@
 
 ---
 
+## 2026-10-24 · 员工详情数据新增「所在地區」（数据库已部署，前端待部署）
+- 需求：「員工詳情數據」在員工 ID 右侧加地区列；新建员工可选地区；「入职日期」右边加地区筛选按钮，下拉菜单与按钮同宽、显示各地区人数、可搜索、可新增地区（新建员工的地区菜单也能新增）；调整列宽与按钮尺寸。
+- 改动：表格新增「地區」列（員工 ID 由 100px 调为 84px，地區 68px，備註 66px→72px）；筛选列新增紫色「地區」按钮与下拉菜单（含「未設定地區」、搜索、新增地區、目前篩選/清除），提現中/停工天数/入职日期按钮宽度调为 172/164/160px，1536 屏宽时整列一行；新建员工与编辑员工弹窗新增「所在地區（選填）」，可在菜单里直接新增并选上。地区清单所有管理员共用，暂不提供删除/改名。
+- 文件：`src/components/admin/EmployeeRegionMenu.tsx`（新）、`src/components/admin/EmployeeManagement.tsx`、`src/types/database.ts`、`src/types/index.ts`、`supabase/migrations/20261102000000_add_employee_regions.sql`、`supabase/tests/employee-regions.test.mjs`、`package.json`、`docs/admin-backend.md`、`docs/database.md`、`AGENTS.md`。
+- 数据库/服务端：新表 `employee_regions`、`users.region_id`、RPC `admin_create_employee_region`，改写 `get_employee_management_snapshot`、`admin_create_employee_account_with_automation_plan`（新增可省略的 `p_region_id`）、`admin_update_employee_account_unlocked`（允许 `region_id`）。用户确认后已用 MCP `apply_migration` 部署正式库（版本 `20261024001146`）；部署后只读核对：新表 0 行、RLS 开启、anon 无表权限，72 名在职员工资料未变动（地区均为空），建立员工函数只剩新签名，用无效 token 调用新 RPC 与旧版 8 参数建立调用均正常到达函数并被会话校验拒绝（未写入任何资料，证明 API 已识别新函数、线上旧前端的建立员工仍可用）。改写前已只读核对正式库这三个函数与迁移文件逻辑一致。前端待用户部署。
+- 验证：typecheck、lint、build 通过；新测试 `test:employee-regions` 6/6（PGlite 回放全部 527 个迁移，仅有 12 个既有历史失败，新迁移成功；覆盖权限、去重、建立/编辑/快照、旧调用方式）；`test:audit-cleanup` 48/48、`test:service-chat` 6/6、`test:work-session` 6/6。Chromium 本地替身（假资料、未连正式库）实测 1280/1366/1536/1920 布局、菜单同宽与贴底向上展开、搜索/新增/重复提示/筛选/清除/重置、新建与编辑弹窗选地区与 Esc、二级管理员视图、迁移未部署时页面不报错。未在正式库与真实浏览器登录下实测。
+- 备注：1280 屏宽时表格比可视区宽约 35px，会出现横向滚动（lg 宽度原本就会横向滚动）；部署顺序为先执行迁移、再部署前端。
+
 ## 2026-10-23 · 清理已放弃的员工资料迁移功能
 - 需求：用户明确放弃员工资料导出/导入与「遷入檔案」功能。
 - 改动：清除迁移专属客户端、Edge Function、专项测试、59 个未部署 SQL 草案、独立解密脚本及迁移依赖；移除相关 RPC 类型、超时例外和文档入口。保留员工删除归档与内容稽核功能。

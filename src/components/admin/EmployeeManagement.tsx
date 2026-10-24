@@ -8,6 +8,8 @@ import { createFinancialOperationId, getAdminFinancialSessionToken, logout } fro
 import { mutateAuditedContent } from '../../lib/contentAudit';
 import EmployeeDetailModal from './EmployeeDetailModal';
 import LoginDeviceSummary from './LoginDeviceSummary';
+import { EmployeeRegionFilter, EmployeeRegionPicker, UNASSIGNED_REGION_FILTER } from './EmployeeRegionMenu';
+import type { CreateRegionResult, EmployeeRegion } from './EmployeeRegionMenu';
 
 interface OrderRealtimeData {
   user_id: string;
@@ -59,6 +61,10 @@ const getCreateEmployeeErrorMessage = (
 
   if (/The selected dispatch group is not available\./i.test(message)) {
     return '新增員工失敗：所選派單分組已封存、停用或不存在，請重新開啟視窗選擇可用分組。';
+  }
+
+  if (/The selected region is not available\./i.test(message)) {
+    return '新增員工失敗：所選地區已不存在，請重新選擇地區。';
   }
 
   if (/^(使用者名稱為必填|密碼至少需要 6 個字元|員工 ID 為必填|請先選擇派單分組|所選派單分組已不可用，請重新選擇|派單分組載入中，請稍候再試|無法載入派單分組，請關閉視窗後重試。)$/.test(message)) {
@@ -246,7 +252,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const editPlanButtonRef = useRef<HTMLButtonElement>(null);
   const editPlanMenuRef = useRef<HTMLDivElement>(null);
   const editBackdropPressRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
-  const editingEmployeeInitialRef = useRef<{ username: string; employeeId: string; remarks: string; planId: string } | null>(null);
+  const editingEmployeeInitialRef = useRef<{ username: string; employeeId: string; remarks: string; planId: string; regionId: string } | null>(null);
   const [savingEmployeeEdit, setSavingEmployeeEdit] = useState(false);
   const [editEmployeeError, setEditEmployeeError] = useState<string | null>(null);
   const [editingRemarksOnly, setEditingRemarksOnly] = useState<EmployeeWithAdmin | null>(null);
@@ -285,7 +291,12 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     remarks: '',
     dispatchGroupId: '',
     automationPlanId: '',
+    regionId: '',
   });
+  const [regions, setRegions] = useState<EmployeeRegion[]>([]);
+  const [regionFilterByGroup, setRegionFilterByGroup] = useState<Map<string, string>>(new Map());
+  const [regionDropdownOpen, setRegionDropdownOpen] = useState<string | null>(null);
+  const regionNameById = useMemo(() => new Map(regions.map(region => [region.id, region.name])), [regions]);
   const [selectedAdminForCreate, setSelectedAdminForCreate] = useState<string | null>(null);
   const [createPlanMenuOpen, setCreatePlanMenuOpen] = useState(false);
   const [createPlanMenuPosition, setCreatePlanMenuPosition] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -546,6 +557,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       initialLoadStartedRef.current = false;
       employeeGroupsRef.current = [];
       setEmployeeGroups([]);
+      setRegions([]);
       setAutomationPlans([]);
       setAutomationAssignmentsByEmployee(new Map());
       setEditingAutomationPlanId('');
@@ -644,7 +656,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       if (payload.eventType === 'INSERT' || payload.eventType === 'DELETE') return true;
       if (!currentEmployee) return true;
 
-      const relevantFields = ['username', 'employee_id', 'is_verified', 'is_active', 'remarks', 'tags', 'is_pinned', 'created_by', 'created_at'];
+      const relevantFields = ['username', 'employee_id', 'is_verified', 'is_active', 'remarks', 'tags', 'is_pinned', 'created_by', 'created_at', 'region_id'];
       return relevantFields.some(field =>
         field in payload.new && JSON.stringify(payload.new[field]) !== JSON.stringify((currentEmployee as unknown as Record<string, unknown>)[field])
       );
@@ -954,9 +966,28 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setCreateError(null);
     setCreatePlanMenuOpen(false);
     setCreatePlanMenuPosition(null);
-    setFormData({ username: '', password: '', employeeId: '', remarks: '', dispatchGroupId: '', automationPlanId: '' });
+    setFormData({ username: '', password: '', employeeId: '', remarks: '', dispatchGroupId: '', automationPlanId: '', regionId: '' });
     setSelectedAdminForCreate(null);
   };
+
+  const createEmployeeRegion = useCallback(async (name: string): Promise<CreateRegionResult> => {
+    const { data, error } = await supabase.rpc('admin_create_employee_region', {
+      p_admin_session_token: getAdminFinancialSessionToken(),
+      p_name: name,
+    });
+    if (error || !data?.id) {
+      if (error && isFinancialAdminSessionError(error)) {
+        void logout(false);
+        throw new Error('登入已失效，請重新登入。');
+      }
+      const message = error ? formatSupabaseError(error) : '';
+      console.error('Error creating employee region:', message);
+      throw new Error(/1 to 30 characters/.test(message) ? '地區名稱需為 1～30 個字。' : '新增地區失敗，請稍後再試。');
+    }
+    const region = { id: data.id, name: data.name };
+    setRegions(prev => (prev.some(item => item.id === region.id) ? prev : [...prev, region]));
+    return { region, created: Boolean(data.created) };
+  }, []);
 
   useEffect(() => {
     if (!showCreateForm) return;
@@ -1224,6 +1255,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
       realtimeChangeGenerationRef.current += 1;
       setEmployeeGroups(groupsArray);
+      setRegions(Array.isArray(snapshot.regions) ? snapshot.regions : []);
       if (hasValidPlanAssignmentSnapshot) {
         setAutomationPlans(planAssignmentSnapshot!.plans!);
         setAutomationAssignmentsByEmployee(nextAssignmentsByEmployee!);
@@ -1292,13 +1324,14 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         p_remarks: formData.remarks.trim(),
         p_automation_plan_id: formData.automationPlanId || null,
         p_dispatch_group_id: formData.dispatchGroupId,
+        ...(formData.regionId ? { p_region_id: formData.regionId } : {}),
       };
       const { data: result, error } = await supabase.rpc('admin_create_employee_account_with_automation_plan', createArgs);
 
       if (error) throw error;
       if (!result?.success) throw new Error(result?.error || '建立員工失敗');
 
-      setFormData({ username: '', password: '', employeeId: '', remarks: '', dispatchGroupId: '', automationPlanId: '' });
+      setFormData({ username: '', password: '', employeeId: '', remarks: '', dispatchGroupId: '', automationPlanId: '', regionId: '' });
       setShowCreateForm(false);
       setCreateError(null);
       setSelectedAdminForCreate(null);
@@ -1543,6 +1576,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       employeeId: employee.employee_id,
       remarks: employee.remarks || '',
       planId,
+      regionId: employee.region_id || '',
     };
     setEditingEmployee(employee);
     setEditingAutomationPlanId(planId);
@@ -1559,6 +1593,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       editingEmployee.username !== initial.username
       || editingEmployee.employee_id !== initial.employeeId
       || (editingEmployee.remarks || '') !== initial.remarks
+      || (editingEmployee.region_id || '') !== initial.regionId
       || editingAutomationPlanId !== initial.planId
     ));
     if (dirty && !window.confirm('員工資料或自動化方案尚未儲存，確定要放棄變更嗎？')) return;
@@ -1654,6 +1689,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     const selectedPlan = nextPlanId
       ? activeOwnerPlans.find(plan => plan.id === nextPlanId)
       : null;
+    const nextRegionId = editingEmployee.region_id || null;
+    const regionChanged = (editingEmployeeInitialRef.current?.regionId || null) !== nextRegionId;
     let profileSaved = false;
 
     setSavingEmployeeEdit(true);
@@ -1667,6 +1704,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           username,
           employee_id: employeeId,
           remarks: (editingEmployee.remarks || '').trim(),
+          ...(regionChanged ? { region_id: nextRegionId } : {}),
         },
       });
       if (profileError) throw profileError;
@@ -1710,6 +1748,10 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           { label: '使用者名稱', value: username },
           { label: '員工 ID', value: employeeId },
           { label: '備註', value: editingEmployee.remarks?.trim() || '（空白）' },
+          ...(regionChanged ? [{
+            label: '所在地區',
+            value: (nextRegionId && regionNameById.get(nextRegionId)) || '未設定',
+          }] : []),
           ...(assignmentChanged ? [{
             label: '自動化方案',
             value: selectedPlan?.name || (nextPlanId ? currentAssignment?.plan_name || '已更新' : '不指定方案'),
@@ -1880,6 +1922,12 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       next.delete(adminId);
       return next;
     });
+    setRegionFilterByGroup(prev => {
+      if (!prev.has(adminId)) return prev;
+      const next = new Map(prev);
+      next.delete(adminId);
+      return next;
+    });
   };
 
   const resetEmployeeListFilters = (adminId: string) => {
@@ -1898,6 +1946,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setWithdrawalDropdownPos(null);
     setCreatedDateDropdownOpen(null);
     setCreatedDateDropdownPos(null);
+    setRegionDropdownOpen(null);
   };
 
   const handleActiveFilter = (adminId: string, filter: 'all' | 'active' | 'inactive') => {
@@ -2103,6 +2152,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     const workStatusFilter = workStatusFilterByGroup.get(group.admin.id) || new Set<'online' | 'offline' | 'never_started'>();
     const summaryFilter = summaryFilterByGroup.get(group.admin.id) || null;
     const createdDateFilter = createdDateFilterByGroup.get(group.admin.id) || null;
+    const regionFilter = regionFilterByGroup.get(group.admin.id) || null;
     const financialFilter = ignoreFinancialFilter ? null : financialFilterByGroup.get(group.admin.id) || null;
     const inactiveDaysRange = ignoreInactiveDaysFilter ? null : inactiveDaysFilterByGroup.get(group.admin.id) || null;
     const searchLower = searchTerm.toLowerCase();
@@ -2153,11 +2203,13 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               ? emp.hasPendingWithdrawal
               : emp.pendingWithdrawals?.some(withdrawal => formatWithdrawalDate(withdrawal.created_at) === withdrawalFilter));
         const matchesCreatedDate = !createdDateFilter || getUTCDateKey(emp.created_at) === createdDateFilter;
+        const matchesRegion = !regionFilter
+          || (regionFilter === UNASSIGNED_REGION_FILTER ? !emp.region_id : emp.region_id === regionFilter);
         const matchesFinancial = !financialFilter
           || (financialFilter === 'wallet' && (emp.walletBalance || 0) > 0)
           || (financialFilter === 'today_commission' && emp.todayCommission > 0);
 
-        return matchesSearch && matchesTags && matchesActive && matchesWorkStatus && matchesSummary && matchesInactiveDays && matchesWithdrawal && matchesCreatedDate && matchesFinancial;
+        return matchesSearch && matchesTags && matchesActive && matchesWorkStatus && matchesSummary && matchesInactiveDays && matchesWithdrawal && matchesCreatedDate && matchesRegion && matchesFinancial;
       }),
       group.admin.id
     );
@@ -2166,6 +2218,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     createdDateFilterByGroup,
     financialFilterByGroup,
     inactiveDaysFilterByGroup,
+    regionFilterByGroup,
     withdrawalFilterByGroup,
     searchTerm,
     selectedTagsByGroup,
@@ -2539,9 +2592,36 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setIdleDaysDropdownPos(null);
     setWithdrawalDropdownOpen(null);
     setWithdrawalDropdownPos(null);
+    setRegionDropdownOpen(null);
     setCreatedDateDropdownPos({ top, left });
     setCreatedDateDropdownOpen(adminId);
   };
+
+  const handleRegionDropdownOpenChange = (adminId: string, open: boolean) => {
+    if (open) {
+      setInactiveDaysDropdownOpen(null);
+      setIdleDaysDropdownPos(null);
+      setWithdrawalDropdownOpen(null);
+      setWithdrawalDropdownPos(null);
+      setCreatedDateDropdownOpen(null);
+      setCreatedDateDropdownPos(null);
+    }
+    setRegionDropdownOpen(current => (open ? adminId : current === adminId ? null : current));
+  };
+
+  const getRegionCounts = (employees: EmployeeWithAdmin[]) => {
+    const counts = new Map<string, number>();
+    let unassigned = 0;
+    employees.forEach(employee => {
+      if (employee.region_id) counts.set(employee.region_id, (counts.get(employee.region_id) || 0) + 1);
+      else unassigned += 1;
+    });
+    return { counts, unassigned };
+  };
+
+  const getGroupRegionCounts = (adminId: string) => getRegionCounts(
+    employeeGroups.find(group => group.admin.id === adminId)?.employees || [],
+  );
 
   const getWithdrawalDateOptions = (adminId: string) => {
     const groupEmployees = employeeGroups.find(group => group.admin.id === adminId)?.employees || [];
@@ -2669,6 +2749,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setIdleDaysDropdownPos(null);
     setCreatedDateDropdownOpen(null);
     setCreatedDateDropdownPos(null);
+    setRegionDropdownOpen(null);
     setWithdrawalDropdownPos({ top, left });
     setWithdrawalDropdownOpen(adminId);
   };
@@ -2773,6 +2854,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       setCreatedDateDropdownPos(null);
       setWithdrawalDropdownOpen(null);
       setWithdrawalDropdownPos(null);
+      setRegionDropdownOpen(null);
       const rect = e.currentTarget.getBoundingClientRect();
       const menuWidth = 190;
       const menuHeight = 194;
@@ -2797,6 +2879,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     const selectedWithdrawal = withdrawalFilterByGroup.get(adminId);
     const selectedCreatedDate = createdDateFilterByGroup.get(adminId);
     const pendingWithdrawalCount = groupEmployees.filter(employee => employee.hasPendingWithdrawal).length;
+    const regionCounts = getRegionCounts(groupEmployees);
 
     const on = 'text-white font-semibold shadow-md border border-transparent';
     const dim = 'bg-slate-800/60 border border-slate-600/50 font-medium';
@@ -2891,7 +2974,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
         {/* Withdrawing */}
         <div data-withdrawal-dropdown className="ml-2 inline-flex items-center">
-          <div className={`inline-flex h-8 w-[180px] shrink-0 overflow-hidden rounded-lg border shadow-md transition-all ${selectedWithdrawal ? 'border-orange-200 bg-orange-600 shadow-orange-950/50' : 'border-orange-500/70 bg-orange-950/55 shadow-orange-950/30 hover:border-orange-300/90 hover:bg-orange-900/75'}`}>
+          <div className={`inline-flex h-8 w-[172px] shrink-0 overflow-hidden rounded-lg border shadow-md transition-all ${selectedWithdrawal ? 'border-orange-200 bg-orange-600 shadow-orange-950/50' : 'border-orange-500/70 bg-orange-950/55 shadow-orange-950/30 hover:border-orange-300/90 hover:bg-orange-900/75'}`}>
             <button
               type="button"
               onClick={event => handleWithdrawalClick(adminId, event)}
@@ -2930,7 +3013,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
         {/* Idle Days */}
         <div data-inactive-days-dropdown className="ml-2 inline-flex items-center">
-          <div className={`inline-flex h-8 w-[180px] shrink-0 overflow-hidden rounded-lg border shadow-sm transition-all ${
+          <div className={`inline-flex h-8 w-[164px] shrink-0 overflow-hidden rounded-lg border shadow-sm transition-all ${
             hasIdleFilter
               ? 'border-emerald-400/90 bg-emerald-900/90 shadow-emerald-950/40'
               : inactiveDaysDropdownOpen === adminId
@@ -2986,7 +3069,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         {renderIdleDaysPortal(adminId)}
 
         <div data-created-date-dropdown className="ml-2 inline-flex items-center">
-          <div className={`inline-flex h-8 w-[178px] shrink-0 overflow-hidden rounded-lg border shadow-sm transition-all ${
+          <div className={`inline-flex h-8 w-[160px] shrink-0 overflow-hidden rounded-lg border shadow-sm transition-all ${
             selectedCreatedDate
               ? 'border-sky-300/90 bg-sky-800 shadow-sky-950/40'
               : createdDateDropdownOpen === adminId
@@ -3032,6 +3115,24 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           </div>
         </div>
         {renderCreatedDatePortal(adminId)}
+
+        <EmployeeRegionFilter
+          regions={regions}
+          counts={regionCounts.counts}
+          unassignedCount={regionCounts.unassigned}
+          selectedId={regionFilterByGroup.get(adminId) || null}
+          open={regionDropdownOpen === adminId}
+          onOpenChange={open => handleRegionDropdownOpenChange(adminId, open)}
+          onSelect={regionId => {
+            setRegionFilterByGroup(prev => {
+              const next = new Map(prev);
+              if (regionId) next.set(adminId, regionId);
+              else next.delete(adminId);
+              return next;
+            });
+          }}
+          onCreate={createEmployeeRegion}
+        />
 
         <button
           type="button"
@@ -3663,7 +3764,17 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           )}
         </div>
       </td>
-      <td title={employee.employee_id} className="hidden w-[100px] max-w-[100px] overflow-hidden text-ellipsis py-0.5 px-1 text-xs text-slate-300 font-mono whitespace-nowrap cursor-pointer lg:table-cell" onClick={() => setViewingEmployee(employee)}>{employee.employee_id}</td>
+      <td title={employee.employee_id} className="hidden w-[84px] max-w-[84px] overflow-hidden text-ellipsis py-0.5 px-1 text-xs text-slate-300 font-mono whitespace-nowrap cursor-pointer lg:table-cell" onClick={() => setViewingEmployee(employee)}>{employee.employee_id}</td>
+      <td className="hidden w-[68px] max-w-[68px] py-0.5 px-1 whitespace-nowrap lg:table-cell">
+        {employee.region_id && regionNameById.has(employee.region_id) ? (
+          <span title={regionNameById.get(employee.region_id)} className="flex min-w-0 items-center gap-1 text-[11px] font-medium text-violet-200">
+            <MapPin className="h-2.5 w-2.5 shrink-0 text-violet-400" />
+            <span className="min-w-0 truncate">{regionNameById.get(employee.region_id)}</span>
+          </span>
+        ) : (
+          <span className="text-xs text-slate-600" title="未設定地區">-</span>
+        )}
+      </td>
       <td className="hidden w-[72px] py-0.5 px-1 text-[10px] text-emerald-400 whitespace-nowrap xl:table-cell" onClick={(e) => e.stopPropagation()}>
         <span>{employee.created_at ? new Date(employee.created_at).toLocaleDateString('en-CA') : '-'}</span>
         <button
@@ -3713,8 +3824,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           {employee.is_active ? '啟用' : '停用'}
         </button>
       </td>
-      <td className="hidden w-[66px] py-0.5 px-1 relative group/remarks 2xl:table-cell" onClick={(e) => e.stopPropagation()}>
-        <div className="flex min-w-0 items-center gap-0.5 max-w-[66px]">
+      <td className="hidden w-[72px] py-0.5 px-1 relative group/remarks 2xl:table-cell" onClick={(e) => e.stopPropagation()}>
+        <div className="flex min-w-0 items-center gap-0.5 max-w-[72px]">
           <span className="text-xs text-blue-400 truncate flex-1">{employee.remarks || '-'}</span>
           <button onClick={() => setEditingRemarksOnly(employee)} className="flex-shrink-0 rounded p-0.5 text-blue-400 opacity-0 transition-all hover:bg-blue-500/15 hover:text-cyan-300 group-hover/remarks:opacity-100">
             <Pencil className="h-2.5 w-2.5 text-blue-400 transition-colors group-hover/remarks:text-cyan-300" />
@@ -3886,6 +3997,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     handleOpenWallet,
     handleViewLoginIP,
     onQuickAction,
+    regionNameById,
     renderActionsDropdown,
     renderEmployeeStat,
     renderWorkStatusBadge,
@@ -3908,11 +4020,12 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         <th className="w-[40px] pl-1.5 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">#</th>
         <th className="h-[40px] w-[46px] px-0 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">工作狀態</th>
         <th className="w-[104px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider sm:w-[116px]">使用者</th>
-        <th className="hidden w-[100px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider lg:table-cell">員工 ID</th>
+        <th className="hidden w-[84px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider lg:table-cell">員工 ID</th>
+        <th className="hidden w-[68px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider lg:table-cell">地區</th>
         {renderSortableHeader(adminId, 'created_at', '建立日期', 'hidden w-[72px] xl:table-cell')}
         <th className="hidden h-[40px] w-[44px] pl-1 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider xl:table-cell">驗證</th>
         <th className="h-[40px] w-[48px] pl-0 pr-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">狀態</th>
-        <th className="hidden h-[40px] w-[66px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider 2xl:table-cell">備註</th>
+        <th className="hidden h-[40px] w-[72px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider 2xl:table-cell">備註</th>
         <th className="hidden h-[40px] w-[88px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider 2xl:table-cell">標籤</th>
         {renderSortableHeader(adminId, 'totalOrders', '總數', 'w-[41px]')}
         {renderSortableHeader(adminId, 'todayOrders', '今日', 'w-[41px]')}
@@ -4047,6 +4160,19 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               <div>
                 <label className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>員工 ID</label>
                 <input type="text" value={formData.employeeId} onChange={(e) => setFormData({ ...formData, employeeId: e.target.value })} disabled={creating} required placeholder="輸入員工 ID" className={`w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 ${fieldFocusClasses} disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100`} />
+              </div>
+              <div>
+                <label htmlFor={`create-employee-region-${targetAdminId}`} className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>所在地區 <span className="font-normal normal-case tracking-normal text-slate-500">（選填）</span></label>
+                <EmployeeRegionPicker
+                  id={`create-employee-region-${targetAdminId}`}
+                  regions={regions}
+                  counts={getGroupRegionCounts(targetAdminId).counts}
+                  value={formData.regionId}
+                  onChange={regionId => setFormData(prev => ({ ...prev, regionId }))}
+                  onCreate={createEmployeeRegion}
+                  disabled={creating}
+                  className={`flex w-full items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors ${fieldFocusClasses} disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400`}
+                />
               </div>
               <div>
                 <label className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>備註 <span className="font-normal normal-case tracking-normal text-slate-500">（選填）</span></label>
@@ -4962,6 +5088,22 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                     <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-cyan-200">內部識別</span>
                   </label>
                   <input id="edit-employee-id" type="text" value={editingEmployee.employee_id} onChange={(e) => setEditingEmployee({ ...editingEmployee, employee_id: e.target.value })} disabled={savingEmployeeEdit} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 font-mono text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
+                </div>
+                <div>
+                  <label className="mb-2 flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-region">
+                    所在地區
+                    <span className="rounded-full border border-violet-300/20 bg-violet-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-violet-200">選填</span>
+                  </label>
+                  <EmployeeRegionPicker
+                    id="edit-employee-region"
+                    regions={regions}
+                    counts={getGroupRegionCounts(editingEmployee.created_by).counts}
+                    value={editingEmployee.region_id || ''}
+                    onChange={regionId => setEditingEmployee(current => (current ? { ...current, region_id: regionId || null } : current))}
+                    onCreate={createEmployeeRegion}
+                    disabled={savingEmployeeEdit}
+                    className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors focus:border-blue-500 focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  />
                 </div>
                 <div>
                   <label className="mb-2 block text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-remarks">備註</label>
