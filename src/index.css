@@ -456,6 +456,66 @@
   scrollbar-color: #3b82f6 transparent;
 }
 
+.employee-data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.employee-data-table :is(th, td):nth-child(-n + 10) {
+  position: sticky;
+  z-index: 2;
+}
+
+.employee-data-table :is(th, td):nth-child(1) { left: var(--employee-column-1-left, 0px); }
+.employee-data-table :is(th, td):nth-child(2) { left: var(--employee-column-2-left, 40px); }
+.employee-data-table :is(th, td):nth-child(3) { left: var(--employee-column-3-left, 86px); }
+.employee-data-table :is(th, td):nth-child(4) { left: var(--employee-column-4-left, 202px); }
+.employee-data-table :is(th, td):nth-child(5) { left: var(--employee-column-5-left, 286px); }
+.employee-data-table :is(th, td):nth-child(6) { left: var(--employee-column-6-left, 354px); }
+.employee-data-table :is(th, td):nth-child(7) { left: var(--employee-column-7-left, 426px); }
+.employee-data-table :is(th, td):nth-child(8) { left: var(--employee-column-8-left, 470px); }
+.employee-data-table :is(th, td):nth-child(9) { left: var(--employee-column-9-left, 518px); }
+.employee-data-table :is(th, td):nth-child(10) { left: var(--employee-column-10-left, 590px); }
+
+.employee-data-table thead th:nth-child(-n + 10) {
+  background-color: #1e3a8a;
+}
+
+.employee-data-table tbody tr {
+  --employee-frozen-background: #0c1425;
+  --employee-frozen-hover: #102039;
+}
+
+.employee-data-table tbody tr[data-super-admin] {
+  --employee-frozen-hover: #302e24;
+}
+
+.employee-data-table tbody tr[data-pinned] {
+  --employee-frozen-background: #252022;
+  --employee-frozen-hover: #3d3022;
+}
+
+.employee-data-table tbody td:nth-child(-n + 10) {
+  border-top: 1px solid rgb(51 65 85 / 0.5);
+  background-color: var(--employee-frozen-background);
+}
+
+.employee-data-table tbody tr:hover td:nth-child(-n + 10) {
+  background-color: var(--employee-frozen-hover);
+}
+
+.employee-data-table tbody td:nth-child(-n + 10):hover {
+  z-index: 3;
+}
+
+.employee-data-table :is(th, td):nth-child(10) {
+  box-shadow: 1px 0 0 rgb(71 85 105 / 0.6), 5px 0 8px -6px #020617;
+}
+
+.employee-data-table tbody td:nth-child(n + 11) {
+  border-top: 1px solid rgb(51 65 85 / 0.5);
+}
+
 .dispatch-orders-scroll {
   scrollbar-width: thin;
   scrollbar-color: #0891b2 #0f172a;

@@ -21,28 +21,41 @@ function EmployeeTableScroll({ label, className, children }: {
   const viewportRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
   const dragOffsetRef = useRef<number | null>(null);
-  const [scroll, setScroll] = useState({ left: 0, width: 0, total: 0 });
+  const [scroll, setScroll] = useState({ left: 0, width: 0, total: 0, fixed: 0 });
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
+    const table = viewport.querySelector('table');
     const update = () => {
-      const next = { left: viewport.scrollLeft, width: viewport.clientWidth, total: viewport.scrollWidth };
-      setScroll(current => current.left === next.left && current.width === next.width && current.total === next.total ? current : next);
+      let fixed = 0;
+      const columns = Array.from(table?.tHead?.rows[0]?.cells || []).slice(0, 10);
+      const widths = columns.map(column => column.getBoundingClientRect().width);
+      widths.forEach((width, index) => {
+        table?.style.setProperty(`--employee-column-${index + 1}-left`, `${fixed}px`);
+        fixed += width;
+      });
+      const next = { left: viewport.scrollLeft, width: viewport.clientWidth, total: viewport.scrollWidth, fixed };
+      setScroll(current => current.left === next.left && current.width === next.width && current.total === next.total && current.fixed === next.fixed ? current : next);
     };
     const observer = new ResizeObserver(update);
     observer.observe(viewport);
-    if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
-    viewport.addEventListener('scroll', update, { passive: true });
+    if (table) observer.observe(table);
+    const updateScroll = () => {
+      const left = viewport.scrollLeft;
+      setScroll(current => current.left === left ? current : { ...current, left });
+    };
+    viewport.addEventListener('scroll', updateScroll, { passive: true });
     update();
     return () => {
       observer.disconnect();
-      viewport.removeEventListener('scroll', update);
+      viewport.removeEventListener('scroll', updateScroll);
     };
   }, []);
 
   const maxScroll = Math.max(0, scroll.total - scroll.width);
-  const thumbWidth = scroll.total ? Math.max(8, scroll.width / scroll.total * 100) : 100;
+  const scrollingWidth = scroll.total - scroll.fixed;
+  const thumbWidth = scrollingWidth > 0 ? Math.max(8, Math.max(0, scroll.width - scroll.fixed) / scrollingWidth * 100) : 100;
   const thumbLeft = maxScroll ? scroll.left / maxScroll * (100 - thumbWidth) : 0;
   const scrollToPointer = (event: ReactPointerEvent<HTMLDivElement>, offset: number) => {
     const viewport = viewportRef.current;
@@ -56,19 +69,18 @@ function EmployeeTableScroll({ label, className, children }: {
   return (
     <div className={`flex min-h-0 min-w-0 flex-col ${className}`}>
       {maxScroll > 1 && (
-        <div className="sticky top-0 z-20 flex shrink-0 items-center gap-2 border-y border-cyan-400/25 bg-slate-950 px-3 py-1 text-cyan-200">
-          <span className="shrink-0 text-[10px] font-semibold">左右捲動</span>
-          <ChevronLeft aria-hidden="true" className="h-3 w-3 shrink-0" />
+        <div className="sticky top-0 z-20 flex h-3.5 shrink-0 items-center bg-slate-900 pr-2" style={{ paddingLeft: scroll.fixed + 8 }}>
           <div
             role="scrollbar"
-            aria-label={`${label}橫向捲動條`}
+            aria-label={`${label}右側資料橫向捲動條`}
+            title="左右捲動標籤右側的資料"
             aria-controls={viewportId}
             aria-orientation="horizontal"
             aria-valuemin={0}
             aria-valuemax={Math.ceil(maxScroll)}
             aria-valuenow={Math.round(scroll.left)}
             tabIndex={0}
-            className="relative h-5 min-w-10 flex-1 touch-none select-none rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+            className="group/scrollbar relative h-full min-w-0 flex-1 touch-none select-none rounded-sm cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-slate-400/70"
             onPointerDown={event => {
               if (event.button !== 0 || !thumbRef.current) return;
               event.preventDefault();
@@ -94,8 +106,8 @@ function EmployeeTableScroll({ label, className, children }: {
               const positions: Record<string, number> = {
                 ArrowLeft: viewport.scrollLeft - 80,
                 ArrowRight: viewport.scrollLeft + 80,
-                PageUp: viewport.scrollLeft - viewport.clientWidth,
-                PageDown: viewport.scrollLeft + viewport.clientWidth,
+                PageUp: viewport.scrollLeft - Math.max(0, viewport.clientWidth - scroll.fixed),
+                PageDown: viewport.scrollLeft + Math.max(0, viewport.clientWidth - scroll.fixed),
                 Home: 0,
                 End: maxScroll,
               };
@@ -105,13 +117,12 @@ function EmployeeTableScroll({ label, className, children }: {
               }
             }}
           >
-            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-1 h-3 rounded-full border border-slate-600/70 bg-slate-800" />
-            <div ref={thumbRef} aria-hidden="true" className="absolute top-1 h-3 rounded-full border border-cyan-200/60 bg-gradient-to-r from-cyan-500 to-blue-500 shadow-sm hover:brightness-125 active:brightness-125" style={{ width: `${thumbWidth}%`, left: `${thumbLeft}%` }} />
+            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-slate-700/50" />
+            <div ref={thumbRef} aria-hidden="true" className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-slate-500/80 transition-colors hover:bg-slate-400 group-active/scrollbar:bg-slate-400" style={{ width: `${thumbWidth}%`, left: `${thumbLeft}%` }} />
           </div>
-          <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0" />
         </div>
       )}
-      <div ref={viewportRef} id={viewportId} role="region" aria-label={`${label}，可左右捲動`} tabIndex={0} className="-ml-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 pl-1 dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60" style={{ touchAction: 'pan-x pan-y' }}>
+      <div ref={viewportRef} id={viewportId} role="region" aria-label={`${label}，可左右捲動`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60" style={{ touchAction: 'pan-x pan-y' }}>
         {children}
       </div>
     </div>
@@ -3840,6 +3851,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const renderEmployeeRow = useCallback((employee: EmployeeWithAdmin, index: number, isSuperAdmin: boolean) => (
     <tr
       key={employee.id}
+      data-pinned={employee.is_pinned || undefined}
+      data-super-admin={isSuperAdmin || undefined}
       className={`group border-t border-slate-700/50 transition-colors duration-75 ${
         employee.is_pinned
           ? 'bg-amber-500/10 hover:bg-amber-500/20'
@@ -4797,7 +4810,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
               {/* Table - fixed ~22 rows */}
               <EmployeeTableScroll label="員工資料列表" className="flex-1">
-                <table className="w-full min-w-[1320px] shrink-0 table-fixed">
+                <table className="employee-data-table w-full min-w-[1320px] shrink-0 table-fixed">
                   {renderTableHeader(flatAdminId)}
                   <tbody>
                     <EmployeeRegionNamesContext.Provider value={regionNameById}>
@@ -5014,7 +5027,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                     </div>
                     {group.employees.length > 0 ? (
                       <EmployeeTableScroll label={`${group.admin.username} 員工資料列表`} className={selectedAdminFilter !== 'all' ? 'flex-1' : 'min-h-[300px] max-h-[calc(100vh-160px)]'}>
-                        <table className="w-full min-w-[1320px] shrink-0 table-fixed">
+                        <table className="employee-data-table w-full min-w-[1320px] shrink-0 table-fixed">
                           {renderTableHeader(group.admin.id)}
                           <tbody>
                             <EmployeeRegionNamesContext.Provider value={regionNameById}>
