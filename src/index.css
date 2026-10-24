@@ -684,6 +684,43 @@
   box-shadow: 0 0 9px rgba(56, 189, 248, 0.42);
 }
 
+.employee-region-scrollbar {
+  color-scheme: dark;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(167, 139, 250, 0.72) rgba(76, 29, 149, 0.16);
+}
+
+.employee-region-scrollbar:hover {
+  scrollbar-color: rgba(196, 181, 253, 0.94) rgba(76, 29, 149, 0.16);
+}
+
+.employee-region-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.employee-region-scrollbar::-webkit-scrollbar-track {
+  margin-block: 4px;
+  border-radius: 999px;
+  background: rgba(76, 29, 149, 0.16);
+}
+
+.employee-region-scrollbar::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  border: 1px solid rgba(22, 14, 42, 0.9);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(196, 181, 253, 0.9), rgba(139, 92, 246, 0.78));
+  box-shadow: 0 0 6px rgba(139, 92, 246, 0.2);
+}
+
+.employee-region-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(221, 214, 254, 0.98), rgba(167, 139, 250, 0.94));
+  box-shadow: 0 0 8px rgba(167, 139, 250, 0.35);
+}
+
+.employee-region-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 .login-history-list-scrollbar {
   background-color: #020617;
   color-scheme: dark;

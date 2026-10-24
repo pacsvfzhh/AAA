@@ -155,7 +155,7 @@ function EmployeeRegionMenu({
       <div
         role={listRole}
         aria-label="所在地區"
-        className="employee-date-menu-scrollbar max-h-[210px] min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain p-1.5 pr-1"
+        className="employee-region-scrollbar max-h-[210px] min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain p-1.5 pr-1"
       >
         {options.length > 0 ? options.map(option => {
           const isSelected = option.id === selectedId;
@@ -427,7 +427,7 @@ function EmployeeRegionSettingsDialog({
           </p>
         </div>
 
-        <div className="employee-date-menu-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-3">
+        <div className="employee-region-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-3">
           {regions.length === 0 && (
             <p className="py-6 text-center text-xs text-slate-500">此群組尚未建立地區</p>
           )}
