@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode, RefObject, SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, CheckCircle, ChevronDown, Loader2, MapPin, Pencil, Plus, Settings, Trash2, X } from 'lucide-react';
+import { Check, CheckCircle, ChevronDown, Loader2, MapPin, Pencil, Pin, PinOff, Plus, Settings, Trash2, X } from 'lucide-react';
 
 export const UNASSIGNED_REGION_FILTER = '__unassigned__';
 const REGION_NAME_MAX_LENGTH = 30;
@@ -10,11 +10,21 @@ export interface EmployeeRegion {
   id: string;
   name: string;
   admin_id: string;
+  is_pinned: boolean;
 }
+
+const sortRegions = (regions: EmployeeRegion[], counts: Map<string, number>) => (
+  [...regions].sort((a, b) => {
+    if (Boolean(a.is_pinned) !== Boolean(b.is_pinned)) return a.is_pinned ? -1 : 1;
+    if (a.is_pinned) return 0;
+    return (counts.get(b.id) || 0) - (counts.get(a.id) || 0);
+  })
+);
 
 export interface EmployeeRegionActions {
   create: (name: string) => Promise<{ region: EmployeeRegion; created: boolean }>;
   rename: (regionId: string, name: string) => Promise<EmployeeRegion>;
+  setPinned: (regionId: string, pinned: boolean) => Promise<EmployeeRegion>;
   remove: (regionId: string, replacementId: string | null) => Promise<void>;
 }
 
@@ -23,6 +33,7 @@ interface RegionMenuOption {
   name: string;
   count?: number;
   muted?: boolean;
+  pinned?: boolean;
 }
 
 interface MenuPosition {
@@ -176,11 +187,15 @@ function EmployeeRegionMenu({
                     : 'border-transparent bg-white/[0.025] text-slate-300 hover:border-violet-400/25 hover:bg-violet-400/10 hover:text-violet-50'
               }`}
             >
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full transition-all ${
-                isSelected
-                  ? 'bg-white shadow-[0_0_7px_rgba(255,255,255,0.8)]'
-                  : option.muted ? 'bg-slate-500 group-hover:bg-violet-300' : 'bg-violet-400/70 group-hover:bg-violet-300'
-              }`} />
+              {option.pinned ? (
+                <Pin aria-label="已置頂" className="h-3 w-3 shrink-0 text-violet-200" />
+              ) : (
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full transition-all ${
+                  isSelected
+                    ? 'bg-white shadow-[0_0_7px_rgba(255,255,255,0.8)]'
+                    : option.muted ? 'bg-slate-500 group-hover:bg-violet-300' : 'bg-violet-400/70 group-hover:bg-violet-300'
+                }`} />
+              )}
               <span className="min-w-0 flex-1 truncate text-left">{option.name}</span>
               {option.count !== undefined && (
                 <span className={`shrink-0 text-right text-[9px] font-bold tabular-nums ${isSelected ? 'text-white' : 'text-violet-300/75 group-hover:text-violet-200'}`}>
@@ -220,6 +235,7 @@ function EmployeeRegionSettingsDialog({
   onCreated,
 }: EmployeeRegionSettingsDialogProps) {
   const titleId = useId();
+  const sortedRegions = sortRegions(regions, counts);
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
@@ -329,6 +345,20 @@ function EmployeeRegionSettingsDialog({
     }
   };
 
+  const submitPinned = async (region: EmployeeRegion) => {
+    if (busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const updated = await actions.setPinned(region.id, !region.is_pinned);
+      setNotice({ tone: 'success', text: `已${updated.is_pinned ? '置頂' : '取消置頂'}「${updated.name}」` });
+    } catch (error) {
+      setNotice({ tone: 'error', text: errorMessage(error, '設定地區置頂失敗，請稍後再試。') });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitDelete = async () => {
     if (!deleting || busy) return;
     const region = regions.find(item => item.id === deleting.id);
@@ -431,7 +461,7 @@ function EmployeeRegionSettingsDialog({
           {regions.length === 0 && (
             <p className="py-6 text-center text-xs text-slate-500">此群組尚未建立地區</p>
           )}
-          {regions.map(region => {
+          {sortedRegions.map(region => {
             const count = counts.get(region.id) || 0;
             const isEditing = editing?.id === region.id;
             const isDeleting = deleting?.id === region.id;
@@ -504,6 +534,20 @@ function EmployeeRegionSettingsDialog({
                     </>
                   ) : (
                     <>
+                      <button
+                        type="button"
+                        onClick={() => void submitPinned(region)}
+                        disabled={rowLocked || isDeleting}
+                        aria-label={`${region.is_pinned ? '取消置頂' : '置頂'}「${region.name}」`}
+                        aria-pressed={Boolean(region.is_pinned)}
+                        title={region.is_pinned ? '取消置頂' : '置頂地區'}
+                        className={`${iconButton} ${region.is_pinned
+                          ? 'border-violet-300/60 bg-violet-500/25 text-violet-100 hover:bg-violet-500/40'
+                          : 'border-violet-300/20 bg-violet-400/10 text-violet-300/60 hover:border-violet-200/50 hover:bg-violet-400/20 hover:text-violet-100'
+                        } focus-visible:ring-violet-300/60`}
+                      >
+                        {region.is_pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -632,7 +676,7 @@ export function EmployeeRegionFilter({
   const [position, setPosition] = useState<MenuPosition | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const options: RegionMenuOption[] = [
-    ...regions.map(region => ({ id: region.id, name: region.name, count: counts.get(region.id) || 0 })),
+    ...sortRegions(regions, counts).map(region => ({ id: region.id, name: region.name, count: counts.get(region.id) || 0, pinned: region.is_pinned })),
     ...(unassignedCount > 0 || selectedId === UNASSIGNED_REGION_FILTER
       ? [{ id: UNASSIGNED_REGION_FILTER, name: '未設定地區', count: unassignedCount, muted: true }]
       : []),
@@ -786,10 +830,11 @@ export function EmployeeRegionPicker({
   const [position, setPosition] = useState<MenuPosition | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const selected = regions.find(region => region.id === value) || null;
-  const options: RegionMenuOption[] = regions.map(region => ({
+  const options: RegionMenuOption[] = sortRegions(regions, counts).map(region => ({
     id: region.id,
     name: region.name,
     count: counts.get(region.id) || 0,
+    pinned: region.is_pinned,
   }));
   const close = useCallback(() => setPosition(null), []);
   const valueRef = useRef(value);

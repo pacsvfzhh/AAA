@@ -1015,7 +1015,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         p_name: name,
       });
       if (error || !data?.id) return throwRegionActionError(error, 'creating', '新增地區失敗，請稍後再試。');
-      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id };
+      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id, is_pinned: data.is_pinned };
       setRegions(prev => (prev.some(item => item.id === region.id) ? prev : [...prev, region]));
       return { region, created: Boolean(data.created) };
     },
@@ -1026,7 +1026,18 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         p_name: name,
       });
       if (error || !data?.id) return throwRegionActionError(error, 'renaming', '修改地區失敗，請稍後再試。');
-      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id };
+      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id, is_pinned: data.is_pinned };
+      setRegions(prev => prev.map(item => (item.id === region.id ? region : item)));
+      return region;
+    },
+    setPinned: async (regionId, pinned) => {
+      const { data, error } = await supabase.rpc('admin_set_employee_region_pinned', {
+        p_admin_session_token: getAdminFinancialSessionToken(),
+        p_region_id: regionId,
+        p_is_pinned: pinned,
+      });
+      if (error || !data?.id) return throwRegionActionError(error, 'pinning', '設定地區置頂失敗，請稍後再試。');
+      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id, is_pinned: data.is_pinned };
       setRegions(prev => prev.map(item => (item.id === region.id ? region : item)));
       return region;
     },

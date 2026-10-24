@@ -17,6 +17,13 @@
 
 ---
 
+## 2026-10-24 · 地区按人数排序并支持置顶（数据库已部署，前端待部署）
+- 需求：地区下拉菜单按人数由多到少排序；设置面板可置顶地区且不受人数排序影响；「未設定地區」固定最下面。
+- 改动：置顶地区固定在前并保留原始排列，其余地区按人数降序、同人数保持原顺序；未设定选项在排序完成后追加，始终置底。设置面板新增图钉置顶/取消置顶按钮，菜单显示置顶标记；新建/编辑员工地区菜单同样排序。
+- 文件：`supabase/migrations/20261102000002_pin_employee_regions.sql`、`supabase/tests/employee-regions.test.mjs`、`src/components/admin/EmployeeRegionMenu.tsx`、`src/components/admin/EmployeeManagement.tsx`、`src/types/database.ts`、`docs/admin-backend.md`、`docs/database.md`。
+- 数据库/服务端：新增 `employee_regions.is_pinned`、受管理员会话及群组权限保护的 `admin_set_employee_region_pinned`；新建/改名/快照返回置顶状态，原统计与权限保持不变。用户明确选择「现在部署数据库」后，经只读比对正式库原函数指纹一致，已用 MCP `apply_migration` 部署（正式版本 `20261024011635 pin_employee_regions`）；只读核对新列非空且默认 false，10 个地区均未置顶、72 名员工数量不变，四个函数体指纹与本地一致，RLS 保留、浏览器无直接表权限、新 RPC 无 PUBLIC 授权。未操作真实地区置顶作测试；前端待用户部署。
+- 验证：typecheck、lint、build、差异检查通过；`test:employee-regions` 12/12，覆盖置顶默认值、权限/群组隔离、置顶/取消/重复设置、无效输入、改名与重复新增保留置顶、快照持久化状态。Chromium 隔离样例通过人数降序/同人数稳定、多个置顶不随人数变化、置顶/取消/保存失败、未设定固定置底、新建员工地区选择与 320px 窄屏检查。WebKit 因环境缺少 `libgstreamer-1.0.so.0` 未能启动；浏览器测试未使用正式账号或数据。另核对快照函数除新增地区 `is_pinned` 投影外与前迁移逐字一致。
+
 ## 2026-10-24 · 地区菜单与设置面板统一紫色滚动条（前端待部署）
 - 需求：地区下拉菜单及齿轮打开的设置面板，滚动条应匹配菜单的深紫色主题。
 - 改动：两处滚动区域共用独立的 `employee-region-scrollbar`，采用深紫色轨道、细圆角紫色滑块及悬停提亮效果；新建和编辑员工的地区菜单同步生效，不改动入职日期等菜单的滚动条。

@@ -1253,18 +1253,21 @@ export interface Database {
           id: string;
           name: string;
           admin_id: string;
+          is_pinned: boolean;
           created_at: string;
         };
         Insert: {
           id?: string;
           name: string;
           admin_id: string;
+          is_pinned?: boolean;
           created_at?: string;
         };
         Update: {
           id?: string;
           name?: string;
           admin_id?: string;
+          is_pinned?: boolean;
           created_at?: string;
         };
         Relationships: [
@@ -2603,11 +2606,15 @@ export interface Database {
       };
       admin_create_employee_region: {
         Args: { p_admin_session_token: string; p_owner_admin_id: string; p_name: string };
-        Returns: { id: string; name: string; admin_id: string; created: boolean };
+        Returns: { id: string; name: string; admin_id: string; is_pinned: boolean; created: boolean };
       };
       admin_rename_employee_region: {
         Args: { p_admin_session_token: string; p_region_id: string; p_name: string };
-        Returns: { id: string; name: string; admin_id: string };
+        Returns: { id: string; name: string; admin_id: string; is_pinned: boolean };
+      };
+      admin_set_employee_region_pinned: {
+        Args: { p_admin_session_token: string; p_region_id: string; p_is_pinned: boolean };
+        Returns: { id: string; name: string; admin_id: string; is_pinned: boolean };
       };
       admin_delete_employee_region: {
         Args: { p_admin_session_token: string; p_region_id: string; p_replacement_region_id?: string | null };
@@ -2665,6 +2672,7 @@ export interface Database {
             id: string;
             name: string;
             admin_id: string;
+            is_pinned: boolean;
           }>;
           employees: Array<{
             id: string;
