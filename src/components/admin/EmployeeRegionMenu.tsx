@@ -235,11 +235,7 @@ function EmployeeRegionSettingsDialog({
   onCreated,
 }: EmployeeRegionSettingsDialogProps) {
   const titleId = useId();
-  // Keep settings rows in place until reopening so saved pins never jump away from the pointer.
-  const [regionOrder] = useState(() => new Map(sortRegions(regions, counts).map((region, index) => [region.id, index])));
-  const sortedRegions = useMemo(() => [...regions].sort((a, b) => (
-    (regionOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (regionOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
-  )), [regions, regionOrder]);
+  const sortedRegions = useMemo(() => sortRegions(regions, counts), [regions, counts]);
   const [newName, setNewName] = useState('');
   const [pending, setPending] = useState<{ action: 'create' | 'rename' | 'pin' | 'delete'; regionId?: string } | null>(null);
   const busy = pending !== null;
