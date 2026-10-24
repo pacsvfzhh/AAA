@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject, SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, CheckCircle, ChevronDown, Loader2, MapPin, Pencil, Pin, PinOff, Plus, Settings, Trash2, X } from 'lucide-react';
@@ -235,9 +235,14 @@ function EmployeeRegionSettingsDialog({
   onCreated,
 }: EmployeeRegionSettingsDialogProps) {
   const titleId = useId();
-  const sortedRegions = sortRegions(regions, counts);
+  // Keep settings rows in place until reopening so saved pins never jump away from the pointer.
+  const [regionOrder] = useState(() => new Map(sortRegions(regions, counts).map((region, index) => [region.id, index])));
+  const sortedRegions = useMemo(() => [...regions].sort((a, b) => (
+    (regionOrder.get(a.id) ?? regions.length) - (regionOrder.get(b.id) ?? regions.length)
+  )), [regions, regionOrder]);
   const [newName, setNewName] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<{ action: 'create' | 'rename' | 'pin' | 'delete'; regionId?: string } | null>(null);
+  const busy = pending !== null;
   const [notice, setNotice] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; replacementId: string } | null>(null);
@@ -302,7 +307,7 @@ function EmployeeRegionSettingsDialog({
   const submitNewRegion = async () => {
     const name = newName.trim();
     if (!name || busy) return;
-    setBusy(true);
+    setPending({ action: 'create' });
     setNotice(null);
     try {
       const { region, created } = await actions.create(name);
@@ -314,7 +319,7 @@ function EmployeeRegionSettingsDialog({
     } catch (error) {
       setNotice({ tone: 'error', text: errorMessage(error, '新增地區失敗，請稍後再試。') });
     } finally {
-      setBusy(false);
+      setPending(null);
       addRef.current?.focus({ preventScroll: true });
     }
   };
@@ -332,7 +337,7 @@ function EmployeeRegionSettingsDialog({
       setRowError(null);
       return;
     }
-    setBusy(true);
+    setPending({ action: 'rename', regionId: editing.id });
     setRowError(null);
     try {
       const region = await actions.rename(editing.id, name);
@@ -341,13 +346,13 @@ function EmployeeRegionSettingsDialog({
     } catch (error) {
       setRowError(errorMessage(error, '修改地區失敗，請稍後再試。'));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
   const submitPinned = async (region: EmployeeRegion) => {
     if (busy) return;
-    setBusy(true);
+    setPending({ action: 'pin', regionId: region.id });
     setNotice(null);
     try {
       const updated = await actions.setPinned(region.id, !region.is_pinned);
@@ -355,7 +360,7 @@ function EmployeeRegionSettingsDialog({
     } catch (error) {
       setNotice({ tone: 'error', text: errorMessage(error, '設定地區置頂失敗，請稍後再試。') });
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
@@ -367,7 +372,7 @@ function EmployeeRegionSettingsDialog({
       setRowError('請先選擇要改到的地區。');
       return;
     }
-    setBusy(true);
+    setPending({ action: 'delete', regionId: deleting.id });
     setRowError(null);
     try {
       await actions.remove(deleting.id, assigned > 0 ? deleting.replacementId : null);
@@ -376,11 +381,11 @@ function EmployeeRegionSettingsDialog({
     } catch (error) {
       setRowError(errorMessage(error, '刪除地區失敗，請稍後再試。'));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
-  const iconButton = 'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-40';
+  const iconButton = 'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 disabled:cursor-wait';
 
   return createPortal(
     <div
@@ -433,7 +438,7 @@ function EmployeeRegionSettingsDialog({
                 event.preventDefault();
                 void submitNewRegion();
               }}
-              disabled={busy}
+              readOnly={pending?.action === 'create'}
               placeholder="輸入新地區名稱"
               aria-label="新地區名稱"
               autoComplete="off"
@@ -443,17 +448,18 @@ function EmployeeRegionSettingsDialog({
               type="button"
               onClick={() => void submitNewRegion()}
               disabled={busy || !newName.trim()}
-              className="inline-flex h-9 shrink-0 items-center justify-center gap-1 rounded-lg border border-violet-300/60 bg-violet-600 px-3.5 text-xs font-bold text-white transition-colors hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-200/70 disabled:cursor-not-allowed disabled:opacity-50"
+              className={`inline-flex h-9 shrink-0 items-center justify-center gap-1 rounded-lg border border-violet-300/60 bg-violet-600 px-3.5 text-xs font-bold text-white transition-colors hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-200/70 disabled:cursor-not-allowed ${!newName.trim() ? 'opacity-50' : ''}`}
+              aria-busy={pending?.action === 'create'}
             >
-              <Plus className="h-3.5 w-3.5" />
+              {pending?.action === 'create' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
               新增
             </button>
           </div>
           <p
-            role={notice?.tone === 'error' ? 'alert' : 'status'}
-            className={`mt-1.5 min-h-[16px] text-[11px] leading-4 ${notice?.tone === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}
+            role={!busy && notice?.tone === 'error' ? 'alert' : 'status'}
+            className={`mt-1.5 min-h-[16px] text-[11px] leading-4 ${busy ? 'text-violet-300' : notice?.tone === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}
           >
-            {notice?.text}
+            {busy ? '正在儲存……' : notice?.text}
           </p>
         </div>
 
@@ -465,7 +471,7 @@ function EmployeeRegionSettingsDialog({
             const count = counts.get(region.id) || 0;
             const isEditing = editing?.id === region.id;
             const isDeleting = deleting?.id === region.id;
-            const otherRegions = regions.filter(item => item.id !== region.id);
+            const otherRegions = isDeleting ? regions.filter(item => item.id !== region.id) : [];
             const rowLocked = busy || (Boolean(editing || deleting) && !isEditing && !isDeleting);
             return (
               <div
@@ -540,13 +546,16 @@ function EmployeeRegionSettingsDialog({
                         disabled={rowLocked || isDeleting}
                         aria-label={`${region.is_pinned ? '取消置頂' : '置頂'}「${region.name}」`}
                         aria-pressed={Boolean(region.is_pinned)}
+                        aria-busy={pending?.action === 'pin' && pending.regionId === region.id}
                         title={region.is_pinned ? '取消置頂' : '置頂地區'}
                         className={`${iconButton} ${region.is_pinned
                           ? 'border-violet-300/60 bg-violet-500/25 text-violet-100 hover:bg-violet-500/40'
                           : 'border-violet-300/20 bg-violet-400/10 text-violet-300/60 hover:border-violet-200/50 hover:bg-violet-400/20 hover:text-violet-100'
                         } focus-visible:ring-violet-300/60`}
                       >
-                        {region.is_pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                        {pending?.action === 'pin' && pending.regionId === region.id
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : region.is_pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
                       </button>
                       <button
                         type="button"

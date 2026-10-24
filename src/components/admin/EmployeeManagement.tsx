@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
+import { Fragment, createContext, useContext, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { UserPlus, Search, MoreVertical, CheckCircle, XCircle, Key, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ChevronLeft, ChevronRight, Trash2, Eye, EyeOff, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Pin, Tag, X, Users, CalendarDays, Clock, Pencil, Bell, MessageCircle, DollarSign, Headphones, Globe, Loader2, Timer, Wallet, MapPin, Clock3, History, LogIn, LogOut } from 'lucide-react';
@@ -12,6 +12,20 @@ import { EmployeeRegionFilter, EmployeeRegionPicker, UNASSIGNED_REGION_FILTER } 
 import type { EmployeeRegion, EmployeeRegionActions } from './EmployeeRegionMenu';
 
 const REGION_REQUIRED_MESSAGE = '請選擇所在地區';
+const EmployeeRegionNamesContext = createContext<ReadonlyMap<string, string>>(new Map());
+
+function EmployeeRegionName({ regionId }: { regionId: string | null }) {
+  const names = useContext(EmployeeRegionNamesContext);
+  const name = regionId ? names.get(regionId) : undefined;
+  return name ? (
+    <span title={name} className="flex min-w-0 items-center gap-1 text-[11px] font-medium text-violet-200">
+      <MapPin className="h-2.5 w-2.5 shrink-0 text-violet-400" />
+      <span className="min-w-0 truncate">{name}</span>
+    </span>
+  ) : (
+    <span className="text-xs text-slate-600" title="未設定地區">-</span>
+  );
+}
 
 const getRegionActionErrorMessage = (message: string, fallback: string) => {
   if (/1 to 30 characters/.test(message)) return '地區名稱需為 1～30 個字。';
@@ -2371,9 +2385,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     });
   }, [searchTerm, filteredEmployeeGroups]);
 
-  const flatFilteredEmployees = admin.role === 'secondary_admin' && filteredGroups.length > 0
-    ? filteredGroups[0].employees
-    : [];
+  const flatFilteredEmployees = useMemo(() => (
+    admin.role === 'secondary_admin' && filteredGroups.length > 0 ? filteredGroups[0].employees : []
+  ), [admin.role, filteredGroups]);
 
   const flatAdminId = admin.id;
 
@@ -3866,14 +3880,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       </td>
       <td title={employee.employee_id} className="hidden w-[84px] max-w-[84px] overflow-hidden text-ellipsis py-0.5 px-1 text-xs text-slate-300 font-mono whitespace-nowrap cursor-pointer lg:table-cell" onClick={() => setViewingEmployee(employee)}>{employee.employee_id}</td>
       <td className="hidden w-[68px] max-w-[68px] py-0.5 px-1 whitespace-nowrap lg:table-cell">
-        {employee.region_id && regionNameById.has(employee.region_id) ? (
-          <span title={regionNameById.get(employee.region_id)} className="flex min-w-0 items-center gap-1 text-[11px] font-medium text-violet-200">
-            <MapPin className="h-2.5 w-2.5 shrink-0 text-violet-400" />
-            <span className="min-w-0 truncate">{regionNameById.get(employee.region_id)}</span>
-          </span>
-        ) : (
-          <span className="text-xs text-slate-600" title="未設定地區">-</span>
-        )}
+        <EmployeeRegionName regionId={employee.region_id || null} />
       </td>
       <td className="hidden w-[72px] py-0.5 px-1 text-[10px] text-emerald-400 whitespace-nowrap xl:table-cell" onClick={(e) => e.stopPropagation()}>
         <span>{employee.created_at ? new Date(employee.created_at).toLocaleDateString('en-CA') : '-'}</span>
@@ -4097,7 +4104,6 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     handleOpenWallet,
     handleViewLoginIP,
     onQuickAction,
-    regionNameById,
     renderActionsDropdown,
     renderEmployeeStat,
     renderWorkStatusBadge,
@@ -4113,6 +4119,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     });
     return rows;
   }, [expandedGroups, filteredEmployeeGroups, renderEmployeeRow]);
+  const flatEmployeeRows = useMemo(() => flatFilteredEmployees.map(
+    (employee, index) => renderEmployeeRow(employee, index, true),
+  ), [flatFilteredEmployees, renderEmployeeRow]);
 
   const renderTableHeader = (adminId: string) => (
     <thead className="sticky top-0 z-20 isolate bg-blue-900 shadow-[0_2px_4px_rgba(0,0,0,0.35)] border-b-2 border-blue-300/40">
@@ -4883,7 +4892,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                 <table className="w-full min-w-0 shrink-0 table-fixed">
                   {renderTableHeader(flatAdminId)}
                   <tbody>
-                    {flatFilteredEmployees.map((emp, idx) => renderEmployeeRow(emp, idx, true))}
+                    <EmployeeRegionNamesContext.Provider value={regionNameById}>
+                      {flatEmployeeRows}
+                    </EmployeeRegionNamesContext.Provider>
                   </tbody>
                 </table>
                 {flatFilteredEmployees.length === 0 && (
@@ -5097,7 +5108,11 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                       <div className={`-ml-1 pl-1 overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 min-h-[300px] dark-panel-scroll ${selectedAdminFilter !== 'all' ? 'min-h-0 flex-1' : 'max-h-[calc(100vh-160px)]'}`}>
                         <table className="w-full min-w-0 table-fixed">
                           {renderTableHeader(group.admin.id)}
-                          <tbody>{employeeRowsByGroup.get(group.admin.id)}</tbody>
+                          <tbody>
+                            <EmployeeRegionNamesContext.Provider value={regionNameById}>
+                              {employeeRowsByGroup.get(group.admin.id)}
+                            </EmployeeRegionNamesContext.Provider>
+                          </tbody>
                         </table>
                         <div aria-hidden="true" className="h-4 shrink-0 border-t border-blue-300/35 bg-gradient-to-r from-blue-950/10 via-blue-500/35 to-blue-950/10 shadow-[inset_0_1px_0_rgba(96,165,250,0.55),0_-4px_14px_rgba(59,130,246,0.18)]" />
                       </div>
