@@ -2090,6 +2090,11 @@ body {
     zoom: 0.84;
   }
 
+  /* Portaled notices retain viewport sizing and 44px touch targets despite the shell zoom. */
+  .dispatch-notice-stack {
+    zoom: calc(1 / 0.84);
+  }
+
   /* Viewport units are scaled by zoom too, so stretch the shell back to full screen height. */
   .employee-shell {
     min-height: calc(100vh / 0.84) !important;
@@ -3542,13 +3547,146 @@ html.perf-lite .pointer-events-none[class*="blur-"] {
   animation: dispatchStartOverlayIn 900ms ease-out both;
 }
 
-/* Sits just below the sticky employee header (about 56px on phones, 70px on tablets, 104px with the desktop tab bar). */
-.dispatch-notice-stack { top: calc(env(safe-area-inset-top, 0px) + 68px); }
-@media (min-width: 768px) { .dispatch-notice-stack { top: 84px; } }
-@media (min-width: 1025px) { .dispatch-notice-stack { top: 116px; } }
+.dispatch-notice-stack {
+  --dispatch-notice-header: calc(56px + env(safe-area-inset-top, 0px));
+  --dispatch-notice-edge: 12px;
+  --dispatch-notice-bottom: var(--employee-bottom-nav-height, 84px);
+  --dispatch-notice-top: calc(var(--employee-header-height, var(--dispatch-notice-header)) + 12px);
+  position: fixed;
+  top: var(--dispatch-notice-top);
+  right: max(var(--dispatch-notice-edge), env(safe-area-inset-right, 0px));
+  z-index: 60;
+  display: flex;
+  width: min(420px, calc(100vw - max(var(--dispatch-notice-edge), env(safe-area-inset-left, 0px)) - max(var(--dispatch-notice-edge), env(safe-area-inset-right, 0px))));
+  max-height: calc(100vh - var(--dispatch-notice-top) - var(--dispatch-notice-bottom) - 16px);
+  max-height: calc(100dvh - var(--dispatch-notice-top) - var(--dispatch-notice-bottom) - 16px);
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px;
+  pointer-events: none;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
 
 .dispatch-notice {
+  --dispatch-notice-accent: #0284c7;
+  position: relative;
+  display: grid;
+  flex: none;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 12px;
+  overflow: hidden;
+  border-left: 3px solid var(--dispatch-notice-accent);
+  border-radius: 18px;
+  padding: 16px 56px 18px 14px;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), 0 2px 6px rgb(15 23 42 / 0.06), 0 12px 30px -16px rgb(15 23 42 / 0.35);
+  pointer-events: auto;
   animation: dispatchNoticeIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dispatch-notice[data-notice-tone="error"] { --dispatch-notice-accent: #e11d48; }
+.dispatch-notice[data-notice-tone="warning"] { --dispatch-notice-accent: #d97706; }
+.dispatch-notice[data-notice-tone="success"] { --dispatch-notice-accent: #059669; }
+
+.dispatch-notice-icon {
+  display: flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 13px;
+}
+
+.dispatch-notice-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.dispatch-notice-content {
+  min-width: 0;
+  max-height: max(72px, min(280px, calc(100dvh - var(--dispatch-notice-top) - var(--dispatch-notice-bottom) - 64px)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-block: 1px;
+  scrollbar-width: thin;
+}
+
+.dispatch-notice-title,
+.dispatch-notice-message {
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.dispatch-notice-title {
+  margin: 0;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.dispatch-notice-message {
+  margin: 6px 0 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+button.dispatch-notice-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: grid;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  min-width: 44px !important;
+  min-height: 44px !important;
+  place-items: center;
+  border: 0;
+  border-radius: 12px;
+  padding: 0 !important;
+  background: #edf2f7;
+  color: #475569;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85), 0 2px 5px rgb(15 23 42 / 0.05);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+button.dispatch-notice-close:hover,
+button.dispatch-notice-close:focus-visible {
+  background: #dce8f3;
+  color: #1e3a5f;
+}
+
+button.dispatch-notice-close:active { background: #cfdeec; }
+button.dispatch-notice-close:focus-visible { outline: 2px solid #64748b; outline-offset: 2px; }
+button.dispatch-notice-close svg { width: 18px; height: 18px; }
+
+@media (max-width: 359px) {
+  .dispatch-notice { grid-template-columns: 32px minmax(0, 1fr); column-gap: 9px; padding-left: 11px; }
+  .dispatch-notice-icon { width: 32px; height: 32px; border-radius: 11px; }
+  .dispatch-notice-icon svg { width: 18px; height: 18px; }
+}
+
+@media (min-width: 600px) {
+  .dispatch-notice-stack { --dispatch-notice-edge: 20px; }
+  .dispatch-notice-title { font-size: 16px; }
+  .dispatch-notice-message { font-size: 14px; }
+}
+
+@media (min-width: 768px) {
+  .dispatch-notice-stack { --dispatch-notice-header: calc(72px + env(safe-area-inset-top, 0px)); }
+}
+
+@media (min-width: 1025px) {
+  .dispatch-notice-stack { --dispatch-notice-header: calc(104px + env(safe-area-inset-top, 0px)); --dispatch-notice-bottom: 16px; }
 }
 
 @keyframes dispatchNoticeIn {

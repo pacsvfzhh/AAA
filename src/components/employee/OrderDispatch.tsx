@@ -2790,7 +2790,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
       {/* Notification System - portaled so the fixed stack never becomes a space-y sibling that adds margin above the panel */}
       {(notifications.length > 0 || pauseCardVisible) && createPortal(
-        <div className="dispatch-notice-stack pointer-events-none fixed inset-x-3 z-[60] flex flex-col gap-2.5 sm:inset-x-auto sm:right-4 sm:w-[380px]">
+        <div className="dispatch-notice-stack">
           {pauseCardVisible && dispatchPause && (() => {
             const tone = dispatchPause.type === 'error' ? NOTICE_TONES.error : NOTICE_TONES.warning;
             const Icon = tone.icon;
@@ -2799,24 +2799,24 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
             return (
               <div
                 role="status"
-                className={`dispatch-notice pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-[20px] bg-gradient-to-br via-white to-white py-3.5 pl-3.5 pr-11 shadow-[0_2px_6px_-2px_rgba(15,23,42,0.08),0_22px_44px_-20px_rgba(15,23,42,0.35)] ring-1 ${tone.surface}`}
+                data-notice-tone={dispatchPause.type === 'error' ? 'error' : 'warning'}
+                className={`dispatch-notice bg-gradient-to-br via-white to-white ring-1 ${tone.surface}`}
               >
-                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-lg ${tone.badge}`} aria-hidden="true">
+                <span className={`dispatch-notice-icon bg-gradient-to-br text-white shadow-lg ${tone.badge}`} aria-hidden="true">
                   <Icon className="h-5 w-5" strokeWidth={2.25} />
                 </span>
-                <div className="min-w-0 flex-1 pt-0.5">
-                  <h4 className="text-balance text-[15px] font-bold leading-snug text-slate-900">{t.dispatch.pausedTitle.replace(/[。.]$/, '')}</h4>
-                  <p className="mt-1 text-[13px] leading-relaxed text-slate-600">{pauseMessage}</p>
+                <div className="dispatch-notice-content">
+                  <h4 className="dispatch-notice-title">{t.dispatch.pausedTitle.replace(/[。.]$/, '')}</h4>
+                  <p className="dispatch-notice-message">{pauseMessage}</p>
                 </div>
                 <span className={`absolute inset-x-0 bottom-0 h-[3px] opacity-60 ${tone.bar}`} aria-hidden="true" />
                 <button
                   type="button"
                   onClick={() => setDismissedPause(dispatchPause)}
                   aria-label={t.common.close}
-                  className="emp-close-btn absolute right-1.5 top-1.5 flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                  style={{ padding: 0, minWidth: '36px', minHeight: '36px' }}
+                  className="dispatch-notice-close"
                 >
-                  <X className="h-4 w-4" />
+                  <X aria-hidden="true" />
                 </button>
               </div>
             );
@@ -2828,14 +2828,15 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
               <div
                 key={notif.id}
                 role={notif.type === 'error' ? 'alert' : 'status'}
-                className={`dispatch-notice pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-[20px] bg-gradient-to-br via-white to-white py-3.5 pl-3.5 pr-11 shadow-[0_2px_6px_-2px_rgba(15,23,42,0.08),0_22px_44px_-20px_rgba(15,23,42,0.35)] ring-1 ${tone.surface}`}
+                data-notice-tone={notif.type}
+                className={`dispatch-notice bg-gradient-to-br via-white to-white ring-1 ${tone.surface}`}
               >
-                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-lg ${tone.badge}`} aria-hidden="true">
+                <span className={`dispatch-notice-icon bg-gradient-to-br text-white shadow-lg ${tone.badge}`} aria-hidden="true">
                   <Icon className="h-5 w-5" strokeWidth={2.25} />
                 </span>
-                <div className="min-w-0 flex-1 pt-0.5">
-                  <h4 className="text-balance text-[15px] font-bold leading-snug text-slate-900">{notif.title}</h4>
-                  <p className="mt-1 text-[13px] leading-relaxed text-slate-600">{notif.message}</p>
+                <div className="dispatch-notice-content">
+                  <h4 className="dispatch-notice-title">{notif.title}</h4>
+                  <p className="dispatch-notice-message">{notif.message}</p>
                 </div>
                 {notif.duration !== 0 && (
                   <span
@@ -2848,10 +2849,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                   type="button"
                   onClick={() => dismissNotification(notif.id)}
                   aria-label={t.common.close}
-                  className="emp-close-btn absolute right-1.5 top-1.5 flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                  style={{ padding: 0, minWidth: '36px', minHeight: '36px' }}
+                  className="dispatch-notice-close"
                 >
-                  <X className="h-4 w-4" />
+                  <X aria-hidden="true" />
                 </button>
               </div>
             );
