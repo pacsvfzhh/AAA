@@ -1,5 +1,5 @@
-import { Fragment, createContext, useContext, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
-import type { ReactNode } from 'react';
+import { Fragment, createContext, useContext, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useId } from 'react';
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Layers, UserPlus, Search, MoreVertical, CheckCircle, XCircle, Key, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ChevronLeft, ChevronRight, Trash2, Eye, EyeOff, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Pin, Tag, X, Users, CalendarDays, Clock, Pencil, Bell, MessageCircle, DollarSign, Headphones, Globe, Loader2, Timer, Wallet, MapPin, Clock3, History, LogIn, LogOut } from 'lucide-react';
 import { formatSupabaseError, isFinancialAdminSessionError, isSupabaseAbortError, isSupabaseTransientError, supabase } from '../../lib/supabase';
@@ -11,6 +11,112 @@ import LoginDeviceSummary from './LoginDeviceSummary';
 import EmployeeSetupSelect from './EmployeeSetupSelect';
 import { EmployeeRegionFilter, EmployeeRegionPicker, UNASSIGNED_REGION_FILTER } from './EmployeeRegionMenu';
 import type { EmployeeRegion, EmployeeRegionActions } from './EmployeeRegionMenu';
+
+function EmployeeTableScroll({ label, className, children }: {
+  label: string;
+  className: string;
+  children: ReactNode;
+}) {
+  const viewportId = useId();
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
+  const dragOffsetRef = useRef<number | null>(null);
+  const [scroll, setScroll] = useState({ left: 0, width: 0, total: 0 });
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const update = () => {
+      const next = { left: viewport.scrollLeft, width: viewport.clientWidth, total: viewport.scrollWidth };
+      setScroll(current => current.left === next.left && current.width === next.width && current.total === next.total ? current : next);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
+    viewport.addEventListener('scroll', update, { passive: true });
+    update();
+    return () => {
+      observer.disconnect();
+      viewport.removeEventListener('scroll', update);
+    };
+  }, []);
+
+  const maxScroll = Math.max(0, scroll.total - scroll.width);
+  const thumbWidth = scroll.total ? Math.max(8, scroll.width / scroll.total * 100) : 100;
+  const thumbLeft = maxScroll ? scroll.left / maxScroll * (100 - thumbWidth) : 0;
+  const scrollToPointer = (event: ReactPointerEvent<HTMLDivElement>, offset: number) => {
+    const viewport = viewportRef.current;
+    const thumb = thumbRef.current;
+    if (!viewport || !thumb) return;
+    const track = event.currentTarget.getBoundingClientRect();
+    const distance = track.width - thumb.getBoundingClientRect().width;
+    if (distance > 0) viewport.scrollLeft = Math.max(0, Math.min(1, (event.clientX - track.left - offset) / distance)) * maxScroll;
+  };
+
+  return (
+    <div className={`flex min-h-0 min-w-0 flex-col ${className}`}>
+      {maxScroll > 1 && (
+        <div className="sticky top-0 z-20 flex shrink-0 items-center gap-2 border-y border-cyan-400/25 bg-slate-950 px-3 py-1 text-cyan-200">
+          <span className="shrink-0 text-[10px] font-semibold">左右捲動</span>
+          <ChevronLeft aria-hidden="true" className="h-3 w-3 shrink-0" />
+          <div
+            role="scrollbar"
+            aria-label={`${label}橫向捲動條`}
+            aria-controls={viewportId}
+            aria-orientation="horizontal"
+            aria-valuemin={0}
+            aria-valuemax={Math.ceil(maxScroll)}
+            aria-valuenow={Math.round(scroll.left)}
+            tabIndex={0}
+            className="relative h-5 min-w-10 flex-1 touch-none select-none rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+            onPointerDown={event => {
+              if (event.button !== 0 || !thumbRef.current) return;
+              event.preventDefault();
+              event.currentTarget.focus({ preventScroll: true });
+              const thumb = thumbRef.current.getBoundingClientRect();
+              const offset = event.target === thumbRef.current ? event.clientX - thumb.left : thumb.width / 2;
+              dragOffsetRef.current = offset;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              scrollToPointer(event, offset);
+            }}
+            onPointerMove={event => {
+              if (dragOffsetRef.current !== null) scrollToPointer(event, dragOffsetRef.current);
+            }}
+            onPointerUp={event => {
+              dragOffsetRef.current = null;
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+            onLostPointerCapture={() => { dragOffsetRef.current = null; }}
+            onPointerCancel={() => { dragOffsetRef.current = null; }}
+            onKeyDown={event => {
+              const viewport = viewportRef.current;
+              if (!viewport) return;
+              const positions: Record<string, number> = {
+                ArrowLeft: viewport.scrollLeft - 80,
+                ArrowRight: viewport.scrollLeft + 80,
+                PageUp: viewport.scrollLeft - viewport.clientWidth,
+                PageDown: viewport.scrollLeft + viewport.clientWidth,
+                Home: 0,
+                End: maxScroll,
+              };
+              if (event.key in positions) {
+                event.preventDefault();
+                viewport.scrollLeft = positions[event.key];
+              }
+            }}
+          >
+            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-1 h-3 rounded-full border border-slate-600/70 bg-slate-800" />
+            <div ref={thumbRef} aria-hidden="true" className="absolute top-1 h-3 rounded-full border border-cyan-200/60 bg-gradient-to-r from-cyan-500 to-blue-500 shadow-sm hover:brightness-125 active:brightness-125" style={{ width: `${thumbWidth}%`, left: `${thumbLeft}%` }} />
+          </div>
+          <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0" />
+        </div>
+      )}
+      <div ref={viewportRef} id={viewportId} role="region" aria-label={`${label}，可左右捲動`} tabIndex={0} className="-ml-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 pl-1 dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60" style={{ touchAction: 'pan-x pan-y' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 const REGION_REQUIRED_MESSAGE = '請選擇所在地區';
 const EmployeeRegionNamesContext = createContext<ReadonlyMap<string, string>>(new Map());
@@ -4690,7 +4796,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               {renderCreateForm(admin.id)}
 
               {/* Table - fixed ~22 rows */}
-              <div role="region" aria-label="員工資料列表，可左右捲動" tabIndex={0} className="-ml-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 pl-1 dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60">
+              <EmployeeTableScroll label="員工資料列表" className="flex-1">
                 <table className="w-full min-w-[1320px] shrink-0 table-fixed">
                   {renderTableHeader(flatAdminId)}
                   <tbody>
@@ -4723,7 +4829,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                   </div>
                 )}
                 <div aria-hidden="true" className="h-4 shrink-0 border-t border-blue-300/35 bg-gradient-to-r from-blue-950/10 via-blue-500/35 to-blue-950/10 shadow-[inset_0_1px_0_rgba(96,165,250,0.55),0_-4px_14px_rgba(59,130,246,0.18)]" />
-              </div>
+              </EmployeeTableScroll>
             </div>
       ) : filteredGroups.length === 0 ? (
         <div className="text-center py-8 text-slate-400">找不到員工</div>
@@ -4907,8 +5013,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                       </div>
                     </div>
                     {group.employees.length > 0 ? (
-                      <div role="region" aria-label={`${group.admin.username} 員工資料列表，可左右捲動`} tabIndex={0} className={`-ml-1 min-w-0 pl-1 overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 min-h-[300px] dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60 ${selectedAdminFilter !== 'all' ? 'min-h-0 flex-1' : 'max-h-[calc(100vh-160px)]'}`}>
-                        <table className="w-full min-w-[1320px] table-fixed">
+                      <EmployeeTableScroll label={`${group.admin.username} 員工資料列表`} className={selectedAdminFilter !== 'all' ? 'flex-1' : 'min-h-[300px] max-h-[calc(100vh-160px)]'}>
+                        <table className="w-full min-w-[1320px] shrink-0 table-fixed">
                           {renderTableHeader(group.admin.id)}
                           <tbody>
                             <EmployeeRegionNamesContext.Provider value={regionNameById}>
@@ -4917,7 +5023,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                           </tbody>
                         </table>
                         <div aria-hidden="true" className="h-4 shrink-0 border-t border-blue-300/35 bg-gradient-to-r from-blue-950/10 via-blue-500/35 to-blue-950/10 shadow-[inset_0_1px_0_rgba(96,165,250,0.55),0_-4px_14px_rgba(59,130,246,0.18)]" />
-                      </div>
+                      </EmployeeTableScroll>
                     ) : (
                       <div className={`py-8 text-center ${selectedAdminFilter !== 'all' ? `flex flex-1 flex-col items-center justify-center ${isSuperGroup ? 'bg-yellow-500/5' : 'bg-blue-500/5'}` : isSuperGroup ? 'bg-yellow-500/5' : 'bg-blue-500/5'}`}>
                         <p className="text-slate-400 text-sm">沒有員工符合目前的篩選條件</p>
