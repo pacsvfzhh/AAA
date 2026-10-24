@@ -398,12 +398,10 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const [editingEmployee, setEditingEmployee] = useState<EmployeeWithAdmin | null>(null);
   const [editingAutomationPlanId, setEditingAutomationPlanId] = useState('');
   const [editingAutomationPlanTouched, setEditingAutomationPlanTouched] = useState(false);
-  const [editPlanMenuOpen, setEditPlanMenuOpen] = useState(false);
-  const [editPlanMenuPosition, setEditPlanMenuPosition] = useState<{ top: number; left: number; width: number } | null>(null);
-  const editPlanButtonRef = useRef<HTMLButtonElement>(null);
-  const editPlanMenuRef = useRef<HTMLDivElement>(null);
+  const [editingDispatchGroupId, setEditingDispatchGroupId] = useState('');
+  const [currentDispatchGroup, setCurrentDispatchGroup] = useState<{ id: string; name: string } | null>(null);
   const editBackdropPressRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
-  const editingEmployeeInitialRef = useRef<{ username: string; employeeId: string; remarks: string; planId: string; regionId: string } | null>(null);
+  const editingEmployeeInitialRef = useRef<{ username: string; employeeId: string; remarks: string; planId: string; regionId: string; dispatchGroupId: string } | null>(null);
   const [savingEmployeeEdit, setSavingEmployeeEdit] = useState(false);
   const [editEmployeeError, setEditEmployeeError] = useState<string | null>(null);
   const [editingRemarksOnly, setEditingRemarksOnly] = useState<EmployeeWithAdmin | null>(null);
@@ -433,6 +431,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const [viewingEmployee, setViewingEmployee] = useState<EmployeeWithAdmin | null>(null);
   const [selectedTagsByGroup, setSelectedTagsByGroup] = useState<Map<string, string[]>>(new Map());
   const [editingTags, setEditingTags] = useState<EmployeeWithAdmin | null>(null);
+  const initialTagsRef = useRef<string[]>([]);
   const [newTag, setNewTag] = useState('');
   const [savingTags, setSavingTags] = useState(false);
   const [tagError, setTagError] = useState<string | null>(null);
@@ -1191,22 +1190,39 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     },
   }), [throwRegionActionError]);
 
+  const editingEmployeeId = editingEmployee?.id;
   useEffect(() => {
-    if (!showCreateForm) return;
+    if (!showCreateForm && !editingEmployeeId) return;
 
     let cancelled = false;
     const loadDispatchGroups = async () => {
       try {
-        const { data, error } = await supabase
-          .from('dispatch_groups')
-          .select('id, group_name, description, is_default')
-          .eq('is_active', true)
-          .is('archived_at', null)
-          .order('is_default', { ascending: false })
-          .order('group_name', { ascending: true });
-
-        if (error) throw error;
-        if (!cancelled) setDispatchGroups(data || []);
+        const [groups, membership] = await Promise.all([
+          supabase.from('dispatch_groups')
+            .select('id, group_name, description, is_default')
+            .eq('is_active', true)
+            .is('archived_at', null)
+            .order('is_default', { ascending: false })
+            .order('group_name', { ascending: true }),
+          editingEmployeeId
+            ? supabase.from('dispatch_group_members')
+              .select('group_id, dispatch_groups(group_name)')
+              .eq('user_id', editingEmployeeId)
+              .maybeSingle()
+            : Promise.resolve(null),
+        ]);
+        if (groups.error) throw groups.error;
+        if (membership?.error) throw membership.error;
+        if (cancelled) return;
+        setDispatchGroups(groups.data || []);
+        if (editingEmployeeId) {
+          const groupId = membership?.data?.group_id || '';
+          setEditingDispatchGroupId(groupId);
+          setCurrentDispatchGroup(groupId ? { id: groupId, name: membership?.data?.dispatch_groups?.group_name || '目前分組' } : null);
+          if (editingEmployeeInitialRef.current) {
+            editingEmployeeInitialRef.current.dispatchGroupId = groupId;
+          }
+        }
       } catch (error) {
         if (!cancelled) {
           console.error('Error loading dispatch groups:', formatSupabaseError(error));
@@ -1219,7 +1235,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
     void loadDispatchGroups();
     return () => { cancelled = true; };
-  }, [showCreateForm]);
+  }, [showCreateForm, editingEmployeeId]);
 
   useEffect(() => {
     if (!showCreateForm) return;
@@ -1729,12 +1745,16 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       remarks: employee.remarks || '',
       planId,
       regionId: employee.region_id || '',
+      dispatchGroupId: '',
     };
     setEditingEmployee(employee);
     setEditingAutomationPlanId(planId);
     setEditingAutomationPlanTouched(false);
-    setEditPlanMenuOpen(false);
-    setEditPlanMenuPosition(null);
+    setEditingDispatchGroupId('');
+    setCurrentDispatchGroup(null);
+    setDispatchGroups([]);
+    setDispatchGroupsError(null);
+    setDispatchGroupsLoading(true);
     setEditEmployeeError(null);
   }, [automationAssignmentsByEmployee]);
 
@@ -1747,80 +1767,25 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       || (editingEmployee.remarks || '') !== initial.remarks
       || (editingEmployee.region_id || '') !== initial.regionId
       || editingAutomationPlanId !== initial.planId
+      || editingDispatchGroupId !== initial.dispatchGroupId
     ));
-    if (dirty && !window.confirm('員工資料或自動化方案尚未儲存，確定要放棄變更嗎？')) return;
+    if (dirty && !window.confirm('員工資料或分組設定尚未儲存，確定要放棄變更嗎？')) return;
     setEditingEmployee(null);
     setEditingAutomationPlanId('');
     setEditingAutomationPlanTouched(false);
-    setEditPlanMenuOpen(false);
-    setEditPlanMenuPosition(null);
+    setEditingDispatchGroupId('');
+    setCurrentDispatchGroup(null);
     editingEmployeeInitialRef.current = null;
     setEditEmployeeError(null);
   };
 
-  const toggleEditPlanMenu = (optionCount: number) => {
-    if (editPlanMenuOpen) {
-      setEditPlanMenuOpen(false);
-      setEditPlanMenuPosition(null);
-      return;
-    }
-
-    const button = editPlanButtonRef.current;
-    if (!button) return;
-
-    const rect = button.getBoundingClientRect();
-    const viewportPadding = 12;
-    const menuHeight = Math.min(280, 32 + optionCount * 34);
-    const width = Math.min(rect.width, window.innerWidth - viewportPadding * 2);
-    const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
-    const openAbove = window.innerHeight - rect.bottom < menuHeight + viewportPadding && rect.top > menuHeight;
-    const top = openAbove
-      ? Math.max(viewportPadding, rect.top - menuHeight - 8)
-      : Math.max(viewportPadding, Math.min(rect.bottom + 8, window.innerHeight - menuHeight - viewportPadding));
-
-    setEditPlanMenuPosition({ top, left, width });
-    setEditPlanMenuOpen(true);
-  };
-
-  useEffect(() => {
-    if (!editPlanMenuOpen) return;
-
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!editPlanButtonRef.current?.contains(target) && !editPlanMenuRef.current?.contains(target)) {
-        setEditPlanMenuOpen(false);
-        setEditPlanMenuPosition(null);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setEditPlanMenuOpen(false);
-        setEditPlanMenuPosition(null);
-      }
-    };
-    const closeOnViewportChange = (event: Event) => {
-      if (event.type === 'scroll' && editPlanMenuRef.current?.contains(event.target as Node)) return;
-      setEditPlanMenuOpen(false);
-      setEditPlanMenuPosition(null);
-    };
-
-    document.addEventListener('mousedown', closeOnOutsideClick);
-    document.addEventListener('keydown', closeOnEscape);
-    window.addEventListener('resize', closeOnViewportChange);
-    window.addEventListener('scroll', closeOnViewportChange, true);
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick);
-      document.removeEventListener('keydown', closeOnEscape);
-      window.removeEventListener('resize', closeOnViewportChange);
-      window.removeEventListener('scroll', closeOnViewportChange, true);
-    };
-  }, [editPlanMenuOpen]);
-
   const handleSaveEmployeeEdit = async () => {
-    if (!editingEmployee || savingEmployeeEdit) return;
+    const initial = editingEmployeeInitialRef.current;
+    if (!editingEmployee || !initial || savingEmployeeEdit) return;
 
     const username = editingEmployee.username.trim();
     const employeeId = editingEmployee.employee_id.trim();
+    const remarks = (editingEmployee.remarks || '').trim();
     if (!username || !employeeId) {
       setEditEmployeeError('使用者名稱與員工 ID 均為必填。');
       return;
@@ -1829,66 +1794,99 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       setEditEmployeeError(`${REGION_REQUIRED_MESSAGE}。`);
       return;
     }
-
+    if (dispatchGroupsLoading || dispatchGroupsError) {
+      setEditEmployeeError(dispatchGroupsError || '派單分組載入中，請稍候再試。');
+      return;
+    }
+    const dispatchChanged = editingDispatchGroupId !== initial.dispatchGroupId;
+    const selectedGroup = dispatchGroups.find(group => group.id === editingDispatchGroupId);
+    if (dispatchChanged && !selectedGroup) {
+      setEditEmployeeError('所選派單分組已不可用，請重新選擇。');
+      return;
+    }
     const currentAssignment = automationAssignmentsByEmployee.get(editingEmployee.id);
-    const initialPlanId = editingEmployeeInitialRef.current?.planId || null;
+    const initialPlanId = initial.planId || null;
     const livePlanId = currentAssignment?.plan_id || null;
     const nextPlanId = editingAutomationPlanId || null;
     const assignmentChanged = editingAutomationPlanTouched && initialPlanId !== nextPlanId;
-    if (editingAutomationPlanTouched && livePlanId !== initialPlanId && livePlanId !== nextPlanId) {
+    if (assignmentChanged && livePlanId !== initialPlanId && livePlanId !== nextPlanId) {
       setEditEmployeeError('此員工的自動化方案已被其他管理員更新，請關閉後重新開啟最新資料再修改。');
       return;
     }
-    const activeOwnerPlans = automationPlans.filter(plan => (
-      plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
+    const selectedPlan = automationPlans.find(plan => (
+      plan.id === nextPlanId && plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
     ));
-    const selectedPlan = nextPlanId
-      ? activeOwnerPlans.find(plan => plan.id === nextPlanId)
-      : null;
-    const nextRegionId = editingEmployee.region_id || null;
-    const regionChanged = (editingEmployeeInitialRef.current?.regionId || null) !== nextRegionId;
-    let profileSaved = false;
-
+    if (assignmentChanged && nextPlanId && !selectedPlan) {
+      setEditEmployeeError('所選自動化方案已不可用，請重新選擇。');
+      return;
+    }
+    const regionChanged = initial.regionId !== editingEmployee.region_id;
+    const updates = {
+      ...(username !== initial.username ? { username } : {}),
+      ...(employeeId !== initial.employeeId ? { employee_id: employeeId } : {}),
+      ...(remarks !== initial.remarks ? { remarks } : {}),
+      ...(regionChanged ? { region_id: editingEmployee.region_id } : {}),
+    };
+    const savedSections: string[] = [];
+    let savingSection = '帳戶資料';
     setSavingEmployeeEdit(true);
     setEditEmployeeError(null);
 
     try {
-      const { error: profileError } = await supabase.rpc('admin_update_employee_account', {
-        p_admin_session_token: getAdminFinancialSessionToken(),
-        p_user_id: editingEmployee.id,
-        p_updates: {
-          username,
-          employee_id: employeeId,
-          remarks: (editingEmployee.remarks || '').trim(),
-          ...(regionChanged ? { region_id: nextRegionId } : {}),
-        },
-      });
-      if (profileError) throw profileError;
-      profileSaved = true;
-
+      if (Object.keys(updates).length) {
+        const { error } = await supabase.rpc('admin_update_employee_account', {
+          p_admin_session_token: getAdminFinancialSessionToken(),
+          p_user_id: editingEmployee.id,
+          p_updates: updates,
+        });
+        if (error) throw error;
+        Object.assign(initial, { username, employeeId, remarks, regionId: editingEmployee.region_id });
+        setEditingEmployee(current => current ? { ...current, username, employee_id: employeeId, remarks } : current);
+        savedSections.push('帳戶資料');
+      }
+      if (dispatchChanged && selectedGroup) {
+        savingSection = '派單分組';
+        const { data, error } = await supabase.rpc('admin_assign_dispatch_group_member', {
+          p_admin_session_token: getAdminFinancialSessionToken(),
+          p_user_id: editingEmployee.id,
+          p_group_id: selectedGroup.id,
+        });
+        if (error) throw error;
+        if (data?.member?.group_id !== selectedGroup.id) throw new Error('派單分組更新未成功完成。');
+        initial.dispatchGroupId = selectedGroup.id;
+        setCurrentDispatchGroup({ id: selectedGroup.id, name: selectedGroup.group_name });
+        savedSections.push('派單分組');
+      }
       if (assignmentChanged) {
-        const { data: assignmentResult, error: assignmentError } = await supabase.rpc('set_notification_automation_plan_for_employee', {
+        savingSection = '自動化通知方案';
+        const { data, error } = await supabase.rpc('set_notification_automation_plan_for_employee', {
           p_admin_session_token: getAdminFinancialSessionToken(),
           p_user_id: editingEmployee.id,
           p_plan_id: nextPlanId,
         });
-        if (assignmentError) throw assignmentError;
-        if (!assignmentResult?.success) throw new Error('自動化方案更新未成功完成。');
+        if (error) throw error;
+        if (!data?.success) throw new Error('自動化方案更新未成功完成。');
+        initial.planId = nextPlanId || '';
+        setEditingAutomationPlanTouched(false);
+        setAutomationAssignmentsByEmployee(prev => {
+          const next = new Map(prev);
+          if (selectedPlan) next.set(editingEmployee.id, { user_id: editingEmployee.id, plan_id: selectedPlan.id, plan_name: selectedPlan.name, plan_status: selectedPlan.status });
+          else next.delete(editingEmployee.id);
+          return next;
+        });
+        savedSections.push('自動化通知方案');
       }
 
       const refreshed = await guardedLoadEmployeesRef.current?.(false);
       if (!refreshed) {
-        setEditEmployeeError(assignmentChanged
-          ? '員工帳戶資料與自動化方案已儲存，但目前無法重新載入伺服器資料。請保留此視窗並稍後重試。'
-          : '員工帳戶資料已儲存，但目前無法重新載入伺服器資料。請保留此視窗並稍後重試。');
+        setEditEmployeeError('變更已儲存，但目前無法重新載入伺服器資料。請保留此視窗並稍後再按儲存確認；已成功的項目不會重複提交。');
         return;
       }
-
       setEditingEmployee(null);
       setEditingAutomationPlanId('');
       setEditingAutomationPlanTouched(false);
-      setEditPlanMenuOpen(false);
-      setEditPlanMenuPosition(null);
+      setEditingDispatchGroupId('');
+      setCurrentDispatchGroup(null);
       editingEmployeeInitialRef.current = null;
       setEditEmployeeError(null);
       setNotification({
@@ -1896,22 +1894,15 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         type: 'success',
         category: 'profile',
         title: '員工資料已儲存',
-        message: assignmentChanged
-          ? '帳戶資料與自動化方案已成功更新，並已從伺服器重新整理。'
-          : '帳戶資料已成功更新，並已從伺服器重新整理。',
+        message: '員工資料已重新整理，派單分組與自動化通知方案共用相同員工名單，無須到其他頁面重複設定。',
         employee: { username, employeeId },
         details: [
           { label: '使用者名稱', value: username },
           { label: '員工 ID', value: employeeId },
-          { label: '備註', value: editingEmployee.remarks?.trim() || '（空白）' },
-          ...(regionChanged ? [{
-            label: '所在地區',
-            value: (nextRegionId && regionNameById.get(nextRegionId)) || '已更新',
-          }] : []),
-          ...(assignmentChanged ? [{
-            label: '自動化方案',
-            value: selectedPlan?.name || (nextPlanId ? currentAssignment?.plan_name || '已更新' : '不指定方案'),
-          }] : []),
+          { label: '備註', value: remarks || '（空白）' },
+          { label: '所在地區', value: regionNameById.get(editingEmployee.region_id) || '已更新' },
+          { label: '派單分組', value: selectedGroup?.group_name || currentDispatchGroup?.name || '未分組' },
+          { label: '自動化方案', value: selectedPlan?.name || (nextPlanId ? currentAssignment?.plan_name || '保留原方案' : '不指定方案') },
         ],
       });
     } catch (error) {
@@ -1919,17 +1910,12 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         void logout(false);
         return;
       }
-
-      console.error('Error saving employee and automation plan:', formatSupabaseError(error));
       const saveMessage = formatSupabaseError(error);
-      const readableMessage = /region must be selected/i.test(saveMessage)
-        ? `${REGION_REQUIRED_MESSAGE}。`
-        : /selected region is not available/i.test(saveMessage)
-          ? '所選地區已不存在，請重新選擇地區。'
-          : saveMessage || '請重試。';
-      setEditEmployeeError(profileSaved
-        ? `員工帳戶資料已儲存，但自動化方案更新失敗：${readableMessage}`
-        : `員工帳戶資料儲存失敗，自動化方案尚未變更：${readableMessage}`);
+      console.error('Error saving employee settings:', saveMessage);
+      const readableMessage = /selected region is not available/i.test(saveMessage)
+        ? '所選地區已不存在，請重新選擇地區。'
+        : saveMessage || '請重試。';
+      setEditEmployeeError(`${savedSections.length ? `${savedSections.join('、')}已儲存；` : ''}${savingSection}儲存失敗：${readableMessage} 未完成的變更已保留，可重試；已成功的項目不會回復。`);
       await guardedLoadEmployeesRef.current?.(true);
     } finally {
       setSavingEmployeeEdit(false);
@@ -2201,71 +2187,64 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     }
   };
 
+  const tagsDirty = Boolean(editingTags && (
+    JSON.stringify(editingTags.tags || []) !== JSON.stringify(initialTagsRef.current)
+    || (newTag.trim() && !editingTags.tags?.includes(newTag.trim()))
+  ));
+
   const closeTagEditor = () => {
     if (savingTags) return;
+    if (tagsDirty && !window.confirm('標籤尚未儲存，確定要放棄變更嗎？')) return;
     setEditingTags(null);
     setNewTag('');
     setTagError(null);
   };
 
-  const handleAddTag = async (employee: EmployeeWithAdmin, existingTag?: string) => {
+  const handleAddTag = (employee: EmployeeWithAdmin, existingTag?: string) => {
     const tagToAdd = existingTag ?? newTag.trim();
     if (savingTags || !tagToAdd.trim() || employee.tags?.includes(tagToAdd)) return;
-    const updatedTags = [...(employee.tags || []), tagToAdd];
-    setSavingTags(true);
+    setEditingTags(current => current?.id === employee.id
+      ? { ...current, tags: [...(current.tags || []), tagToAdd] }
+      : current);
     setTagError(null);
-    setEmployeeGroups(prev => prev.map(g => ({
-      ...g,
-      employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: updatedTags } : emp)
-    })));
-    setEditingTags(current => current?.id === employee.id ? { ...current, tags: updatedTags } : current);
     if (existingTag === undefined) setNewTag('');
-    try {
-      const { error } = await supabase.rpc('admin_update_employee_account', {
-        p_admin_session_token: getAdminFinancialSessionToken(),
-        p_user_id: employee.id,
-        p_updates: { tags: updatedTags },
-      });
-      if (error) throw error;
-    } catch {
-      const originalTags = employee.tags || [];
-      setEmployeeGroups(prev => prev.map(g => ({
-        ...g,
-        employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: originalTags } : emp)
-      })));
-      setEditingTags(current => current?.id === employee.id ? { ...current, tags: originalTags } : current);
-      if (existingTag === undefined) setNewTag(tagToAdd);
-      setTagError('儲存標籤失敗，請重試。');
-    } finally {
-      setSavingTags(false);
-    }
   };
 
-  const handleRemoveTag = async (employee: EmployeeWithAdmin, tagToRemove: string) => {
+  const handleRemoveTag = (employee: EmployeeWithAdmin, tagToRemove: string) => {
     if (savingTags) return;
-    const updatedTags = (employee.tags || []).filter(tag => tag !== tagToRemove);
-    const originalTags = employee.tags || [];
+    setEditingTags(current => current?.id === employee.id
+      ? { ...current, tags: (current.tags || []).filter(tag => tag !== tagToRemove) }
+      : current);
+    setTagError(null);
+  };
+
+  const handleSaveTags = async () => {
+    if (!editingTags || savingTags || !tagsDirty) return;
+    const employeeId = editingTags.id;
+    const typedTag = newTag.trim();
+    const tags = [...(editingTags.tags || [])];
+    if (typedTag && !tags.includes(typedTag)) tags.push(typedTag);
     setSavingTags(true);
     setTagError(null);
-    setEmployeeGroups(prev => prev.map(g => ({
-      ...g,
-      employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: updatedTags } : emp)
-    })));
-    setEditingTags(current => current?.id === employee.id ? { ...current, tags: updatedTags } : current);
     try {
       const { error } = await supabase.rpc('admin_update_employee_account', {
         p_admin_session_token: getAdminFinancialSessionToken(),
-        p_user_id: employee.id,
-        p_updates: { tags: updatedTags },
+        p_user_id: employeeId,
+        p_updates: { tags },
       });
       if (error) throw error;
-    } catch {
-      setEmployeeGroups(prev => prev.map(g => ({
-        ...g,
-        employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: originalTags } : emp)
+      setEmployeeGroups(prev => prev.map(group => ({
+        ...group,
+        employees: group.employees.map(employee => employee.id === employeeId ? { ...employee, tags } : employee),
       })));
-      setEditingTags(current => current?.id === employee.id ? { ...current, tags: originalTags } : current);
-      setTagError('儲存標籤失敗，請重試。');
+      setEditingTags(null);
+      setNewTag('');
+    } catch (error) {
+      if (isFinancialAdminSessionError(error)) {
+        void logout(false);
+        return;
+      }
+      setTagError('儲存標籤失敗，變更已保留，請重試。');
     } finally {
       setSavingTags(false);
     }
@@ -4024,7 +4003,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
             </span>
           )}
           {(employee.tags || []).length > 1 && <span className="flex-shrink-0 text-[10px] text-slate-500">+{(employee.tags || []).length - 1}</span>}
-          <button type="button" aria-label={`管理 ${employee.username} 的標籤`} onClick={() => { setEditingTags(employee); setNewTag(''); setTagError(null); }} className="ml-1 flex-shrink-0 rounded-full border border-transparent bg-slate-700 px-1 py-0 text-[10px] text-slate-400 transition-all hover:border-amber-400/75 hover:bg-amber-500/15 hover:text-amber-400 hover:shadow-[0_0_8px_rgba(245,158,11,0.28)]">
+          <button type="button" aria-label={`管理 ${employee.username} 的標籤`} onClick={() => { initialTagsRef.current = [...(employee.tags || [])]; setEditingTags(employee); setNewTag(''); setTagError(null); }} className="ml-1 flex-shrink-0 rounded-full border border-transparent bg-slate-700 px-1 py-0 text-[10px] text-slate-400 transition-all hover:border-amber-400/75 hover:bg-amber-500/15 hover:text-amber-400 hover:shadow-[0_0_8px_rgba(245,158,11,0.28)]">
             <Tag className="inline h-2.5 w-2.5 text-current" />+
           </button>
         </div>
@@ -5798,7 +5777,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               {tagError && <p role="alert" className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{tagError}</p>}
               <section aria-labelledby="existing-employee-tags-heading" className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-4">
                 <h4 id="existing-employee-tags-heading" className="text-xs font-semibold tracking-wide text-amber-200">選用已有標籤</h4>
-                <p className="mt-1 text-[11px] text-slate-400">同群組使用過的標籤，點選即可套用並儲存。</p>
+                <p className="mt-1 text-[11px] text-slate-400">點選同群組已有標籤，完成後按「儲存」套用。</p>
                 {existingTagOptions.length > 0 ? (
                   <div className="mt-3 flex max-h-40 flex-wrap gap-2 overflow-y-auto p-0.5 dark-panel-scroll">
                     {existingTagOptions.map(tag => {
@@ -5836,7 +5815,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               <div className="rounded-xl border border-slate-700/80 bg-slate-950/45 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <label className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">目前標籤</label>
-                  <span role="status" className="inline-flex items-center gap-1.5 text-[11px] text-slate-500">{savingTags && <Loader2 className="h-3 w-3 animate-spin" />}{savingTags ? '正在儲存…' : '變更會立即儲存'}</span>
+                  <span role="status" className="inline-flex items-center gap-1.5 text-[11px] text-slate-500">{savingTags && <Loader2 className="h-3 w-3 animate-spin" />}{savingTags ? '正在儲存…' : tagsDirty ? '尚未儲存' : '沒有未儲存變更'}</span>
                 </div>
                 <div className="flex min-h-[92px] flex-wrap content-start gap-2">
                   {(editingTags.tags || []).length === 0 ? (
@@ -5857,7 +5836,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                 </div>
               </div>
               <div className="flex justify-end border-t border-slate-700/70 pt-4">
-                <button type="button" onClick={closeTagEditor} disabled={savingTags} className="rounded-lg border border-slate-600 bg-slate-800 px-5 py-2 text-sm font-semibold text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50">關閉</button>
+                <button type="button" onClick={tagsDirty ? () => void handleSaveTags() : closeTagEditor} disabled={savingTags} className={`inline-flex items-center gap-2 rounded-lg border px-5 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50 ${tagsDirty ? 'border-amber-400/60 bg-amber-600 text-white hover:bg-amber-500' : 'border-slate-600 bg-slate-800 text-slate-300 hover:border-slate-500 hover:bg-slate-700 hover:text-white'}`}>
+                  {savingTags && <Loader2 className="h-4 w-4 animate-spin" />}{savingTags ? '儲存中…' : tagsDirty ? '儲存' : '關閉'}
+                </button>
               </div>
             </div>
           </div>
