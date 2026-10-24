@@ -69,7 +69,7 @@ function EmployeeTableScroll({ label, className, children }: {
   return (
     <div className={`flex min-h-0 min-w-0 flex-col ${className}`}>
       {maxScroll > 1 && (
-        <div className="sticky top-0 z-20 flex h-3.5 shrink-0 items-center bg-slate-900 pr-2" style={{ paddingLeft: scroll.fixed + 8 }}>
+        <div className="sticky top-0 z-20 flex h-5 shrink-0 items-center bg-slate-900 pr-2" style={{ paddingLeft: scroll.fixed + 8 }}>
           <div
             role="scrollbar"
             aria-label={`${label}右側資料橫向捲動條`}
@@ -117,8 +117,8 @@ function EmployeeTableScroll({ label, className, children }: {
               }
             }}
           >
-            <div aria-hidden="true" className="employee-table-scroll-track pointer-events-none absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full" />
-            <div ref={thumbRef} aria-hidden="true" className="employee-table-scroll-thumb absolute top-1/2 h-1 -translate-y-1/2 rounded-full" style={{ width: `${thumbWidth}%`, left: `${thumbLeft}%` }} />
+            <div aria-hidden="true" className="employee-table-scroll-track pointer-events-none absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full" />
+            <div ref={thumbRef} aria-hidden="true" className="employee-table-scroll-thumb absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full" style={{ width: `${thumbWidth}%`, left: `${thumbLeft}%` }} />
           </div>
         </div>
       )}

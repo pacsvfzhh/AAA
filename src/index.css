@@ -466,6 +466,12 @@
   box-shadow: inset 0 1px 0 rgb(226 232 240 / 0.25);
 }
 
+.employee-table-scroll-thumb::after {
+  content: '';
+  position: absolute;
+  inset: -7px 0;
+}
+
 .employee-table-scrollbar:is(:hover, :focus-visible) .employee-table-scroll-thumb {
   background: linear-gradient(90deg, #6499c6, #93c5dd);
 }
