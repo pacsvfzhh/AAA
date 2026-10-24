@@ -3,9 +3,11 @@ import type { Database } from '../types/database';
 
 const REQUEST_TIMEOUT_MS = 8000;
 const AUDIT_REQUEST_TIMEOUT_MS = 120000;
-const getRequestTimeout = (input: RequestInfo | URL) =>
-  /\/(?:functions\/v1\/content-audit|rest\/v1\/rpc\/archive_employee_without_media)(?:\?|\/|$)/.test(input instanceof Request ? input.url : input.toString())
+const getRequestTimeout = (input: RequestInfo | URL) => {
+  const url = input instanceof Request ? input.url : input.toString();
+  return /\/functions\/v1\/content-audit(?:[/?#]|$)|\/rest\/v1\/rpc\/archive_employee_without_media(?:[/?#]|$)/i.test(url)
     ? AUDIT_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+};
 const MAX_NETWORK_RETRIES = 2;
 const NETWORK_RETRY_DELAY_MS = 250;
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -76,7 +78,8 @@ export function isEmployeeSessionEndedError(error: unknown): boolean {
   const message = formatSupabaseError(error).toLowerCase();
   return message.includes('employee session is invalid or expired')
     || message.includes('employee session has expired')
-    || message.includes('invalid employee logout session');
+    || message.includes('invalid employee logout session')
+    || message.includes('invalid employee login session');
 }
 
 export function isSupabaseTransientError(error: unknown): boolean {

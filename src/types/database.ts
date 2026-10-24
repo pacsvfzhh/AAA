@@ -1248,6 +1248,38 @@ export interface Database {
           }
         ];
       };
+      employee_regions: {
+        Row: {
+          id: string;
+          name: string;
+          admin_id: string;
+          is_pinned: boolean;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          admin_id: string;
+          is_pinned?: boolean;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          name?: string;
+          admin_id?: string;
+          is_pinned?: boolean;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'employee_regions_admin_id_fkey';
+            columns: ['admin_id'];
+            isOneToOne: false;
+            referencedRelation: 'admins';
+            referencedColumns: ['id'];
+          }
+        ];
+      };
       admins: {
         Row: {
           id: string;
@@ -1297,6 +1329,7 @@ export interface Database {
           remarks: string;
           tags: string[];
           is_pinned: boolean;
+          region_id: string | null;
           current_session_token: string | null;
           session_created_at: string | null;
           last_heartbeat_at: string | null;
@@ -1317,6 +1350,7 @@ export interface Database {
           remarks?: string;
           tags?: string[];
           is_pinned?: boolean;
+          region_id?: string | null;
           current_session_token?: string | null;
           session_created_at?: string | null;
           last_heartbeat_at?: string | null;
@@ -1337,6 +1371,7 @@ export interface Database {
           remarks?: string;
           tags?: string[];
           is_pinned?: boolean;
+          region_id?: string | null;
           current_session_token?: string | null;
           session_created_at?: string | null;
           last_heartbeat_at?: string | null;
@@ -1345,6 +1380,13 @@ export interface Database {
           updated_at?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: 'users_region_id_fkey';
+            columns: ['region_id'];
+            isOneToOne: false;
+            referencedRelation: 'employee_regions';
+            referencedColumns: ['id'];
+          },
           {
             foreignKeyName: 'wallets_user_id_fkey';
             columns: ['id'];
@@ -2553,6 +2595,7 @@ export interface Database {
           p_remarks: string;
           p_automation_plan_id: string | null;
           p_dispatch_group_id: string;
+          p_region_id: string;
         };
         Returns: {
           success?: boolean;
@@ -2560,6 +2603,22 @@ export interface Database {
           user?: Record<string, unknown>;
           automation_plan_id?: string | null;
         };
+      };
+      admin_create_employee_region: {
+        Args: { p_admin_session_token: string; p_owner_admin_id: string; p_name: string };
+        Returns: { id: string; name: string; admin_id: string; is_pinned: boolean; created: boolean };
+      };
+      admin_rename_employee_region: {
+        Args: { p_admin_session_token: string; p_region_id: string; p_name: string };
+        Returns: { id: string; name: string; admin_id: string; is_pinned: boolean };
+      };
+      admin_set_employee_region_pinned: {
+        Args: { p_admin_session_token: string; p_region_id: string; p_is_pinned: boolean };
+        Returns: { id: string; name: string; admin_id: string; is_pinned: boolean };
+      };
+      admin_delete_employee_region: {
+        Args: { p_admin_session_token: string; p_region_id: string; p_replacement_region_id?: string | null };
+        Returns: { id: string; replacement_region_id: string | null; moved_count: number };
       };
       admin_create_secondary_account: {
         Args: { p_admin_session_token: string; p_password: string; p_username: string };
@@ -2609,6 +2668,12 @@ export interface Database {
             role: string;
             is_pinned: boolean;
           }>;
+          regions: Array<{
+            id: string;
+            name: string;
+            admin_id: string;
+            is_pinned: boolean;
+          }>;
           employees: Array<{
             id: string;
             username: string;
@@ -2619,6 +2684,7 @@ export interface Database {
             first_success_order_date: string | null;
             created_by: string;
             remarks: string;
+            region_id: string | null;
             tags: string[];
             is_pinned: boolean;
             created_at: string;

@@ -32,7 +32,7 @@ const normalizeCarouselSpeed = (value: unknown) => {
 };
 
 export default function AnnouncementBoard({ userId }: AnnouncementBoardProps) {
-  const { deviceType } = useDeviceOptimization();
+  const { deviceType, isLowEnd } = useDeviceOptimization();
   const { t, dateLocale } = useLanguage();
 
   const translateCategory = (category: string) => {
@@ -50,9 +50,9 @@ export default function AnnouncementBoard({ userId }: AnnouncementBoardProps) {
   // Only disable carousel on actual phones - tablets and desktops keep carousel
   const isMobileDevice = deviceType === 'phone' || isActuallyMobile;
 
-  // Tablets and desktops get full visual effects; only phones get reduced effects
-  // iOS devices get even more optimized experience
-  const showDesktopEffects = !isMobileDevice && !isIOS;
+  // Every device gets the full decorative background and header shimmer unless it is low-performance
+  // (weak hardware, Save-Data, or a measured frame-rate drop).
+  const showDesktopEffects = !isLowEnd;
 
   // Tablet-specific detection for optimized layout
   const isTabletDevice = deviceType === 'tablet';
@@ -397,10 +397,28 @@ export default function AnnouncementBoard({ userId }: AnnouncementBoardProps) {
       )
       .subscribe();
 
+    // Realtime events missed while the tab was suspended (iOS backgrounding) or offline are not replayed, so refetch on return.
+    let hiddenAt = 0;
+    const refreshAnnouncements = () => {
+      void loadAnnouncementsRef.current?.(true);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+      } else if (hiddenAt && Date.now() - hiddenAt > 30000) {
+        hiddenAt = 0;
+        refreshAnnouncements();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('online', refreshAnnouncements);
+
     return () => {
       if (reloadTimeout) {
         clearTimeout(reloadTimeout);
       }
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('online', refreshAnnouncements);
       supabase.removeChannel(channel);
     };
   }, [adminResolved, userAdminId]);

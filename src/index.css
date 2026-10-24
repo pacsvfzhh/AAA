@@ -456,6 +456,133 @@
   scrollbar-color: #3b82f6 transparent;
 }
 
+.employee-table-viewport.dark-panel-scroll,
+.employee-table-viewport.dark-panel-scroll:hover {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+.employee-table-viewport::-webkit-scrollbar {
+  width: 6px;
+  height: 0;
+}
+
+.employee-table-scroll-track {
+  background: #1c3048;
+  box-shadow: inset 0 0 0 1px rgb(96 165 250 / 0.15);
+}
+
+.employee-table-scroll-thumb {
+  cursor: grab;
+  background: linear-gradient(90deg, #527fa8, #78a9c9);
+  box-shadow: inset 0 1px 0 rgb(226 232 240 / 0.25);
+}
+
+.employee-table-scroll-thumb::before {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 50%;
+  width: 1px;
+  height: 4px;
+  border-radius: 1px;
+  background: rgb(15 23 42 / 0.55);
+  box-shadow: -3px 0 0 rgb(15 23 42 / 0.55), 3px 0 0 rgb(15 23 42 / 0.55);
+  opacity: 0.5;
+}
+
+.employee-table-scroll-thumb::after {
+  content: '';
+  position: absolute;
+  inset: -7px 0;
+}
+
+.employee-table-scrollbar:is(:hover, :focus-visible, :active) .employee-table-scroll-track {
+  background: #233d58;
+}
+
+.employee-table-scrollbar:is(:hover, :focus-visible) .employee-table-scroll-thumb {
+  background: linear-gradient(90deg, #6499c6, #93c5dd);
+}
+
+.employee-table-scrollbar:is(:hover, :focus-visible, :active) .employee-table-scroll-thumb::before {
+  opacity: 1;
+}
+
+.employee-table-scrollbar:focus-visible .employee-table-scroll-thumb {
+  background: linear-gradient(90deg, #7dabce, #a5cce3);
+  box-shadow: inset 0 0 0 1px rgb(209 233 245 / 0.6);
+}
+
+.employee-table-scrollbar:active,
+.employee-table-scrollbar:active .employee-table-scroll-thumb {
+  cursor: grabbing;
+}
+
+.employee-table-scrollbar:active .employee-table-scroll-thumb {
+  background: linear-gradient(90deg, #78a4c7, #9abdd8);
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 0.35);
+}
+
+.employee-data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.employee-data-table :is(th, td):nth-child(-n + 10) {
+  position: sticky;
+  z-index: 2;
+}
+
+.employee-data-table :is(th, td):nth-child(1) { left: var(--employee-column-1-left, 0px); }
+.employee-data-table :is(th, td):nth-child(2) { left: var(--employee-column-2-left, 40px); }
+.employee-data-table :is(th, td):nth-child(3) { left: var(--employee-column-3-left, 86px); }
+.employee-data-table :is(th, td):nth-child(4) { left: var(--employee-column-4-left, 202px); }
+.employee-data-table :is(th, td):nth-child(5) { left: var(--employee-column-5-left, 286px); }
+.employee-data-table :is(th, td):nth-child(6) { left: var(--employee-column-6-left, 354px); }
+.employee-data-table :is(th, td):nth-child(7) { left: var(--employee-column-7-left, 426px); }
+.employee-data-table :is(th, td):nth-child(8) { left: var(--employee-column-8-left, 470px); }
+.employee-data-table :is(th, td):nth-child(9) { left: var(--employee-column-9-left, 518px); }
+.employee-data-table :is(th, td):nth-child(10) { left: var(--employee-column-10-left, 590px); }
+
+.employee-data-table thead th:nth-child(-n + 10) {
+  background-color: #1e3a8a;
+}
+
+.employee-data-table tbody tr {
+  --employee-frozen-background: #0c1425;
+  --employee-frozen-hover: #102039;
+  background-color: var(--employee-frozen-background);
+}
+
+.employee-data-table tbody tr[data-super-admin] {
+  --employee-frozen-hover: #302e24;
+}
+
+.employee-data-table tbody tr[data-pinned] {
+  --employee-frozen-background: #252022;
+  --employee-frozen-hover: #3d3022;
+}
+
+.employee-data-table tbody td:nth-child(-n + 10) {
+  border-top: 1px solid rgb(51 65 85 / 0.5);
+  background-color: var(--employee-frozen-background);
+  transition: background-color 75ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.employee-data-table tbody tr:hover,
+.employee-data-table tbody tr:hover td:nth-child(-n + 10) {
+  background-color: var(--employee-frozen-hover);
+}
+
+.employee-data-table tbody td:nth-child(-n + 10):hover {
+  z-index: 3;
+}
+
+.employee-data-table tbody td:nth-child(n + 11) {
+  border-top: 1px solid rgb(51 65 85 / 0.5);
+}
+
 .dispatch-orders-scroll {
   scrollbar-width: thin;
   scrollbar-color: #0891b2 #0f172a;
@@ -684,6 +811,171 @@
   box-shadow: 0 0 9px rgba(56, 189, 248, 0.42);
 }
 
+.employee-region-scrollbar {
+  color-scheme: dark;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(167, 139, 250, 0.72) rgba(76, 29, 149, 0.16);
+}
+
+.employee-region-scrollbar:hover {
+  scrollbar-color: rgba(196, 181, 253, 0.94) rgba(76, 29, 149, 0.16);
+}
+
+.employee-region-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.employee-region-scrollbar::-webkit-scrollbar-track {
+  margin-block: 4px;
+  border-radius: 999px;
+  background: rgba(76, 29, 149, 0.16);
+}
+
+.employee-region-scrollbar::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  border: 1px solid rgba(22, 14, 42, 0.9);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(196, 181, 253, 0.9), rgba(139, 92, 246, 0.78));
+  box-shadow: 0 0 6px rgba(139, 92, 246, 0.2);
+}
+
+.employee-region-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(221, 214, 254, 0.98), rgba(167, 139, 250, 0.94));
+  box-shadow: 0 0 8px rgba(167, 139, 250, 0.35);
+}
+
+.employee-region-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+body:has([data-employee-create-theme="warm"]) {
+  --employee-setup-surface: #252117;
+  --employee-setup-base: #171612;
+}
+
+body:has([data-employee-edit-theme="plum"]) {
+  --employee-setup-surface: #2c2135;
+  --employee-setup-base: #1e1727;
+}
+
+[data-employee-edit-theme] .dark-panel-scroll {
+  scrollbar-color: #a78bfa transparent;
+}
+
+.employee-setup-selection-badge {
+  display: none;
+}
+
+[data-employee-edit-theme] [data-setup-tone="violet"] {
+  --employee-selection-accent: #c4b5fd;
+  --employee-selection-tint: 167 139 250;
+}
+
+[data-employee-edit-theme] [data-setup-tone="teal"] {
+  --employee-selection-accent: #99f6e4;
+  --employee-selection-tint: 94 234 212;
+}
+
+[data-employee-edit-theme] [data-setup-tone="amber"] {
+  --employee-selection-accent: #fde68a;
+  --employee-selection-tint: 252 211 77;
+}
+
+[data-employee-edit-theme] [data-configured="true"] {
+  border-color: rgb(var(--employee-selection-tint) / 0.65);
+  background: linear-gradient(110deg, rgb(var(--employee-selection-tint) / 0.22), rgb(var(--employee-selection-tint) / 0.07));
+  box-shadow: inset 3px 0 0 var(--employee-selection-accent), 0 0 0 1px rgb(var(--employee-selection-tint) / 0.09), 0 4px 14px rgb(0 0 0 / 0.16);
+}
+
+[data-employee-edit-theme] [data-configured="true"]:hover {
+  border-color: var(--employee-selection-accent);
+  background: linear-gradient(110deg, rgb(var(--employee-selection-tint) / 0.28), rgb(var(--employee-selection-tint) / 0.1));
+}
+
+[data-employee-edit-theme] [data-configured="true"] .employee-setup-icon,
+[data-employee-edit-theme] [data-configured="true"] .employee-setup-selection-badge {
+  border-color: rgb(var(--employee-selection-tint) / 0.4);
+  background: rgb(var(--employee-selection-tint) / 0.16);
+  color: var(--employee-selection-accent);
+}
+
+[data-employee-edit-theme] [data-configured="true"] .employee-setup-selection-badge {
+  display: inline-flex;
+}
+
+.employee-setup-menu,
+.employee-setup-details {
+  background: linear-gradient(145deg, var(--employee-setup-surface, #162235), var(--employee-setup-base, #0c1522));
+}
+
+.employee-setup-menu {
+  animation: employee-setup-expand 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+[data-side="bottom"] > .employee-setup-menu,
+[data-side="top"] > .employee-setup-menu {
+  animation-name: employee-setup-expand-vertical;
+}
+
+.employee-setup-details {
+  animation: employee-setup-details-in 140ms ease-out both;
+}
+
+.employee-setup-scrollbar {
+  color-scheme: dark;
+  scrollbar-width: thin;
+}
+
+.employee-setup-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.employee-setup-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.employee-setup-scrollbar::-webkit-scrollbar-thumb {
+  border: 1px solid #202027;
+  border-radius: 999px;
+  background: #7c7095;
+}
+
+.employee-setup-menu[data-tone="teal"] .employee-setup-scrollbar::-webkit-scrollbar-thumb {
+  border-color: #1b2226;
+  background: #5c837e;
+}
+
+.employee-setup-menu[data-tone="amber"] .employee-setup-scrollbar::-webkit-scrollbar-thumb {
+  border-color: #24211b;
+  background: #958364;
+}
+
+.employee-setup-scrollbar::-webkit-scrollbar-thumb:hover {
+  filter: brightness(1.2);
+}
+
+@keyframes employee-setup-expand {
+  from { opacity: 0; transform: translateX(-12px) scale(0.86, 0.94); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes employee-setup-expand-vertical {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes employee-setup-details-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .employee-setup-menu,
+  .employee-setup-details {
+    animation: none;
+  }
+}
+
 .login-history-list-scrollbar {
   background-color: #020617;
   color-scheme: dark;
@@ -795,6 +1087,26 @@
 .message-content-dark a,
 .message-content-dark a * {
   color: #2563eb !important;
+}
+
+/* Notification detail body. Fixed px so the phone root-size steps (12-15px) cannot shrink reading text; list-card previews keep their own smaller sizes. */
+.notification-detail-prose {
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+@media (max-width: 359px) {
+  .notification-detail-prose {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+}
+
+@media (min-width: 600px) {
+  .notification-detail-prose {
+    font-size: 16px;
+    line-height: 1.7;
+  }
 }
 
 @keyframes fadeInScale {
@@ -1081,6 +1393,69 @@ body:has(.employee-shell) .employee-modal-surface {
   isolation: isolate;
 }
 
+@keyframes messagePanelSlideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes messagePanelSlideOut {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+
+@keyframes messageListFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.message-list-fade {
+  animation: messageListFadeIn 420ms ease-out both;
+}
+
+@keyframes messagePanelBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  body:has(.employee-shell) .employee-modal-surface.message-center-panel {
+    animation: messagePanelSlideIn 520ms cubic-bezier(0.32, 0.72, 0, 1) both !important;
+    will-change: transform;
+  }
+
+  body:has(.employee-shell) .employee-modal-surface.message-center-panel.message-center-panel--closing {
+    animation: messagePanelSlideOut 520ms cubic-bezier(0.4, 0, 0.6, 1) both !important;
+  }
+
+  body:has(.employee-shell) .employee-modal-backdrop.message-center-backdrop {
+    animation: messagePanelBackdropIn 520ms ease backwards !important;
+  }
+}
+
+@keyframes csWindowIn {
+  from { opacity: 0; transform: translateY(28px) scale(0.92); }
+  60% { opacity: 1; }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes csWindowOut {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(20px) scale(0.94); }
+}
+
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  body:has(.employee-shell) .employee-modal-surface.customer-service-window {
+    transform-origin: bottom right;
+    will-change: transform, opacity;
+    animation: csWindowIn 340ms cubic-bezier(0.22, 1, 0.36, 1) both !important;
+  }
+
+  body:has(.employee-shell) .employee-modal-surface.customer-service-window.customer-service-window--closing {
+    animation: csWindowOut 220ms cubic-bezier(0.4, 0, 1, 1) both !important;
+    pointer-events: none;
+  }
+}
+
 /* Submit Order success dialog: badge pops, rings ripple, check draws, commission card rises and a shine sweeps once. */
 @media (prefers-reduced-motion: no-preference) {
   .submit-success-badge { animation: submitSuccessPop 520ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
@@ -1249,7 +1624,7 @@ body:has(.employee-shell) :is(.leading-tight, .leading-snug):lang(hi) {
   }
 
   body:has(.employee-shell) .emp-detail-text {
-    font-size: 12px !important;
+    font-size: 12.5px !important;
     line-height: 1.55 !important;
   }
 
@@ -1476,13 +1851,56 @@ body {
   }
 }
 
-/* iOS Safari zooms the page when focusing inputs under 16px; -webkit-touch-callout is iOS-only. */
+/* iOS Safari zooms the page when focusing inputs under 16px (and the viewport allows zooming, so it stays zoomed);
+   -webkit-touch-callout is iOS-only. Phones get it everywhere, tablets only inside the employee shell where :has() is supported. */
 @supports (-webkit-touch-callout: none) {
-  @media (max-width: 639px) {
-    .order-submission-form :is(input, textarea) {
+  @media (max-width: 767px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+    select,
+    textarea {
       font-size: 16px !important;
     }
   }
+  @media (min-width: 768px) {
+    body:has(.employee-shell) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+    body:has(.employee-shell) select,
+    body:has(.employee-shell) textarea {
+      font-size: 16px !important;
+    }
+  }
+}
+
+/* Chat floating button and its new-message card share these variables, so the card always sits above the button. */
+.customer-service-fab,
+.customer-service-popup {
+  --cs-fab-size: 56px;
+  --cs-fab-right: 16px;
+  --cs-fab-bottom: calc(var(--employee-bottom-nav-height, 72px) + 28px);
+}
+
+@media (min-width: 1025px) {
+  .customer-service-fab,
+  .customer-service-popup {
+    --cs-fab-size: 80px;
+  }
+}
+
+.customer-service-fab {
+  right: var(--cs-fab-right);
+  bottom: var(--cs-fab-bottom);
+}
+
+.customer-service-fab > button {
+  width: var(--cs-fab-size) !important;
+  height: var(--cs-fab-size) !important;
+  min-width: var(--cs-fab-size) !important;
+  min-height: var(--cs-fab-size) !important;
+}
+
+.customer-service-popup {
+  right: var(--cs-fab-right);
+  bottom: calc(var(--cs-fab-bottom) + var(--cs-fab-size) + 18px);
+  width: min(calc(100vw - var(--cs-fab-right) - 12px), 384px);
 }
 
 /* iPhone SE-class phones (≤359px, 568px tall): reclaim height from header, bottom nav and form chrome. */
@@ -1574,16 +1992,11 @@ body {
     padding-bottom: 0 !important;
   }
 
-  .customer-service-fab {
-    right: 10px !important;
-    bottom: calc(var(--employee-bottom-nav-height, 72px) + 10px) !important;
-  }
-
-  .customer-service-fab > button {
-    width: 44px !important;
-    height: 44px !important;
-    min-width: 44px !important;
-    min-height: 44px !important;
+  .customer-service-fab,
+  .customer-service-popup {
+    --cs-fab-size: 44px;
+    --cs-fab-right: 10px;
+    --cs-fab-bottom: calc(var(--employee-bottom-nav-height, 72px) + 22px);
   }
 
   body:has(.employee-shell) .order-submission-form button.order-submission-submit {
@@ -1746,6 +2159,15 @@ body {
   }
 }
 
+/* A link inside notification text is a word in a sentence; the touch-target padding above would open a 16px gap on each side of it. Same specificity, so it must stay below those rules. */
+@media (pointer: coarse) {
+  .notification-detail-prose a:not([class]) {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+  }
+}
+
 button.employee-header-action {
   box-sizing: border-box;
   min-height: 0 !important;
@@ -1832,6 +2254,19 @@ button.employee-header-action {
   .animate-breath-ripple {
     animation: breathRipple 3.5s ease-in-out infinite !important;
   }
+}
+
+/* Low-performance mode: devicePerformance sets .perf-lite on <html> for weak hardware, Save-Data, or a measured
+   frame-rate drop (older phones, battery saver, iOS Low Power Mode). Only effects that never carry content are dropped. */
+html.perf-lite *,
+html.perf-lite *::before,
+html.perf-lite *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.perf-lite .pointer-events-none[class*="blur-"] {
+  filter: none !important;
 }
 
 /* Tablet optimization - ensure animations work on iPad and other tablets */
@@ -2091,6 +2526,21 @@ button.employee-header-action {
 
 .dispatch-order-accent::after {
   background: linear-gradient(90deg, transparent, rgb(255 255 255 / 24%) 18%, rgb(255 255 255 / 96%) 50%, rgb(253 230 138 / 80%) 68%, transparent);
+}
+
+.dispatch-progress-accent {
+  --progress-glow: 56 189 248;
+  animation: dispatchProgressPulse 2.2s ease-in-out infinite;
+}
+
+.dispatch-progress-accent--alert {
+  --progress-glow: 244 63 94;
+  animation-duration: 1.4s;
+}
+
+@keyframes dispatchProgressPulse {
+  0%, 100% { opacity: 0.82; box-shadow: 0 3px 8px rgb(var(--progress-glow) / 25%); }
+  50% { opacity: 1; box-shadow: 0 4px 18px rgb(var(--progress-glow) / 70%); }
 }
 
 .dispatch-accept-btn {
@@ -2356,11 +2806,12 @@ button.employee-header-action {
   width: min(450px, 92%);
   height: auto;
   left: 38.2%;
-  bottom: 96px;
+  bottom: 101px;
+  translate: 0 21%;
+  transform-origin: 50% 79%;
   transform: translateX(-50%);
   opacity: 0.36;
-  filter: drop-shadow(0 14px 24px rgb(37 99 235 / 14%));
-  animation: dispatchPanelShip 3.6s ease-in-out infinite;
+  animation: dispatchPanelShip 5s ease-in-out infinite;
 }
 
 .dispatch-ship-light { animation: dispatchShipLight 2.4s ease-in-out infinite; }
@@ -2370,18 +2821,23 @@ button.employee-header-action {
 }
 
 @keyframes dispatchPanelShip {
-  0%, 100% { transform: translate(calc(-50% - 8px), 0) rotate(-0.5deg); }
-  50% { transform: translate(calc(-50% + 8px), -6px) rotate(0.5deg); }
+  0%, 100% { transform: translate(calc(-50% - 4px), 0) rotate(-0.45deg); }
+  50% { transform: translate(calc(-50% + 4px), -2px) rotate(0.45deg); }
 }
 
 .dispatch-veil-sea.dispatch-panel-sea {
   position: absolute;
   width: 100%;
   height: 30px;
-  bottom: 92px;
-  opacity: 0.85;
+  bottom: 90px;
+  opacity: 0.95;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
   mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+}
+
+@media (min-width: 600px) and (max-width: 767px) {
+  .dispatch-veil-sea.dispatch-panel-sea { bottom: 130px; }
+  .dispatch-panel-ship { bottom: 141px; }
 }
 
 @media (min-width: 768px) {
@@ -2403,6 +2859,7 @@ button.employee-header-action {
 @media (min-width: 768px) {
   .dispatch-panel-ship {
     width: min(760px, 82%);
+    bottom: 113px;
   }
 
   .dispatch-panel-sea {
@@ -2414,12 +2871,63 @@ button.employee-header-action {
 @media (min-width: 1024px) {
   .dispatch-panel-ship {
     width: min(1020px, 84%);
-    bottom: 100px;
+    bottom: 134px;
   }
 
   .dispatch-panel-sea {
     bottom: 116px;
   }
+}
+
+/* Gap kept between the dispatch panels and the bottom nav; short screens keep more because browser toolbars on real devices eat into the page. */
+:root { --dispatch-reserve: 24px; }
+@media (max-height: 640px) { :root { --dispatch-reserve: 56px; } }
+
+.dispatch-work-panel { isolation: isolate; }
+
+@media (max-width: 599px) {
+  .dispatch-work-panel {
+    --dispatch-working-height: min(580px, max(340px, calc(100svh - var(--employee-header-height, 56px) - var(--employee-bottom-nav-height, 70px) - var(--dispatch-reserve, 24px))));
+    --dispatch-idle-height: min(480px, var(--dispatch-working-height));
+    display: flex;
+    flex-direction: column;
+    height: var(--dispatch-idle-height);
+    min-height: 0;
+    contain: layout paint;
+    transform: translateZ(0);
+  }
+
+  .dispatch-work-panel[data-expanded="true"] {
+    height: var(--dispatch-working-height);
+  }
+
+  .dispatch-work-panel.dispatch-panel-resizing {
+    transition: none;
+  }
+
+  .dispatch-work-panel[data-connecting="true"] > .dispatch-panel-content {
+    flex: none;
+    height: calc(var(--dispatch-idle-height) - 2.5rem - 4px);
+  }
+
+  .dispatch-work-panel .dispatch-veil-connect {
+    bottom: auto;
+    height: calc(var(--dispatch-working-height) - 4px);
+    contain: layout paint;
+    transform: translateZ(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dispatch-work-panel.dispatch-panel-resizing {
+    transition: none;
+  }
+}
+
+/* Short phones (iPhone SE): the End Session row is shorter, so the ship and sea sit lower with it. */
+@media (max-width: 599px) and (max-height: 640px) {
+  .dispatch-veil-sea.dispatch-panel-sea { bottom: 68px; }
+  .dispatch-panel-ship { bottom: 79px; }
 }
 
 .order-panel-ship {
@@ -3037,16 +3545,6 @@ button.employee-header-action {
   to { opacity: 0; transform: translateY(-8px); }
 }
 
-.dispatch-start-enter {
-  animation: dispatchStartEnter 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@keyframes dispatchStartEnter {
-  0% { opacity: 0; transform: translateY(10px); }
-  45% { opacity: 1; }
-  100% { opacity: 1; transform: none; }
-}
-
 button.dispatch-start-cta {
   box-sizing: border-box;
   height: 60px !important;
@@ -3150,15 +3648,11 @@ button.dispatch-start-cta:active:not(:disabled) {
 
 /* The veil already covers the swap; moving text underneath shows up as a shake as it lifts. */
 @media (max-width: 1023px) {
-  .dispatch-waiting-enter > *,
-  .dispatch-start-enter { animation: none; }
+  .dispatch-waiting-enter > * { animation: none; }
   .dispatch-start-exit { animation-name: dispatchStartFadeExit !important; }
   .dispatch-veil .dispatch-veil-stage { animation-name: dispatchStartOverlayIn; }
 }
 
-/* The standby and waiting layouts share one grid cell on phones and the inactive one stays in place, invisible,
-   to hold the panel height. Invisible elements can't be composited, so their loops would tick on the main thread
-   every frame for nothing. */
 .dispatch-parked,
 .dispatch-parked *,
 .dispatch-parked *::before,
@@ -3166,8 +3660,8 @@ button.dispatch-start-cta:active:not(:disabled) {
   animation: none !important;
 }
 
-/* After Start, rows drift away from the button upwards (order 0 = closest to the button), the rings ping outwards
-   (phones), and the veil (START_CONNECT_VEIL_DELAY_MS in OrderDispatch) arrives while the top rows clear.
+/* After Start, rows drift away from the button upwards (order 0 = closest to the button), and the veil
+   (START_CONNECT_VEIL_DELAY_MS in OrderDispatch) arrives while the top rows clear.
    Only opacity/transform animate, so nothing reflows or repaints mid-exit. */
 @media (prefers-reduced-motion: no-preference) {
   .dispatch-standby-leaving .dispatch-standby-item {
@@ -3175,13 +3669,6 @@ button.dispatch-start-cta:active:not(:disabled) {
     animation-delay: calc(var(--leave-order, 0) * 80ms);
   }
 
-  .dispatch-standby-leaving .dispatch-standby-rings {
-    animation: dispatchStandbyPing 1000ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .dispatch-standby-leaving .dispatch-standby-glow {
-    animation: dispatchStandbyGlowOut 760ms ease-out both;
-  }
 }
 
 @keyframes dispatchStandbyLeave {
@@ -3199,6 +3686,16 @@ button.dispatch-start-cta:active:not(:disabled) {
   min-height: 0 !important;
   margin: 0 !important;
   overflow: hidden;
+}
+.dispatch-modal-backdrop-in { animation: dispatchVeilIn 260ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .dispatch-modal-backdrop-in { animation: none; }
+}
+.dispatch-grab-snapshot { animation: dispatchGrabSnapshotOut 700ms cubic-bezier(0.4, 0, 0.2, 1) both; }
+.dispatch-grab-snapshot * { animation-play-state: paused !important; }
+@keyframes dispatchGrabSnapshotOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 .dispatch-accept-ghost-out { animation: dispatchGhostOut 320ms 160ms cubic-bezier(0.45, 0, 0.55, 1) forwards; }
 .dispatch-accept-ghost-out > * { animation: dispatchGhostLift 260ms cubic-bezier(0.4, 0, 1, 1) forwards !important; }
@@ -3398,22 +3895,11 @@ button.dispatch-start-cta:active:not(:disabled) {
 }
 
 
-@keyframes dispatchStandbyPing {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(1.22); }
-}
-
-@keyframes dispatchStandbyGlowOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
-
 .dispatch-veil {
   position: absolute;
   inset: 0;
   z-index: 30;
   overflow: hidden;
-  border-radius: inherit;
   pointer-events: none;
   background:
     radial-gradient(120% 90% at 15% 0%, rgb(224 242 254 / 95%) 0%, transparent 60%),
@@ -3428,6 +3914,13 @@ button.dispatch-start-cta:active:not(:disabled) {
 .dispatch-veil-out {
   animation: dispatchVeilOut 760ms cubic-bezier(0.4, 0, 0.2, 1) 380ms both;
 }
+
+.dispatch-veil-stop.dispatch-veil-out {
+  animation: dispatchVeilOut var(--dispatch-stop-reveal-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.dispatch-veil-stop .dispatch-veil-sweep { display: none; }
+.dispatch-veil.dispatch-veil-stop .dispatch-veil-stage { animation: none; }
 
 @keyframes dispatchVeilIn {
   from { opacity: 0; }
@@ -3454,7 +3947,6 @@ button.dispatch-start-cta:active:not(:disabled) {
 .dispatch-veil-blob {
   position: absolute;
   border-radius: 28%;
-  filter: blur(2px);
   animation: dispatchVeilBlob 2.4s ease-in-out infinite alternate;
 }
 
@@ -3465,6 +3957,11 @@ button.dispatch-start-cta:active:not(:disabled) {
 @keyframes dispatchVeilBlob {
   from { transform: translateY(0) rotate(var(--veil-rot)); }
   to { transform: translateY(-10px) rotate(calc(var(--veil-rot) + 8deg)); }
+}
+
+.dispatch-veil-content {
+  position: absolute;
+  inset: 0;
 }
 
 .dispatch-veil-stage {
@@ -3488,18 +3985,19 @@ button.dispatch-start-cta:active:not(:disabled) {
   width: min(300px, 46%);
   height: auto;
   margin-bottom: -14px;
-  filter: drop-shadow(0 10px 18px rgb(37 99 235 / 18%));
-  animation: dispatchVeilShip 1.8s ease-in-out infinite;
+  translate: 0 calc(14.3% + 11px);
+  transform-origin: 50% 86%;
+  animation: dispatchVeilShip 3s ease-in-out infinite;
 }
 
 @keyframes dispatchVeilShip {
-  0%, 100% { transform: translate(-6px, 0) rotate(-0.8deg); }
-  50% { transform: translate(6px, -5px) rotate(0.8deg); }
+  0%, 100% { transform: translate(-3px, 0) rotate(-0.5deg); }
+  50% { transform: translate(3px, -2px) rotate(0.5deg); }
 }
 
 .dispatch-veil-sea {
   position: relative;
-  z-index: 1;
+  z-index: 3;
   width: min(460px, 70%);
   height: 40px;
   overflow: hidden;
@@ -3513,6 +4011,16 @@ button.dispatch-start-cta:active:not(:disabled) {
   bottom: 0;
   width: 200%;
   height: 100%;
+}
+
+/* Phones: the ship is small here, so the sea is lower and calmer (back layer hidden, crests flattened about each baseline, slower drift) and the waterline sits near the keel, leaving the hull above water. */
+@media (max-width: 767px) {
+  .dispatch-veil .dispatch-veil-sea { --wave-slow: 1.5; height: 26px; }
+  .dispatch-veil .dispatch-veil-wave { scale: 1 0.7; }
+  .dispatch-veil .dispatch-veil-wave-back { display: none; }
+  .dispatch-veil .dispatch-veil-ship { translate: 0 calc(14.3% + 4px); }
+  .dispatch-veil .dispatch-veil-wave-mid { transform-origin: 0 55%; }
+  .dispatch-veil .dispatch-veil-wave-front { transform-origin: 0 70%; }
 }
 
 .dispatch-veil-wave-back { animation: dispatchVeilWave 9s linear infinite; }
@@ -3817,11 +4325,26 @@ button.dispatch-start-cta:active:not(:disabled) {
   to { transform: scale(1); }
 }
 
+.dispatch-panel-resizing :is(.shs-ship, .shs-body, .shs-box, .shs-sheen, .idle-chip, .start-btn-particle, .dispatch-start-cta-shine),
+.dispatch-panel-resizing .dispatch-start-cta-wrap::before,
+.dispatch-panel-resizing .dispatch-start-cta-icon::after,
 .dispatch-panel-resizing .dispatch-waiting-flow::before,
 .dispatch-panel-resizing .dispatch-waiting-glow,
 .dispatch-panel-resizing.dispatch-waiting-surface-animated::after,
+.dispatch-panel-resizing .dispatch-panel-ship,
+.dispatch-panel-resizing .dispatch-panel-sea .dispatch-veil-wave,
+.dispatch-panel-resizing .dispatch-waiting-accent::before,
+.dispatch-panel-resizing .dispatch-waiting-accent::after,
 .dispatch-panel-resizing .dispatch-panel-wave,
 .dispatch-panel-resizing [class*="dispatch-gull"] {
+  animation-play-state: paused !important;
+}
+
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing)::before,
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing)::after,
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing) *,
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing) *::before,
+.dispatch-scrolling .dispatch-work-panel:not(.dispatch-panel-resizing) *::after {
   animation-play-state: paused !important;
 }
 
@@ -3846,7 +4369,6 @@ button.dispatch-start-cta:active:not(:disabled) {
   .dispatch-veil-wave { animation: none; }
   .dispatch-decor-fade,
   .dispatch-waiting-exit,
-  .dispatch-start-enter,
   .dispatch-start-overlay,
   .dispatch-waiting-enter > * { animation: none; }
   .dispatch-start-exit,
@@ -5499,11 +6021,6 @@ body:has(.employee-shell) .order-detail-content-scrollbar::-webkit-scrollbar-thu
     font-style: italic;
   }
 
-  .prose-sm {
-    font-size: 0.875rem;
-    line-height: 1.5;
-  }
-
   /* Responsive image styles for announcements */
   .prose-invert img {
     max-width: 100%;
@@ -6499,19 +7016,6 @@ body:has(.employee-shell) .order-detail-content-scrollbar::-webkit-scrollbar-thu
     will-change: transform;
   }
 
-  @keyframes badgeBounce {
-    0%, 100% {
-      transform: translateY(0) scale(1);
-    }
-    50% {
-      transform: translateY(-5px) scale(1.05);
-    }
-  }
-
-  .animate-badge-bounce {
-    animation: badgeBounce 1.5s ease-in-out infinite;
-  }
-
   /* ============================================
      SCROLL OPTIMIZATION FOR MOBILE DEVICES
      ============================================ */
@@ -7352,4 +7856,54 @@ body:has(.employee-shell) .order-detail-content-scrollbar::-webkit-scrollbar-thu
   animation-duration: 2s !important;
   -webkit-animation-iteration-count: infinite !important;
   animation-iteration-count: infinite !important;
+}
+
+@keyframes badgeShake {
+  0%, 54%, 100% { rotate: 0deg; }
+  6% { rotate: -14deg; }
+  12% { rotate: 14deg; }
+  18% { rotate: -12deg; }
+  24% { rotate: 12deg; }
+  30% { rotate: -8deg; }
+  36% { rotate: 8deg; }
+  42% { rotate: -4deg; }
+  48% { rotate: 4deg; }
+}
+
+@keyframes badgeLift {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-5px) scale(1.05); }
+}
+
+.animate-badge-shake.keep-animation {
+  animation: badgeShake 1.5s ease-in-out infinite !important;
+}
+
+.animate-badge-shake-lift.keep-animation {
+  animation: badgeLift 1.5s ease-in-out infinite, badgeShake 1.5s ease-in-out infinite !important;
+}
+
+.animate-badge-shake-pulse.keep-animation {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite, badgeShake 1.5s ease-in-out infinite !important;
+}
+
+/* Administrator-editable site name: the treatment only depends on the text box, so any replacement text gets it. */
+.emp-brand-title {
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.06em 0.04em 0.12em;
+  font-weight: 800;
+  letter-spacing: 0.015em;
+  color: #fff;
+  filter: drop-shadow(0 2px 10px rgb(56 189 248 / 38%)) drop-shadow(0 1px 0 rgb(15 23 42 / 22%));
+}
+
+@supports (-webkit-background-clip: text) or (background-clip: text) {
+  .emp-brand-title {
+    background-image: linear-gradient(100deg, #fff 0%, #f0f9ff 38%, #bae6fd 72%, #7dd3fc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
 }

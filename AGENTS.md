@@ -14,16 +14,16 @@
 ## 2. 目录地图
 | 路径 | 内容 |
 |---|---|
-| `src/components/admin/` | 管理员后台各页面（`docs/admin-backend.md`） |
+| `src/components/admin/` | 管理员后台各页面；`EmployeeSetupSelect.tsx` 为新增员工的彩色侧展选择菜单（`docs/admin-backend.md`） |
 | `src/components/employee/` | 员工端各页面（`docs/employee-portal.md`） |
 | `src/components/*.tsx` | 共用组件：ErrorBoundary、LanguageSwitcher、AnnouncementDetailModal、背景装饰 |
 | `src/lib/` | 登录会话、Supabase client、上传/净化/设备等工具（`docs/architecture.md`） |
 | `src/lib/i18n/` | 员工端与登录页的 10 种语言 |
 | `src/types/database.ts` | 手工维护的 Supabase 类型（新增表/RPC 要同步） |
 | `src/index.css` | 全局样式与可复用滚动条类 |
-| `supabase/migrations/` | 500+ 个按文件名时间戳排序的数据库迁移 |
-| `supabase/functions/content-audit/` | 仓库内唯一的 Edge Function 源码 |
-| `supabase/tests/*.test.mjs` | 用 PGlite 执行真实迁移的回归测试（内容稽核清理、聊天摘要/未读计数） |
+| `supabase/migrations/` | 按文件名时间戳排序的数据库迁移 |
+| `supabase/functions/content-audit/` | 内容稽核 Edge 源码，已在正式环境 |
+| `supabase/tests/*.test.mjs` | 内容稽核、聊天、工时等回归测试 |
 | `docs/` | 详细说明与更新记录 |
 
 ## 3. 硬性规则
@@ -53,8 +53,9 @@
 ## 4. 验证
 - 每次改动后：`npm run typecheck`、`npm run lint`；较大改动加 `npm run build`。
 - 改到聊天摘要、分组会话数、后台未读计数 RPC 或聊天表索引：`npm run test:service-chat`。
+- 改到员工建立/编辑 RPC、`get_employee_management_snapshot` 或员工地区：`npm run test:employee-regions`（回放全部迁移）。
 - 改到内容稽核/已删员工相关迁移或 Edge Function：`npm run test:audit-cleanup`；Edge Function 语法检查：`npx esbuild supabase/functions/content-audit/index.ts --format=esm --log-level=warning > /dev/null`。
-- 界面改动要在预览中实际操作。本环境的浏览器自动化不可用，且预览需要登录账号；无法实测时要明说，并请用户验证。
+- 界面改动要在预览中实际操作。Chromium已可用于本地隔离替身测试；正式预览需登录，不能为测试调用正式资料。无法实测的路径要明确说明。
 
 ## 5. 文档维护（每次修改都必须做）
 - 改动前：读本文件 → 相关 `docs/*.md` → `docs/CHANGELOG.md` 顶部最近几条。
@@ -69,7 +70,7 @@
 ## 6. 已知陷阱
 - 未接入页面的旧组件，改了不会生效：`admin/DispatchRecords.tsx`、`admin/SubmitTimeManagement.tsx`、`admin/AutoCleanupSettings.tsx` + `services/autoCleanupService.ts`、`employee/TransactionHistory.tsx`、`employee/WorkSessionTracker.tsx`；`services/orderProcessor.ts` 是空文件。
 - 正式环境另有 `process-orders`、`cleanup-dispatch` 两个 Edge Function：仓库无源码，前端未调用（逻辑已移到 RPC）。
-- `supabase/config.toml` 没有 `content-audit` 项；部署它时必须保持 `verify_jwt=false`（正式环境现状）。
+- `supabase/config.toml` 中的服务配置需与正式环境核对；`content-audit` 部署保持 `verify_jwt=false`（正式现状）。
 - 超管可在「導航設定」改导航文字和顺序（存于 `system_configs.admin_navigation_preferences`），正式环境显示的文字可能和代码默认值不同。
 - `vercel.json` 的 CSP `connect-src` 只允许本站与 `*.supabase.co`；接入外部 API 必须同步修改。
 - 员工改密码：前端要求 ≥8 位且含字母与数字，数据库 RPC 只要求 ≥6 位。

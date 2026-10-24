@@ -44,27 +44,28 @@ interface CleanupResult {
   message: string;
 }
 
-const tableLabels: Record<string, { name: string; description: string }> = {
-  dispatch_assignments: { name: '派單分配紀錄', description: '員工訂單派送歷史紀錄，保留過久可能影響查詢效能。' },
-  dispatch_sessions: { name: '派單會話紀錄', description: '員工每次開始與結束派單的會話紀錄。' },
-  work_sessions: { name: '工作會話紀錄', description: '員工工作時長的統計會話。' },
-  customer_service_sessions: { name: '客服會話紀錄', description: '客服與客戶之間的會話歷史。' },
-  used_order_data: { name: '訂單派送使用紀錄', description: '清理使用紀錄後，對應驗證資料可回流至可用池。' },
-  valid_order_data: { name: '訂單驗證資料回流', description: '將符合條件的已用驗證資料重新啟用，供再次派送。' },
-  valid_data_audit_log: { name: '驗證資料稽核紀錄', description: '記錄驗證資料的變更與操作。' },
-  valid_data_error_log: { name: '驗證資料錯誤紀錄', description: '記錄驗證資料的異常與錯誤。' },
-  dispatch_system_logs: { name: '派單系統日誌', description: '派單系統的執行與錯誤紀錄。' },
-  commission_audit_log: { name: '佣金稽核紀錄', description: '佣金計算與發放的稽核資料。' },
-  money_data_protection_audit: { name: '資金保護稽核', description: '資金操作的安全稽核資料。' },
-  dispatch_performance_metrics: { name: '派單效能指標', description: '派單系統的效能監測資料。' },
-  valid_data_query_performance: { name: '查詢效能紀錄', description: '驗證資料的查詢效能監測紀錄。' },
-  orders_history: { name: '訂單歷史封存', description: '已封存的歷史訂單資料。' },
-  valid_order_data_archive: { name: '驗證資料封存', description: '已封存的訂單驗證資料。' },
-  bulk_import_log: { name: '批次匯入紀錄', description: '批次資料匯入的歷史紀錄。' },
+const tableLabels: Record<string, { name: string; description: string; details: string }> = {
+  dispatch_assignments: { name: '派單分配紀錄', description: '員工訂單派送歷史紀錄，保留過久可能影響查詢效能。', details: '只刪除指派時間早於截止日且狀態為已完成、錯誤、逾時或已取消的派單紀錄；待處理與已接受的派單會保留，訂單本身不會被刪除。' },
+  dispatch_sessions: { name: '派單會話紀錄', description: '員工每次開始與結束派單的會話紀錄。', details: '只刪除開始時間早於截止日、已結束且沒有待處理或已接受派單的會話。仍保留的歷史派單可能失去與該會話的關聯；派單紀錄本身不會被刪除。' },
+  work_sessions: { name: '工作會話紀錄', description: '員工工作時長的統計會話。', details: '只刪除開始時間早於截止日且已結束的工作會話；仍在進行中的會話不會被清理。清理後，這些舊會話不再能用於查閱工作時長歷史。' },
+  customer_service_sessions: { name: '客服會話紀錄', description: '客服與客戶之間已結束的會話歷史。', details: '只刪除建立時間早於截止日且已關閉的客服會話；未關閉的會話會保留。相關評分資料會保留，但與會話的連結可能被清空。' },
+  used_order_data: { name: '訂單派送使用紀錄', description: '記錄驗證資料曾被哪筆訂單使用。', details: '只刪除建立時間早於截止日且不屬於處理中訂單的使用紀錄。這項操作只刪除使用關聯，不會直接重新啟用驗證資料；要回流資料，請使用「訂單驗證資料回流」項目。' },
+  valid_order_data: { name: '訂單驗證資料回流', description: '重新啟用符合條件的已用驗證資料，供再次派送。', details: '只處理因「已使用」而停用、最後使用時間早於截止日、沒有較新或時間不明的使用紀錄，且沒有關聯處理中訂單的資料。符合條件後會刪除其過期使用關聯並重新啟用資料；資料本身不會被刪除。' },
+  valid_data_audit_log: { name: '驗證資料稽核紀錄', description: '記錄驗證資料的變更與操作。', details: '依操作時間刪除截止日前的驗證資料稽核紀錄。這只清除稽核歷史，不會還原或修改驗證資料本身；清除後不能從此表追溯該操作。' },
+  valid_data_error_log: { name: '驗證資料錯誤紀錄', description: '記錄驗證資料的異常與錯誤。', details: '只刪除發現時間早於截止日且已標記解決的錯誤紀錄；尚未解決的錯誤會保留。' },
+  dispatch_system_logs: { name: '派單系統日誌', description: '派單系統的執行與錯誤紀錄。', details: '依建立時間刪除截止日前的派單系統日誌。此項用來控制舊執行與錯誤紀錄的保留量，不會修改派單或訂單資料。' },
+  commission_audit_log: { name: '佣金稽核紀錄', description: '佣金計算與發放的稽核資料。', details: '依建立時間刪除截止日前的佣金稽核紀錄。佣金與錢包資料不會因此改變，但被清除的稽核紀錄不能再用來追查歷史佣金計算；請先確認符合所需的財務留存期限。' },
+  money_data_protection_audit: { name: '資金保護稽核', description: '資金操作的安全稽核資料。', details: '依嘗試時間刪除截止日前的資金保護稽核紀錄。這是安全稽核歷史的永久清理，不會回復或修改資金操作；請先確認符合所需的安全與財務留存期限。' },
+  dispatch_performance_metrics: { name: '派單效能指標', description: '派單系統的效能監測資料。', details: '依測量時間刪除截止日前的派單效能指標。派單功能不受影響，但清理後可供比較的歷史效能資料會減少。' },
+  valid_data_query_performance: { name: '查詢效能紀錄', description: '驗證資料的查詢效能監測紀錄。', details: '依記錄時間刪除截止日前的驗證資料查詢效能紀錄。驗證資料不會被更動，但較早的效能診斷資料將無法再查閱。' },
+  orders_history: { name: '訂單歷史封存', description: '已封存的歷史訂單資料。', details: '依建立時間永久刪除截止日前的封存訂單資料。這不會清理目前的訂單表，但已刪除的封存內容無法從此處復原。' },
+  valid_order_data_archive: { name: '驗證資料封存', description: '已封存的訂單驗證資料。', details: '依封存時間永久刪除截止日前的驗證資料封存紀錄。清理後無法從此封存表復原這些資料。' },
+  bulk_import_log: { name: '批次匯入紀錄', description: '批次資料匯入的歷史紀錄。', details: '只刪除完成時間早於截止日且狀態為已完成或失敗的批次匯入紀錄；其他狀態不會被此項清理。清理後不能再從此表查看該批次的歷史結果。' },
 };
 
 const getTableName = (config: CleanupConfig) => tableLabels[config.table_name]?.name ?? config.display_name;
 const getTableDescription = (config: CleanupConfig) => tableLabels[config.table_name]?.description ?? config.description;
+const getTableDetails = (config: CleanupConfig) => tableLabels[config.table_name]?.details ?? config.description;
 const formatSize = (size: string) => size.replace(/\bbytes?\b/gi, '位元組').replace(/\brecords?\b/gi, '筆紀錄').replace(/^N\/A$/i, '無資料');
 const utcTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const hourOptions = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'));
@@ -73,6 +74,7 @@ const quickTimes = ['00:00', '02:00', '02:30', '03:00', '06:00'];
 
 export default function HistoryDataManagement({ isActive }: { isActive: boolean }) {
   const [showAudit, setShowAudit] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const auditActivations = useRef<number[]>([]);
   const [configs, setConfigs] = useState<CleanupConfig[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,6 +105,7 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
   useEffect(() => {
     if (!isActive) {
       setShowAudit(false);
+      setShowGuide(false);
       auditActivations.current = [];
     }
   }, [isActive]);
@@ -119,7 +122,7 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
   const isTimePickerOpen = timePicker !== null;
 
   useEffect(() => {
-    const anyModalOpen = showPreviewModal || showConfirmModal || isTimePickerOpen;
+    const anyModalOpen = showPreviewModal || showConfirmModal || isTimePickerOpen || showGuide;
     if (anyModalOpen) {
       const scrollY = window.scrollY;
       document.body.style.overflow = 'hidden';
@@ -134,16 +137,18 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
         window.scrollTo(0, scrollY);
       };
     }
-  }, [showPreviewModal, showConfirmModal, isTimePickerOpen]);
+  }, [showPreviewModal, showConfirmModal, isTimePickerOpen, showGuide]);
 
   useEffect(() => {
-    if (!isTimePickerOpen) return;
+    if (!isTimePickerOpen && !showGuide) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setTimePicker(null);
+      if (event.key !== 'Escape') return;
+      setTimePicker(null);
+      setShowGuide(false);
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [isTimePickerOpen]);
+  }, [isTimePickerOpen, showGuide]);
 
   const loadConfigs = async (silent = false): Promise<boolean> => {
     try {
@@ -406,8 +411,8 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
     switch (tableName) {
       case 'used_order_data':
         return {
-          warning: '派送紀錄清理後，對應的驗證資料可回流至可用池，供員工再次使用。',
-          color: 'text-sky-700'
+          warning: '此項只刪除過期使用紀錄；驗證資料不會在這一步自動回流，請另行使用「訂單驗證資料回流」。',
+          color: 'text-amber-700'
         };
       case 'valid_order_data':
         return {
@@ -462,16 +467,27 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
             </div>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              aria-busy={refreshing}
-              className="group inline-flex h-[38px] w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-cyan-300/60 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 px-2 text-xs font-bold text-white shadow-[0_8px_20px_-9px_rgba(34,211,238,0.65)] transition-all hover:brightness-110 hover:shadow-[0_10px_22px_-8px_rgba(34,211,238,0.75)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-wait disabled:opacity-70"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : 'transition-transform duration-300 group-hover:rotate-45'}`} aria-hidden="true" />
-              {refreshing ? '刷新中…' : '刷新'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowGuide(true)}
+                aria-label="查看歷史資料清理說明"
+                className="inline-flex h-[38px] w-[38px] items-center justify-center gap-1.5 rounded-lg border border-cyan-200/40 bg-white/10 text-xs font-bold text-cyan-50 transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 sm:w-[82px]"
+              >
+                <Info className="h-4 w-4" aria-hidden="true" />
+                <span className="hidden sm:inline">說明</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={refreshing}
+                aria-busy={refreshing}
+                className="group inline-flex h-[38px] w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-cyan-300/60 bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 px-2 text-xs font-bold text-white shadow-[0_8px_20px_-9px_rgba(34,211,238,0.65)] transition-all hover:brightness-110 hover:shadow-[0_10px_22px_-8px_rgba(34,211,238,0.75)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-wait disabled:opacity-70"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : 'transition-transform duration-300 group-hover:rotate-45'}`} aria-hidden="true" />
+                {refreshing ? '刷新中…' : '刷新'}
+              </button>
+            </div>
             {lastRefreshedAt && <span role="status" className="text-[10px] text-cyan-200">上次刷新 {lastRefreshedAt}</span>}
           </div>
         </div>
@@ -541,6 +557,11 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
                               {getTableWarning(config.table_name)!.warning}
                             </div>
                           )}
+                          <details className="mt-2 text-xs text-slate-600">
+                            <summary className="w-fit cursor-pointer font-semibold text-blue-700 hover:text-blue-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">功能與清理範圍</summary>
+                            <p className="mt-1 max-w-2xl leading-5">{getTableDetails(config)}</p>
+                            <p className="mt-1 max-w-2xl leading-5"><strong>啟動方式：</strong>{scheduleItem?.enabled ? '自動清理已開啟，資料庫排程會按設定的 UTC 時間檢查並執行；也可手動預覽後清理。' : '自動清理目前關閉；需要時仍可手動預覽並清理。'}</p>
+                          </details>
                         </div>
                       </td>
                       <td className="px-5 py-4 whitespace-nowrap">
@@ -676,6 +697,50 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
           </section>
         ))}
       </div>
+
+      {showGuide && createPortal(
+        <div
+          className="fixed inset-0 z-[9997] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setShowGuide(false); }}
+        >
+          <section role="dialog" aria-modal="true" aria-labelledby="history-guide-title" className="flex max-h-[min(88vh,760px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl">
+            <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-gradient-to-r from-slate-900 to-blue-950 px-5 py-4 text-white sm:px-6">
+              <div>
+                <h3 id="history-guide-title" className="text-base font-bold">歷史資料清理說明</h3>
+                <p className="mt-1 text-xs leading-5 text-blue-100">查看保留期限、自動排程、手動預覽和執行結果的含義。</p>
+              </div>
+              <button type="button" onClick={() => setShowGuide(false)} aria-label="關閉說明" autoFocus className="rounded-lg p-1 text-blue-100 hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </header>
+            <div className="overflow-y-auto p-5 sm:p-6">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h4 className="text-sm font-bold text-slate-900">保留天數</h4>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">每種資料按其對應時間欄位計算截止日，只處理早於截止日且符合該項條件的記錄。設定值不得低於該項列出的最低天數；修改後按「儲存」才會生效。</p>
+                </article>
+                <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h4 className="text-sm font-bold text-slate-900">自動清理</h4>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">開啟後由資料庫排程每分鐘檢查一次；若資料庫已啟用 pg_cron，會在設定的 UTC 時間或之後每日最多成功執行一次，每次只處理一種到期資料。關閉自動清理不會停用手動操作。</p>
+                </article>
+                <article className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h4 className="text-sm font-bold text-slate-900">手動清理</h4>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">按「清理」先查看預覽，再確認執行。預覽不會鎖定資料；執行時會按當下資料重新判斷，因此實際筆數可能不同。除「訂單驗證資料回流」外，刪除均不可復原。</p>
+                </article>
+                <article className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <h4 className="text-sm font-bold text-amber-950">風險與空間數字</h4>
+                  <p className="mt-1 text-xs leading-5 text-amber-900">若預計處理超過此類資料的 80%，預覽會顯示高比例警告。空間是估算或資料表大小的前後差額，不保證資料庫磁碟空間立即等量釋出。佣金與資金稽核紀錄清理前，請確認符合你的留存要求。</p>
+                </article>
+              </div>
+              <p className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-950"><strong>重要：</strong>每個資料項目都有自己的清理範圍和時間欄位，請展開該列的「功能與清理範圍」查看。清理排程不會自動停用其他功能或清除未列出的資料類型。</p>
+            </div>
+            <footer className="flex justify-end border-t border-slate-200 bg-slate-50 px-5 py-3 sm:px-6">
+              <button type="button" onClick={() => setShowGuide(false)} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">知道了</button>
+            </footer>
+          </section>
+        </div>,
+        document.body
+      )}
 
       {timePicker && createPortal(
         <div
@@ -828,14 +893,22 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
                 </div>
               </div>
 
-              <p className="text-xs text-amber-700">手動清理使用此資料類型的保留期限（{previewResult.retention_days} 天），只處理到期且符合條件的資料；請確認預覽筆數。</p>
+              <p className="text-xs text-amber-700">手動清理使用此資料類型的保留期限（{previewResult.retention_days} 天），只處理到期且符合條件的資料；實際筆數可能因預覽後的資料變化而不同。</p>
+
+              {previewResult.risk_level === 'warning' && previewResult.records_to_delete > 0 && (
+                <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>預計處理此資料類型超過 80% 的記錄。請先確認資料類型、保留天數及筆數，再決定是否繼續。</span>
+                </div>
+              )}
 
               {selectedTable.table_name !== 'valid_order_data' && (
                 <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">預估釋出空間：</span>
+                    <span className="text-gray-600">估算資料表大小差額：</span>
                     <span className="font-medium text-blue-600">{formatSize(previewResult.estimated_space)}</span>
                   </div>
+                  <p className="text-xs leading-5 text-slate-500">這是依預計處理筆數推算的估值，不代表資料庫磁碟空間會立即等量釋出。</p>
                 </div>
               )}
 
@@ -930,8 +1003,8 @@ export default function HistoryDataManagement({ isActive }: { isActive: boolean 
                   </div>
                   {selectedTable?.table_name !== 'valid_order_data' && (
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">釋出空間：</span>
-                      <span className="font-bold text-gray-900">{formatSize(cleanupResult.space_freed)}</span>
+                      <span className="text-gray-600">資料表大小差額：</span>
+                    <span className="font-bold text-gray-900">{formatSize(cleanupResult.space_freed)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-sm">

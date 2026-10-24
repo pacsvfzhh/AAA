@@ -1,12 +1,14 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { Bell, Package, Wallet, BarChart3, LogOut, User, PackageSearch, X, Lock, ChevronDown, Gift } from 'lucide-react';
+import { Bell, Package, Wallet, BarChart3, LogOut, User, PackageSearch, X, Lock, ChevronDown, Gift, AlertCircle, Zap, Shield, Radio } from 'lucide-react';
 import { Employee, MessageWithRecipient } from '../../types';
 import { AUTH_STORAGE_KEY, getEmployeeFinancialSession, getStoredAuth, leaveSessionForAnotherTab, logout } from '../../lib/auth';
 import { logEmployeeLogin } from '../../lib/loginHistoryService';
 import { formatSupabaseError, isSupabaseTransientError, supabase } from '../../lib/supabase';
 import { useCompanyName } from '../../lib/useCompanyName';
 import { useResponsive } from '../../lib/useResponsive';
+import { useDeviceOptimization } from '../../lib/useDeviceOptimization';
+import { getNotificationAudioContext, installNotificationAudioUnlock } from '../../lib/notificationAudio';
 import { tabSessionManager } from '../../lib/TabSessionManager';
 import { useLanguage } from '../../lib/i18n/context';
 import type { Language } from '../../lib/i18n/types';
@@ -81,7 +83,6 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   const [showMessageToast, setShowMessageToast] = useState(false);
   const [latestMessage, setLatestMessage] = useState<MessageToast | null>(null);
   const [messageToastQueue, setMessageToastQueue] = useState<MessageToast[]>([]);
-  const [audioContextReady, setAudioContextReady] = useState(false);
   const [showPasswordChange, setShowPasswordChange] = useState(false);
   const [showSessionExpired, setShowSessionExpired] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -89,9 +90,13 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   const [showWithdrawalHistory, setShowWithdrawalHistory] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const employeeHeaderRef = useRef<HTMLElement>(null);
+  const bellWrapRef = useRef<HTMLDivElement>(null);
+  const toastCardRef = useRef<HTMLDivElement>(null);
+  const [toastPos, setToastPos] = useState<{ top: number; right: number; arrow: number } | null>(null);
   const employeeNavRef = useRef<HTMLElement>(null);
   const { companyName } = useCompanyName(employee.created_by);
   const { isMobile, isTablet } = useResponsive();
+  const { isLowEnd } = useDeviceOptimization();
   const { t, language, setLanguage } = useLanguage();
   const [bootPhase, setBootPhase] = useState<'show' | 'exit' | 'done'>('show');
   useEffect(() => {
@@ -353,36 +358,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     await logout(false);
   };
 
-  // Initialize audio context on first user interaction
-  useEffect(() => {
-    const initAudioContext = () => {
-      if (!audioContextReady) {
-        try {
-          const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-          if (!AudioContextConstructor) return;
-          const audioContext = new AudioContextConstructor();
-          audioContext.resume().then(() => {
-            setAudioContextReady(true);
-            console.log('Audio context initialized and ready');
-          });
-        } catch (error) {
-          console.error('Error initializing audio context:', error);
-        }
-      }
-    };
-
-    // Listen for any user interaction to initialize audio
-    const events = ['click', 'touchstart', 'keydown'];
-    events.forEach(event => {
-      document.addEventListener(event, initAudioContext, { once: true });
-    });
-
-    return () => {
-      events.forEach(event => {
-        document.removeEventListener(event, initAudioContext);
-      });
-    };
-  }, [audioContextReady]);
+  // Unlock the shared notification audio context from real user gestures
+  useEffect(() => installNotificationAudioUnlock(), []);
 
   // Handle click outside user menu to close it
   useEffect(() => {
@@ -610,14 +587,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   const playNotificationSound = () => {
     // Create a pleasant notification sound with two tones
     try {
-      const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioContextConstructor) return;
-      const audioContext = new AudioContextConstructor();
-
-      // Resume audio context if suspended (browser autoplay policy)
-      if (audioContext.state === 'suspended') {
-        audioContext.resume();
-      }
+      const audioContext = getNotificationAudioContext();
+      if (!audioContext) return;
 
       // First tone (higher pitch)
       const oscillator1 = audioContext.createOscillator();
@@ -845,20 +816,32 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
   };
 
   useEffect(() => {
-    if (showMessageToast || latestMessage || messageToastQueue.length === 0) return;
-    const [nextMessage, ...remainingMessages] = messageToastQueue;
-    setLatestMessage(nextMessage);
-    setMessageToastQueue(remainingMessages);
+    if (messageToastQueue.length === 0) return;
+    setLatestMessage(messageToastQueue[messageToastQueue.length - 1]);
+    setMessageToastQueue([]);
     setShowMessageToast(true);
-  }, [latestMessage, messageToastQueue, showMessageToast]);
+  }, [messageToastQueue]);
 
-  useEffect(() => {
-    if (!showMessageToast || !latestMessage) return;
-    const timer = window.setTimeout(() => {
-      setShowMessageToast(false);
-      setLatestMessage(null);
-    }, 10000);
-    return () => window.clearTimeout(timer);
+  useLayoutEffect(() => {
+    if (!showMessageToast || !latestMessage) {
+      setToastPos(null);
+      return;
+    }
+    const update = () => {
+      const bell = bellWrapRef.current?.getBoundingClientRect();
+      const card = toastCardRef.current;
+      if (!bell || !card) return;
+      const viewportWidth = document.documentElement.clientWidth;
+      const width = card.offsetWidth;
+      const right = Math.max(12, Math.min(viewportWidth - bell.right, viewportWidth - width - 12));
+      const bellCenter = bell.left + bell.width / 2;
+      const arrow = Math.min(Math.max(viewportWidth - right - bellCenter - 6, 16), width - 28);
+      const top = bell.bottom + 10;
+      setToastPos(previous => previous && previous.top === top && previous.right === right && previous.arrow === arrow ? previous : { top, right, arrow });
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
   }, [latestMessage, showMessageToast]);
 
   useEffect(() => {
@@ -867,6 +850,16 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
     setShowMessageToast(false);
     setLatestMessage(null);
   }, [employee.id]);
+
+  const toastIsReward = latestMessage?.notificationCategory === 'performance_reward';
+  const toastPriorityLabel = latestMessage?.priority === 'urgent' ? t.header.urgent
+    : latestMessage?.priority === 'high' ? t.header.highPriority
+    : latestMessage?.priority === 'normal' ? t.header.normal
+    : t.messages.priorityLow;
+  const toastPriorityStyle = latestMessage?.priority === 'urgent' ? 'bg-white text-rose-600'
+    : latestMessage?.priority === 'high' ? 'bg-white text-emerald-600'
+    : latestMessage?.priority === 'normal' ? (toastIsReward ? 'bg-white text-amber-700' : 'bg-white text-blue-600')
+    : 'bg-white text-sky-600';
 
   return (
     <div className={`min-h-screen relative nav-root-padding employee-shell`} style={{ background: '#f8fafc' }}>
@@ -877,8 +870,12 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
           <>
             <div className="absolute top-0 right-0 w-[50%] h-[50%] bg-gradient-to-bl from-blue-50/50 via-transparent to-transparent"></div>
             <div className="absolute bottom-0 left-0 w-[40%] h-[40%] bg-gradient-to-tr from-slate-100/60 via-transparent to-transparent"></div>
-            <div className="absolute top-[20%] right-[15%] w-[500px] h-[500px] bg-blue-50/40 rounded-full blur-[150px]"></div>
-            <div className="absolute bottom-[20%] left-[10%] w-[400px] h-[400px] bg-sky-50/30 rounded-full blur-[130px]"></div>
+            {!isLowEnd && (
+              <>
+                <div className="absolute top-[20%] right-[15%] w-[500px] h-[500px] bg-blue-50/40 rounded-full blur-[150px]"></div>
+                <div className="absolute bottom-[20%] left-[10%] w-[400px] h-[400px] bg-sky-50/30 rounded-full blur-[130px]"></div>
+              </>
+            )}
 
             {/* Decorative color blocks - desktop */}
             <div className="absolute top-[12%] left-[5%] w-24 h-24 bg-gradient-to-br from-blue-100/60 to-cyan-100/40 rounded-2xl rotate-12 opacity-60"></div>
@@ -989,7 +986,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                 </div>
                 {!isMobile && !isTablet ? (
                   <div className="flex min-w-0 flex-1 items-center gap-4">
-                    <h1 className="truncate text-[20px] font-bold leading-none tracking-tight text-white" style={{ textShadow: '0 1px 12px rgba(56,189,248,0.25)' }}>
+                    <h1 className="emp-brand-title truncate text-[22px] leading-tight">
                       {companyName}
                     </h1>
                     <span className="h-6 w-px flex-shrink-0 bg-gradient-to-b from-transparent via-white/35 to-transparent" aria-hidden="true"></span>
@@ -1001,7 +998,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                   </div>
                 ) : (
                 <div className="flex-1 min-w-0" style={{ maxWidth: isMobile ? 'calc(100vw - 140px)' : undefined }}>
-                  <h1 className={`${isMobile ? 'text-[15px]' : 'text-lg'} font-bold text-white truncate tracking-tight leading-tight`}>
+                  <h1 className={`emp-brand-title ${isMobile ? 'text-[17px]' : 'text-xl'} truncate leading-tight`}>
                     {companyName}
                   </h1>
                   <div className="flex items-center gap-1.5 mt-px">
@@ -1013,7 +1010,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
               </div>
               <div className={`flex flex-shrink-0 items-center ${isMobile ? 'gap-1.5' : isTablet ? 'gap-2' : 'gap-3'}`}>
                 {/* Message Center Button */}
-                <div className="relative">
+                <div className="relative" ref={bellWrapRef}>
                   <button
                     onClick={() => {
                       dismissMessageToast();
@@ -1053,7 +1050,7 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                   {/* Unread count badge */}
                   {unreadMessageCount > 0 && (
                     <div
-                      className={`absolute -top-2 -right-2 min-w-[22px] h-[22px] px-1.5 bg-red-500 text-white text-[12px] leading-none font-bold tabular-nums rounded-full shadow-[0_2px_6px_rgba(220,38,38,0.45)] flex items-center justify-center border-2 border-white z-20 keep-animation ${hasNewMessage ? 'animate-badge-bounce' : ''}`}
+                      className={`absolute -top-2 -right-2 min-w-[22px] h-[22px] px-1.5 bg-red-500 text-white text-[12px] leading-none font-bold tabular-nums rounded-full shadow-[0_2px_6px_rgba(220,38,38,0.45)] flex items-center justify-center border-2 border-white z-20 keep-animation ${hasNewMessage ? 'animate-badge-shake-lift' : 'animate-badge-shake'}`}
                       style={{ willChange: hasNewMessage ? 'transform' : 'auto' }}
                     >
                       {unreadMessageCount > 99 ? '99+' : unreadMessageCount}
@@ -1061,91 +1058,107 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                   )}
                   </button>
 
-                  {/* New Message Toast Popup - Mobile Optimized */}
-                  {showMessageToast && latestMessage && (
-                    <div className="absolute top-full right-0 mt-2 w-[min(calc(100vw-2rem),320px)] z-50 animate-slide-in-down" style={{ maxWidth: 'min(calc(100vw - 2rem), 320px)' }}>
+                  {/* New message toast: portaled and measured against the bell so it never hangs off the screen edge */}
+                  {showMessageToast && latestMessage && createPortal(
+                    <div
+                      ref={toastCardRef}
+                      className="employee-header-toast fixed animate-slide-in-down"
+                      style={{
+                        top: toastPos?.top ?? 'calc(var(--employee-header-height, 64px) + 8px)',
+                        right: toastPos?.right ?? 12,
+                        width: 'min(calc(100vw - 24px), 340px)',
+                        WebkitTextSizeAdjust: '100%',
+                      }}
+                    >
                       {/* Arrow */}
-                      <div className={`absolute -top-[6px] right-3 h-3 w-3 rotate-45 border border-b-0 border-r-0 ${latestMessage.notificationCategory === 'performance_reward' ? 'border-amber-300/40 bg-amber-500' : 'border-emerald-400/30 bg-emerald-600'}`}></div>
+                      <div
+                        className={`absolute -top-[6px] h-3 w-3 rotate-45 border border-b-0 border-r-0 ${toastIsReward ? 'border-amber-300/40 bg-amber-500' : 'border-emerald-400/30 bg-emerald-600'}`}
+                        style={{ right: toastPos?.arrow ?? 28 }}
+                      ></div>
 
-                      <div className={`relative overflow-hidden rounded-2xl border shadow-2xl ring-1 ${latestMessage.notificationCategory === 'performance_reward' ? 'border-amber-300/30 bg-gradient-to-br from-amber-500 via-yellow-500 to-orange-500 ring-amber-300/50' : 'border-emerald-500/20 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-600 ring-emerald-400/40'}`} style={{ WebkitTextSizeAdjust: '100%' }}>
-                        {/* Decorative patterns - hidden on very narrow screens */}
-                        <div className="hidden sm:block absolute top-0 right-0 w-20 h-20 rounded-full bg-teal-300 opacity-15 -translate-y-8 translate-x-6"></div>
-                        <div className="hidden sm:block absolute bottom-0 left-0 w-14 h-14 rounded-full bg-emerald-300 opacity-10 translate-y-5 -translate-x-5"></div>
-                        <div className="hidden sm:block absolute top-1/2 right-8 w-6 h-6 rotate-45 bg-white opacity-[0.07]"></div>
-                        <div className="hidden sm:block absolute bottom-6 right-16 w-4 h-4 rounded-full bg-cyan-200 opacity-15"></div>
+                      <div className={`relative overflow-hidden rounded-[16px] border shadow-2xl ring-1 ${toastIsReward ? 'border-amber-300/30 bg-gradient-to-br from-amber-500 via-yellow-500 to-orange-500 ring-amber-300/50' : 'border-emerald-500/20 bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-600 ring-emerald-400/40'}`}>
+                        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+                          <div className={`absolute -right-8 -top-8 h-[88px] w-[88px] rounded-full ${toastIsReward ? 'bg-yellow-300/30' : 'bg-cyan-300/25'}`}></div>
+                          <div className={`absolute -bottom-8 -left-8 h-[72px] w-[72px] rounded-full ${toastIsReward ? 'bg-orange-400/30' : 'bg-teal-300/30'}`}></div>
+                          <div className={`absolute -right-10 top-[44%] h-[18px] w-[130px] -rotate-[28deg] rounded-full ${toastIsReward ? 'bg-white/15' : 'bg-white/10'}`}></div>
+                          <div className="absolute left-[44%] top-[10px] h-[8px] w-[8px] rotate-45 rounded-[2px] bg-white/30"></div>
+                        </div>
 
                         {/* Top accent line */}
-                        <div className="h-[2px]" style={{ background: 'linear-gradient(90deg, transparent, #6ee7b7, #a7f3d0, #6ee7b7, transparent)' }} />
+                        <div className="relative h-[2px]" style={{ background: 'linear-gradient(90deg, transparent, #6ee7b7, #a7f3d0, #6ee7b7, transparent)' }} />
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); dismissMessageToast(); }}
+                          aria-label={t.common.close}
+                          className={`absolute right-[8px] top-[10px] z-10 flex h-[26px] w-[26px] items-center justify-center rounded-full !min-h-0 !min-w-0 !p-0 text-white ring-1 ring-white/40 transition-colors after:absolute after:-inset-[9px] after:content-[''] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                            toastIsReward ? 'bg-amber-900/25 hover:bg-amber-900/40' : 'bg-emerald-950/30 hover:bg-emerald-950/45'
+                          }`}
+                          style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+                        >
+                          <X className="h-[14px] w-[14px]" strokeWidth={3} aria-hidden="true" />
+                        </button>
 
                         {/* Content */}
                         <div
                           onClick={() => { setMessageToOpen(latestMessage.summaryCount ? null : latestMessage.notification); dismissMessageToast(); setShowMessageCenter(true); setHasNewMessage(false); }}
-                          className="relative px-3 sm:px-4 pt-3 sm:pt-3.5 pb-3 sm:pb-3.5 cursor-pointer touch-manipulation"
+                          className="relative cursor-pointer touch-manipulation"
                           style={{ WebkitTapHighlightColor: 'transparent' }}
                         >
-                          {/* Header row */}
-                          <div className="flex items-center gap-2 sm:gap-2.5 mb-2 sm:mb-2.5">
-                            <div className="relative flex-shrink-0">
-                              <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-white/15 border border-white/20 ring-1 ring-white/10 shadow-inner">
-                                {latestMessage.notificationCategory === 'performance_reward' ? <Gift className="h-4.5 w-4.5 text-white" strokeWidth={2.2} /> : <Bell className="w-4.5 h-4.5 text-white" strokeWidth={2.2} />}
+                          <div className="flex items-start gap-[12px] px-[14px] pb-[12px] pt-[12px] sm:gap-[14px] sm:px-[16px] sm:pb-[14px] sm:pt-[14px]">
+                            <div className="relative mt-[2px] flex-shrink-0">
+                              <div className="flex h-[38px] w-[38px] items-center justify-center rounded-xl border border-white/25 bg-white/15 shadow-inner ring-1 ring-white/10 sm:h-[42px] sm:w-[42px]">
+                                {toastIsReward ? <Gift className="h-[19px] w-[19px] text-white" strokeWidth={2.2} /> : <Bell className="h-[19px] w-[19px] text-white" strokeWidth={2.2} />}
                               </div>
-                              <div className="absolute -top-1.5 -right-1.5 min-w-[16px] h-[16px] px-[3px] rounded-full flex items-center justify-center bg-white shadow-md">
-                                <span className="text-[10px] font-black leading-none text-emerald-600">{latestMessage.summaryCount ? (latestMessage.summaryCount > 99 ? '99+' : latestMessage.summaryCount) : 1}</span>
+                              <div className="absolute -right-1.5 -top-1.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-white px-[3px] shadow-md">
+                                <span className={`text-[10px] font-black leading-none ${toastIsReward ? 'text-amber-600' : 'text-emerald-600'}`}>{latestMessage.summaryCount ? (latestMessage.summaryCount > 99 ? '99+' : latestMessage.summaryCount) : 1}</span>
                               </div>
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <span className={`mb-0.5 block text-[11px] font-bold uppercase tracking-[0.12em] ${latestMessage.notificationCategory === 'performance_reward' ? 'text-amber-50' : 'text-emerald-200'}`}>{latestMessage.notificationCategory === 'performance_reward' ? 'Performance Reward' : t.header.newMessage}</span>
-                              <h3 className="font-bold text-[13px] leading-tight truncate text-white">
+                            <div className="min-w-0 flex-1">
+                              <div className="mb-[5px] flex items-center gap-[8px] pr-[24px]">
+                                <span className={`h-[18px] w-[4px] flex-shrink-0 rounded-full bg-gradient-to-b ${toastIsReward ? 'from-white to-amber-100/50' : 'from-white to-emerald-100/50'}`} aria-hidden="true"></span>
+                                <span className="truncate text-[15px] font-extrabold leading-[20px] tracking-[0.01em] text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.28)] sm:text-[16px] sm:leading-[22px]">
+                                  {toastIsReward ? 'Performance Reward' : t.header.newMessage}
+                                </span>
+                              </div>
+                              <h3 className="mb-[3px] line-clamp-2 break-words text-[13px] font-semibold leading-[1.35] text-white/95 sm:text-[14px]">
                                 {latestMessage.summaryCount
                                   ? t.header.newMessagesSummary.replace('{n}', String(latestMessage.summaryCount))
                                   : latestMessage.title}
                               </h3>
+                              <p className="line-clamp-1 text-[11px] leading-[16px] text-white/90 sm:line-clamp-2 sm:text-[12px] sm:leading-[17px]">
+                                {latestMessage.summaryCount
+                                  ? t.header.newMessagesSummaryHint
+                                  : latestMessage.content.replace(/<[^>]*>/g, '').slice(0, 80)}
+                              </p>
                             </div>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); dismissMessageToast(); }}
-                              aria-label={t.common.close}
-                              className="emp-close-btn max-sm:-m-0.5 flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 active:scale-90 transition-all"
-                              style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', minWidth: '32px', minHeight: '32px' }}
-                            >
-                              <X className="w-3.5 h-3.5 text-white/80" strokeWidth={2.5} />
-                            </button>
-                          </div>
-
-                          {latestMessage.notificationCategory === 'performance_reward' && (
-                            <div className="mb-2.5 ml-[44px] flex items-center justify-between gap-3 rounded-lg border border-white/20 bg-white/15 px-3 py-2 sm:ml-[46px]">
-                              <span className="min-w-0 text-[11px] font-bold uppercase leading-tight tracking-wider text-white/75">{t.messages.rewardWalletLabel}</span>
-                              <span className="shrink-0 whitespace-nowrap text-sm font-black text-white">+{Number(latestMessage.rewardAmount || 0).toFixed(2)} {latestMessage.rewardCurrency}</span>
-                            </div>
-                          )}
-
-                          {/* Body */}
-                          <div className="ml-[44px] sm:ml-[46px] p-2 sm:p-2.5 rounded-lg bg-white/10 border border-white/10 backdrop-blur-sm mb-2.5 sm:mb-3">
-                            <p className="text-[12px] line-clamp-2 leading-[1.5] text-white/85">
-                              {latestMessage.summaryCount
-                                ? t.header.newMessagesSummaryHint
-                                : latestMessage.content.replace(/<[^>]*>/g, '').slice(0, 80)}
-                            </p>
                           </div>
 
                           {/* Footer */}
-                          <div className="flex items-center justify-between ml-[44px] sm:ml-[46px]">
-                            <span className="text-[11px] font-medium text-white/50 truncate mr-2">
-                              {latestMessage.priority === 'urgent' ? t.header.urgent :
-                               latestMessage.priority === 'high' ? t.header.highPriority : t.header.normal}
-                            </span>
-                            <div className={`flex-shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg transition-all active:scale-95 hover:scale-105 bg-white shadow-md ${latestMessage.notificationCategory === 'performance_reward' ? 'text-amber-700' : 'text-emerald-700'}`}>
-                              <span className="text-[11px] font-bold">{t.header.view}</span>
-                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+                          <div className={`flex items-center justify-between gap-[8px] px-[14px] py-[8px] sm:px-[16px] sm:py-[10px] ${toastIsReward ? 'bg-amber-900/25' : 'bg-emerald-950/30'}`}>
+                            <div className="flex min-w-0 items-center gap-[8px]">
+                              <span className={`inline-flex h-[24px] flex-shrink-0 items-center gap-[5px] rounded-full px-[9px] text-[11px] font-bold leading-none shadow-md ring-1 ring-white/50 ${toastPriorityStyle}`}>
+                                {latestMessage.priority === 'urgent' ? <AlertCircle className="h-[14px] w-[14px] min-h-[14px] min-w-[14px] flex-shrink-0" width={14} height={14} strokeWidth={2.75} aria-hidden="true" />
+                                  : latestMessage.priority === 'high' ? <Zap className="h-[14px] w-[14px] min-h-[14px] min-w-[14px] flex-shrink-0" width={14} height={14} strokeWidth={2.75} aria-hidden="true" />
+                                  : latestMessage.priority === 'normal' ? <Shield className="h-[14px] w-[14px] min-h-[14px] min-w-[14px] flex-shrink-0" width={14} height={14} strokeWidth={2.75} aria-hidden="true" />
+                                  : <Radio className="h-[14px] w-[14px] min-h-[14px] min-w-[14px] flex-shrink-0" width={14} height={14} strokeWidth={2.75} aria-hidden="true" />}
+                                <span className="whitespace-nowrap">{toastPriorityLabel}</span>
+                              </span>
+                              {toastIsReward && (
+                                <span className="min-w-0 truncate">
+                                  <span className="mr-[8px] hidden text-[11px] font-bold uppercase tracking-wider text-white/85 sm:inline">{t.messages.rewardWalletLabel}</span>
+                                  <span className="whitespace-nowrap text-[12px] font-black text-white sm:text-[13px]">+{Number(latestMessage.rewardAmount || 0).toFixed(2)} {latestMessage.rewardCurrency}</span>
+                                </span>
+                              )}
+                            </div>
+                            <div className={`flex h-[28px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[9px] bg-white px-[12px] shadow-md transition-all hover:scale-105 active:scale-95 sm:h-[32px] sm:rounded-[10px] sm:px-[14px] ${toastIsReward ? 'text-amber-700' : 'text-emerald-700'}`}>
+                              <span className="text-[11px] font-bold sm:text-[12px]">{t.header.view}</span>
+                              <svg className="h-[11px] w-[11px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3} aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
                             </div>
                           </div>
                         </div>
-
-                        {/* Progress bar */}
-                        <div className="h-[2px] bg-black/10">
-                          <div className="h-full animate-shrink-width" style={{ background: 'linear-gradient(90deg, #6ee7b7, #a7f3d0, #ffffff)' }} />
-                        </div>
                       </div>
-                    </div>
+                    </div>,
+                    document.body
                   )}
                 </div>
 
@@ -1253,8 +1266,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
                             }}
                             className="w-full px-4 py-3 flex items-center gap-3 rounded-xl hover:bg-red-50 transition-all duration-200 group"
                           >
-                            <div className="w-8 h-8 bg-slate-50 group-hover:bg-red-100 rounded-lg flex items-center justify-center transition-colors">
-                              <LogOut className="w-4 h-4 text-slate-400 group-hover:text-red-500 transition-colors" />
+                            <div className="w-8 h-8 bg-red-50 group-hover:bg-red-100 rounded-lg flex items-center justify-center transition-colors">
+                              <LogOut className="w-4 h-4 text-red-500" />
                             </div>
                             <span className="text-sm font-medium text-slate-700 group-hover:text-red-600 transition-colors">{t.header.logout}</span>
                           </button>
@@ -1340,19 +1353,19 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
         <div className={`max-w-7xl mx-auto ${isMobile ? 'px-3 pt-[calc(0.75rem-1px)] pb-2' : isTablet ? 'px-5 pt-[calc(0.75rem-1px)] pb-4' : 'px-8 py-6 pb-6'}`}>
           <Suspense fallback={<PageLoader />}>
           <div>
-            <div className="emp-tab-pane sm:max-lg:pb-[88px]" style={{ display: activeTab === 'announcements' ? 'block' : 'none' }}>
+            <div className="emp-tab-pane sm:max-lg:pb-[100px]" style={{ display: activeTab === 'announcements' ? 'block' : 'none' }}>
               {isTabMounted('announcements') && <Suspense fallback={<PageLoader />}>{announcementsPage}</Suspense>}
             </div>
-            <div style={{ display: activeTab === 'dispatch' ? 'block' : 'none' }} className="emp-tab-pane pb-[72px] max-[359px]:pb-[66px] min-[480px]:pb-16 lg:pb-[88px] min-[1025px]:pb-20">
+            <div style={{ display: activeTab === 'dispatch' ? 'block' : 'none' }} className="emp-tab-pane pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px] short:max-md:!pb-3">
               {isTabMounted('dispatch') && <Suspense fallback={<PageLoader />}>{dispatchPage}</Suspense>}
             </div>
-            <div className="emp-tab-pane space-y-4 sm:space-y-6 pb-[72px] max-[359px]:pb-[66px] min-[480px]:pb-16 lg:pb-[88px] min-[1025px]:pb-20" style={{ display: activeTab === 'orders' ? 'block' : 'none' }}>
+            <div className="emp-tab-pane space-y-4 sm:space-y-6 pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px]" style={{ display: activeTab === 'orders' ? 'block' : 'none' }}>
               {isTabMounted('orders') && <Suspense fallback={<PageLoader />}>{orderSubmissionPage}{orderListPage}</Suspense>}
             </div>
-            <div className="emp-tab-pane pb-[88px] lg:pb-24" style={{ display: activeTab === 'wallet' ? 'block' : 'none' }}>
+            <div className="emp-tab-pane pb-[100px] lg:pb-[108px]" style={{ display: activeTab === 'wallet' ? 'block' : 'none' }}>
               {isTabMounted('wallet') && <Suspense fallback={<PageLoader />}>{walletPage}</Suspense>}
             </div>
-            <div className="emp-tab-pane pb-[72px] max-[359px]:pb-[66px] min-[480px]:pb-16 lg:pb-[88px] min-[1025px]:pb-20" style={{ display: activeTab === 'statistics' ? 'block' : 'none' }}>
+            <div className="emp-tab-pane pb-[84px] max-[359px]:pb-[78px] min-[480px]:pb-[76px] lg:pb-[100px] min-[1025px]:pb-[92px]" style={{ display: activeTab === 'statistics' ? 'block' : 'none' }}>
               {isTabMounted('statistics') && <Suspense fallback={<PageLoader />}>{statisticsPage}</Suspense>}
             </div>
           </div>
@@ -1485,6 +1498,8 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
         body:has(.employee-modal-backdrop, .employee-modal-surface) .customer-service-fab {
           visibility: hidden;
         }
+        .employee-header-toast { z-index: 10021; }
+        body:has(.employee-modal-backdrop, .employee-modal-surface) .employee-header-toast { z-index: 9000; }
         .employee-nav {
           position: fixed !important;
           bottom: 0 !important;
@@ -1632,22 +1647,11 @@ export default function EmployeeDashboard({ employee: initialEmployee }: Employe
           }
         }
 
-        @keyframes shrinkWidth {
-          from {
-            width: 100%;
-          }
-          to {
-            width: 0%;
-          }
-        }
 
         .animate-slide-in-down {
           animation: slideInDown 0.4s ease-out;
         }
 
-        .animate-shrink-width {
-          animation: shrinkWidth 10s linear;
-        }
 
       `}</style>
 

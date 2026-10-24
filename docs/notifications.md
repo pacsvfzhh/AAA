@@ -3,6 +3,7 @@
 ## 后台发送 `MessageManagement.tsx`（导航「通知」）
 - 收件人面板：二级只看到自己的员工；可按启用/已验证、姓名或员工 ID 筛选；多个标签之间是 **OR** 条件；已勾选的员工排到列表最前面；改变筛选不会取消已勾选。
 - 发送：`send_admin_message_with_delivery`，参数含 `delivery_mode`（`realtime_only` / `login_only` / `realtime_with_login_fallback`）、优先级、可选奖金和 `operation_id`。内容相同的请求复用同一个操作编号，避免重复发奖。
+- 优先级配色（2026-10-15，员工端与管理端统一）：普通 = 蓝色，重要 = 绿色，紧急 = 红色（沿用），绩效奖励 = 琥珀色（沿用）。员工端在 `MessageCenter.tsx`（消息卡片、优先级标签）与 `EmployeeDashboard.tsx`（铃铛弹出卡片的优先级胶囊）；管理端在 `MessageManagement.tsx` 的优先级选择按钮、消息列表标签和消息详情里的优先级卡片。
 - 奖金：`send_admin_message_secure` 在同一事务内为每位收件人调用 `private.credit_performance_bonus`：写一笔 `wallet_transactions(type='performance_bonus')`，`wallets.available_balance` 与 `users.total_income` 同步增加，并由触发器记入 `wallet_ledger_entries`、排入钱包对账；任何一步失败整笔回滚。总额 = 金额 × 收件人数。前端金额没有上限、不四舍五入（确认框会显示人均与总额）。永久删除员工时，其奖金流水与自动执行记录一并清除。
 - 范本：`message_templates`（按 `admin_id` 隔离），可载入、套用、新增、修改、删除。
 - 已读显示：汇总 `message_recipients.is_read` / `read_at`。筛选「已讀」= 有收件人且全部已读；「未讀」包含部分已读。
@@ -28,7 +29,7 @@
 ## 通知自动化 `NotificationAutomation.tsx`
 > 2026-10-09 起正式库使用下列「执行」「锁」「判定」「错误」描述的流程（迁移 `20261101000000_scale_notification_automation_processing.sql`，正式库版本 `20261009104010`）。之前的旧流程：pg_cron 调用 `process_notification_automation_queue_fast(200)` / `process_notification_automation_queue(200)`，一批最多 200 人在同一个事务里并独占锁；员工登录时要等这把锁；同一员工任一任务失败会回滚他本次所有任务，错误只记在 `notification_automation_queue.last_error`；启用任务/恢复方案/加成员时当场逐个员工计算基线。两种流程的发送规则（何时达标、不补发、只发一次）相同。
 
-- 方案（plan）状态：active / paused / archived；任务（task）状态：draft / active / paused。二级只能管理自己的；超管可切换管理员组。
+- 方案（plan）状态：active / paused / archived；任务（task）状态：draft / active / paused。二级只能管理自己的；超管可切换管理员组。「員工詳情數據」的「編輯員工」可直接预选、更换或移除该员工的方案，储存共用 `set_notification_automation_plan_for_employee` 与原成员关系，返回自动化页会重新加载名单，无须重复勾选；原暂停／封存方案不改动时保留，候选仅列员工所属管理员的启用方案。
 - 管理员之间的隔离（服务端强制）：员工只能加入建立他的管理员（`users.created_by`）的方案，且同时只能在一个方案（`notification_automation_plan_members` 的 `UNIQUE(user_id)`）；方案任务只发给任务所属管理员名下的方案成员，超管的任务也一样；新任务必须属于方案。另有约束 `notification_automation_active_tasks_require_plan`：启用中的任务必须属于方案且不是共享模板；`automation_task_applies_to_user` 不再放行未分组任务。`resolve_notification_automation_owner` 让二级只能操作自己的分组，超管可以操作任何分组，但改动仍归属该分组。
 - 触发条件：累计订单、每日订单、工作天数、佣金、连续工作日、年度日期、首次登录；可设一次性达标或循环。编辑任务会重置为草稿并清除进度；方案内任务的收件人是方案成员。
 - RPC：`get_notification_automation_dashboard_v2`、`get_notification_automation_executions_v2`、`save_notification_automation_task_v2`、`set_notification_automation_task_status_v2`、`set_notification_automation_plan_for_employee`、`get_notification_automation_plan_assignments`、`get_notification_automation_failures`。以下旧 RPC 已撤销浏览器调用权限：`save_notification_automation_task`、`save_notification_automation_task_with_delivery`、`save_notification_automation_task_copy`、`save_notification_automation_task_copy_with_delivery`、`copy_shared_notification_automation_task`、`copy_shared_notification_automation_task_with_delivery`、`set_notification_automation_task_status`、`get_notification_automation_dashboard`、`process_notification_automation_queue`、`process_notification_automation_queue_fast`（前端都未调用）。

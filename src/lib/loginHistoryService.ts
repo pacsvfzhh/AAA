@@ -68,6 +68,8 @@ export async function logEmployeeLogin(
     });
 
     if (!structuredError) return;
+    // The session was ended server-side (taken over by another login, logged out, expired or deactivated); the plain RPC checks the same thing and would be rejected too.
+    if (isEmployeeSessionEndedError(structuredError)) return;
 
     const { error: fallbackError } = await supabase.rpc('log_employee_login', {
       p_user_id: userId,
@@ -78,7 +80,7 @@ export async function logEmployeeLogin(
       p_session_id: sessionId || null,
     });
 
-    if (fallbackError) {
+    if (fallbackError && !isEmployeeSessionEndedError(fallbackError)) {
       console.error(
         'Error logging employee login:',
         `${formatSupabaseError(fallbackError)} (structured RPC: ${formatSupabaseError(structuredError)})`,

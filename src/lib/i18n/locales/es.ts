@@ -257,6 +257,8 @@ const es = {
     activeAssignment: 'Asignación Activa',
     activeAssignmentDesc: 'Envíe los detalles del pedido para esta asignación',
     assignmentExpired: 'Esta asignación ha expirado. Regrese a la página de Asignación de Pedidos.',
+    noActiveGroup: 'No tiene un grupo de pedidos activo asignado. Contacte a su administrador.',
+    assignmentAwaiting: 'Hay un pedido pendiente de aceptar. Acéptelo primero en Asignación de Pedidos.',
   },
   orderList: {
     title: 'Historial de pedidos',
