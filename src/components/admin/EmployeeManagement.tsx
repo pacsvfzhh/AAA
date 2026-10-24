@@ -404,6 +404,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const editingEmployeeInitialRef = useRef<{ username: string; employeeId: string; remarks: string; planId: string; regionId: string; dispatchGroupId: string } | null>(null);
   const [savingEmployeeEdit, setSavingEmployeeEdit] = useState(false);
   const [editEmployeeError, setEditEmployeeError] = useState<string | null>(null);
+  const [showDiscardEmployeeEdit, setShowDiscardEmployeeEdit] = useState(false);
+  const employeeEditDialogRef = useRef<HTMLDivElement>(null);
+  const discardEmployeeEditDialogRef = useRef<HTMLDivElement>(null);
   const [editingRemarksOnly, setEditingRemarksOnly] = useState<EmployeeWithAdmin | null>(null);
   const [showPasswordReset, setShowPasswordReset] = useState<{id: string; username: string; employeeId: string} | null>(null);
   const [newPassword, setNewPassword] = useState('');
@@ -1190,6 +1193,18 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     },
   }), [throwRegionActionError]);
 
+  useEffect(() => {
+    if (!showDiscardEmployeeEdit) return;
+    const editor = employeeEditDialogRef.current;
+    const previousFocus = document.activeElement;
+    if (editor) editor.inert = true;
+    discardEmployeeEditDialogRef.current?.querySelector<HTMLButtonElement>('[data-continue-editing]')?.focus();
+    return () => {
+      if (editor) editor.inert = false;
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+    };
+  }, [showDiscardEmployeeEdit]);
+
   const editingEmployeeId = editingEmployee?.id;
   useEffect(() => {
     if (!showCreateForm && !editingEmployeeId) return;
@@ -1747,6 +1762,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       regionId: employee.region_id || '',
       dispatchGroupId: '',
     };
+    setShowDiscardEmployeeEdit(false);
     setEditingEmployee(employee);
     setEditingAutomationPlanId(planId);
     setEditingAutomationPlanTouched(false);
@@ -1758,8 +1774,20 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setEditEmployeeError(null);
   }, [automationAssignmentsByEmployee]);
 
-  const closeEmployeeEditor = () => {
+  const resetEmployeeEditor = () => {
     if (savingEmployeeEdit) return;
+    setShowDiscardEmployeeEdit(false);
+    setEditingEmployee(null);
+    setEditingAutomationPlanId('');
+    setEditingAutomationPlanTouched(false);
+    setEditingDispatchGroupId('');
+    setCurrentDispatchGroup(null);
+    editingEmployeeInitialRef.current = null;
+    setEditEmployeeError(null);
+  };
+
+  const closeEmployeeEditor = () => {
+    if (savingEmployeeEdit || showDiscardEmployeeEdit) return;
     const initial = editingEmployeeInitialRef.current;
     const dirty = Boolean(editingEmployee && initial && (
       editingEmployee.username !== initial.username
@@ -1769,14 +1797,11 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       || editingAutomationPlanId !== initial.planId
       || editingDispatchGroupId !== initial.dispatchGroupId
     ));
-    if (dirty && !window.confirm('員工資料或分組設定尚未儲存，確定要放棄變更嗎？')) return;
-    setEditingEmployee(null);
-    setEditingAutomationPlanId('');
-    setEditingAutomationPlanTouched(false);
-    setEditingDispatchGroupId('');
-    setCurrentDispatchGroup(null);
-    editingEmployeeInitialRef.current = null;
-    setEditEmployeeError(null);
+    if (dirty) {
+      setShowDiscardEmployeeEdit(true);
+      return;
+    }
+    resetEmployeeEditor();
   };
 
   const handleSaveEmployeeEdit = async () => {
@@ -5102,8 +5127,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
             <div aria-hidden="true" className="pointer-events-none absolute -left-32 top-[-10rem] h-[32rem] w-[32rem] rounded-full bg-purple-500/10 blur-[100px]" />
             <div aria-hidden="true" className="pointer-events-none absolute -bottom-48 right-[-8rem] h-[36rem] w-[36rem] rounded-full bg-fuchsia-700/10 blur-[120px]" />
             <div
+              ref={employeeEditDialogRef}
               role="dialog"
-              aria-modal="true"
+              aria-modal={!showDiscardEmployeeEdit}
               aria-labelledby="edit-employee-title"
               aria-busy={savingEmployeeEdit}
               data-employee-edit-theme="plum"
@@ -5244,6 +5270,55 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                 </button>
               </div>
             </div>
+            {showDiscardEmployeeEdit && (
+              <div
+                className="absolute inset-0 z-10 flex items-center justify-center bg-[#100b19]/80 p-4 backdrop-blur-sm"
+                onPointerDown={event => event.stopPropagation()}
+                onPointerUp={event => event.stopPropagation()}
+                onClick={event => {
+                  event.stopPropagation();
+                  if (event.target === event.currentTarget) setShowDiscardEmployeeEdit(false);
+                }}
+                onKeyDown={event => {
+                  event.stopPropagation();
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setShowDiscardEmployeeEdit(false);
+                  } else if (event.key === 'Tab') {
+                    const buttons = Array.from(discardEmployeeEditDialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []);
+                    const first = buttons[0];
+                    const last = buttons[buttons.length - 1];
+                    if (event.shiftKey && document.activeElement === first) {
+                      event.preventDefault();
+                      last?.focus();
+                    } else if (!event.shiftKey && document.activeElement === last) {
+                      event.preventDefault();
+                      first?.focus();
+                    }
+                  }
+                }}
+              >
+                <div ref={discardEmployeeEditDialogRef} role="alertdialog" aria-modal="true" aria-labelledby="discard-employee-edit-title" aria-describedby="discard-employee-edit-description" className="relative max-h-[calc(100vh-2rem)] w-full max-w-[440px] overflow-y-auto rounded-2xl border border-purple-300/35 bg-[#21172d] shadow-[0_24px_80px_rgba(0,0,0,0.65)]">
+                  <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-purple-600 via-fuchsia-300 to-purple-600" />
+                  <div className="flex items-start gap-3 px-5 pb-4 pt-6">
+                    <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-purple-300/30 bg-purple-400/15 text-purple-200"><Pencil className="h-5 w-5" /></span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] font-semibold tracking-widest text-purple-300">尚未儲存</p>
+                      <h4 id="discard-employee-edit-title" className="mt-1 text-base font-bold leading-6 text-white">要放棄尚未儲存的變更嗎？</h4>
+                    </div>
+                    <button type="button" aria-label="返回編輯員工" onClick={() => setShowDiscardEmployeeEdit(false)} className="shrink-0 rounded-lg p-1.5 text-purple-200/65 transition-colors hover:bg-purple-300/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-200/60"><X className="h-4 w-4" /></button>
+                  </div>
+                  <div className="px-5 pb-5">
+                    <p className="break-all rounded-xl border border-purple-300/15 bg-purple-950/30 px-3 py-2.5 text-xs font-semibold text-purple-100">{editingEmployee.username} <span className="ml-1 font-normal text-purple-200/60">· {editingEmployee.employee_id}</span></p>
+                    <p id="discard-employee-edit-description" className="mt-3 text-xs leading-6 text-stone-300">關閉後，尚未儲存的員工資料與分組設定將不會套用；已儲存的項目不受影響。繼續編輯可保留目前內容。</p>
+                  </div>
+                  <div className="flex flex-col-reverse gap-2 border-t border-purple-300/10 bg-black/15 px-5 py-4 sm:flex-row sm:justify-end">
+                    <button type="button" onClick={resetEmployeeEditor} className="rounded-xl border border-rose-300/30 bg-rose-950/20 px-4 py-2.5 text-xs font-semibold text-rose-200 transition-colors hover:border-rose-300/60 hover:bg-rose-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/60">放棄變更並關閉</button>
+                    <button type="button" data-continue-editing onClick={() => setShowDiscardEmployeeEdit(false)} className="rounded-xl border border-purple-300/45 bg-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-purple-950/25 transition-colors hover:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-100/70">繼續編輯</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>,
           document.body,
         );
