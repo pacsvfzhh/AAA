@@ -464,6 +464,65 @@ test('employee updates change the region within the group but never clear it', a
   assert.deepEqual(row, { region_id: taipei, remarks: 'still here', tags: ['a'] });
 });
 
+test('employee editor RPCs update the same employee in regions, dispatch groups and automation memberships', async () => {
+  const originalRegion = await createRegion(TOKENS.super, SECONDARY, '编辑前地区');
+  const nextRegion = await createRegion(TOKENS.secondary, SECONDARY, '编辑后地区');
+  const { rows: [dispatch] } = await db.query(`
+    INSERT INTO public.dispatch_groups (group_name, is_active) VALUES ('Editor dispatch', true) RETURNING id
+  `);
+  const { rows: plans } = await db.query(`
+    INSERT INTO public.notification_automation_plans (owner_admin_id, name)
+    VALUES ($1, 'Editor original'), ($1, 'Editor next') RETURNING id, name
+  `, [SECONDARY]);
+  const originalPlan = plans.find(plan => plan.name === 'Editor original').id;
+  const nextPlan = plans.find(plan => plan.name === 'Editor next').id;
+
+  for (const token of [TOKENS.super, TOKENS.secondary]) {
+    const employee = (await createEmployee(token, SECONDARY, {
+      p_region_id: originalRegion.id,
+      p_automation_plan_id: originalPlan,
+    })).user;
+    const assignGroup = (session, groupId) => call('admin_assign_dispatch_group_member', {
+      p_admin_session_token: session, p_user_id: employee.id, p_group_id: groupId,
+    });
+    const assignPlan = (session, planId) => call('set_notification_automation_plan_for_employee', {
+      p_admin_session_token: session, p_user_id: employee.id, p_plan_id: planId,
+    });
+    try {
+      await db.exec('SET ROLE anon');
+      await call('admin_update_employee_account', {
+        p_admin_session_token: token,
+        p_user_id: employee.id,
+        p_updates: JSON.stringify({ region_id: nextRegion.id, remarks: 'Editor saved', tags: ['existing', 'new'] }),
+      });
+      assert.equal((await assignGroup(token, dispatch.id)).member.group_id, dispatch.id);
+      assert.equal((await assignPlan(token, nextPlan)).success, true);
+      await assert.rejects(assignGroup(TOKENS.other, GROUP), /not found or not owned|permission/i);
+      await assert.rejects(assignPlan(TOKENS.other, originalPlan), /permission|not found|own/i);
+    } finally {
+      await db.exec('RESET ROLE');
+    }
+
+    const { rows: [saved] } = await db.query(`
+      SELECT u.region_id, u.remarks, u.tags, m.group_id
+      FROM public.users u JOIN public.dispatch_group_members m ON m.user_id = u.id WHERE u.id = $1
+    `, [employee.id]);
+    assert.deepEqual(saved, { region_id: nextRegion.id, remarks: 'Editor saved', tags: ['existing', 'new'], group_id: dispatch.id });
+    const assignments = await call('get_notification_automation_plan_assignments', { p_admin_session_token: token });
+    assert.equal(assignments.assignments.find(row => row.user_id === employee.id).plan_id, nextPlan);
+    const dashboard = await call('get_notification_automation_dashboard_v2', {
+      p_admin_session_token: token, p_owner_admin_id: SECONDARY,
+    });
+    assert.equal(dashboard.plan_members.filter(row => row.user_id === employee.id).length, 1);
+    assert.equal(dashboard.plan_members.find(row => row.user_id === employee.id).plan_id, nextPlan);
+    assert.deepEqual(dashboard.employees.find(row => row.id === employee.id).tags, ['existing', 'new']);
+    await assignPlan(token, null);
+    const cleared = await call('get_notification_automation_plan_assignments', { p_admin_session_token: token });
+    assert.equal(cleared.assignments.some(row => row.user_id === employee.id), false);
+    assert.equal((await db.query('SELECT group_id FROM public.dispatch_group_members WHERE user_id = $1', [employee.id])).rows[0].group_id, dispatch.id);
+  }
+});
+
 test('the employee snapshot returns persisted boolean pins only for visible administrator groups', async () => {
   const { id: taipei } = await createRegion(TOKENS.super, OTHER, '台北');
   const secondaryPinned = await createRegion(TOKENS.secondary, SECONDARY, '快照置頂');
