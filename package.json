@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "test:audit-cleanup": "node --test supabase/tests/audit-cleanup.test.mjs",
     "test:employee-regions": "node --test supabase/tests/employee-regions.test.mjs",
+    "test:employee-login-maintenance": "node --test supabase/tests/employee-login-maintenance.test.mjs",
     "test:service-chat": "node --test supabase/tests/service-chat-scale.test.mjs",
     "test:work-session": "node --test supabase/tests/work-session-stop.test.mjs"
   },

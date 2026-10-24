@@ -48,8 +48,9 @@ before(async () => {
   for (const [index, file] of files.entries()) {
     for (const segment of segments) if (segment.before && file.startsWith(segment.before)) await db.exec(segment.sql);
     if (file === migration) {
-      for (const fn of ['create_admin_financial_session(text,text)', 'validate_employee_session(uuid,text,text)']) {
+      for (const fn of ['create_admin_financial_session(text,text)', 'validate_employee_session(uuid,uuid,text)']) {
         originals[fn] = (await db.query('SELECT pg_get_functiondef(to_regprocedure($1)) AS definition', [fn])).rows[0].definition;
+        assert(originals[fn], `${fn} must exist before the migration`);
       }
     }
     const sql = (await readFile(new URL(file, migrationDir), 'utf8')).replace(/CREATE EXTENSION IF NOT EXISTS pg_cron[^;]*;/gi, '').replace(/CREATE EXTENSION IF NOT EXISTS pg_trgm;/gi, '');
@@ -139,6 +140,7 @@ test('blocked employee login creates no session, does not replace online session
   const { rows: [user] } = await db.query('SELECT current_session_token FROM public.users WHERE username = $1', ['maintenance-employee']);
   assert.equal(user.current_session_token, original.session_marker);
   assert.equal((await db.query('SELECT revoked_at FROM public.employee_financial_sessions WHERE token_hash = private.hash_financial_token($1)', [original.session_token])).rows[0].revoked_at, null);
+  assert.equal(await call('validate_employee_session', { p_user_id: original.user.id, p_session_token: original.session_token, p_tab_id: 'qa-tab' }), true);
   assert.equal((await login('other-employee')).success, true);
   assert.equal((await login('root-employee')).success, true);
   const admin = await call('create_admin_financial_session', { p_username: 'maintenance-team', p_password: 'password-team' });
