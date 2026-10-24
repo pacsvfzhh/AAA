@@ -7,12 +7,13 @@ import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 
 const REGION_MIGRATION = '20261102000000_add_employee_regions.sql';
+const PER_ADMIN_MIGRATION = '20261102000001_per_admin_employee_regions.sql';
 const migrationDir = new URL('../migrations/', import.meta.url);
 const supportDir = new URL('./support/', import.meta.url);
 
 // baseline.sql segments: the first runs right after the first migration, the others before the named file.
-// A few historical files cannot run on an empty database; only the region migration must succeed here.
-async function replayMigrations() {
+// A few historical files cannot run on an empty database; only the region migrations must succeed here.
+async function replayMigrations(beforeFile) {
   const segments = [{ before: null, sql: '' }];
   for (const line of (await readFile(new URL('baseline.sql', supportDir), 'utf8')).split('\n')) {
     const marker = line.match(/^-- @before (\S+)/);
@@ -27,6 +28,7 @@ async function replayMigrations() {
     for (const segment of segments) {
       if (segment.before && file.startsWith(segment.before)) await database.exec(segment.sql);
     }
+    await beforeFile?.(database, file);
     const sql = (await readFile(new URL(file, migrationDir), 'utf8'))
       .replace(/CREATE EXTENSION IF NOT EXISTS pg_cron[^;]*;/gi, '')
       .replace(/CREATE EXTENSION IF NOT EXISTS pg_trgm;/gi, '');
@@ -54,6 +56,15 @@ const TOKENS = {
 const GROUP = '20000000-0000-4000-8000-000000000001';
 const MISSING_REGION = '30000000-0000-4000-8000-000000000099';
 
+// Seeded with the earlier shared-region schema to check the per-admin conversion.
+const LEGACY_A = '40000000-0000-4000-8000-000000000001';
+const LEGACY_B = '40000000-0000-4000-8000-000000000002';
+const SHARED_REGION = '50000000-0000-4000-8000-000000000001';
+const UNUSED_REGION = '50000000-0000-4000-8000-000000000002';
+const ORPHAN_REGION = '50000000-0000-4000-8000-000000000003';
+const LEGACY_USER_A = '60000000-0000-4000-8000-000000000001';
+const LEGACY_USER_B = '60000000-0000-4000-8000-000000000002';
+
 let db;
 let replay;
 
@@ -64,9 +75,20 @@ async function call(fn, args) {
   return rows[0].result;
 }
 
-const createRegion = (token, name) => call('admin_create_employee_region', {
+const createRegion = (token, ownerId, name) => call('admin_create_employee_region', {
   p_admin_session_token: token,
+  p_owner_admin_id: ownerId,
   p_name: name,
+});
+const renameRegion = (token, regionId, name) => call('admin_rename_employee_region', {
+  p_admin_session_token: token,
+  p_region_id: regionId,
+  p_name: name,
+});
+const deleteRegion = (token, regionId, replacementId) => call('admin_delete_employee_region', {
+  p_admin_session_token: token,
+  p_region_id: regionId,
+  ...(replacementId === undefined ? {} : { p_replacement_region_id: replacementId }),
 });
 
 let employeeSequence = 0;
@@ -87,9 +109,24 @@ function createEmployee(token, createdBy, extra = {}) {
 
 const regionOf = async userId => (await db.query(
   'SELECT region_id FROM public.users WHERE id = $1', [userId])).rows[0].region_id;
+const countUsers = async () => (await db.query('SELECT count(*)::int AS count FROM public.users')).rows[0].count;
 
 before(async () => {
-  replay = await replayMigrations();
+  replay = await replayMigrations(async (database, file) => {
+    if (file !== PER_ADMIN_MIGRATION) return;
+    await database.exec(`
+      INSERT INTO public.admins (id, username, password_hash, role) VALUES
+        ('${LEGACY_A}', 'legacy-a', 'x', 'secondary_admin'),
+        ('${LEGACY_B}', 'legacy-b', 'x', 'secondary_admin');
+      INSERT INTO public.employee_regions (id, name, created_by) VALUES
+        ('${SHARED_REGION}', '共用地區', '${LEGACY_A}'),
+        ('${UNUSED_REGION}', '未使用', '${LEGACY_B}'),
+        ('${ORPHAN_REGION}', '無主', NULL);
+      INSERT INTO public.users (id, username, password_hash, employee_id, created_by, region_id) VALUES
+        ('${LEGACY_USER_A}', 'legacy-user-a', 'x', 'LA', '${LEGACY_A}', '${SHARED_REGION}'),
+        ('${LEGACY_USER_B}', 'legacy-user-b', 'x', 'LB', '${LEGACY_B}', '${SHARED_REGION}');
+    `);
+  });
   db = replay.database;
   await db.exec(`
     INSERT INTO public.admins (id, username, password_hash, role, parent_id) VALUES
@@ -106,9 +143,41 @@ before(async () => {
   `);
 });
 
-test('the region migration applies on top of the full migration history', () => {
+test('the region migrations apply on top of the full migration history', () => {
   assert.ok(replay.files.includes(REGION_MIGRATION));
+  assert.ok(replay.files.includes(PER_ADMIN_MIGRATION));
   assert.deepEqual(replay.failures.filter(failure => failure.file >= REGION_MIGRATION), []);
+});
+
+test('shared regions are split into each administrator group that uses them', async () => {
+  const { rows } = await db.query(`
+    SELECT region.id, region.name, region.admin_id
+    FROM public.employee_regions AS region
+    WHERE region.admin_id IN ($1, $2)
+    ORDER BY region.admin_id, region.name
+  `, [LEGACY_A, LEGACY_B]);
+  assert.deepEqual(rows.map(row => [row.admin_id, row.name]), [
+    [LEGACY_A, '共用地區'],
+    [LEGACY_B, '共用地區'],
+    [LEGACY_B, '未使用'],
+  ]);
+  const regionA = rows.find(row => row.admin_id === LEGACY_A).id;
+  const regionB = rows.find(row => row.admin_id === LEGACY_B && row.name === '共用地區').id;
+  assert.notEqual(regionA, regionB);
+  assert.equal(await regionOf(LEGACY_USER_A), regionA);
+  assert.equal(await regionOf(LEGACY_USER_B), regionB);
+  assert.equal(rows.find(row => row.name === '未使用').id, UNUSED_REGION);
+
+  const { rows: gone } = await db.query('SELECT id FROM public.employee_regions WHERE id = ANY($1)', [[SHARED_REGION, ORPHAN_REGION]]);
+  assert.deepEqual(gone, []);
+  const { rows: [columns] } = await db.query(`
+    SELECT
+      (SELECT is_nullable FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'employee_regions' AND column_name = 'admin_id') AS admin_nullable,
+      EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'employee_regions' AND column_name = 'created_by') AS has_created_by
+  `);
+  assert.deepEqual(columns, { admin_nullable: 'NO', has_created_by: false });
 });
 
 test('regions are only reachable through the administrator RPCs', async () => {
@@ -119,18 +188,24 @@ test('regions are only reachable through the administrator RPCs', async () => {
       (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.employee_regions'::regclass) AS rls,
       has_column_privilege('anon', 'public.users', 'region_id', 'SELECT') AS anon_region_column,
       has_column_privilege('anon', 'public.users', 'region_id', 'UPDATE') AS anon_region_update,
-      has_function_privilege('anon', 'public.admin_create_employee_region(uuid, text)', 'EXECUTE') AS anon_create_region,
+      has_function_privilege('anon', 'public.admin_create_employee_region(uuid, uuid, text)', 'EXECUTE') AS anon_create_region,
+      has_function_privilege('anon', 'public.admin_rename_employee_region(uuid, uuid, text)', 'EXECUTE') AS anon_rename_region,
+      has_function_privilege('anon', 'public.admin_delete_employee_region(uuid, uuid, uuid)', 'EXECUTE') AS anon_delete_region,
       has_function_privilege('anon',
         'public.admin_create_employee_account_with_automation_plan(uuid, text, text, text, uuid, text, uuid, uuid, uuid)',
         'EXECUTE') AS anon_create_employee,
       has_function_privilege('anon', 'public.admin_update_employee_account_unlocked(uuid, uuid, jsonb)', 'EXECUTE') AS anon_unlocked,
       has_function_privilege('service_role', 'public.admin_update_employee_account_unlocked(uuid, uuid, jsonb)', 'EXECUTE') AS service_unlocked,
+      has_function_privilege('anon', 'private.resolve_employee_region_owner(uuid, text, uuid)', 'EXECUTE') AS anon_owner_helper,
       (SELECT count(*) FROM pg_proc AS p, aclexplode(p.proacl) AS acl
         WHERE p.oid IN (
-          'public.admin_create_employee_region(uuid, text)'::regprocedure,
+          'public.admin_create_employee_region(uuid, uuid, text)'::regprocedure,
+          'public.admin_rename_employee_region(uuid, uuid, text)'::regprocedure,
+          'public.admin_delete_employee_region(uuid, uuid, uuid)'::regprocedure,
           'public.admin_create_employee_account_with_automation_plan(uuid, text, text, text, uuid, text, uuid, uuid, uuid)'::regprocedure
         ) AND acl.grantee = 0) AS public_grants,
-      (SELECT count(*) FROM pg_proc WHERE proname = 'admin_create_employee_account_with_automation_plan') AS create_signatures
+      (SELECT count(*) FROM pg_proc WHERE proname = 'admin_create_employee_account_with_automation_plan') AS create_signatures,
+      (SELECT count(*) FROM pg_proc WHERE proname = 'admin_create_employee_region') AS region_signatures
   `);
   assert.deepEqual(privileges, {
     anon_table: false,
@@ -139,64 +214,108 @@ test('regions are only reachable through the administrator RPCs', async () => {
     anon_region_column: true,
     anon_region_update: false,
     anon_create_region: true,
+    anon_rename_region: true,
+    anon_delete_region: true,
     anon_create_employee: true,
     anon_unlocked: false,
     service_unlocked: false,
+    anon_owner_helper: false,
     public_grants: 0,
     create_signatures: 1,
+    region_signatures: 1,
   });
 });
 
-test('super and secondary administrators add shared, trimmed and de-duplicated regions', async () => {
-  const taipei = await createRegion(TOKENS.super, '  台北  ');
-  assert.equal(taipei.name, '台北');
-  assert.equal(taipei.created, true);
+test('each administrator group keeps its own trimmed and de-duplicated regions', async () => {
+  const secondaryTaipei = await createRegion(TOKENS.secondary, SECONDARY, '  台北  ');
+  assert.deepEqual([secondaryTaipei.name, secondaryTaipei.admin_id, secondaryTaipei.created], ['台北', SECONDARY, true]);
 
-  const again = await createRegion(TOKENS.secondary, '台北');
-  assert.equal(again.id, taipei.id);
-  assert.equal(again.created, false);
+  const again = await createRegion(TOKENS.super, SECONDARY, '台北');
+  assert.deepEqual([again.id, again.created], [secondaryTaipei.id, false]);
 
-  const kaohsiung = await createRegion(TOKENS.secondary, '\u3000高雄\u3000');
-  assert.equal(kaohsiung.name, '高雄');
-  assert.equal(kaohsiung.created, true);
+  const otherTaipei = await createRegion(TOKENS.other, OTHER, '台北');
+  assert.notEqual(otherTaipei.id, secondaryTaipei.id);
+  assert.equal(otherTaipei.created, true);
 
-  const latin = await createRegion(TOKENS.other, 'Kuala Lumpur');
-  const latinAgain = await createRegion(TOKENS.super, 'kuala lumpur');
-  assert.equal(latinAgain.id, latin.id);
-  assert.equal(latinAgain.name, 'Kuala Lumpur');
-  assert.equal(latinAgain.created, false);
+  const superTaipei = await createRegion(TOKENS.super, SUPER, '\u3000台北\u3000');
+  assert.equal(superTaipei.admin_id, SUPER);
+  assert.notEqual(superTaipei.id, secondaryTaipei.id);
 
-  await assert.rejects(createRegion(TOKENS.super, '   '), /1 to 30 characters/);
-  await assert.rejects(createRegion(TOKENS.super, 'x'.repeat(31)), /1 to 30 characters/);
-  assert.equal((await createRegion(TOKENS.super, 'y'.repeat(30))).created, true);
-  await assert.rejects(createRegion(TOKENS.emergency, '台中'), /session is invalid or expired/);
-  await assert.rejects(createRegion('10000000-0000-4000-8000-0000000000ff', '台中'), /session is invalid or expired/);
+  const latin = await createRegion(TOKENS.other, OTHER, 'Kuala Lumpur');
+  assert.equal((await createRegion(TOKENS.super, OTHER, 'kuala lumpur')).id, latin.id);
 
-  const { rows } = await db.query(`SELECT name, created_by FROM public.employee_regions ORDER BY created_at, name`);
-  assert.deepEqual(rows.map(row => row.name), ['台北', '高雄', 'Kuala Lumpur', 'y'.repeat(30)]);
-  assert.deepEqual(rows.slice(0, 3).map(row => row.created_by), [SUPER, SECONDARY, OTHER]);
+  await assert.rejects(createRegion(TOKENS.secondary, OTHER, '台中'), /another administrator group/);
+  await assert.rejects(createRegion(TOKENS.super, null, '台中'), /administrator group must be selected/);
+  await assert.rejects(createRegion(TOKENS.super, EMERGENCY, '台中'), /administrator group is not available/);
+  await assert.rejects(createRegion(TOKENS.super, SECONDARY, '   '), /1 to 30 characters/);
+  await assert.rejects(createRegion(TOKENS.super, SECONDARY, 'x'.repeat(31)), /1 to 30 characters/);
+  assert.equal((await createRegion(TOKENS.super, SECONDARY, 'y'.repeat(30))).created, true);
+  await assert.rejects(createRegion(TOKENS.emergency, SECONDARY, '台中'), /session is invalid or expired/);
+  await assert.rejects(createRegion('10000000-0000-4000-8000-0000000000ff', SECONDARY, '台中'), /session is invalid or expired/);
 });
 
-test('creating an employee stores the chosen region and the old call shape still works', async () => {
-  const { id: taipei } = await createRegion(TOKENS.super, '台北');
+test('administrators rename only their own regions and names stay unique per group', async () => {
+  const region = await createRegion(TOKENS.secondary, SECONDARY, '新北');
+  await createRegion(TOKENS.secondary, SECONDARY, '桃園');
+  await createRegion(TOKENS.other, OTHER, '新竹');
+
+  const renamed = await renameRegion(TOKENS.secondary, region.id, '  新竹  ');
+  assert.deepEqual([renamed.id, renamed.name], [region.id, '新竹']);
+  assert.equal((await renameRegion(TOKENS.super, region.id, '新竹市')).name, '新竹市');
+  assert.equal((await renameRegion(TOKENS.secondary, region.id, '新竹市')).name, '新竹市');
+
+  await assert.rejects(renameRegion(TOKENS.secondary, region.id, '桃園'), /already exists/);
+  await assert.rejects(renameRegion(TOKENS.secondary, region.id, ' '), /1 to 30 characters/);
+  await assert.rejects(renameRegion(TOKENS.other, region.id, '別人的'), /another administrator group/);
+  await assert.rejects(renameRegion(TOKENS.super, MISSING_REGION, '不存在'), /region is not available/);
+});
+
+test('deleting a region in use requires moving its employees to another region of the same group', async () => {
+  const keep = await createRegion(TOKENS.super, SECONDARY, '保留區');
+  const remove = await createRegion(TOKENS.super, SECONDARY, '刪除區');
+  const unused = await createRegion(TOKENS.super, SECONDARY, '空區');
+  const foreign = await createRegion(TOKENS.super, OTHER, '外組');
+  const first = (await createEmployee(TOKENS.super, SECONDARY, { p_region_id: remove.id })).user;
+  const second = (await createEmployee(TOKENS.super, SECONDARY, { p_region_id: remove.id })).user;
+  const archived = (await createEmployee(TOKENS.super, SECONDARY, { p_region_id: remove.id })).user;
+  await db.exec(`
+    SET session_replication_role = replica;
+    UPDATE public.users SET archived_at = now(), is_active = false WHERE id = '${archived.id}';
+    RESET session_replication_role;
+  `);
+
+  assert.deepEqual(await deleteRegion(TOKENS.secondary, unused.id), { id: unused.id, replacement_region_id: null, moved_count: 0 });
+
+  await assert.rejects(deleteRegion(TOKENS.secondary, remove.id), /still assigned to 2 employees/);
+  await assert.rejects(deleteRegion(TOKENS.secondary, remove.id, foreign.id), /replacement region is not available/);
+  await assert.rejects(deleteRegion(TOKENS.secondary, remove.id, remove.id), /replacement region is not available/);
+  await assert.rejects(deleteRegion(TOKENS.other, remove.id, keep.id), /another administrator group/);
+
+  const result = await deleteRegion(TOKENS.secondary, remove.id, keep.id);
+  assert.deepEqual(result, { id: remove.id, replacement_region_id: keep.id, moved_count: 2 });
+  assert.equal(await regionOf(first.id), keep.id);
+  assert.equal(await regionOf(second.id), keep.id);
+  assert.equal(await regionOf(archived.id), null);
+  assert.deepEqual((await db.query('SELECT id FROM public.employee_regions WHERE id = $1', [remove.id])).rows, []);
+});
+
+test('creating an employee requires a region from the employee administrator group', async () => {
+  const { id: taipei } = await createRegion(TOKENS.super, SECONDARY, '台北');
+  const { id: otherTaipei } = await createRegion(TOKENS.super, OTHER, '台北');
 
   const withRegion = await createEmployee(TOKENS.super, SECONDARY, { p_region_id: taipei });
   assert.equal(withRegion.success, true);
   assert.equal(withRegion.user.region_id, taipei);
-  assert.equal(await regionOf(withRegion.user.id), taipei);
-
-  const withoutRegion = await createEmployee(TOKENS.super, SECONDARY);
-  assert.equal(withoutRegion.success, true);
-  assert.equal(await regionOf(withoutRegion.user.id), null);
 
   const bySecondary = await createEmployee(TOKENS.secondary, SECONDARY, { p_region_id: taipei });
   assert.equal(await regionOf(bySecondary.user.id), taipei);
 
-  const before = (await db.query('SELECT count(*)::int AS count FROM public.users')).rows[0].count;
-  await assert.rejects(createEmployee(TOKENS.super, SECONDARY, { p_region_id: MISSING_REGION }), /region is not available/);
-  assert.equal((await db.query('SELECT count(*)::int AS count FROM public.users')).rows[0].count, before);
-
-  const legacy = await call('admin_create_employee_account', {
+  const before = await countUsers();
+  await assert.rejects(createEmployee(TOKENS.super, SECONDARY), /region must be selected/);
+  await assert.rejects(createEmployee(TOKENS.super, SECONDARY, { p_region_id: null }), /region must be selected/);
+  await assert.rejects(createEmployee(TOKENS.super, SECONDARY, { p_region_id: otherTaipei }), /region is not available/);
+  await assert.rejects(createEmployee(TOKENS.secondary, SECONDARY, { p_region_id: MISSING_REGION }), /region is not available/);
+  await assert.rejects(call('admin_create_employee_account', {
     p_admin_session_token: TOKENS.super,
     p_username: 'region-legacy-wrapper',
     p_password: 'secret-123',
@@ -204,15 +323,15 @@ test('creating an employee stores the chosen region and the old call shape still
     p_created_by: OTHER,
     p_remarks: '',
     p_dispatch_group_id: GROUP,
-  });
-  assert.equal(legacy.success, true);
-  assert.equal(await regionOf(legacy.user.id), null);
+  }), /region must be selected/);
+  assert.equal(await countUsers(), before);
 });
 
-test('employee updates set and clear the region but reject unknown regions and other groups', async () => {
-  const { id: taipei } = await createRegion(TOKENS.super, '台北');
-  const { id: kaohsiung } = await createRegion(TOKENS.super, '高雄');
-  const employee = (await createEmployee(TOKENS.super, SECONDARY, { p_remarks: 'keep me' })).user;
+test('employee updates change the region within the group but never clear it', async () => {
+  const { id: taipei } = await createRegion(TOKENS.super, SECONDARY, '台北');
+  const { id: kaohsiung } = await createRegion(TOKENS.super, SECONDARY, '高雄');
+  const { id: otherTaipei } = await createRegion(TOKENS.super, OTHER, '台北');
+  const employee = (await createEmployee(TOKENS.super, SECONDARY, { p_region_id: taipei })).user;
   const update = (token, updates) => call('admin_update_employee_account', {
     p_admin_session_token: token,
     p_user_id: employee.id,
@@ -222,30 +341,35 @@ test('employee updates set and clear the region but reject unknown regions and o
   assert.equal((await update(TOKENS.secondary, { region_id: kaohsiung })).region_id, kaohsiung);
   assert.equal((await update(TOKENS.super, { region_id: taipei, remarks: 'still here' })).region_id, taipei);
   assert.equal((await update(TOKENS.super, { tags: ['a'] })).region_id, taipei);
-  assert.equal((await update(TOKENS.super, { region_id: null })).region_id, null);
-  assert.equal((await update(TOKENS.super, { region_id: taipei })).region_id, taipei);
-  assert.equal((await update(TOKENS.super, { region_id: '' })).region_id, null);
 
+  await assert.rejects(update(TOKENS.super, { region_id: null }), /region must be selected/);
+  await assert.rejects(update(TOKENS.super, { region_id: '' }), /region must be selected/);
+  await assert.rejects(update(TOKENS.super, { region_id: otherTaipei }), /region is not available/);
   await assert.rejects(update(TOKENS.super, { region_id: MISSING_REGION }), /region is not available/);
-  await assert.rejects(update(TOKENS.other, { region_id: taipei }), /permission to manage this employee/);
+  await assert.rejects(update(TOKENS.other, { region_id: otherTaipei }), /permission to manage this employee/);
   await assert.rejects(update(TOKENS.super, { region: taipei }), /protected field/);
 
   const { rows: [row] } = await db.query('SELECT region_id, remarks, tags FROM public.users WHERE id = $1', [employee.id]);
-  assert.deepEqual(row, { region_id: null, remarks: 'still here', tags: ['a'] });
+  assert.deepEqual(row, { region_id: taipei, remarks: 'still here', tags: ['a'] });
 });
 
-test('the employee snapshot lists every shared region and each employee region', async () => {
-  const { id: taipei } = await createRegion(TOKENS.super, '台北');
+test('the employee snapshot only lists regions of the visible administrator groups', async () => {
+  const { id: taipei } = await createRegion(TOKENS.super, OTHER, '台北');
   const created = (await createEmployee(TOKENS.super, OTHER, { p_region_id: taipei })).user;
 
   const superSnapshot = await call('get_employee_management_snapshot', { p_admin_session_token: TOKENS.super });
-  const { rows: regionRows } = await db.query('SELECT id, name FROM public.employee_regions ORDER BY created_at, name, id');
-  assert.deepEqual(superSnapshot.regions, regionRows);
+  const { rows: visibleRegions } = await db.query(`
+    SELECT region.id, region.name, region.admin_id
+    FROM public.employee_regions AS region
+    INNER JOIN public.admins AS a ON a.id = region.admin_id AND a.role <> 'emergency_admin'
+    ORDER BY region.created_at, region.name, region.id
+  `);
+  assert.deepEqual(superSnapshot.regions, visibleRegions);
   assert.equal(superSnapshot.employees.find(employee => employee.id === created.id).region_id, taipei);
   assert.ok(superSnapshot.employees.every(employee => 'region_id' in employee));
 
   const secondarySnapshot = await call('get_employee_management_snapshot', { p_admin_session_token: TOKENS.secondary });
-  assert.deepEqual(secondarySnapshot.regions, regionRows);
-  assert.ok(secondarySnapshot.employees.length > 0);
+  assert.ok(secondarySnapshot.regions.length > 0);
+  assert.deepEqual(secondarySnapshot.regions, visibleRegions.filter(region => region.admin_id === SECONDARY));
   assert.ok(secondarySnapshot.employees.every(employee => employee.created_by === SECONDARY));
 });

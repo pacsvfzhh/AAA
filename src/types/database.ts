@@ -1252,25 +1252,25 @@ export interface Database {
         Row: {
           id: string;
           name: string;
-          created_by: string | null;
+          admin_id: string;
           created_at: string;
         };
         Insert: {
           id?: string;
           name: string;
-          created_by?: string | null;
+          admin_id: string;
           created_at?: string;
         };
         Update: {
           id?: string;
           name?: string;
-          created_by?: string | null;
+          admin_id?: string;
           created_at?: string;
         };
         Relationships: [
           {
-            foreignKeyName: 'employee_regions_created_by_fkey';
-            columns: ['created_by'];
+            foreignKeyName: 'employee_regions_admin_id_fkey';
+            columns: ['admin_id'];
             isOneToOne: false;
             referencedRelation: 'admins';
             referencedColumns: ['id'];
@@ -2592,7 +2592,7 @@ export interface Database {
           p_remarks: string;
           p_automation_plan_id: string | null;
           p_dispatch_group_id: string;
-          p_region_id?: string | null;
+          p_region_id: string;
         };
         Returns: {
           success?: boolean;
@@ -2602,8 +2602,16 @@ export interface Database {
         };
       };
       admin_create_employee_region: {
-        Args: { p_admin_session_token: string; p_name: string };
-        Returns: { id: string; name: string; created_at: string; created: boolean };
+        Args: { p_admin_session_token: string; p_owner_admin_id: string; p_name: string };
+        Returns: { id: string; name: string; admin_id: string; created: boolean };
+      };
+      admin_rename_employee_region: {
+        Args: { p_admin_session_token: string; p_region_id: string; p_name: string };
+        Returns: { id: string; name: string; admin_id: string };
+      };
+      admin_delete_employee_region: {
+        Args: { p_admin_session_token: string; p_region_id: string; p_replacement_region_id?: string | null };
+        Returns: { id: string; replacement_region_id: string | null; moved_count: number };
       };
       admin_create_secondary_account: {
         Args: { p_admin_session_token: string; p_password: string; p_username: string };
@@ -2656,6 +2664,7 @@ export interface Database {
           regions: Array<{
             id: string;
             name: string;
+            admin_id: string;
           }>;
           employees: Array<{
             id: string;

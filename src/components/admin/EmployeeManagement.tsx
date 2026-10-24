@@ -9,7 +9,21 @@ import { mutateAuditedContent } from '../../lib/contentAudit';
 import EmployeeDetailModal from './EmployeeDetailModal';
 import LoginDeviceSummary from './LoginDeviceSummary';
 import { EmployeeRegionFilter, EmployeeRegionPicker, UNASSIGNED_REGION_FILTER } from './EmployeeRegionMenu';
-import type { CreateRegionResult, EmployeeRegion } from './EmployeeRegionMenu';
+import type { EmployeeRegion, EmployeeRegionActions } from './EmployeeRegionMenu';
+
+const REGION_REQUIRED_MESSAGE = '請選擇所在地區';
+
+const getRegionActionErrorMessage = (message: string, fallback: string) => {
+  if (/1 to 30 characters/.test(message)) return '地區名稱需為 1～30 個字。';
+  if (/Region name already exists/.test(message)) return '此群組已有同名地區。';
+  const assigned = message.match(/still assigned to (\d+) employees/);
+  if (assigned) return `此地區仍有 ${assigned[1]} 名員工，請先選擇要改到的地區。`;
+  if (/replacement region is not available/.test(message)) return '要改到的地區已不存在，請重新整理後再試。';
+  if (/selected region is not available/.test(message)) return '此地區已不存在，請重新整理後再試。';
+  if (/another administrator group|cannot manage employee regions/.test(message)) return '你沒有權限管理此群組的地區。';
+  if (/administrator group is not available/.test(message)) return '此管理員群組目前無法使用。';
+  return fallback;
+};
 
 interface OrderRealtimeData {
   user_id: string;
@@ -67,7 +81,11 @@ const getCreateEmployeeErrorMessage = (
     return '新增員工失敗：所選地區已不存在，請重新選擇地區。';
   }
 
-  if (/^(使用者名稱為必填|密碼至少需要 6 個字元|員工 ID 為必填|請先選擇派單分組|所選派單分組已不可用，請重新選擇|派單分組載入中，請稍候再試|無法載入派單分組，請關閉視窗後重試。)$/.test(message)) {
+  if (/A region must be selected\./i.test(message)) {
+    return '新增員工失敗：請選擇所在地區。';
+  }
+
+  if (/^(使用者名稱為必填|密碼至少需要 6 個字元|員工 ID 為必填|請先選擇派單分組|所選派單分組已不可用，請重新選擇|派單分組載入中，請稍候再試|無法載入派單分組，請關閉視窗後重試。|請選擇所在地區|所選地區已不存在，請重新選擇地區)$/.test(message)) {
     return message;
   }
 
@@ -297,6 +315,15 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const [regionFilterByGroup, setRegionFilterByGroup] = useState<Map<string, string>>(new Map());
   const [regionDropdownOpen, setRegionDropdownOpen] = useState<string | null>(null);
   const regionNameById = useMemo(() => new Map(regions.map(region => [region.id, region.name])), [regions]);
+  const regionsByAdmin = useMemo(() => {
+    const grouped = new Map<string, EmployeeRegion[]>();
+    regions.forEach(region => {
+      const list = grouped.get(region.admin_id);
+      if (list) list.push(region);
+      else grouped.set(region.admin_id, [region]);
+    });
+    return grouped;
+  }, [regions]);
   const [selectedAdminForCreate, setSelectedAdminForCreate] = useState<string | null>(null);
   const [createPlanMenuOpen, setCreatePlanMenuOpen] = useState(false);
   const [createPlanMenuPosition, setCreatePlanMenuPosition] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -949,7 +976,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   };
 
   const openCreateEmployeeForm = (targetAdminId: string) => {
-    setFormData(prev => ({ ...prev, dispatchGroupId: '', automationPlanId: '' }));
+    setFormData(prev => ({ ...prev, dispatchGroupId: '', automationPlanId: '', regionId: '' }));
     setDispatchGroups([]);
     setDispatchGroupsError(null);
     setDispatchGroupsLoading(true);
@@ -970,24 +997,69 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setSelectedAdminForCreate(null);
   };
 
-  const createEmployeeRegion = useCallback(async (name: string): Promise<CreateRegionResult> => {
-    const { data, error } = await supabase.rpc('admin_create_employee_region', {
-      p_admin_session_token: getAdminFinancialSessionToken(),
-      p_name: name,
-    });
-    if (error || !data?.id) {
-      if (error && isFinancialAdminSessionError(error)) {
-        void logout(false);
-        throw new Error('登入已失效，請重新登入。');
-      }
-      const message = error ? formatSupabaseError(error) : '';
-      console.error('Error creating employee region:', message);
-      throw new Error(/1 to 30 characters/.test(message) ? '地區名稱需為 1～30 個字。' : '新增地區失敗，請稍後再試。');
+  const throwRegionActionError = useCallback((error: unknown, action: string, fallback: string): never => {
+    if (error && isFinancialAdminSessionError(error)) {
+      void logout(false);
+      throw new Error('登入已失效，請重新登入。');
     }
-    const region = { id: data.id, name: data.name };
-    setRegions(prev => (prev.some(item => item.id === region.id) ? prev : [...prev, region]));
-    return { region, created: Boolean(data.created) };
+    const message = error ? formatSupabaseError(error) : '';
+    console.error(`Error ${action} employee region:`, message);
+    throw new Error(getRegionActionErrorMessage(message, fallback));
   }, []);
+
+  const getRegionActions = useCallback((ownerAdminId: string): EmployeeRegionActions => ({
+    create: async name => {
+      const { data, error } = await supabase.rpc('admin_create_employee_region', {
+        p_admin_session_token: getAdminFinancialSessionToken(),
+        p_owner_admin_id: ownerAdminId,
+        p_name: name,
+      });
+      if (error || !data?.id) return throwRegionActionError(error, 'creating', '新增地區失敗，請稍後再試。');
+      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id };
+      setRegions(prev => (prev.some(item => item.id === region.id) ? prev : [...prev, region]));
+      return { region, created: Boolean(data.created) };
+    },
+    rename: async (regionId, name) => {
+      const { data, error } = await supabase.rpc('admin_rename_employee_region', {
+        p_admin_session_token: getAdminFinancialSessionToken(),
+        p_region_id: regionId,
+        p_name: name,
+      });
+      if (error || !data?.id) return throwRegionActionError(error, 'renaming', '修改地區失敗，請稍後再試。');
+      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id };
+      setRegions(prev => prev.map(item => (item.id === region.id ? region : item)));
+      return region;
+    },
+    remove: async (regionId, replacementId) => {
+      const { error } = await supabase.rpc('admin_delete_employee_region', {
+        p_admin_session_token: getAdminFinancialSessionToken(),
+        p_region_id: regionId,
+        p_replacement_region_id: replacementId,
+      });
+      if (error) return throwRegionActionError(error, 'deleting', '刪除地區失敗，請稍後再試。');
+      setRegions(prev => prev.filter(item => item.id !== regionId));
+      setEmployeeGroups(prev => prev.map(group => ({
+        ...group,
+        employees: group.employees.map(employee => (
+          employee.region_id === regionId ? { ...employee, region_id: replacementId } : employee
+        )),
+      })));
+      setRegionFilterByGroup(prev => {
+        if (prev.get(ownerAdminId) !== regionId) return prev;
+        const next = new Map(prev);
+        next.delete(ownerAdminId);
+        return next;
+      });
+      setFormData(prev => (prev.regionId === regionId ? { ...prev, regionId: replacementId || '' } : prev));
+      setEditingEmployee(current => (
+        current && current.region_id === regionId ? { ...current, region_id: replacementId } : current
+      ));
+      if (editingEmployeeInitialRef.current?.regionId === regionId) {
+        editingEmployeeInitialRef.current = { ...editingEmployeeInitialRef.current, regionId: replacementId || '' };
+      }
+      void guardedLoadEmployeesRef.current?.(false);
+    },
+  }), [throwRegionActionError]);
 
   useEffect(() => {
     if (!showCreateForm) return;
@@ -1315,6 +1387,11 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         ? admin.id
         : (selectedAdminForCreate || admin.id);
 
+      if (!formData.regionId) throw new Error(REGION_REQUIRED_MESSAGE);
+      if (!regionsByAdmin.get(createdBy)?.some(region => region.id === formData.regionId)) {
+        throw new Error('所選地區已不存在，請重新選擇地區');
+      }
+
       const createArgs = {
         p_admin_session_token: getAdminFinancialSessionToken(),
         p_username: formData.username.trim(),
@@ -1324,7 +1401,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         p_remarks: formData.remarks.trim(),
         p_automation_plan_id: formData.automationPlanId || null,
         p_dispatch_group_id: formData.dispatchGroupId,
-        ...(formData.regionId ? { p_region_id: formData.regionId } : {}),
+        p_region_id: formData.regionId,
       };
       const { data: result, error } = await supabase.rpc('admin_create_employee_account_with_automation_plan', createArgs);
 
@@ -1673,6 +1750,10 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       setEditEmployeeError('使用者名稱與員工 ID 均為必填。');
       return;
     }
+    if (!editingEmployee.region_id) {
+      setEditEmployeeError(`${REGION_REQUIRED_MESSAGE}。`);
+      return;
+    }
 
     const currentAssignment = automationAssignmentsByEmployee.get(editingEmployee.id);
     const initialPlanId = editingEmployeeInitialRef.current?.planId || null;
@@ -1750,7 +1831,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           { label: '備註', value: editingEmployee.remarks?.trim() || '（空白）' },
           ...(regionChanged ? [{
             label: '所在地區',
-            value: (nextRegionId && regionNameById.get(nextRegionId)) || '未設定',
+            value: (nextRegionId && regionNameById.get(nextRegionId)) || '已更新',
           }] : []),
           ...(assignmentChanged ? [{
             label: '自動化方案',
@@ -1765,9 +1846,15 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       }
 
       console.error('Error saving employee and automation plan:', formatSupabaseError(error));
+      const saveMessage = formatSupabaseError(error);
+      const readableMessage = /region must be selected/i.test(saveMessage)
+        ? `${REGION_REQUIRED_MESSAGE}。`
+        : /selected region is not available/i.test(saveMessage)
+          ? '所選地區已不存在，請重新選擇地區。'
+          : saveMessage || '請重試。';
       setEditEmployeeError(profileSaved
-        ? `員工帳戶資料已儲存，但自動化方案更新失敗：${formatSupabaseError(error) || '請重試。'}`
-        : `員工帳戶資料儲存失敗，自動化方案尚未變更：${formatSupabaseError(error) || '請重試。'}`);
+        ? `員工帳戶資料已儲存，但自動化方案更新失敗：${readableMessage}`
+        : `員工帳戶資料儲存失敗，自動化方案尚未變更：${readableMessage}`);
       await guardedLoadEmployeesRef.current?.(true);
     } finally {
       setSavingEmployeeEdit(false);
@@ -2868,7 +2955,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   };
 
   const renderStatusFilterButtons = (adminId: string) => {
-    const groupEmployees = employeeGroups.find(group => group.admin.id === adminId)?.employees || [];
+    const statusGroup = employeeGroups.find(group => group.admin.id === adminId);
+    const groupEmployees = statusGroup?.employees || [];
     if (groupEmployees.some(employee => !employee.statsLoaded)) {
       return <span className="px-2 text-[10px] font-medium text-slate-500">統計資料載入中……</span>;
     }
@@ -3117,7 +3205,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         {renderCreatedDatePortal(adminId)}
 
         <EmployeeRegionFilter
-          regions={regions}
+          groupLabel={statusGroup?.admin.username || ''}
+          regions={regionsByAdmin.get(adminId) || []}
           counts={regionCounts.counts}
           unassignedCount={regionCounts.unassigned}
           selectedId={regionFilterByGroup.get(adminId) || null}
@@ -3131,7 +3220,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               return next;
             });
           }}
-          onCreate={createEmployeeRegion}
+          actions={getRegionActions(adminId)}
         />
 
         <button
@@ -4162,14 +4251,19 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                 <input type="text" value={formData.employeeId} onChange={(e) => setFormData({ ...formData, employeeId: e.target.value })} disabled={creating} required placeholder="輸入員工 ID" className={`w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 ${fieldFocusClasses} disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100`} />
               </div>
               <div>
-                <label htmlFor={`create-employee-region-${targetAdminId}`} className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>所在地區 <span className="font-normal normal-case tracking-normal text-slate-500">（選填）</span></label>
+                <label htmlFor={`create-employee-region-${targetAdminId}`} className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>所在地區 <span className="text-rose-400" aria-hidden="true">*</span></label>
                 <EmployeeRegionPicker
                   id={`create-employee-region-${targetAdminId}`}
-                  regions={regions}
+                  groupLabel={groupAdmin?.username || admin.username}
+                  regions={regionsByAdmin.get(targetAdminId) || []}
                   counts={getGroupRegionCounts(targetAdminId).counts}
                   value={formData.regionId}
-                  onChange={regionId => setFormData(prev => ({ ...prev, regionId }))}
-                  onCreate={createEmployeeRegion}
+                  onChange={regionId => {
+                    setFormData(prev => ({ ...prev, regionId }));
+                    setCreateError(current => (current === REGION_REQUIRED_MESSAGE ? null : current));
+                  }}
+                  actions={getRegionActions(targetAdminId)}
+                  invalid={createError === REGION_REQUIRED_MESSAGE}
                   disabled={creating}
                   className={`flex w-full items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors ${fieldFocusClasses} disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400`}
                 />
@@ -5092,15 +5186,20 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                 <div>
                   <label className="mb-2 flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-region">
                     所在地區
-                    <span className="rounded-full border border-violet-300/20 bg-violet-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-violet-200">選填</span>
+                    <span className="rounded-full border border-rose-300/30 bg-rose-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-rose-200">必填</span>
                   </label>
                   <EmployeeRegionPicker
                     id="edit-employee-region"
-                    regions={regions}
+                    groupLabel={editingEmployee.admin?.username || ''}
+                    regions={regionsByAdmin.get(editingEmployee.created_by) || []}
                     counts={getGroupRegionCounts(editingEmployee.created_by).counts}
                     value={editingEmployee.region_id || ''}
-                    onChange={regionId => setEditingEmployee(current => (current ? { ...current, region_id: regionId || null } : current))}
-                    onCreate={createEmployeeRegion}
+                    onChange={regionId => {
+                      setEditingEmployee(current => (current ? { ...current, region_id: regionId || null } : current));
+                      setEditEmployeeError(current => (current === `${REGION_REQUIRED_MESSAGE}。` ? null : current));
+                    }}
+                    actions={getRegionActions(editingEmployee.created_by)}
+                    invalid={editEmployeeError === `${REGION_REQUIRED_MESSAGE}。`}
                     disabled={savingEmployeeEdit}
                     className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors focus:border-blue-500 focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   />
