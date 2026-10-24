@@ -2405,6 +2405,8 @@ export interface Database {
           owner_admin_id?: string;
           enabled?: boolean;
           updated_at?: string;
+          affected_employees?: number;
+          stopped_sessions?: number;
         };
       };
       cancel_audit_deletion_confirmation: {

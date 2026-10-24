@@ -15,7 +15,7 @@
 | 路径 | 内容 |
 |---|---|
 | `src/components/admin/` | 管理员后台各页面；`EmployeeSetupSelect.tsx` 为新增员工的彩色侧展选择菜单（`docs/admin-backend.md`） |
-| `src/components/employee/` | 员工端各页面（`docs/employee-portal.md`） |
+| `src/components/employee/` | 员工端各页面；`EmployeeSessionGuard.tsx` 在挂载前及在线期间检查团队维护（`docs/employee-portal.md`） |
 | `src/components/*.tsx` | 共用组件：ErrorBoundary、LanguageSwitcher、AnnouncementDetailModal、EmployeeMaintenanceDialog（员工维护登录提示）、背景装饰 |
 | `src/lib/` | 登录会话、Supabase client、上传/净化/设备等工具（`docs/architecture.md`） |
 | `src/lib/i18n/` | 员工端与登录页的 10 种语言 |

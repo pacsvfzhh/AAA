@@ -393,8 +393,8 @@ export default function EmployeeDashboard({ employee: initialEmployee, onSession
     <OrderDispatch employee={employee} onStatusChange={handleOrderStatusChange} onSessionExpired={handleDispatchSessionExpired} onNavigateToOrders={openOrdersTab} />
   ), [employee, handleOrderStatusChange, handleDispatchSessionExpired, openOrdersTab]);
   const orderSubmissionPage = useMemo(() => (
-    <OrderSubmission employeeId={employee.id} isActive={ordersActive} adminId={employee.created_by} onNavigateToDispatch={openDispatchTab} />
-  ), [employee.id, employee.created_by, ordersActive, openDispatchTab]);
+    <OrderSubmission employeeId={employee.id} isActive={ordersActive} adminId={employee.created_by} onNavigateToDispatch={openDispatchTab} onSessionInvalid={onSessionInvalid} />
+  ), [employee.id, employee.created_by, ordersActive, openDispatchTab, onSessionInvalid]);
   const orderListPage = useMemo(() => <OrderList employeeId={employee.id} />, [employee.id]);
   const walletPage = useMemo(() => (
     <WalletOverview employeeId={employee.id} employee={employee} onWithdrawalHistoryChange={setShowWithdrawalHistory} />

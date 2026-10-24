@@ -20,9 +20,10 @@ interface OrderSubmissionProps {
   isActive: boolean;
   adminId?: string | null;
   onNavigateToDispatch?: () => void;
+  onSessionInvalid?: () => void;
 }
 
-export default function OrderSubmission({ employeeId, isActive, adminId: propAdminId, onNavigateToDispatch }: OrderSubmissionProps) {
+export default function OrderSubmission({ employeeId, isActive, adminId: propAdminId, onNavigateToDispatch, onSessionInvalid }: OrderSubmissionProps) {
   const { t } = useLanguage();
   const [adminId, setAdminId] = useState<string | null>(propAdminId || null);
   const currencyUnit = useCurrencyUnit(adminId);
@@ -552,6 +553,18 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
           },
         );
         if (markError || !markedSubmitted) {
+          const { data: sessionStatus, error: statusError } = await supabase.rpc('get_employee_maintenance_status', {
+            p_user_id: auth.user.id,
+            p_session_token: auth.financialSessionToken,
+            p_tab_id: auth.tabId,
+          });
+          if (sessionStatus?.maintenance) {
+            animation.cancel();
+            setShowSubmitAnimation(false);
+            onSessionInvalid?.();
+            return;
+          }
+          if (statusError) throw statusError;
           await supabase.from('used_order_data').delete().eq('order_id', orderData.id);
           await supabase.from('orders').delete().eq('id', orderData.id);
           throw markError || new SubmitBlockedError('assignmentExpired');

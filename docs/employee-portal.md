@@ -21,9 +21,11 @@
 - 会话机制见 `docs/architecture.md`；员工安全 RPC 需要 financial token + `tabId`。
 
 ## 登录维护提示
-- 管理员开启所属团队的「員工新登入維護」后，员工正确输入账号密码时仍停留登录页，由服务器阻止创建新会话，再显示 `EmployeeMaintenanceDialog.tsx`；管理员、其他团队及现有有效会话不受影响，不会因维护拦截增加密码错误次数。
+- 管理员开启所属团队的「員工團隊維護」后，该团队所有员工（在线及记住我）由服务器停止工作、旧登录失效；已提交订单保留正常结算，不改资金。在线页面由 `EmployeeSessionGuard.tsx` 接收用户更新信号并核对服务端状态，确认维护后卸载工作区及其计时器／弹层，再显示 `EmployeeMaintenanceDialog.tsx`。不能通过Esc、背景或关闭图标绕过，也不倒计时退出；仅「确认并退出登录」清除本页及匹配的记住我登录会话。管理员及其他团队不受影响；关闭维护须重新登录并手动开工。
+- 首次打开（含sessionStorage恢复）、记住我恢复、Realtime重新订阅、网络恢复、窗口聚焦、pageshow和回到前台均检查维护；可见页面每15秒兜底。服务器在开关提交时就停工并撤销会话，提示通常由Realtime立即送达，断线／冻结页面在恢复后显示。首次无法验证时不挂载工作区，可重试或返回登录；普通会话过期仍沿用原失效提示。
+- 员工正确输入账号密码时，维护团队仍停留登录页，由服务器阻止创建新会话并弹提示，不增加密码错误次数；错误密码仍走原限流。
 - 中文文案：「系统正在进行维护与升级，员工登录暂时不可用。请在维护完成后重新尝试。」「如有疑问或需紧急协助，请直接联系您的部门经理。」标题、状态、内容、按钮与语言选择标签均来自十语言 `t.login.maintenance*`，弹窗内切换语言即时更新。
-- 弹窗沿用蓝白登录页风格，深蓝标题、青色装饰和浅色正文；三端共用，窄屏／低高度可滚动。portal挂到body，底层页面inert并锁滚动，Tab限制在弹窗，Esc／关闭／「回到登录」只关闭提示并恢复焦点，不自动重试；点击背景不误关闭。后台配置和部署状态见 `docs/admin-backend.md`「設定」。
+- 弹窗沿用蓝白风格，深蓝标题、青色装饰和浅色正文；三端共用，窄屏／低高度可滚动。portal挂到body，底层inert并锁滚动，Tab限制在弹窗。登录页模式的Esc／关闭／「回到登录」只关闭提示、不自动重试；在线维护模式改为十语言停工说明及确认退出，没有其他关闭入口。后台配置和部署状态见 `docs/admin-backend.md`「設定」。
 
 ## 屏幕适配
 - 手机横屏提示 `src/components/PhoneLandscapeGuard.tsx`：手机（`pointer: coarse` 且屏幕短边 <600px）横放时全屏遮罩，提示转回竖屏；平板、电脑不拦截。按设备方向（`screen.orientation`，旧浏览器用 `window.orientation`）判断，键盘把竖屏视口压扁不会误触发。遮罩不卸载页面，输入内容与实时订阅都保留；出现时让当前输入框失焦。员工端挂在 `EmployeeDashboard`，有待接订单或订单将超时时显示浅黄/浅红提醒（`notice.tone` = `order`/`urgent`）；登录页由 `App.tsx` 挂载。文字在 `t.orientation`，样式类 `phone-landscape-guard`/`plg-*` 在 `src/index.css`。卡片高过屏幕（矮屏或系统字体放大）时组件加 `data-compact`，隐藏说明文字，保证标题与提醒可见。普通网页无法强制锁定方向（iOS Safari 不支持 `screen.orientation.lock()`），所以采用遮罩提示。
@@ -52,7 +54,7 @@
 ## 提交订单 `OrderSubmission.tsx`
 - Product Type 选择框在选中后显示清除按钮（X）；清除后恢复未选择状态并关闭下拉菜单，不影响其他表单内容，焦点回到选择框。
 - 订单号 9 位、交易号 11 位；`get_employee_dispatch_submit_wait_secure` 取得有效的 assignment。
-- 用 `valid_order_data` 校验，`used_order_data` 防止重复使用；插入 `orders(status='processing', assignment_id)` 后调用 `mark_dispatch_assignment_submitted_secure`；标记失败会删除刚插入的订单和使用记录。
+- 用 `valid_order_data` 校验，`used_order_data` 防止重复使用；插入 `orders(status='processing', assignment_id)` 后调用 `mark_dispatch_assignment_submitted_secure`；标记失败时先核对维护原因：维护中保留已接受的订单和使用记录，停止动画并交由会话边界提示退出；无法确认服务端状态时也不做破坏性补偿，其他明确失败才沿用删除补偿。维护guard允许已保存同员工真实订单补写使用记录，仍拒绝维护期间的新订单。
 - `orders.status` 为 `processing` / `success` / `failure`（和派单状态是两回事）。pg_cron 每分钟 `process_pending_orders()` 处理已 processing 满 3 分钟的订单（每批 200）。
 
 ## 订单列表与统计

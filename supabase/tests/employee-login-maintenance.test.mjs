@@ -42,6 +42,7 @@ const historicalFailures = [
 const failures = [];
 const originals = {};
 let previousEmployeeLogin;
+let previousEmployeeRecovery;
 let replayedFiles;
 let fixtureSequence = 0;
 
@@ -133,14 +134,17 @@ before(async () => {
         'private.get_financial_employee_id(uuid,uuid,text)', 'process_pending_orders()',
         'auto_create_commission_and_update_wallet()', 'private.snapshot_order_dispatch_rates()',
         'start_employee_dispatch_session_secure(uuid,uuid,text)', 'stop_employee_dispatch_session_secure(uuid,uuid,text,uuid)',
-        'recover_employee_dispatch_assignment_secure(uuid,uuid,text)', 'resume_employee_dispatch_session_secure(uuid,uuid,text,uuid)',
+        'resume_employee_dispatch_session_secure(uuid,uuid,text,uuid)',
         'prepare_next_dispatch_order_secure(uuid,uuid,text,uuid)', 'assign_next_dispatch_order_secure(uuid,uuid,text,uuid,uuid,text)',
         'accept_dispatch_assignment_secure(uuid,uuid,text,uuid,uuid,text)', 'update_session_heartbeat_secure(uuid,uuid,text,uuid)']) {
         originals[fn] = await definition(fn);
         assert(originals[fn], `${fn} must exist before the migration`);
       }
     }
-    if (file === migration) previousEmployeeLogin = await definition('create_employee_financial_session(text,text,text)');
+    if (file === migration) {
+      previousEmployeeLogin = await definition('create_employee_financial_session(text,text,text)');
+      previousEmployeeRecovery = await definition('recover_employee_dispatch_assignment_secure(uuid,uuid,text)');
+    }
     const sql = (await readFile(new URL(file, migrationDir), 'utf8')).replace(/CREATE EXTENSION IF NOT EXISTS pg_cron[^;]*;/gi, '').replace(/CREATE EXTENSION IF NOT EXISTS pg_trgm;/gi, '');
     try { await db.exec(sql); } catch (error) {
       failures.push({ file, message: String(error.message).split('\n')[0] });
@@ -208,7 +212,8 @@ test('maintenance defaults off and is private with guarded RPC permissions', asy
         [role, 'public.employee_financial_sessions', 'maintenance_revoked_at', privilege])).rows[0].allowed, false);
     }
   }
-  for (const signature of ['get_employee_login_maintenance(uuid,uuid)', 'set_employee_login_maintenance(uuid,uuid,text,boolean)', 'get_employee_maintenance_status(uuid,uuid,text)']) {
+  for (const signature of ['get_employee_login_maintenance(uuid,uuid)', 'set_employee_login_maintenance(uuid,uuid,text,boolean)',
+    'get_employee_maintenance_status(uuid,uuid,text)', 'recover_employee_dispatch_assignment_secure(uuid,uuid,text)']) {
     const { rows: [r] } = await db.query(`SELECT prosecdef, proconfig, has_function_privilege('anon', oid, 'EXECUTE') AS anon, EXISTS(SELECT 1 FROM aclexplode(proacl) WHERE grantee = 0 AND privilege_type = 'EXECUTE') AS public FROM pg_proc WHERE oid = to_regprocedure($1)`, [`public.${signature}`]);
     assert.equal(r.prosecdef, true); assert.equal(r.anon, true); assert.equal(r.public, false);
     assert.equal((await db.query(`SELECT has_function_privilege('authenticated', to_regprocedure($1), 'EXECUTE') AS allowed`, [`public.${signature}`])).rows[0].allowed, true);
@@ -324,6 +329,21 @@ test('team lock is the only login change and precedes financial/user locks and s
   assert(guard.includes('NEW.user_id'));
   assert(guard.includes("pg_advisory_xact_lock_shared(hashtextextended('employee-maintenance:' || v_owner_admin_id::text, 0))"));
   assert(guard.indexOf('pg_advisory_xact_lock_shared') < guard.indexOf('FROM private.employee_login_maintenance'));
+  const recovery = await definition('recover_employee_dispatch_assignment_secure(uuid,uuid,text)');
+  const financialLock = '  FOR UPDATE OF financial_session, employee;';
+  assert(recovery.indexOf(financialLock) > recovery.indexOf('private.hash_financial_token(p_session_token)'));
+  assert(recovery.indexOf(financialLock) < recovery.indexOf('FROM public.dispatch_assignments'));
+  assert(recovery.indexOf(financialLock) < recovery.indexOf('UPDATE public.dispatch_assignments'));
+  assert.equal(recovery.includes('pg_advisory_xact_lock'), false);
+  const guardStart = recovery.indexOf('  IF v_candidate.id IS NOT NULL AND EXISTS (');
+  const guardEnd = recovery.indexOf('  IF v_candidate.id IS NULL THEN');
+  assert(guardStart > recovery.indexOf('INTO v_candidate'));
+  assert(guardEnd > guardStart);
+  assert.equal(recovery.replace(recovery.slice(guardStart, guardEnd), '')
+    .replace('employee.is_active = true\n' + financialLock, 'employee.is_active = true;')
+    .replace('assignment.accepted_at, assignment.assigned_at,', 'assignment.accepted_at,'), previousEmployeeRecovery);
+  const migrationSQL = await readFile(new URL(migration, migrationDir), 'utf8');
+  assert.equal(/\/\*|^\s*--.*\n\s*--/m.test(migrationSQL), false);
 });
 
 test('enable atomically stops all teammates at heartbeat cutoff, cancels only unsubmitted assignments and cannot resume old work', async () => {
@@ -461,18 +481,31 @@ test('submitted assignments and actual orders survive maintenance, while direct 
   await db.query('UPDATE public.dispatch_assignments SET order_submitted = true WHERE id = $1', [flagOnly.assignment.id]);
   const assignments = (await db.query('SELECT * FROM public.dispatch_assignments WHERE id = ANY($1::uuid[]) ORDER BY id',
     [[submitted.assignment.id, flagOnly.assignment.id, pending.assignment.id]])).rows;
+  const otherExistingOrder = await order(other);
   const protectedBefore = await moneyAndOrders();
   const dataId = await validData();
+  const authenticatedDataId = await validData();
+  const invalidDataId = await validData();
   await set(TEAM, TEAM, true);
   assert.deepEqual(await moneyAndOrders(), protectedBefore);
   assert.deepEqual((await db.query('SELECT * FROM public.dispatch_assignments WHERE id = ANY($1::uuid[]) ORDER BY id',
     [[submitted.assignment.id, flagOnly.assignment.id, pending.assignment.id]])).rows, assignments);
   await assert.rejects(order(actual), /employee_login_maintenance/);
   await assert.rejects(order(actual, submitted.assignment.assignment_id), /employee_login_maintenance/);
-  for (const role of ['anon', 'authenticated']) {
-    await assert.rejects(asBrowser('INSERT INTO public.used_order_data(user_id, valid_order_data_id, order_id) VALUES ($1,$2,$3)',
-      [actual.user.id, dataId, existingOrder.id], role), /employee_login_maintenance/);
+  const usageSQL = 'INSERT INTO public.used_order_data(user_id, valid_order_data_id, order_id) VALUES ($1,$2,$3) RETURNING id';
+  for (const [role, validId] of [['anon', dataId], ['authenticated', authenticatedDataId]]) {
+    const params = [actual.user.id, validId, existingOrder.id];
+    assert((await asBrowser(usageSQL, params, role)).rows[0].id);
+    await assert.rejects(asBrowser(usageSQL, params, role), error => error.code === '23505'
+      && error.constraint === 'used_order_data_user_id_valid_order_data_id_key');
+    for (const invalidOrderId of [otherExistingOrder.id, null, INVALID_TOKEN]) {
+      await assert.rejects(asBrowser(usageSQL, [actual.user.id, invalidDataId, invalidOrderId], role), /employee_login_maintenance/);
+    }
+    await assert.rejects(asBrowser('INSERT INTO public.used_order_data(user_id, valid_order_data_id) VALUES ($1,$2)',
+      [actual.user.id, invalidDataId], role), /employee_login_maintenance/);
   }
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM public.used_order_data WHERE user_id = $1', [actual.user.id])).rows[0].n, 2);
+  assert.deepEqual(await moneyAndOrders(), protectedBefore);
   const otherOrder = await order(other);
   await asBrowser('INSERT INTO public.used_order_data(user_id, valid_order_data_id, order_id) VALUES ($1,$2,$3)', [other.user.id, dataId, otherOrder.id]);
   // Existing-order UPDATE is not guarded. Exercise a system scheduling write
@@ -491,6 +524,68 @@ test('submitted assignments and actual orders survive maintenance, while direct 
   assert.deepEqual(await rowsOf('public.wallet_transactions'), walletBeforeRepeat);
   const fresh = await employee();
   assert((await order(fresh)).id);
+});
+
+test('new login cannot auto-recover a pre-maintenance submitted assignment but can explicitly start work', async () => {
+  for (const submittedFlag of [false, true]) {
+    const original = await employee();
+    const active = await dispatch(original, true);
+    await order(original, active.assignment.assignment_id);
+    if (submittedFlag) await db.query('UPDATE public.dispatch_assignments SET order_submitted = true WHERE id = $1', [active.assignment.id]);
+    const assignmentBefore = (await db.query('SELECT * FROM public.dispatch_assignments WHERE id = $1', [active.assignment.id])).rows;
+    const protectedBefore = await moneyAndOrders();
+    assert.equal((await set(TEAM, TEAM, true)).success, true);
+    assert.equal((await set(TEAM, TEAM, false)).success, true);
+    // Historical maintenance evidence must survive the old token's expiry.
+    await db.query(`UPDATE public.employee_financial_sessions SET expires_at = now() - interval '1 second'
+      WHERE token_hash = private.hash_financial_token($1)`, [original.session_token]);
+    const fresh = await login(original.user.username);
+    assert.equal(fresh.success, true); assert.equal(await valid(fresh), true);
+    assert.equal(await valid(original), false);
+    assert.equal((await get(TEAM)).enabled, false);
+    const dispatchBefore = await rowsOf('public.dispatch_sessions');
+    const workBefore = await rowsOf('public.work_sessions');
+    for (let i = 0; i < 3; i++) {
+      assert.deepEqual(await work('recover_employee_dispatch_assignment_secure', fresh),
+        { success: true, recovered: false, assignment: null });
+    }
+    assert.deepEqual(await rowsOf('public.dispatch_sessions'), dispatchBefore);
+    assert.deepEqual(await rowsOf('public.work_sessions'), workBefore);
+    assert.deepEqual((await db.query('SELECT * FROM public.dispatch_assignments WHERE id = $1', [active.assignment.id])).rows, assignmentBefore);
+    assert.deepEqual(await moneyAndOrders(), protectedBefore);
+    const started = await work('start_employee_dispatch_session_secure', fresh);
+    assert.equal(started.success, true);
+    assert.notEqual(started.session_id, active.session_id);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM public.dispatch_sessions WHERE user_id = $1 AND status = 'online'", [fresh.user.id])).rows[0].n, 1);
+    assert.equal((await work('end_employee_dispatch_session_secure', fresh)).success, true);
+  }
+});
+
+test('recovery still works for post-maintenance assignments and stop markers without maintenance revocation', async () => {
+  const original = await employee();
+  await set(TEAM, TEAM, true);
+  await set(TEAM, TEAM, false);
+  const fresh = await login(original.user.username);
+  const active = await dispatch(fresh, true);
+  assert.equal((await db.query(`SELECT a.assigned_at > max(s.maintenance_revoked_at) AS newer
+    FROM public.dispatch_assignments a JOIN public.employee_financial_sessions s ON s.user_id = a.user_id
+    WHERE a.id = $1 GROUP BY a.assigned_at`, [active.assignment.id])).rows[0].newer, true);
+  await work('stop_employee_dispatch_session_secure', fresh, { p_session_id: active.session_id });
+  const recovered = await work('recover_employee_dispatch_assignment_secure', fresh);
+  assert.equal(recovered.recovered, true);
+  assert.equal(recovered.assignment.id, active.assignment.id);
+  await work('end_employee_dispatch_session_secure', fresh);
+
+  const other = await employee(OTHER);
+  const otherActive = await dispatch(other, true);
+  await work('end_employee_dispatch_session_secure', other);
+  const otherFresh = await login(other.user.username);
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM public.employee_financial_sessions
+    WHERE user_id = $1 AND maintenance_revoked_at IS NOT NULL`, [other.user.id])).rows[0].n, 0);
+  const otherRecovered = await work('recover_employee_dispatch_assignment_secure', otherFresh);
+  assert.equal(otherRecovered.recovered, true);
+  assert.equal(otherRecovered.assignment.id, otherActive.assignment.id);
+  await work('end_employee_dispatch_session_secure', otherFresh);
 });
 
 test('late failure rolls back settings, revocations, markers, sessions, assignments and audit together', async () => {
