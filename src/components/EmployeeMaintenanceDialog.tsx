@@ -1,9 +1,8 @@
 import { useId, useLayoutEffect, useRef } from 'react';
 import type { KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Globe, PauseCircle, Shield, Wrench, X } from 'lucide-react';
+import { ArrowLeft, Loader2, LogOut, MessageCircle, Wrench, X } from 'lucide-react';
 import { useLanguage } from '../lib/i18n/context';
-import { LANGUAGES } from '../lib/i18n/types';
 
 interface EmployeeMaintenanceDialogProps {
   onClose: () => void;
@@ -12,7 +11,7 @@ interface EmployeeMaintenanceDialogProps {
 }
 
 export default function EmployeeMaintenanceDialog({ onClose, sessionEnded = false, busy = false }: EmployeeMaintenanceDialogProps) {
-  const { t, language, setLanguage, dateLocale } = useLanguage();
+  const { t, dateLocale } = useLanguage();
   const dialogRef = useRef<HTMLDivElement>(null);
   const id = useId();
 
@@ -96,7 +95,12 @@ export default function EmployeeMaintenanceDialog({ onClose, sessionEnded = fals
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[10050] flex items-center justify-center overflow-hidden bg-slate-950/55 backdrop-blur-[6px]"
+      className="fixed inset-0 z-[10050] flex items-center justify-center overflow-hidden bg-[#071727]/[0.65] backdrop-blur-[8px]"
+      onPointerDown={event => {
+        if (event.target !== event.currentTarget) return;
+        event.preventDefault();
+        dialogRef.current?.focus({ preventScroll: true });
+      }}
       style={{
         paddingTop: 'max(16px, env(safe-area-inset-top))',
         paddingRight: 'max(16px, env(safe-area-inset-right))',
@@ -108,7 +112,7 @@ export default function EmployeeMaintenanceDialog({ onClose, sessionEnded = fals
       <style>{`
         div.employee-maintenance-dialog[role="dialog"][aria-modal="true"] {
           width: 100% !important;
-          max-width: 540px !important;
+          max-width: 520px !important;
           max-height: 100% !important;
           padding: 0 !important;
         }
@@ -117,86 +121,65 @@ export default function EmployeeMaintenanceDialog({ onClose, sessionEnded = fals
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-busy={busy}
         aria-labelledby={`${id}-title`}
         aria-describedby={`${id}-message ${id}-contact`}
         lang={dateLocale}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className="employee-maintenance-dialog relative max-h-full w-full max-w-[540px] overflow-y-auto overscroll-contain rounded-[24px] border border-white/70 bg-slate-50 text-slate-700 shadow-[0_28px_90px_-20px_rgba(15,23,42,0.55)] outline-none"
+        className="employee-maintenance-dialog relative isolate max-h-full w-full max-w-[520px] overflow-y-auto overscroll-contain rounded-[28px] border border-white/80 bg-[#f8fafc] text-slate-700 shadow-[0_32px_100px_-24px_rgba(2,25,43,0.6)] outline-none"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
-        <div className="relative overflow-hidden bg-gradient-to-br from-slate-950 via-blue-950 to-blue-800 px-[24px] pb-[26px] pt-[18px] sm:px-[32px]">
-          <div aria-hidden="true" className="pointer-events-none absolute -right-[48px] -top-[72px] h-[240px] w-[240px] rounded-full border border-cyan-200/10 bg-cyan-300/5" />
-          <div aria-hidden="true" className="pointer-events-none absolute -bottom-[80px] right-[20px] h-[180px] w-[180px] rounded-full border border-cyan-200/10" />
-          <div className="relative flex items-start justify-between gap-[12px]">
-            <span className="mt-[6px] inline-flex min-w-0 items-center gap-[8px] rounded-[12px] border border-cyan-200/25 bg-cyan-300/10 px-[10px] py-[6px] text-[12px] font-semibold leading-[18px] text-cyan-100">
-              <PauseCircle aria-hidden="true" className="h-[15px] w-[15px] shrink-0" />
-              <span>{t.login.maintenanceStatus}</span>
+        <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[240px] rounded-t-[28px] bg-gradient-to-b from-cyan-50 via-sky-50/40 to-transparent" />
+        <div className="relative px-[24px] pb-[26px] pt-[18px] sm:px-[32px] sm:pb-[32px] sm:pt-[22px]">
+          <div className="flex min-h-[44px] items-center justify-between gap-[12px]">
+            <span className="inline-flex min-w-0 items-center gap-[8px] rounded-full border border-amber-200/70 bg-amber-50 px-[12px] py-[6px] text-[12px] font-semibold leading-[18px] text-amber-800">
+              <span aria-hidden="true" className="h-[6px] w-[6px] shrink-0 rounded-full bg-amber-500" />
+              <span className="break-words">{t.login.maintenanceStatus}</span>
             </span>
             {!sessionEnded && <button
               type="button"
               onClick={onClose}
+              disabled={busy}
               aria-label={t.login.maintenanceClose}
-              className="-mr-[10px] flex h-[44px] w-[44px] !min-h-[44px] shrink-0 items-center justify-center rounded-[12px] !p-0 text-blue-100 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-200"
+              className="-mr-[10px] flex h-[44px] w-[44px] !min-h-[44px] shrink-0 items-center justify-center rounded-full !p-0 text-slate-500 transition-colors hover:bg-slate-200/60 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:opacity-60"
             >
               <X aria-hidden="true" className="h-[20px] w-[20px]" />
             </button>}
           </div>
-          <div className="relative mt-[22px] flex items-start gap-[14px]">
-            <span aria-hidden="true" className="flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-[16px] border border-cyan-200/25 bg-gradient-to-br from-cyan-300/20 to-blue-400/10 text-cyan-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]">
-              <Wrench className="h-[24px] w-[24px]" strokeWidth={1.75} />
-            </span>
-            <h2 id={`${id}-title`} className="min-w-0 self-center break-words text-[24px] font-bold leading-[1.3] tracking-[-0.4px] text-white sm:text-[26px]">
+
+          <div className="mt-[18px] text-center">
+            <div aria-hidden="true" className="mx-auto flex h-[80px] w-[80px] items-center justify-center rounded-[26px] border border-cyan-100/80 bg-white/80 shadow-[0_8px_28px_-14px_rgba(14,116,144,0.3)]">
+              <span className="flex h-[60px] w-[60px] items-center justify-center rounded-[20px] bg-gradient-to-br from-[#153349] to-[#137c86] text-cyan-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]">
+                <Wrench className="h-[29px] w-[29px]" strokeWidth={1.6} />
+              </span>
+            </div>
+            <h2 id={`${id}-title`} className="mt-[22px] break-words text-[24px] font-bold leading-[1.4] tracking-[-0.4px] text-[#123047] sm:text-[26px]">
               {t.login.maintenanceTitle}
             </h2>
+            <p id={`${id}-message`} className="mt-[14px] break-words text-[15px] leading-[26px] text-slate-600 [hyphens:auto]">
+              {sessionEnded ? t.login.maintenanceSessionMessage : t.login.maintenanceMessage}
+            </p>
           </div>
-        </div>
 
-        <div className="h-[3px] bg-gradient-to-r from-cyan-400 via-sky-300 to-blue-100" aria-hidden="true" />
-
-        <div className="px-[24px] pb-[26px] pt-[24px] sm:px-[32px]">
-          <p id={`${id}-message`} className="break-words text-[15px] leading-[26px] text-slate-600">
-            {sessionEnded ? t.login.maintenanceSessionMessage : t.login.maintenanceMessage}
-          </p>
-          <div className="mt-[18px] flex items-start gap-[12px] rounded-[16px] border border-sky-100 bg-gradient-to-br from-blue-50 to-white p-[16px]">
-            <Shield aria-hidden="true" className="mt-[3px] h-[20px] w-[20px] shrink-0 text-sky-700" strokeWidth={1.75} />
-            <p id={`${id}-contact`} className="min-w-0 break-words text-[14px] leading-[24px] text-slate-600">
+          <div className="mt-[24px] flex items-start gap-[12px] rounded-[18px] border border-slate-200/80 bg-white/90 p-[16px]">
+            <span aria-hidden="true" className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[11px] bg-cyan-50 text-cyan-800">
+              <MessageCircle className="h-[18px] w-[18px]" strokeWidth={1.75} />
+            </span>
+            <p id={`${id}-contact`} className="min-w-0 self-center break-words text-[13px] leading-[22px] text-slate-600 [hyphens:auto]">
               {t.login.maintenanceContact}
             </p>
           </div>
 
-          <div className="mt-[24px] border-t border-slate-200/80 pt-[20px]">
-            <label htmlFor={`${id}-language`} className="mb-[8px] flex items-center gap-[7px] text-[12px] font-semibold leading-[18px] text-slate-500">
-              <Globe aria-hidden="true" className="h-[14px] w-[14px]" />
-              {t.login.maintenanceLanguage}
-            </label>
-            <select
-              id={`${id}-language`}
-              value={language}
-              disabled={busy}
-              onChange={event => {
-                const selected = LANGUAGES.find(option => option.code === event.target.value);
-                if (selected) setLanguage(selected.code);
-              }}
-              className="block w-full !min-h-[44px] rounded-[12px] border border-slate-300 bg-white px-[12px] py-[10px] !text-[16px] leading-[22px] text-slate-800 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
-              style={{ appearance: 'auto', WebkitAppearance: 'menulist', colorScheme: 'light' }}
-            >
-              {LANGUAGES.map(option => (
-                <option key={option.code} value={option.code} lang={option.code} className="bg-white text-slate-900">
-                  {option.nativeName}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={busy}
-              className="mt-[16px] disabled:opacity-60 flex w-full !min-h-[44px] items-center justify-center gap-[10px] rounded-[12px] bg-gradient-to-r from-blue-700 to-blue-600 !px-[16px] !py-[12px] !text-[15px] font-semibold leading-[22px] text-white shadow-[0_8px_18px_-10px_rgba(37,99,235,0.6)] transition-colors hover:from-blue-800 hover:to-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-            >
-              <ArrowLeft aria-hidden="true" className="h-[18px] w-[18px] shrink-0" />
-              <span>{busy ? t.common.loading : sessionEnded ? t.login.maintenanceSessionAction : t.login.maintenanceAction}</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="mt-[24px] flex w-full !min-h-[48px] items-center justify-center gap-[10px] rounded-[14px] bg-gradient-to-r from-[#12364f] to-[#0f6878] !px-[16px] !py-[13px] !text-[15px] font-semibold leading-[22px] text-white shadow-[0_8px_20px_-12px_rgba(15,104,120,0.55)] transition-colors hover:from-[#16445e] hover:to-[#137c86] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:cursor-wait disabled:opacity-60"
+          >
+            {busy ? <Loader2 aria-hidden="true" className="h-[18px] w-[18px] shrink-0 animate-spin motion-reduce:animate-none" /> : sessionEnded ? <LogOut aria-hidden="true" className="h-[18px] w-[18px] shrink-0" /> : <ArrowLeft aria-hidden="true" className="h-[18px] w-[18px] shrink-0" />}
+            <span>{busy ? t.common.loading : sessionEnded ? t.login.maintenanceSessionAction : t.login.maintenanceAction}</span>
+          </button>
         </div>
       </div>
     </div>,
