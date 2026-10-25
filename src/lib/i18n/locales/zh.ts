@@ -716,7 +716,6 @@ const zh = {
     maintenanceMessage: '系统正在进行维护与升级，工作平台暂时无法使用。请在维护完成后再次登录。',
     maintenanceContact: '如有疑问或需紧急协助，请直接联系您的部门经理。',
     maintenanceAction: '回到登录',
-    maintenanceStatus: '工作平台维护中',
     maintenanceClose: '关闭维护提示',
     employeeWorkPlatform: '员工工作平台',
     welcomeBack: '欢迎回来',

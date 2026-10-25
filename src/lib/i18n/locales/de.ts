@@ -127,7 +127,6 @@ const de = {
     maintenanceMessage: 'Das System wird derzeit gewartet und aktualisiert. Die Arbeitsplattform ist vorübergehend nicht verfügbar. Bitte melden Sie sich nach Abschluss der Wartung erneut an.',
     maintenanceContact: 'Bei Fragen oder dringendem Unterstützungsbedarf wenden Sie sich bitte direkt an Ihre Abteilungsleitung.',
     maintenanceAction: 'Zurück zur Anmeldung',
-    maintenanceStatus: 'Plattform wird gewartet',
     maintenanceClose: 'Wartungshinweis schließen',
     employeeWorkPlatform: 'Mitarbeiter-Arbeitsplattform',
     welcomeBack: 'Willkommen zurück',

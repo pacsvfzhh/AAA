@@ -127,7 +127,6 @@ const ja = {
     maintenanceMessage: '現在、システムのメンテナンスと更新を行っているため、業務プラットフォームは一時的にご利用いただけません。メンテナンス完了後に、再度ログインしてください。',
     maintenanceContact: 'ご不明な点や緊急のサポートが必要な場合は、所属部署のマネージャーに直接お問い合わせください。',
     maintenanceAction: 'ログイン画面に戻る',
-    maintenanceStatus: 'プラットフォームのメンテナンス中',
     maintenanceClose: 'メンテナンスのお知らせを閉じる',
     employeeWorkPlatform: '従業員ワークプラットフォーム',
     welcomeBack: 'おかえりなさい',

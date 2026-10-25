@@ -133,7 +133,6 @@ const it = {
     maintenanceMessage: 'Il sistema è in fase di manutenzione e aggiornamento. La piattaforma di lavoro è temporaneamente non disponibile. Accedi nuovamente al termine della manutenzione.',
     maintenanceContact: 'Per domande o assistenza urgente, contatta direttamente il responsabile del tuo reparto.',
     maintenanceAction: 'Torna al login',
-    maintenanceStatus: 'Piattaforma in manutenzione',
     maintenanceClose: 'Chiudi avviso di manutenzione',
     employeeWorkPlatform: 'Piattaforma di Lavoro',
     welcomeBack: 'Bentornato',

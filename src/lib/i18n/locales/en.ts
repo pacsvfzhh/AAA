@@ -790,7 +790,6 @@ const en = {
     maintenanceMessage: 'The system is undergoing maintenance and upgrades. The work platform is temporarily unavailable. Please sign in again once maintenance is complete.',
     maintenanceContact: 'If you have any questions or need urgent assistance, please contact your department manager directly.',
     maintenanceAction: 'Back to sign in',
-    maintenanceStatus: 'Platform under maintenance',
     maintenanceClose: 'Close maintenance notice',
     employeeWorkPlatform: 'Employee Work Platform',
     welcomeBack: 'Welcome Back',

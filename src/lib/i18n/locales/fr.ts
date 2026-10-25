@@ -66,7 +66,6 @@ const fr = {
     maintenanceMessage: 'Le système est en cours de maintenance et de mise à niveau. La plateforme de travail est temporairement indisponible. Veuillez vous reconnecter une fois la maintenance terminée.',
     maintenanceContact: 'Pour toute question ou assistance urgente, veuillez contacter directement votre responsable de département.',
     maintenanceAction: 'Retour à la connexion',
-    maintenanceStatus: 'Plateforme en maintenance',
     maintenanceClose: 'Fermer l’avis de maintenance',
     employeeWorkPlatform: 'Plateforme de Travail',
     welcomeBack: 'Bienvenue',

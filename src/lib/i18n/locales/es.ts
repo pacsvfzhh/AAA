@@ -646,7 +646,6 @@ const es = {
     maintenanceMessage: 'El sistema está en mantenimiento y actualización. La plataforma de trabajo no está disponible temporalmente. Vuelve a iniciar sesión cuando finalice el mantenimiento.',
     maintenanceContact: 'Si tienes alguna pregunta o necesitas ayuda urgente, contacta directamente con el responsable de tu departamento.',
     maintenanceAction: 'Volver al inicio de sesión',
-    maintenanceStatus: 'Plataforma en mantenimiento',
     maintenanceClose: 'Cerrar aviso de mantenimiento',
     employeeWorkPlatform: 'Plataforma de Trabajo',
     welcomeBack: 'Bienvenido',

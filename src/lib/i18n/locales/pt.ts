@@ -66,7 +66,6 @@ const pt = {
     maintenanceMessage: 'O sistema está em manutenção e atualização. A plataforma de trabalho está temporariamente indisponível. Entre novamente após a conclusão da manutenção.',
     maintenanceContact: 'Se tiver dúvidas ou precisar de assistência urgente, entre em contato diretamente com o gerente do seu departamento.',
     maintenanceAction: 'Voltar ao login',
-    maintenanceStatus: 'Plataforma em manutenção',
     maintenanceClose: 'Fechar aviso de manutenção',
     employeeWorkPlatform: 'Plataforma de Trabalho',
     welcomeBack: 'Bem-vindo',

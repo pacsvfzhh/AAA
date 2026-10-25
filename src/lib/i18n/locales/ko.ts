@@ -127,7 +127,6 @@ const ko = {
     maintenanceMessage: '시스템 점검 및 업그레이드가 진행 중이므로 업무 플랫폼을 일시적으로 사용할 수 없습니다. 점검이 완료된 후 다시 로그인해 주세요.',
     maintenanceContact: '문의 사항이 있거나 긴급한 지원이 필요한 경우 소속 부서 관리자에게 직접 연락해 주세요.',
     maintenanceAction: '로그인 화면으로 돌아가기',
-    maintenanceStatus: '업무 플랫폼 점검 중',
     maintenanceClose: '점검 안내 닫기',
     employeeWorkPlatform: '직원 업무 플랫폼',
     welcomeBack: '환영합니다',
