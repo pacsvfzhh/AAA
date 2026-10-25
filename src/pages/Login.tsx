@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Shield, Lock, Globe, Package, ClipboardCheck, ArrowRight, AlertTriangle, ShieldAlert, Clock, Info, Check, Eye, EyeOff } from 'lucide-react';
 import {
   AccountLockedError,
+  EmployeeLoginMaintenanceError,
   clearOpenedElsewhereNotice,
   getRememberedUsername,
   hasOpenedElsewhereNotice,
@@ -19,6 +20,7 @@ import { LANGUAGES } from '../lib/i18n/types';
 import { LanguageModal } from '../components/LanguageSwitcher';
 import type { Language } from '../lib/i18n/types';
 import LoginDecorations from '../components/LoginDecorations';
+import EmployeeMaintenanceDialog from '../components/EmployeeMaintenanceDialog';
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -65,13 +67,16 @@ function getLoginErrorKind(error: unknown): LoginErrorKind {
   return 'failed';
 }
 
+const stripWhitespace = (value: string) => value.replace(/[\s\u200B-\u200D\u2060\uFEFF]+/g, '');
+
 export default function Login({ onLoginSuccess }: LoginProps) {
-  const [username, setUsername] = useState(getRememberedUsername);
+  const [username, setUsername] = useState(() => stripWhitespace(getRememberedUsername()));
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(() => getRememberedUsername() !== '');
   const [openedElsewhere, setOpenedElsewhere] = useState(hasOpenedElsewhereNotice);
   const [loading, setLoading] = useState(false);
+  const [showMaintenance, setShowMaintenance] = useState(false);
   const [error, setError] = useState<LoginErrorKind | null>(null);
   const [warning, setWarning] = useState<{ attempts?: number } | null>(null);
   const [lockInfo, setLockInfo] = useState<{
@@ -160,7 +165,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     e.preventDefault();
     setError(null);
     setOpenedElsewhere(false);
-    const normalizedUsername = username.trim();
+    const normalizedUsername = stripWhitespace(username);
 
     if (supabaseConfigurationError) {
       console.error('[Login]', supabaseConfigurationError);
@@ -204,6 +209,14 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       onLoginSuccess();
     } catch (err) {
       if (isSupabaseAbortError(err)) return;
+
+      if (err instanceof EmployeeLoginMaintenanceError) {
+        setWarning(null);
+        setLockInfo(null);
+        setError(null);
+        setShowMaintenance(true);
+        return;
+      }
 
       if (err instanceof AccountLockedError) {
         const remainingSeconds = err.lockedUntil
@@ -363,6 +376,10 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     );
   };
 
+  const maintenanceDialog = showMaintenance && (
+    <EmployeeMaintenanceDialog onClose={() => setShowMaintenance(false)} />
+  );
+
   // Phone layout (phones and narrow portrait tablets)
   if (phoneLayout) {
     const phoneColumn = 'w-full max-w-[520px] self-center';
@@ -469,7 +486,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                     id="username"
                     type="text"
                     value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    onChange={(e) => setUsername(stripWhitespace(e.target.value))}
                     autoComplete="username"
                     required
                     className="w-full pl-11 pr-4 py-3.5 short:py-2.5 bg-white border-2 border-slate-100 rounded-xl text-slate-800 placeholder-slate-400 text-[15px] focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all"
@@ -543,6 +560,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           </div>
         </div>
 
+        {maintenanceDialog}
         {showLanguageModal && (
           <LanguageModal
             currentLanguage={language}
@@ -678,7 +696,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                       id="username"
                       type="text"
                       value={username}
-                      onChange={(e) => setUsername(e.target.value)}
+                      onChange={(e) => setUsername(stripWhitespace(e.target.value))}
                       autoComplete="username"
                       required
                       className="w-full px-4 py-3.5 short:py-3 low:py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all hover:border-slate-300"
@@ -756,6 +774,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           </div>
         </div>
 
+        {maintenanceDialog}
         {showLanguageModal && (
           <LanguageModal
             currentLanguage={language}
@@ -906,7 +925,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                       id="username"
                       type="text"
                       value={username}
-                      onChange={(e) => setUsername(e.target.value)}
+                      onChange={(e) => setUsername(stripWhitespace(e.target.value))}
                       autoComplete="username"
                       required
                       className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all hover:border-slate-300"
@@ -989,6 +1008,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
         </div>
       </div>
 
+      {maintenanceDialog}
       {showLanguageModal && (
         <LanguageModal
           currentLanguage={language}

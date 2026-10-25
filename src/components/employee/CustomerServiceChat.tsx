@@ -1,14 +1,17 @@
-import { useState, useEffect, useLayoutEffect, useRef, memo, useMemo, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, memo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageCircle, X, Send, Image, Star, ArrowLeft, Search, Clock, Zap, Sparkles, Award, Gift, ZoomIn, ZoomOut, RotateCcw, Megaphone, ChevronRight } from 'lucide-react';
+import { MessageCircle, X, Send, Image, Star, ArrowLeft, Clock, Zap, Sparkles, Award, Gift, Megaphone, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { sanitizeChatMessage, sanitizeAnnouncementContent } from '../../lib/sanitizeHTML';
 import { useLanguage } from '../../lib/i18n/context';
 import { CustomerAvatarDisplay } from '../admin/CustomerAvatarPicker';
 import { preloadCustomerAvatar } from '../admin/customerAvatarUtils';
 import { uploadStorageObjectWithProgress } from '../../lib/storageUpload';
+import { getNotificationAudioContext } from '../../lib/notificationAudio';
 import { uniqueRealtimeChannelName } from '../../lib/realtimeChannel';
 import PageLoader from './PageLoader';
+import PanelColorBlocks from './PanelColorBlocks';
+import ChatImageViewer from './ChatImageViewer';
 
 function extractImageOnlyUrl(content: string): string | null {
   const container = document.createElement('div');
@@ -278,12 +281,34 @@ interface CustomerServiceChatProps {
   employeeId: string;
 }
 
+const CS_WINDOW_CLOSE_MS = 220;
+const CS_WINDOW_ANIMATED_QUERY = '(min-width: 1024px) and (prefers-reduced-motion: no-preference)';
+
 export default function CustomerServiceChat({ employeeId }: CustomerServiceChatProps) {
   const { t, dateLocale } = useLanguage();
   const initialConversationSnapshot = employeeConversationCache.get(employeeId);
 
   const [isOpen, setIsOpen] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
   const [showConversationList, setShowConversationList] = useState(true);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
+  const requestClosePanel = () => {
+    if (isClosing) return;
+    if (!window.matchMedia(CS_WINDOW_ANIMATED_QUERY).matches) {
+      setIsOpen(false);
+      return;
+    }
+    setIsClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      setIsClosing(false);
+      setIsOpen(false);
+    }, CS_WINDOW_CLOSE_MS);
+  };
   const skipListAnimationRef = useRef(false);
   const employeeAdminIdRef = useRef<string | null>(null);
   const [conversations, setConversations] = useState<CustomerConversation[]>(
@@ -302,8 +327,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
   const [uploadProgress, setUploadProgress] = useState(0);
   const uploadingTempIdRef = useRef<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [conversationsError, setConversationsError] = useState(false);
@@ -461,10 +484,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
       }
     }
   }, [fetchRichCardContent, fetchTemplateContentForViewer, fetchAutoMsgContentForViewer]);
-  const [imageZoom, setImageZoom] = useState(1);
-  const [imageDrag, setImageDrag] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0, ox: 0, oy: 0 });
   const audioRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const popupTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [customerOnlineStatus, setCustomerOnlineStatus] = useState<Map<string, boolean>>(new Map());
@@ -755,9 +774,8 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
   };
 
   const playNotificationSound = (isSuper: boolean) => {
-    const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextConstructor) return;
-    const audioContext = new AudioContextConstructor();
+    const audioContext = getNotificationAudioContext();
+    if (!audioContext) return;
 
     const playTone = (frequency: number, startTime: number, duration: number, volume: number) => {
       const oscillator = audioContext.createOscillator();
@@ -870,7 +888,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
           <ChatImage
             src={msg.image_url}
             alt="Shared image"
-            onClickImage={isUploading ? () => {} : (url: string) => { setPreviewImage(url); setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
+            onClickImage={isUploading ? () => {} : (url: string) => setPreviewImage(url)}
           />
           {isUploading && (
             <div className="absolute inset-0 bg-black/25 backdrop-blur-[2px] flex flex-col items-center justify-center rounded-xl z-10">
@@ -1068,7 +1086,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
         <ChatImage
           src={imageOnlyUrl}
           alt="Shared image"
-          onClickImage={(url: string) => { setPreviewImage(url); setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
+          onClickImage={(url: string) => setPreviewImage(url)}
         />
       );
     }
@@ -1086,11 +1104,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
               e.stopPropagation();
               e.preventDefault();
               const imgSrc = (target as HTMLImageElement).src;
-              if (imgSrc) {
-                setPreviewImage(imgSrc);
-                setImageZoom(1);
-                setImageDrag({ x: 0, y: 0 });
-              }
+              if (imgSrc) setPreviewImage(imgSrc);
             }
           }}
         />
@@ -1910,16 +1924,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
     return date.toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' });
   };
 
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  const filteredConversations = useMemo(() => conversations.filter(conv =>
-    conv.customer.customer_name.toLowerCase().includes(debouncedSearchQuery.toLowerCase()) ||
-    conv.customer.customer_id.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
-  ), [conversations, debouncedSearchQuery]);
-
   return (
     <>
       <style>{`
@@ -2227,8 +2231,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
         }
 
         button.customer-service-panel-close,
-        button.customer-service-header-btn,
-        button.customer-service-search-clear {
+        button.customer-service-header-btn {
           box-sizing: border-box;
           width: 44px !important;
           height: 44px !important;
@@ -2282,48 +2285,9 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
           box-shadow: 0 6px 14px -8px rgb(15 23 42 / 45%);
         }
 
-        .cs-viewer-toolbar {
-          top: calc(env(safe-area-inset-top) + 12px);
-          right: calc(env(safe-area-inset-right) + 12px);
-        }
-
-        button.cs-viewer-btn {
-          box-sizing: border-box;
-          width: 40px !important;
-          height: 40px !important;
-          min-width: 40px !important;
-          min-height: 40px !important;
-          padding: 0 !important;
-          flex: 0 0 auto;
-        }
-
-        @media (pointer: coarse), (max-width: 1023px) {
-          button.cs-viewer-btn {
-            width: 44px !important;
-            height: 44px !important;
-            min-width: 44px !important;
-            min-height: 44px !important;
-          }
-        }
-
-        @media (min-width: 640px) {
-          .cs-viewer-toolbar {
-            top: calc(env(safe-area-inset-top) + 20px);
-            right: calc(env(safe-area-inset-right) + 20px);
-          }
-        }
-
-        input.customer-service-search {
-          box-sizing: border-box;
-          height: 40px;
-          min-height: 40px !important;
-          padding-top: 0;
-          padding-bottom: 0;
-        }
-
         @media (max-width: 1023px) {
           .customer-service-panel-header {
-            padding-top: calc(env(safe-area-inset-top) + 12px);
+            padding-top: calc(env(safe-area-inset-top) + 16px);
           }
 
           .customer-service-composer {
@@ -2359,40 +2323,42 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
         }
       `}</style>
       {messagePopup && !isOpen && createPortal(
-        <div className="fixed bottom-36 right-2 sm:right-4 md:bottom-44 lg:bottom-28 lg:right-4 z-[10001] w-[min(calc(100%-1.5rem),24rem)] animate-[slideIn_0.3s_ease-out_both] keep-animation" style={{ maxWidth: 'min(calc(100% - 1.5rem), 24rem)', WebkitTextSizeAdjust: '100%' }}>
-          <div className={`relative overflow-hidden rounded-2xl shadow-2xl animate-[fadeInUp_0.4s_ease-out_both] keep-animation border ${
+        <div className="customer-service-popup fixed z-[10001] animate-[slideIn_0.3s_ease-out_both] keep-animation" style={{ WebkitTextSizeAdjust: '100%' }}>
+          <div className={`relative overflow-hidden rounded-[18px] shadow-2xl animate-[fadeInUp_0.4s_ease-out_both] keep-animation border ${
             messagePopup.customer.is_super
               ? 'bg-gradient-to-br from-amber-500 via-yellow-500 to-amber-600 ring-1 ring-amber-400/50 border-amber-400/30'
               : 'bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-600 ring-1 ring-blue-400/50 border-blue-400/30'
           }`}>
-            {/* Decorative patterns - hidden on narrow screens */}
-            <div className={`hidden sm:block absolute top-0 right-0 w-24 h-24 rounded-full opacity-20 -translate-y-8 translate-x-8 ${
-              messagePopup.customer.is_super ? 'bg-yellow-300' : 'bg-blue-300'
-            }`}></div>
-            <div className={`hidden sm:block absolute bottom-0 left-0 w-16 h-16 rounded-full opacity-15 translate-y-6 -translate-x-6 ${
-              messagePopup.customer.is_super ? 'bg-orange-400' : 'bg-indigo-300'
-            }`}></div>
-            <div className={`hidden sm:block absolute top-1/2 right-4 w-8 h-8 rotate-45 opacity-10 ${
-              messagePopup.customer.is_super ? 'bg-white' : 'bg-white'
-            }`}></div>
-            <div className={`hidden sm:block absolute bottom-8 right-12 w-5 h-5 rounded-full opacity-20 ${
-              messagePopup.customer.is_super ? 'bg-amber-200' : 'bg-sky-200'
-            }`}></div>
+            <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+              <div className={`absolute -right-8 -top-8 h-[104px] w-[104px] rounded-full ${
+                messagePopup.customer.is_super ? 'bg-yellow-300/30' : 'bg-cyan-300/25'
+              }`}></div>
+              <div className={`absolute -bottom-8 -left-8 h-[88px] w-[88px] rounded-full ${
+                messagePopup.customer.is_super ? 'bg-orange-400/30' : 'bg-indigo-300/30'
+              }`}></div>
+              <div className={`absolute -right-10 top-[46%] h-[22px] w-[150px] -rotate-[28deg] rounded-full ${
+                messagePopup.customer.is_super ? 'bg-white/15' : 'bg-sky-200/15'
+              }`}></div>
+              <div className="absolute left-[38%] top-[10px] h-[10px] w-[10px] rotate-45 rounded-[2px] bg-white/30"></div>
+              <div className={`absolute bottom-[58px] right-[52px] h-[8px] w-[8px] rounded-full ${
+                messagePopup.customer.is_super ? 'bg-amber-100/60' : 'bg-cyan-200/60'
+              }`}></div>
+            </div>
 
-            <div className="relative p-3 sm:p-4">
-              <div className="flex items-start gap-2.5 sm:gap-3 mb-2.5 sm:mb-3">
+            <div className="relative p-[12px] sm:p-[16px]">
+              <div className="mb-[10px] flex items-start gap-[10px] sm:mb-[12px] sm:gap-[12px]">
                 <div className={`relative flex-shrink-0 rounded-xl overflow-hidden ring-2 shadow-lg ${
                   messagePopup.customer.is_super ? 'ring-white/60' : 'ring-white/50'
                 }`}>
                   <CustomerAvatar
                     customer={messagePopup.customer}
-                    className="w-10 h-10 sm:w-11 sm:h-11"
+                    className="h-[40px] w-[40px] sm:h-[44px] sm:w-[44px]"
                   />
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 sm:gap-2 mb-0.5">
-                    <h3 className="font-bold text-sm sm:text-base text-white truncate">
+                  <div className="mb-[2px] flex items-center gap-[6px] sm:gap-[8px]">
+                    <h3 className="truncate text-[14px] font-bold text-white sm:text-[16px]">
                       {messagePopup.customer.customer_name}
                     </h3>
                     {messagePopup.customer.is_super && (
@@ -2402,7 +2368,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                       </div>
                     )}
                   </div>
-                  <p className="text-[11px] sm:text-xs text-white/70 truncate">
+                  <p className="truncate text-[11px] text-white/80 sm:text-[12px]">
                     ID: {messagePopup.customer.customer_id}
                   </p>
                 </div>
@@ -2413,33 +2379,39 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                     stopContinuousSound();
                   }}
                   aria-label={t.common.close}
-                  className="emp-close-btn flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl transition-colors active:scale-95 max-sm:bg-white/15 hover:bg-white/20 text-white/60 hover:text-white"
-                  style={{ minWidth: '36px', minHeight: '36px', touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
+                  className={`emp-close-btn flex h-[36px] w-[36px] flex-shrink-0 items-center justify-center rounded-full !min-h-0 !min-w-0 !p-0 text-white ring-1 ring-white/40 transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                    messagePopup.customer.is_super
+                      ? 'bg-amber-900/25 hover:bg-amber-900/40'
+                      : 'bg-indigo-900/30 hover:bg-indigo-900/45'
+                  }`}
+                  style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                 >
-                  <X className="w-4 h-4" />
+                  <X className="h-[18px] w-[18px]" strokeWidth={2.75} aria-hidden="true" />
                 </button>
               </div>
 
-              <div className={`p-2.5 sm:p-3 rounded-xl mb-2.5 sm:mb-3 backdrop-blur-sm overflow-hidden ${
+              <div className={`mb-[12px] overflow-hidden rounded-xl p-[10px] backdrop-blur-sm sm:p-[12px] ${
                 messagePopup.customer.is_super
                   ? 'bg-amber-700/40 border border-amber-300/30'
                   : 'bg-blue-800/40 border border-blue-300/20'
               }`}>
                 {messagePopup.message.includes('\ud83d\udcf7 Photo') ? (
                   <div className="flex items-center gap-2 text-white/95">
-                    <Image className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
-                    <span className="text-xs sm:text-sm font-medium">{t.customerService.photo}</span>
+                    <Image className="h-[18px] w-[18px] flex-shrink-0" />
+                    <span className="text-[13px] font-medium sm:text-[14px]">{t.customerService.photo}</span>
                   </div>
                 ) : (
-                  <p className="text-xs sm:text-sm leading-relaxed break-words whitespace-pre-wrap text-white/95 line-clamp-3">
+                  <p className="line-clamp-3 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-white/95 sm:text-[14px]">
                     {messagePopup.message}
                   </p>
                 )}
               </div>
 
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-white/60 truncate min-w-0">
-                  <Clock className="w-3 h-3 flex-shrink-0" />
+              <div className={`-mx-[12px] -mb-[12px] flex items-center justify-between gap-[8px] px-[12px] py-[8px] sm:-mx-[16px] sm:-mb-[16px] sm:px-[16px] sm:py-[10px] ${
+                messagePopup.customer.is_super ? 'bg-amber-900/25' : 'bg-indigo-900/30'
+              }`}>
+                <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-white/80 sm:text-[12px]">
+                  <Clock className="h-3 w-3 flex-shrink-0" />
                   <span className="truncate">{messagePopup.time}</span>
                 </div>
 
@@ -2450,13 +2422,14 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                     stopContinuousSound();
                     handleSelectConversation(messagePopup.customer);
                   }}
-                  className={`flex-shrink-0 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg font-semibold text-xs sm:text-sm transition-all hover:scale-105 active:scale-95 shadow-md ${
+                  className={`inline-flex h-[36px] min-w-[104px] flex-shrink-0 items-center justify-center gap-[6px] whitespace-nowrap rounded-[10px] !min-h-0 !px-[14px] !py-0 !text-[13px] font-bold leading-none shadow-md transition-all hover:scale-[1.03] active:scale-95 sm:h-[40px] sm:!text-[14px] ${
                     messagePopup.customer.is_super
                       ? 'bg-white text-amber-700 hover:bg-amber-50'
                       : 'bg-white text-blue-700 hover:bg-blue-50'
                   }`}
                   style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                 >
+                  <MessageCircle className="h-[15px] w-[15px]" strokeWidth={2.5} aria-hidden="true" />
                   {t.customerService.replyNow}
                 </button>
               </div>
@@ -2469,7 +2442,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
       {!isOpen && createPortal(
         <div
           className="customer-service-fab fixed z-[9999]"
-          style={{ right: '16px', bottom: 'calc(var(--employee-bottom-nav-height, 72px) + 16px)' }}
         >
           <button
             onClick={() => {
@@ -2477,7 +2449,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
               setMessagePopup(null);
               stopContinuousSound();
             }}
-            className={`relative group active:scale-95 transition-transform keep-animation w-14 h-14 lg:w-20 lg:h-20 ${unreadCount > 0 ? 'chat-btn-shake' : ''}`}
+            className={`relative group active:scale-95 transition-transform keep-animation ${unreadCount > 0 ? 'chat-btn-shake' : ''}`}
             style={{
               padding: 0,
               background: 'none',
@@ -2576,7 +2548,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
 
       {isOpen && createPortal(
         <div
-          className="employee-modal-surface fixed inset-0 lg:bottom-4 lg:right-4 lg:top-auto lg:left-auto z-[10000] lg:z-50 w-full lg:w-[400px] xl:w-[460px] h-full lg:h-[600px] xl:h-[680px] lg:max-h-[calc(100vh_-_var(--employee-header-height,_76px)_-_2rem)] bg-white lg:rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          className={`employee-modal-surface customer-service-window ${isClosing ? 'customer-service-window--closing' : ''} fixed inset-0 lg:bottom-4 lg:right-4 lg:top-auto lg:left-auto z-[10000] lg:z-50 w-full lg:w-[400px] xl:w-[460px] h-full lg:h-[600px] xl:h-[680px] lg:max-h-[calc(100vh_-_var(--employee-header-height,_76px)_-_2rem)] bg-white lg:rounded-2xl shadow-2xl flex flex-col overflow-hidden`}
           style={{
             WebkitOverflowScrolling: 'touch',
           }}
@@ -2591,7 +2563,6 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                 {/* Decorative elements */}
                 <div className="absolute top-0 right-0 w-48 h-48 bg-white/[0.04] rounded-full -translate-y-1/2 translate-x-1/4"></div>
                 <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/[0.04] rounded-full translate-y-1/2 -translate-x-1/4"></div>
-                <div className="absolute top-1/3 right-1/3 w-1.5 h-1.5 bg-white/10 rounded-full"></div>
 
                 <div className="relative flex items-center gap-3">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -2601,17 +2572,17 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                       </div>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h2 className="text-lg lg:text-xl font-bold text-white tracking-tight">
+                      <h2 className="text-[20px] leading-[28px] lg:text-[22px] font-bold text-white tracking-tight">
                         {t.customerService.title}
                       </h2>
-                      <p className="text-xs lg:text-sm text-blue-100 mt-0.5 font-medium">
+                      <p className="text-xs lg:text-sm text-blue-100/90 mt-0.5 font-medium">
                         {t.customerService.subtitle}
                       </p>
                     </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsOpen(false)}
+                    onClick={requestClosePanel}
                     className="customer-service-panel-close emp-close-btn emp-close-btn--wrap group flex flex-shrink-0 items-center justify-center rounded-xl text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
                     style={{ WebkitTapHighlightColor: 'transparent' }}
                     aria-label={t.common.close}
@@ -2622,42 +2593,21 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </button>
                 </div>
 
-                <div className="relative mt-4">
-                  <div className="absolute left-3 sm:left-3.5 top-1/2 -translate-y-1/2">
-                    <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-300" />
-                  </div>
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder={t.customerService.searchPlaceholder}
-                    autoComplete="off"
-                    className="customer-service-search w-full pl-9 sm:pl-10 pr-[44px] bg-white/15 border border-white/20 rounded-lg text-white text-xs sm:text-sm placeholder-blue-200 focus:outline-none focus:ring-2 focus:ring-white/30 focus:border-white/40 focus:bg-white/20 transition-all"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="customer-service-search-clear group absolute right-0 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-lg"
-                      aria-label="Clear search"
-                    >
-                      <span className="flex h-[32px] w-[32px] items-center justify-center rounded-lg transition-colors group-hover:bg-white/10">
-                        <X className="h-[18px] w-[18px] text-blue-200 transition-colors group-hover:text-white" />
-                      </span>
-                    </button>
-                  )}
-                </div>
-              </div>
+                              </div>
 
               <div
+                   className="relative min-h-0 flex-1 overflow-hidden"
+                   style={{ background: 'linear-gradient(180deg, #f8fafc 0%, #f1f5f9 50%, #e8eef6 100%)' }}>
+                <PanelColorBlocks />
+              <div
                    ref={conversationListRef}
-                   className="relative flex-1 overflow-hidden overflow-y-auto"
+                   className="relative h-full overflow-y-auto"
                    style={{
                      WebkitOverflowScrolling: 'touch',
                      scrollbarWidth: 'thin',
                      scrollbarColor: 'rgba(148, 163, 184, 0.4) transparent',
-                     background: 'linear-gradient(180deg, #f8fafc 0%, #f1f5f9 50%, #e8eef6 100%)'
                    }}>
-                {loadingConversations && filteredConversations.length === 0 ? (
+                {loadingConversations && conversations.length === 0 ? (
                   <div className="p-3 sm:p-4 space-y-2.5" aria-label={t.customerService.loadingMessages}>
                     {Array.from({ length: 4 }).map((_, index) => (
                       <div
@@ -2689,17 +2639,24 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                       {t.common.retry}
                     </button>
                   </div>
-                ) : filteredConversations.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-center px-6">
-                    <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-slate-100 to-blue-50 flex items-center justify-center mb-4 shadow-inner">
-                      <MessageCircle className="w-10 h-10 text-slate-300" />
+                ) : conversations.length === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center px-8 text-center">
+                    <div className="relative z-10 mb-5 h-[72px] w-[100px]" aria-hidden="true">
+                      <div className="absolute left-0 top-0 flex h-[44px] w-[66px] flex-col justify-center gap-[5px] rounded-2xl rounded-bl-md bg-blue-200/90 px-3">
+                        <span className="h-[3px] w-full rounded-full bg-white/80"></span>
+                        <span className="h-[3px] w-2/3 rounded-full bg-white/80"></span>
+                      </div>
+                      <div className="absolute bottom-0 right-0 flex h-[40px] w-[58px] flex-col justify-center gap-[5px] rounded-2xl rounded-br-md bg-blue-500 px-3 shadow-sm shadow-blue-500/20">
+                        <span className="h-[3px] w-full rounded-full bg-white/80"></span>
+                        <span className="h-[3px] w-1/2 rounded-full bg-white/80"></span>
+                      </div>
                     </div>
-                    <p className="text-sm font-medium text-slate-500">{t.customerService.noConversations}</p>
-                    <p className="text-xs mt-1 text-slate-400">{t.customerService.noConversationsDesc}</p>
+                    <p className="relative z-10 text-[15px] font-semibold leading-6 text-blue-900">{t.customerService.noConversations}</p>
+                    <p className="relative z-10 mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.customerService.noConversationsDesc}</p>
                   </div>
                 ) : (
                   <div className="p-3 sm:p-4 space-y-2 sm:space-y-2.5">
-                    {filteredConversations.map((conv, index) => (
+                    {conversations.map((conv, index) => (
                       <button
                         key={conv.customer.id}
                         onClick={() => handleSelectConversation(conv.customer)}
@@ -2709,16 +2666,33 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                         className={`w-full rounded-2xl transition-all duration-200 hover:translate-x-0.5 active:scale-[0.98] group relative overflow-hidden ${skipListAnimationRef.current ? '' : 'animate-[fadeInUp_0.4s_ease-out_both]'} ${
                           conv.customer.is_super
                             ? conv.unread_count > 0
-                              ? 'p-3.5 sm:p-4 bg-gradient-to-r from-amber-100 via-orange-50 to-amber-100 border-2 border-amber-400 hover:border-amber-500 hover:shadow-lg hover:shadow-amber-200/60 ring-1 ring-amber-300/50'
-                              : 'p-3.5 sm:p-4 bg-gradient-to-r from-amber-50 via-white to-orange-50 border border-amber-200/80 hover:border-amber-300 hover:shadow-lg hover:shadow-amber-100/50'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-r from-amber-200 via-amber-100 to-orange-100 border border-orange-400 shadow-[0_6px_16px_-8px_rgba(234,88,12,0.5)] hover:shadow-[0_8px_20px_-8px_rgba(234,88,12,0.6)]'
+                              : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-amber-50/60 border border-amber-200 hover:border-amber-300 hover:shadow-md'
                             : conv.unread_count > 0
-                              ? 'p-3.5 sm:p-4 bg-gradient-to-r from-blue-50 via-sky-50/80 to-blue-50 border-2 border-blue-400 hover:border-blue-500 hover:shadow-lg hover:shadow-blue-200/60 ring-1 ring-blue-300/50'
-                              : 'p-3.5 sm:p-4 bg-white border border-slate-200/80 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-50/50'
+                              ? 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-gradient-to-r from-blue-200 via-blue-100 to-sky-50 border border-blue-300 shadow-[0_6px_16px_-8px_rgba(37,99,235,0.45)] hover:shadow-[0_8px_20px_-8px_rgba(37,99,235,0.55)]'
+                              : 'p-3.5 pl-[18px] sm:p-4 sm:pl-5 bg-white border border-slate-200 hover:border-blue-200 hover:shadow-md'
                         }`}
                         style={skipListAnimationRef.current ? undefined : {
                           animationDelay: `${Math.min(index * 0.05, 0.4)}s`
                         }}
                       >
+                        {conv.unread_count > 0 ? (
+                          <span
+                            className="pointer-events-none absolute inset-0 rounded-[15px]"
+                            style={{
+                              padding: '3px 0 0 4px',
+                              background: conv.customer.is_super
+                                ? 'linear-gradient(135deg, #f97316 0%, #fbbf24 45%, rgba(251,191,36,0) 85%)'
+                                : 'linear-gradient(135deg, #2563eb 0%, #60a5fa 45%, rgba(96,165,250,0) 85%)',
+                              WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+                              WebkitMaskComposite: 'xor',
+                              mask: 'linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0)',
+                            }}
+                            aria-hidden="true"
+                          ></span>
+                        ) : (
+                          <span className={`pointer-events-none absolute inset-y-0 left-0 w-[4px] ${conv.customer.is_super ? 'bg-amber-400' : 'bg-blue-500/70'}`} aria-hidden="true"></span>
+                        )}
                         {conv.customer.is_super ? (
                           /* VIP card: 4-line vertical layout */
                           <div className="relative">
@@ -2736,7 +2710,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                 )}
                                 <CustomerAvatar
                                   customer={conv.customer}
-                                  className="w-11 h-11 sm:w-12 sm:h-12"
+                                  className={`w-11 h-11 sm:w-12 sm:h-12 ${conv.unread_count > 0 ? 'ring-2 ring-orange-400/70 ring-offset-2' : ''}`}
                                 />
                                 <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 sm:w-3.5 sm:h-3.5 rounded-full border-2 border-white transition-colors ${
                                   customerOnlineStatus.get(conv.customer.id)
@@ -2752,7 +2726,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     {conv.customer.customer_name}
                                   </span>
                                   {conv.unread_count > 0 && (
-                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-r from-red-500 to-rose-500 text-white text-[11px] font-bold rounded-full shadow-md shadow-red-300/60 animate-pulse flex-shrink-0">
+                                    <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-md shadow-orange-400/50 keep-animation animate-badge-shake-pulse flex-shrink-0">
                                       {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                     </span>
                                   )}
@@ -2785,7 +2759,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     const isPhoto = conv.last_message.includes('\ud83d\udcf7 Photo') || (!stripped && hasImg);
                                     if (isPhoto && !stripped) {
                                       return (
-                                        <p className="text-xs text-amber-700/60 truncate flex items-center gap-1">
+                                        <p className={`text-xs truncate flex items-center gap-1 ${conv.unread_count > 0 ? 'font-semibold text-amber-900' : 'text-amber-700/60'}`}>
                                           <Image className="w-3 h-3 flex-shrink-0" />
                                           <span>{t.customerService.photo}</span>
                                         </p>
@@ -2793,12 +2767,12 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                     }
                                     const preview = stripped || '';
                                     return (
-                                      <p className="text-xs text-amber-700/60 truncate">
+                                      <p className={`text-xs truncate ${conv.unread_count > 0 ? 'font-semibold text-amber-900' : 'text-amber-700/60'}`}>
                                         {preview.length > 40 ? `${preview.substring(0, 40)}...` : preview}
                                       </p>
                                     );
                                   })()}
-                                  <div className="flex items-center gap-1 text-[11px] text-amber-500/70 font-medium flex-shrink-0">
+                                  <div className={`flex items-center gap-1 text-[11px] flex-shrink-0 ${conv.unread_count > 0 ? 'font-semibold text-orange-600' : 'font-medium text-amber-500/70'}`}>
                                     <Clock className="w-3 h-3" />
                                     {formatTime(conv.last_message_time)}
                                   </div>
@@ -2812,7 +2786,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                             <div className="relative flex-shrink-0 mt-0.5">
                               <CustomerAvatar
                                 customer={conv.customer}
-                                className="w-10 h-10 sm:w-11 sm:h-11"
+                                className={`w-10 h-10 sm:w-11 sm:h-11 ${conv.unread_count > 0 ? 'ring-2 ring-blue-500/70 ring-offset-2' : ''}`}
                               />
                               <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border-2 border-white transition-colors ${
                                 customerOnlineStatus.get(conv.customer.id)
@@ -2823,11 +2797,11 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
 
                             <div className="flex-1 min-w-0 text-left">
                               <div className="flex items-center justify-between gap-2 mb-0.5">
-                                <span className="text-sm font-semibold truncate text-gray-900">
+                                <span className={`text-sm truncate text-gray-900 ${conv.unread_count > 0 ? 'font-bold' : 'font-semibold'}`}>
                                   {conv.customer.customer_name}
                                 </span>
                                 {conv.unread_count > 0 && (
-                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-r from-red-500 to-rose-500 text-white text-[11px] font-bold rounded-full shadow-md shadow-red-300/60 animate-pulse flex-shrink-0">
+                                  <span className="flex items-center justify-center min-w-[26px] h-[26px] px-2 bg-gradient-to-br from-red-500 to-orange-500 text-white text-[13px] font-bold leading-none tabular-nums rounded-full shadow-md shadow-orange-400/50 keep-animation animate-badge-shake-pulse flex-shrink-0">
                                     {conv.unread_count > 9 ? '9+' : conv.unread_count}
                                   </span>
                                 )}
@@ -2844,7 +2818,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                   const isPhoto = conv.last_message.includes('\ud83d\udcf7 Photo') || (!stripped && hasImg);
                                   if (isPhoto && !stripped) {
                                     return (
-                                      <p className="text-xs text-gray-600 truncate flex items-center gap-1">
+                                      <p className={`text-xs truncate flex items-center gap-1 ${conv.unread_count > 0 ? 'font-semibold text-slate-900' : 'text-gray-600'}`}>
                                         <Image className="w-3 h-3 flex-shrink-0" />
                                         <span>{t.customerService.photo}</span>
                                       </p>
@@ -2852,12 +2826,12 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                                   }
                                   const preview = stripped || '';
                                   return (
-                                    <p className="text-xs text-gray-600 truncate">
+                                    <p className={`text-xs truncate ${conv.unread_count > 0 ? 'font-semibold text-slate-900' : 'text-gray-600'}`}>
                                       {preview.length > 35 ? `${preview.substring(0, 35)}...` : preview}
                                     </p>
                                   );
                                 })()}
-                                <div className="flex items-center gap-1 text-[11px] text-slate-400 font-medium flex-shrink-0">
+                                <div className={`flex items-center gap-1 text-[11px] flex-shrink-0 ${conv.unread_count > 0 ? 'font-semibold text-blue-700' : 'font-medium text-slate-400'}`}>
                                   <Clock className="w-3 h-3" />
                                   {formatTime(conv.last_message_time)}
                                 </div>
@@ -2870,10 +2844,11 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                   </div>
                 )}
               </div>
+              </div>
             </>
           ) : (
             <>
-              <div className={`customer-service-panel-header customer-service-chat-header relative flex-shrink-0 px-4 pt-3 pb-4 lg:px-6 lg:pt-5 lg:pb-5 overflow-hidden ${
+              <div className={`customer-service-panel-header customer-service-chat-header relative flex-shrink-0 px-4 pt-3 pb-5 lg:px-6 lg:pt-3 lg:pb-3 overflow-hidden ${
                 selectedCustomer?.is_super
                   ? 'bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600'
                   : 'bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700'
@@ -2913,7 +2888,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <div className="h-5 truncate text-sm font-bold leading-5 text-white sm:h-6 sm:text-base sm:leading-6">
+                        <div className="h-6 truncate text-[17px] font-bold leading-6 tracking-tight text-white sm:h-7 sm:text-[19px] sm:leading-7">
                           {selectedCustomer.customer_name}
                         </div>
 
@@ -2960,17 +2935,23 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
               </div>
 
               <div
+                className="relative min-h-0 flex-1 overflow-hidden"
+                style={{
+                  background: selectedCustomer?.is_super
+                    ? 'linear-gradient(160deg, #fffbeb 0%, #fef3c7 30%, #fff7ed 60%, #fffbeb 100%)'
+                    : 'linear-gradient(160deg, #f0f4f8 0%, #e8eef6 30%, #eef2ff 60%, #f0f4f8 100%)'
+                }}
+              >
+              <PanelColorBlocks tone={selectedCustomer?.is_super ? 'gold' : 'blue'} />
+              <div
                 ref={messagesContainerCallbackRef}
-                className="chat-messages-container relative flex-1 flex flex-col-reverse"
+                className="chat-messages-container relative h-full flex flex-col-reverse"
                 style={{
                   scrollbarWidth: 'thin',
                   scrollbarColor: 'rgba(148, 163, 184, 0.4) transparent',
                   WebkitOverflowScrolling: 'touch',
                   overflowY: 'auto',
                   overflowX: 'hidden',
-                  background: selectedCustomer?.is_super
-                    ? 'linear-gradient(160deg, #fffbeb 0%, #fef3c7 30%, #fff7ed 60%, #fffbeb 100%)'
-                    : 'linear-gradient(160deg, #f0f4f8 0%, #e8eef6 30%, #eef2ff 60%, #f0f4f8 100%)'
                 }}
               >
                {loadingMessages && (
@@ -3111,6 +3092,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
                 )}
                </div>
               </div>
+              </div>
 
               <form onSubmit={handleSendMessage} className="customer-service-composer relative border-t border-gray-200 bg-white p-3 md:p-4">
                 <div className="flex items-end gap-2">
@@ -3213,75 +3195,7 @@ export default function CustomerServiceChat({ employeeId }: CustomerServiceChatP
           </div>
         </div>
       )}
-      {previewImage && createPortal(
-        <div
-          className="employee-modal-backdrop fixed inset-0 z-[99999] flex items-center justify-center bg-black/90"
-          onClick={(e) => { if (e.target === e.currentTarget) { setPreviewImage(null); setImageZoom(1); setImageDrag({ x: 0, y: 0 }); } }}
-        >
-          <div className="cs-viewer-toolbar absolute z-10 flex items-center gap-1.5 sm:gap-2">
-            <button
-              type="button"
-              onClick={() => setImageZoom(z => Math.max(0.5, z - 0.25))}
-              className="cs-viewer-btn flex items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 active:bg-white/25"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label="Zoom out"
-            >
-              <ZoomOut className="h-5 w-5 shrink-0" />
-            </button>
-            <span className="w-[64px] sm:w-[72px] text-center font-mono text-[17px] sm:text-[19px] leading-none font-semibold tabular-nums text-white/90">{Math.round(imageZoom * 100)}%</span>
-            <button
-              type="button"
-              onClick={() => setImageZoom(z => Math.min(5, z + 0.25))}
-              className="cs-viewer-btn flex items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 active:bg-white/25"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label="Zoom in"
-            >
-              <ZoomIn className="h-5 w-5 shrink-0" />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
-              className="cs-viewer-btn flex items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 active:bg-white/25"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label="Reset"
-            >
-              <RotateCcw className="h-5 w-5 shrink-0" />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setPreviewImage(null); setImageZoom(1); setImageDrag({ x: 0, y: 0 }); }}
-              className="cs-viewer-btn ml-1 flex items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/25 active:bg-white/30"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-              aria-label={t.common.close}
-            >
-              <X className="h-5 w-5 shrink-0" strokeWidth={2.25} />
-            </button>
-          </div>
-
-          <div
-            className="w-full h-full flex items-center justify-center overflow-hidden cursor-grab active:cursor-grabbing"
-            onMouseDown={(e) => { setIsDragging(true); dragStartRef.current = { x: e.clientX, y: e.clientY, ox: imageDrag.x, oy: imageDrag.y }; }}
-            onMouseMove={(e) => { if (!isDragging) return; setImageDrag({ x: dragStartRef.current.ox + e.clientX - dragStartRef.current.x, y: dragStartRef.current.oy + e.clientY - dragStartRef.current.y }); }}
-            onMouseUp={() => setIsDragging(false)}
-            onMouseLeave={() => setIsDragging(false)}
-            onTouchStart={(e) => { const t = e.touches[0]; setIsDragging(true); dragStartRef.current = { x: t.clientX, y: t.clientY, ox: imageDrag.x, oy: imageDrag.y }; }}
-            onTouchMove={(e) => { if (!isDragging) return; const t = e.touches[0]; setImageDrag({ x: dragStartRef.current.ox + t.clientX - dragStartRef.current.x, y: dragStartRef.current.oy + t.clientY - dragStartRef.current.y }); }}
-            onTouchEnd={() => setIsDragging(false)}
-          >
-            <img
-              src={previewImage}
-              alt="Preview"
-              className="max-w-[95vw] max-h-[90vh] sm:max-w-[85vw] sm:max-h-[85vh] object-contain select-none"
-              style={{
-                transform: `scale(${imageZoom}) translate(${imageDrag.x / imageZoom}px, ${imageDrag.y / imageZoom}px)`,
-                transition: isDragging ? 'none' : 'transform 0.2s ease-out',
-              }}
-              draggable={false}
-            />
-          </div>
-        </div>,
-        document.body
-      )}
+      {previewImage && <ChatImageViewer src={previewImage} onClose={() => setPreviewImage(null)} />}
       {viewingRichCard && createPortal(
         <div
           className="employee-modal-backdrop fixed inset-0 z-[10000] flex items-stretch justify-stretch p-0 xl:items-center xl:justify-center xl:p-6 overflow-hidden touch-none"

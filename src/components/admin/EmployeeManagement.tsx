@@ -1,13 +1,161 @@
-import { Fragment, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
-import type { ReactNode } from 'react';
+import { Fragment, createContext, useContext, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useId } from 'react';
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { UserPlus, Search, MoreVertical, CheckCircle, XCircle, Key, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ChevronLeft, ChevronRight, Trash2, Eye, EyeOff, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Pin, Tag, X, Users, CalendarDays, Clock, Pencil, Bell, MessageCircle, DollarSign, Headphones, Globe, Loader2, Timer, Wallet, MapPin, Clock3, History, LogIn, LogOut } from 'lucide-react';
+import { Layers, UserPlus, Search, MoreVertical, CheckCircle, XCircle, Key, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ChevronLeft, ChevronRight, Trash2, Eye, EyeOff, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Pin, Tag, X, Users, CalendarDays, Clock, Pencil, Bell, MessageCircle, DollarSign, Headphones, Globe, Loader2, Timer, Wallet, MapPin, Clock3, History, LogIn, LogOut } from 'lucide-react';
 import { formatSupabaseError, isFinancialAdminSessionError, isSupabaseAbortError, isSupabaseTransientError, supabase } from '../../lib/supabase';
 import { Employee, Admin, NotificationAutomationPlan, NotificationAutomationPlanAssignment } from '../../types';
 import { createFinancialOperationId, getAdminFinancialSessionToken, logout } from '../../lib/auth';
 import { mutateAuditedContent } from '../../lib/contentAudit';
 import EmployeeDetailModal from './EmployeeDetailModal';
 import LoginDeviceSummary from './LoginDeviceSummary';
+import EmployeeSetupSelect from './EmployeeSetupSelect';
+import { EmployeeRegionFilter, EmployeeRegionPicker, UNASSIGNED_REGION_FILTER } from './EmployeeRegionMenu';
+import type { EmployeeRegion, EmployeeRegionActions } from './EmployeeRegionMenu';
+
+function EmployeeTableScroll({ label, className, children }: {
+  label: string;
+  className: string;
+  children: ReactNode;
+}) {
+  const viewportId = useId();
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
+  const dragOffsetRef = useRef<number | null>(null);
+  const [scroll, setScroll] = useState({ left: 0, width: 0, total: 0, fixed: 0 });
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const table = viewport.querySelector('table');
+    const update = () => {
+      let fixed = 0;
+      const columns = Array.from(table?.tHead?.rows[0]?.cells || []).slice(0, 10);
+      const widths = columns.map(column => column.getBoundingClientRect().width);
+      widths.forEach((width, index) => {
+        table?.style.setProperty(`--employee-column-${index + 1}-left`, `${fixed}px`);
+        fixed += width;
+      });
+      const next = { left: viewport.scrollLeft, width: viewport.clientWidth, total: viewport.scrollWidth, fixed };
+      setScroll(current => current.left === next.left && current.width === next.width && current.total === next.total && current.fixed === next.fixed ? current : next);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    if (table) observer.observe(table);
+    const updateScroll = () => {
+      const left = viewport.scrollLeft;
+      setScroll(current => current.left === left ? current : { ...current, left });
+    };
+    viewport.addEventListener('scroll', updateScroll, { passive: true });
+    update();
+    return () => {
+      observer.disconnect();
+      viewport.removeEventListener('scroll', updateScroll);
+    };
+  }, []);
+
+  const maxScroll = Math.max(0, scroll.total - scroll.width);
+  const scrollingWidth = scroll.total - scroll.fixed;
+  const thumbWidth = scrollingWidth > 0 ? Math.max(8, Math.max(0, scroll.width - scroll.fixed) / scrollingWidth * 100) : 100;
+  const thumbLeft = maxScroll ? scroll.left / maxScroll * (100 - thumbWidth) : 0;
+  const scrollToPointer = (event: ReactPointerEvent<HTMLDivElement>, offset: number) => {
+    const viewport = viewportRef.current;
+    const thumb = thumbRef.current;
+    if (!viewport || !thumb) return;
+    const track = event.currentTarget.getBoundingClientRect();
+    const distance = track.width - thumb.getBoundingClientRect().width;
+    if (distance > 0) viewport.scrollLeft = Math.max(0, Math.min(1, (event.clientX - track.left - offset) / distance)) * maxScroll;
+  };
+
+  return (
+    <div className={`flex min-h-0 min-w-0 flex-col ${className}`}>
+      {maxScroll > 1 && (
+        <div className="sticky top-0 z-20 flex h-5 shrink-0 items-center bg-slate-900 pr-2" style={{ paddingLeft: scroll.fixed + 8 }}>
+          <div
+            role="scrollbar"
+            aria-label={`${label}右側資料橫向捲動條`}
+            title="左右捲動標籤右側的資料"
+            aria-controls={viewportId}
+            aria-orientation="horizontal"
+            aria-valuemin={0}
+            aria-valuemax={Math.ceil(maxScroll)}
+            aria-valuenow={Math.round(scroll.left)}
+            tabIndex={0}
+            className="employee-table-scrollbar relative h-full min-w-0 flex-1 touch-none select-none rounded-sm cursor-pointer focus:outline-none"
+            onPointerDown={event => {
+              if (event.button !== 0 || !thumbRef.current) return;
+              event.preventDefault();
+              event.currentTarget.focus({ preventScroll: true });
+              const thumb = thumbRef.current.getBoundingClientRect();
+              const offset = event.target === thumbRef.current ? event.clientX - thumb.left : thumb.width / 2;
+              dragOffsetRef.current = offset;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              scrollToPointer(event, offset);
+            }}
+            onPointerMove={event => {
+              if (dragOffsetRef.current !== null) scrollToPointer(event, dragOffsetRef.current);
+            }}
+            onPointerUp={event => {
+              dragOffsetRef.current = null;
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+            onLostPointerCapture={() => { dragOffsetRef.current = null; }}
+            onPointerCancel={() => { dragOffsetRef.current = null; }}
+            onKeyDown={event => {
+              const viewport = viewportRef.current;
+              if (!viewport) return;
+              const positions: Record<string, number> = {
+                ArrowLeft: viewport.scrollLeft - 80,
+                ArrowRight: viewport.scrollLeft + 80,
+                PageUp: viewport.scrollLeft - Math.max(0, viewport.clientWidth - scroll.fixed),
+                PageDown: viewport.scrollLeft + Math.max(0, viewport.clientWidth - scroll.fixed),
+                Home: 0,
+                End: maxScroll,
+              };
+              if (event.key in positions) {
+                event.preventDefault();
+                viewport.scrollLeft = positions[event.key];
+              }
+            }}
+          >
+            <div aria-hidden="true" className="employee-table-scroll-track pointer-events-none absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full" />
+            <div ref={thumbRef} aria-hidden="true" className="employee-table-scroll-thumb absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full" style={{ width: `${thumbWidth}%`, left: `${thumbLeft}%` }} />
+          </div>
+        </div>
+      )}
+      <div ref={viewportRef} id={viewportId} role="region" aria-label={`${label}，可左右捲動`} tabIndex={0} className="employee-table-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 dark-panel-scroll focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-300/60" style={{ touchAction: 'pan-x pan-y' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const REGION_REQUIRED_MESSAGE = '請選擇所在地區';
+const EmployeeRegionNamesContext = createContext<ReadonlyMap<string, string>>(new Map());
+
+function EmployeeRegionName({ regionId }: { regionId: string | null }) {
+  const names = useContext(EmployeeRegionNamesContext);
+  const name = regionId ? names.get(regionId) : undefined;
+  return name ? (
+    <span title={name} className="flex min-w-0 items-center gap-1 text-[11px] font-medium text-violet-200">
+      <MapPin className="h-2.5 w-2.5 shrink-0 text-violet-400" />
+      <span className="min-w-0 truncate">{name}</span>
+    </span>
+  ) : (
+    <span className="text-xs text-slate-600" title="未設定地區">-</span>
+  );
+}
+
+const getRegionActionErrorMessage = (message: string, fallback: string) => {
+  if (/1 to 30 characters/.test(message)) return '地區名稱需為 1～30 個字。';
+  if (/Region name already exists/.test(message)) return '此群組已有同名地區。';
+  const assigned = message.match(/still assigned to (\d+) employees/);
+  if (assigned) return `此地區仍有 ${assigned[1]} 名員工，請先選擇要改到的地區。`;
+  if (/replacement region is not available/.test(message)) return '要改到的地區已不存在，請重新整理後再試。';
+  if (/selected region is not available/.test(message)) return '此地區已不存在，請重新整理後再試。';
+  if (/another administrator group|cannot manage employee regions/.test(message)) return '你沒有權限管理此群組的地區。';
+  if (/administrator group is not available/.test(message)) return '此管理員群組目前無法使用。';
+  return fallback;
+};
 
 interface OrderRealtimeData {
   user_id: string;
@@ -61,7 +209,15 @@ const getCreateEmployeeErrorMessage = (
     return '新增員工失敗：所選派單分組已封存、停用或不存在，請重新開啟視窗選擇可用分組。';
   }
 
-  if (/^(使用者名稱為必填|密碼至少需要 6 個字元|員工 ID 為必填|請先選擇派單分組|所選派單分組已不可用，請重新選擇|派單分組載入中，請稍候再試|無法載入派單分組，請關閉視窗後重試。)$/.test(message)) {
+  if (/The selected region is not available\./i.test(message)) {
+    return '新增員工失敗：所選地區已不存在，請重新選擇地區。';
+  }
+
+  if (/A region must be selected\./i.test(message)) {
+    return '新增員工失敗：請選擇所在地區。';
+  }
+
+  if (/^(使用者名稱為必填|密碼至少需要 6 個字元|員工 ID 為必填|請先選擇派單分組|所選派單分組已不可用，請重新選擇|派單分組載入中，請稍候再試|無法載入派單分組，請關閉視窗後重試。|請選擇所在地區|所選地區已不存在，請重新選擇地區)$/.test(message)) {
     return message;
   }
 
@@ -233,7 +389,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [dispatchGroups, setDispatchGroups] = useState<Array<{ id: string; group_name: string; is_default: boolean }>>([]);
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [dispatchGroups, setDispatchGroups] = useState<Array<{ id: string; group_name: string; description: string | null; is_default: boolean }>>([]);
   const [dispatchGroupsLoading, setDispatchGroupsLoading] = useState(false);
   const [dispatchGroupsError, setDispatchGroupsError] = useState<string | null>(null);
   const [automationPlans, setAutomationPlans] = useState<NotificationAutomationPlan[]>([]);
@@ -241,14 +398,15 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const [editingEmployee, setEditingEmployee] = useState<EmployeeWithAdmin | null>(null);
   const [editingAutomationPlanId, setEditingAutomationPlanId] = useState('');
   const [editingAutomationPlanTouched, setEditingAutomationPlanTouched] = useState(false);
-  const [editPlanMenuOpen, setEditPlanMenuOpen] = useState(false);
-  const [editPlanMenuPosition, setEditPlanMenuPosition] = useState<{ top: number; left: number; width: number } | null>(null);
-  const editPlanButtonRef = useRef<HTMLButtonElement>(null);
-  const editPlanMenuRef = useRef<HTMLDivElement>(null);
+  const [editingDispatchGroupId, setEditingDispatchGroupId] = useState('');
+  const [currentDispatchGroup, setCurrentDispatchGroup] = useState<{ id: string; name: string } | null>(null);
   const editBackdropPressRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
-  const editingEmployeeInitialRef = useRef<{ username: string; employeeId: string; remarks: string; planId: string } | null>(null);
+  const editingEmployeeInitialRef = useRef<{ username: string; employeeId: string; remarks: string; planId: string; regionId: string; dispatchGroupId: string } | null>(null);
   const [savingEmployeeEdit, setSavingEmployeeEdit] = useState(false);
   const [editEmployeeError, setEditEmployeeError] = useState<string | null>(null);
+  const [showDiscardEmployeeEdit, setShowDiscardEmployeeEdit] = useState(false);
+  const employeeEditDialogRef = useRef<HTMLDivElement>(null);
+  const discardEmployeeEditDialogRef = useRef<HTMLDivElement>(null);
   const [editingRemarksOnly, setEditingRemarksOnly] = useState<EmployeeWithAdmin | null>(null);
   const [showPasswordReset, setShowPasswordReset] = useState<{id: string; username: string; employeeId: string} | null>(null);
   const [newPassword, setNewPassword] = useState('');
@@ -259,7 +417,6 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteFeedback, setDeleteFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [showPassword, setShowPassword] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [pinConfirmEmployee, setPinConfirmEmployee] = useState<{id: string; username: string; employeeId?: string; currentPinned: boolean} | null>(null);
   const [editingCreatedAt, setEditingCreatedAt] = useState<{id: string; username: string; employeeId: string; currentDate: string} | null>(null);
@@ -277,7 +434,10 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const [viewingEmployee, setViewingEmployee] = useState<EmployeeWithAdmin | null>(null);
   const [selectedTagsByGroup, setSelectedTagsByGroup] = useState<Map<string, string[]>>(new Map());
   const [editingTags, setEditingTags] = useState<EmployeeWithAdmin | null>(null);
+  const initialTagsRef = useRef<string[]>([]);
   const [newTag, setNewTag] = useState('');
+  const [savingTags, setSavingTags] = useState(false);
+  const [tagError, setTagError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     username: '',
     password: '',
@@ -285,12 +445,22 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     remarks: '',
     dispatchGroupId: '',
     automationPlanId: '',
+    regionId: '',
   });
+  const [regions, setRegions] = useState<EmployeeRegion[]>([]);
+  const [regionFilterByGroup, setRegionFilterByGroup] = useState<Map<string, string>>(new Map());
+  const [regionDropdownOpen, setRegionDropdownOpen] = useState<string | null>(null);
+  const regionNameById = useMemo(() => new Map(regions.map(region => [region.id, region.name])), [regions]);
+  const regionsByAdmin = useMemo(() => {
+    const grouped = new Map<string, EmployeeRegion[]>();
+    regions.forEach(region => {
+      const list = grouped.get(region.admin_id);
+      if (list) list.push(region);
+      else grouped.set(region.admin_id, [region]);
+    });
+    return grouped;
+  }, [regions]);
   const [selectedAdminForCreate, setSelectedAdminForCreate] = useState<string | null>(null);
-  const [createPlanMenuOpen, setCreatePlanMenuOpen] = useState(false);
-  const [createPlanMenuPosition, setCreatePlanMenuPosition] = useState<{ top: number; left: number; width: number } | null>(null);
-  const createPlanButtonRef = useRef<HTMLButtonElement>(null);
-  const createPlanMenuRef = useRef<HTMLDivElement>(null);
   const createBackdropPressRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const adminFilterRef = useRef<HTMLDivElement>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -546,6 +716,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       initialLoadStartedRef.current = false;
       employeeGroupsRef.current = [];
       setEmployeeGroups([]);
+      setRegions([]);
       setAutomationPlans([]);
       setAutomationAssignmentsByEmployee(new Map());
       setEditingAutomationPlanId('');
@@ -644,7 +815,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       if (payload.eventType === 'INSERT' || payload.eventType === 'DELETE') return true;
       if (!currentEmployee) return true;
 
-      const relevantFields = ['username', 'employee_id', 'is_verified', 'is_active', 'remarks', 'tags', 'is_pinned', 'created_by', 'created_at'];
+      const relevantFields = ['username', 'employee_id', 'is_verified', 'is_active', 'remarks', 'tags', 'is_pinned', 'created_by', 'created_at', 'region_id'];
       return relevantFields.some(field =>
         field in payload.new && JSON.stringify(payload.new[field]) !== JSON.stringify((currentEmployee as unknown as Record<string, unknown>)[field])
       );
@@ -927,23 +1098,13 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     return `${hours}h ${mins}m`;
   }, []);
 
-  const generatePassword = () => {
-    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-    let password = '';
-    for (let i = 0; i < 12; i++) {
-      password += charset.charAt(Math.floor(Math.random() * charset.length));
-    }
-    setFormData({ ...formData, password });
-  };
-
   const openCreateEmployeeForm = (targetAdminId: string) => {
-    setFormData(prev => ({ ...prev, dispatchGroupId: '', automationPlanId: '' }));
+    setFormData(prev => ({ ...prev, dispatchGroupId: '', automationPlanId: '', regionId: '' }));
     setDispatchGroups([]);
     setDispatchGroupsError(null);
     setDispatchGroupsLoading(true);
     setCreateError(null);
-    setCreatePlanMenuOpen(false);
-    setCreatePlanMenuPosition(null);
+    setShowCreatePassword(false);
     setSelectedAdminForCreate(targetAdminId);
     setShowCreateForm(true);
     setExpandedGroups(prev => new Set(prev).add(targetAdminId));
@@ -952,28 +1113,131 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const closeCreateEmployeeForm = () => {
     setShowCreateForm(false);
     setCreateError(null);
-    setCreatePlanMenuOpen(false);
-    setCreatePlanMenuPosition(null);
-    setFormData({ username: '', password: '', employeeId: '', remarks: '', dispatchGroupId: '', automationPlanId: '' });
+    setShowCreatePassword(false);
+    setFormData({ username: '', password: '', employeeId: '', remarks: '', dispatchGroupId: '', automationPlanId: '', regionId: '' });
     setSelectedAdminForCreate(null);
   };
 
+  const throwRegionActionError = useCallback((error: unknown, action: string, fallback: string): never => {
+    if (error && isFinancialAdminSessionError(error)) {
+      void logout(false);
+      throw new Error('登入已失效，請重新登入。');
+    }
+    const message = error ? formatSupabaseError(error) : '';
+    console.error(`Error ${action} employee region:`, message);
+    throw new Error(getRegionActionErrorMessage(message, fallback));
+  }, []);
+
+  const getRegionActions = useCallback((ownerAdminId: string): EmployeeRegionActions => ({
+    create: async name => {
+      const { data, error } = await supabase.rpc('admin_create_employee_region', {
+        p_admin_session_token: getAdminFinancialSessionToken(),
+        p_owner_admin_id: ownerAdminId,
+        p_name: name,
+      });
+      if (error || !data?.id) return throwRegionActionError(error, 'creating', '新增地區失敗，請稍後再試。');
+      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id, is_pinned: data.is_pinned };
+      setRegions(prev => (prev.some(item => item.id === region.id) ? prev : [...prev, region]));
+      return { region, created: Boolean(data.created) };
+    },
+    rename: async (regionId, name) => {
+      const { data, error } = await supabase.rpc('admin_rename_employee_region', {
+        p_admin_session_token: getAdminFinancialSessionToken(),
+        p_region_id: regionId,
+        p_name: name,
+      });
+      if (error || !data?.id) return throwRegionActionError(error, 'renaming', '修改地區失敗，請稍後再試。');
+      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id, is_pinned: data.is_pinned };
+      setRegions(prev => prev.map(item => (item.id === region.id ? region : item)));
+      return region;
+    },
+    setPinned: async (regionId, pinned) => {
+      const { data, error } = await supabase.rpc('admin_set_employee_region_pinned', {
+        p_admin_session_token: getAdminFinancialSessionToken(),
+        p_region_id: regionId,
+        p_is_pinned: pinned,
+      });
+      if (error || !data?.id) return throwRegionActionError(error, 'pinning', '設定地區置頂失敗，請稍後再試。');
+      const region: EmployeeRegion = { id: data.id, name: data.name, admin_id: data.admin_id, is_pinned: data.is_pinned };
+      setRegions(prev => prev.map(item => (item.id === region.id ? region : item)));
+      return region;
+    },
+    remove: async (regionId, replacementId) => {
+      const { error } = await supabase.rpc('admin_delete_employee_region', {
+        p_admin_session_token: getAdminFinancialSessionToken(),
+        p_region_id: regionId,
+        p_replacement_region_id: replacementId,
+      });
+      if (error) return throwRegionActionError(error, 'deleting', '刪除地區失敗，請稍後再試。');
+      setRegions(prev => prev.filter(item => item.id !== regionId));
+      setEmployeeGroups(prev => prev.map(group => ({
+        ...group,
+        employees: group.employees.map(employee => (
+          employee.region_id === regionId ? { ...employee, region_id: replacementId } : employee
+        )),
+      })));
+      setRegionFilterByGroup(prev => {
+        if (prev.get(ownerAdminId) !== regionId) return prev;
+        const next = new Map(prev);
+        next.delete(ownerAdminId);
+        return next;
+      });
+      setFormData(prev => (prev.regionId === regionId ? { ...prev, regionId: replacementId || '' } : prev));
+      setEditingEmployee(current => (
+        current && current.region_id === regionId ? { ...current, region_id: replacementId } : current
+      ));
+      if (editingEmployeeInitialRef.current?.regionId === regionId) {
+        editingEmployeeInitialRef.current = { ...editingEmployeeInitialRef.current, regionId: replacementId || '' };
+      }
+      void guardedLoadEmployeesRef.current?.(false);
+    },
+  }), [throwRegionActionError]);
+
   useEffect(() => {
-    if (!showCreateForm) return;
+    if (!showDiscardEmployeeEdit) return;
+    const editor = employeeEditDialogRef.current;
+    const previousFocus = document.activeElement;
+    if (editor) editor.inert = true;
+    discardEmployeeEditDialogRef.current?.querySelector<HTMLButtonElement>('[data-continue-editing]')?.focus();
+    return () => {
+      if (editor) editor.inert = false;
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+    };
+  }, [showDiscardEmployeeEdit]);
+
+  const editingEmployeeId = editingEmployee?.id;
+  useEffect(() => {
+    if (!showCreateForm && !editingEmployeeId) return;
 
     let cancelled = false;
     const loadDispatchGroups = async () => {
       try {
-        const { data, error } = await supabase
-          .from('dispatch_groups')
-          .select('id, group_name, is_default')
-          .eq('is_active', true)
-          .is('archived_at', null)
-          .order('is_default', { ascending: false })
-          .order('group_name', { ascending: true });
-
-        if (error) throw error;
-        if (!cancelled) setDispatchGroups(data || []);
+        const [groups, membership] = await Promise.all([
+          supabase.from('dispatch_groups')
+            .select('id, group_name, description, is_default')
+            .eq('is_active', true)
+            .is('archived_at', null)
+            .order('is_default', { ascending: false })
+            .order('group_name', { ascending: true }),
+          editingEmployeeId
+            ? supabase.from('dispatch_group_members')
+              .select('group_id, dispatch_groups(group_name)')
+              .eq('user_id', editingEmployeeId)
+              .maybeSingle()
+            : Promise.resolve(null),
+        ]);
+        if (groups.error) throw groups.error;
+        if (membership?.error) throw membership.error;
+        if (cancelled) return;
+        setDispatchGroups(groups.data || []);
+        if (editingEmployeeId) {
+          const groupId = membership?.data?.group_id || '';
+          setEditingDispatchGroupId(groupId);
+          setCurrentDispatchGroup(groupId ? { id: groupId, name: membership?.data?.dispatch_groups?.group_name || '目前分組' } : null);
+          if (editingEmployeeInitialRef.current) {
+            editingEmployeeInitialRef.current.dispatchGroupId = groupId;
+          }
+        }
       } catch (error) {
         if (!cancelled) {
           console.error('Error loading dispatch groups:', formatSupabaseError(error));
@@ -986,74 +1250,19 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
     void loadDispatchGroups();
     return () => { cancelled = true; };
-  }, [showCreateForm]);
-
-  const toggleCreatePlanMenu = (optionCount: number) => {
-    if (createPlanMenuOpen) {
-      setCreatePlanMenuOpen(false);
-      setCreatePlanMenuPosition(null);
-      return;
-    }
-
-    const button = createPlanButtonRef.current;
-    if (!button) return;
-
-    const rect = button.getBoundingClientRect();
-    const viewportPadding = 12;
-    const menuHeight = Math.min(280, 32 + optionCount * 34);
-    const width = Math.min(rect.width, window.innerWidth - viewportPadding * 2);
-    const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
-    const openAbove = window.innerHeight - rect.bottom < menuHeight + viewportPadding && rect.top > menuHeight;
-    const top = openAbove
-      ? Math.max(viewportPadding, rect.top - menuHeight - 8)
-      : Math.max(viewportPadding, Math.min(rect.bottom + 8, window.innerHeight - menuHeight - viewportPadding));
-
-    setCreatePlanMenuPosition({ top, left, width });
-    setCreatePlanMenuOpen(true);
-  };
+  }, [showCreateForm, editingEmployeeId]);
 
   useEffect(() => {
     if (!showCreateForm) return;
 
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (createPlanMenuOpen) {
-        setCreatePlanMenuOpen(false);
-        setCreatePlanMenuPosition(null);
-      } else if (!creating) {
-        closeCreateEmployeeForm();
-      }
+      if (!creating) closeCreateEmployeeForm();
     };
 
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
-  }, [showCreateForm, createPlanMenuOpen, creating]);
-
-  useEffect(() => {
-    if (!createPlanMenuOpen) return;
-
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!createPlanButtonRef.current?.contains(target) && !createPlanMenuRef.current?.contains(target)) {
-        setCreatePlanMenuOpen(false);
-        setCreatePlanMenuPosition(null);
-      }
-    };
-    const closeOnViewportChange = (event: Event) => {
-      if (event.type === 'scroll' && createPlanMenuRef.current?.contains(event.target as Node)) return;
-      setCreatePlanMenuOpen(false);
-      setCreatePlanMenuPosition(null);
-    };
-
-    document.addEventListener('mousedown', closeOnOutsideClick);
-    window.addEventListener('resize', closeOnViewportChange);
-    window.addEventListener('scroll', closeOnViewportChange, true);
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick);
-      window.removeEventListener('resize', closeOnViewportChange);
-      window.removeEventListener('scroll', closeOnViewportChange, true);
-    };
-  }, [createPlanMenuOpen]);
+  }, [showCreateForm, creating]);
 
   const generateResetPassword = () => {
     const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
@@ -1224,6 +1433,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
       realtimeChangeGenerationRef.current += 1;
       setEmployeeGroups(groupsArray);
+      setRegions(Array.isArray(snapshot.regions) ? snapshot.regions : []);
       if (hasValidPlanAssignmentSnapshot) {
         setAutomationPlans(planAssignmentSnapshot!.plans!);
         setAutomationAssignmentsByEmployee(nextAssignmentsByEmployee!);
@@ -1283,6 +1493,11 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         ? admin.id
         : (selectedAdminForCreate || admin.id);
 
+      if (!formData.regionId) throw new Error(REGION_REQUIRED_MESSAGE);
+      if (!regionsByAdmin.get(createdBy)?.some(region => region.id === formData.regionId)) {
+        throw new Error('所選地區已不存在，請重新選擇地區');
+      }
+
       const createArgs = {
         p_admin_session_token: getAdminFinancialSessionToken(),
         p_username: formData.username.trim(),
@@ -1292,13 +1507,14 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         p_remarks: formData.remarks.trim(),
         p_automation_plan_id: formData.automationPlanId || null,
         p_dispatch_group_id: formData.dispatchGroupId,
+        p_region_id: formData.regionId,
       };
       const { data: result, error } = await supabase.rpc('admin_create_employee_account_with_automation_plan', createArgs);
 
       if (error) throw error;
       if (!result?.success) throw new Error(result?.error || '建立員工失敗');
 
-      setFormData({ username: '', password: '', employeeId: '', remarks: '', dispatchGroupId: '', automationPlanId: '' });
+      setFormData({ username: '', password: '', employeeId: '', remarks: '', dispatchGroupId: '', automationPlanId: '', regionId: '' });
       setShowCreateForm(false);
       setCreateError(null);
       setSelectedAdminForCreate(null);
@@ -1543,158 +1759,159 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       employeeId: employee.employee_id,
       remarks: employee.remarks || '',
       planId,
+      regionId: employee.region_id || '',
+      dispatchGroupId: '',
     };
+    setShowDiscardEmployeeEdit(false);
     setEditingEmployee(employee);
     setEditingAutomationPlanId(planId);
     setEditingAutomationPlanTouched(false);
-    setEditPlanMenuOpen(false);
-    setEditPlanMenuPosition(null);
+    setEditingDispatchGroupId('');
+    setCurrentDispatchGroup(null);
+    setDispatchGroups([]);
+    setDispatchGroupsError(null);
+    setDispatchGroupsLoading(true);
     setEditEmployeeError(null);
   }, [automationAssignmentsByEmployee]);
 
-  const closeEmployeeEditor = () => {
+  const resetEmployeeEditor = () => {
     if (savingEmployeeEdit) return;
+    setShowDiscardEmployeeEdit(false);
+    setEditingEmployee(null);
+    setEditingAutomationPlanId('');
+    setEditingAutomationPlanTouched(false);
+    setEditingDispatchGroupId('');
+    setCurrentDispatchGroup(null);
+    editingEmployeeInitialRef.current = null;
+    setEditEmployeeError(null);
+  };
+
+  const closeEmployeeEditor = () => {
+    if (savingEmployeeEdit || showDiscardEmployeeEdit) return;
     const initial = editingEmployeeInitialRef.current;
     const dirty = Boolean(editingEmployee && initial && (
       editingEmployee.username !== initial.username
       || editingEmployee.employee_id !== initial.employeeId
       || (editingEmployee.remarks || '') !== initial.remarks
+      || (editingEmployee.region_id || '') !== initial.regionId
       || editingAutomationPlanId !== initial.planId
+      || editingDispatchGroupId !== initial.dispatchGroupId
     ));
-    if (dirty && !window.confirm('員工資料或自動化方案尚未儲存，確定要放棄變更嗎？')) return;
-    setEditingEmployee(null);
-    setEditingAutomationPlanId('');
-    setEditingAutomationPlanTouched(false);
-    setEditPlanMenuOpen(false);
-    setEditPlanMenuPosition(null);
-    editingEmployeeInitialRef.current = null;
-    setEditEmployeeError(null);
-  };
-
-  const toggleEditPlanMenu = (optionCount: number) => {
-    if (editPlanMenuOpen) {
-      setEditPlanMenuOpen(false);
-      setEditPlanMenuPosition(null);
+    if (dirty) {
+      setShowDiscardEmployeeEdit(true);
       return;
     }
-
-    const button = editPlanButtonRef.current;
-    if (!button) return;
-
-    const rect = button.getBoundingClientRect();
-    const viewportPadding = 12;
-    const menuHeight = Math.min(280, 32 + optionCount * 34);
-    const width = Math.min(rect.width, window.innerWidth - viewportPadding * 2);
-    const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
-    const openAbove = window.innerHeight - rect.bottom < menuHeight + viewportPadding && rect.top > menuHeight;
-    const top = openAbove
-      ? Math.max(viewportPadding, rect.top - menuHeight - 8)
-      : Math.max(viewportPadding, Math.min(rect.bottom + 8, window.innerHeight - menuHeight - viewportPadding));
-
-    setEditPlanMenuPosition({ top, left, width });
-    setEditPlanMenuOpen(true);
+    resetEmployeeEditor();
   };
 
-  useEffect(() => {
-    if (!editPlanMenuOpen) return;
-
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!editPlanButtonRef.current?.contains(target) && !editPlanMenuRef.current?.contains(target)) {
-        setEditPlanMenuOpen(false);
-        setEditPlanMenuPosition(null);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setEditPlanMenuOpen(false);
-        setEditPlanMenuPosition(null);
-      }
-    };
-    const closeOnViewportChange = (event: Event) => {
-      if (event.type === 'scroll' && editPlanMenuRef.current?.contains(event.target as Node)) return;
-      setEditPlanMenuOpen(false);
-      setEditPlanMenuPosition(null);
-    };
-
-    document.addEventListener('mousedown', closeOnOutsideClick);
-    document.addEventListener('keydown', closeOnEscape);
-    window.addEventListener('resize', closeOnViewportChange);
-    window.addEventListener('scroll', closeOnViewportChange, true);
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick);
-      document.removeEventListener('keydown', closeOnEscape);
-      window.removeEventListener('resize', closeOnViewportChange);
-      window.removeEventListener('scroll', closeOnViewportChange, true);
-    };
-  }, [editPlanMenuOpen]);
-
   const handleSaveEmployeeEdit = async () => {
-    if (!editingEmployee || savingEmployeeEdit) return;
+    const initial = editingEmployeeInitialRef.current;
+    if (!editingEmployee || !initial || savingEmployeeEdit) return;
 
     const username = editingEmployee.username.trim();
     const employeeId = editingEmployee.employee_id.trim();
+    const remarks = (editingEmployee.remarks || '').trim();
     if (!username || !employeeId) {
       setEditEmployeeError('使用者名稱與員工 ID 均為必填。');
       return;
     }
-
+    if (!editingEmployee.region_id) {
+      setEditEmployeeError(`${REGION_REQUIRED_MESSAGE}。`);
+      return;
+    }
+    if (dispatchGroupsLoading || dispatchGroupsError) {
+      setEditEmployeeError(dispatchGroupsError || '派單分組載入中，請稍候再試。');
+      return;
+    }
+    const dispatchChanged = editingDispatchGroupId !== initial.dispatchGroupId;
+    const selectedGroup = dispatchGroups.find(group => group.id === editingDispatchGroupId);
+    if (dispatchChanged && !selectedGroup) {
+      setEditEmployeeError('所選派單分組已不可用，請重新選擇。');
+      return;
+    }
     const currentAssignment = automationAssignmentsByEmployee.get(editingEmployee.id);
-    const initialPlanId = editingEmployeeInitialRef.current?.planId || null;
+    const initialPlanId = initial.planId || null;
     const livePlanId = currentAssignment?.plan_id || null;
     const nextPlanId = editingAutomationPlanId || null;
     const assignmentChanged = editingAutomationPlanTouched && initialPlanId !== nextPlanId;
-    if (editingAutomationPlanTouched && livePlanId !== initialPlanId && livePlanId !== nextPlanId) {
+    if (assignmentChanged && livePlanId !== initialPlanId && livePlanId !== nextPlanId) {
       setEditEmployeeError('此員工的自動化方案已被其他管理員更新，請關閉後重新開啟最新資料再修改。');
       return;
     }
-    const activeOwnerPlans = automationPlans.filter(plan => (
-      plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
+    const selectedPlan = automationPlans.find(plan => (
+      plan.id === nextPlanId && plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
     ));
-    const selectedPlan = nextPlanId
-      ? activeOwnerPlans.find(plan => plan.id === nextPlanId)
-      : null;
-    let profileSaved = false;
-
+    if (assignmentChanged && nextPlanId && !selectedPlan) {
+      setEditEmployeeError('所選自動化方案已不可用，請重新選擇。');
+      return;
+    }
+    const regionChanged = initial.regionId !== editingEmployee.region_id;
+    const updates = {
+      ...(username !== initial.username ? { username } : {}),
+      ...(employeeId !== initial.employeeId ? { employee_id: employeeId } : {}),
+      ...(remarks !== initial.remarks ? { remarks } : {}),
+      ...(regionChanged ? { region_id: editingEmployee.region_id } : {}),
+    };
+    const savedSections: string[] = [];
+    let savingSection = '帳戶資料';
     setSavingEmployeeEdit(true);
     setEditEmployeeError(null);
 
     try {
-      const { error: profileError } = await supabase.rpc('admin_update_employee_account', {
-        p_admin_session_token: getAdminFinancialSessionToken(),
-        p_user_id: editingEmployee.id,
-        p_updates: {
-          username,
-          employee_id: employeeId,
-          remarks: (editingEmployee.remarks || '').trim(),
-        },
-      });
-      if (profileError) throw profileError;
-      profileSaved = true;
-
+      if (Object.keys(updates).length) {
+        const { error } = await supabase.rpc('admin_update_employee_account', {
+          p_admin_session_token: getAdminFinancialSessionToken(),
+          p_user_id: editingEmployee.id,
+          p_updates: updates,
+        });
+        if (error) throw error;
+        Object.assign(initial, { username, employeeId, remarks, regionId: editingEmployee.region_id });
+        setEditingEmployee(current => current ? { ...current, username, employee_id: employeeId, remarks } : current);
+        savedSections.push('帳戶資料');
+      }
+      if (dispatchChanged && selectedGroup) {
+        savingSection = '派單分組';
+        const { data, error } = await supabase.rpc('admin_assign_dispatch_group_member', {
+          p_admin_session_token: getAdminFinancialSessionToken(),
+          p_user_id: editingEmployee.id,
+          p_group_id: selectedGroup.id,
+        });
+        if (error) throw error;
+        if (data?.member?.group_id !== selectedGroup.id) throw new Error('派單分組更新未成功完成。');
+        initial.dispatchGroupId = selectedGroup.id;
+        setCurrentDispatchGroup({ id: selectedGroup.id, name: selectedGroup.group_name });
+        savedSections.push('派單分組');
+      }
       if (assignmentChanged) {
-        const { data: assignmentResult, error: assignmentError } = await supabase.rpc('set_notification_automation_plan_for_employee', {
+        savingSection = '自動化通知方案';
+        const { data, error } = await supabase.rpc('set_notification_automation_plan_for_employee', {
           p_admin_session_token: getAdminFinancialSessionToken(),
           p_user_id: editingEmployee.id,
           p_plan_id: nextPlanId,
         });
-        if (assignmentError) throw assignmentError;
-        if (!assignmentResult?.success) throw new Error('自動化方案更新未成功完成。');
+        if (error) throw error;
+        if (!data?.success) throw new Error('自動化方案更新未成功完成。');
+        initial.planId = nextPlanId || '';
+        setEditingAutomationPlanTouched(false);
+        setAutomationAssignmentsByEmployee(prev => {
+          const next = new Map(prev);
+          if (selectedPlan) next.set(editingEmployee.id, { user_id: editingEmployee.id, plan_id: selectedPlan.id, plan_name: selectedPlan.name, plan_status: selectedPlan.status });
+          else next.delete(editingEmployee.id);
+          return next;
+        });
+        savedSections.push('自動化通知方案');
       }
 
       const refreshed = await guardedLoadEmployeesRef.current?.(false);
       if (!refreshed) {
-        setEditEmployeeError(assignmentChanged
-          ? '員工帳戶資料與自動化方案已儲存，但目前無法重新載入伺服器資料。請保留此視窗並稍後重試。'
-          : '員工帳戶資料已儲存，但目前無法重新載入伺服器資料。請保留此視窗並稍後重試。');
+        setEditEmployeeError('變更已儲存，但目前無法重新載入伺服器資料。請保留此視窗並稍後再按儲存確認；已成功的項目不會重複提交。');
         return;
       }
-
       setEditingEmployee(null);
       setEditingAutomationPlanId('');
       setEditingAutomationPlanTouched(false);
-      setEditPlanMenuOpen(false);
-      setEditPlanMenuPosition(null);
+      setEditingDispatchGroupId('');
+      setCurrentDispatchGroup(null);
       editingEmployeeInitialRef.current = null;
       setEditEmployeeError(null);
       setNotification({
@@ -1702,18 +1919,15 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         type: 'success',
         category: 'profile',
         title: '員工資料已儲存',
-        message: assignmentChanged
-          ? '帳戶資料與自動化方案已成功更新，並已從伺服器重新整理。'
-          : '帳戶資料已成功更新，並已從伺服器重新整理。',
+        message: '員工資料已重新整理，派單分組與自動化通知方案共用相同員工名單，無須到其他頁面重複設定。',
         employee: { username, employeeId },
         details: [
           { label: '使用者名稱', value: username },
           { label: '員工 ID', value: employeeId },
-          { label: '備註', value: editingEmployee.remarks?.trim() || '（空白）' },
-          ...(assignmentChanged ? [{
-            label: '自動化方案',
-            value: selectedPlan?.name || (nextPlanId ? currentAssignment?.plan_name || '已更新' : '不指定方案'),
-          }] : []),
+          { label: '備註', value: remarks || '（空白）' },
+          { label: '所在地區', value: regionNameById.get(editingEmployee.region_id) || '已更新' },
+          { label: '派單分組', value: selectedGroup?.group_name || currentDispatchGroup?.name || '未分組' },
+          { label: '自動化方案', value: selectedPlan?.name || (nextPlanId ? currentAssignment?.plan_name || '保留原方案' : '不指定方案') },
         ],
       });
     } catch (error) {
@@ -1721,11 +1935,12 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         void logout(false);
         return;
       }
-
-      console.error('Error saving employee and automation plan:', formatSupabaseError(error));
-      setEditEmployeeError(profileSaved
-        ? `員工帳戶資料已儲存，但自動化方案更新失敗：${formatSupabaseError(error) || '請重試。'}`
-        : `員工帳戶資料儲存失敗，自動化方案尚未變更：${formatSupabaseError(error) || '請重試。'}`);
+      const saveMessage = formatSupabaseError(error);
+      console.error('Error saving employee settings:', saveMessage);
+      const readableMessage = /selected region is not available/i.test(saveMessage)
+        ? '所選地區已不存在，請重新選擇地區。'
+        : saveMessage || '請重試。';
+      setEditEmployeeError(`${savedSections.length ? `${savedSections.join('、')}已儲存；` : ''}${savingSection}儲存失敗：${readableMessage} 未完成的變更已保留，可重試；已成功的項目不會回復。`);
       await guardedLoadEmployeesRef.current?.(true);
     } finally {
       setSavingEmployeeEdit(false);
@@ -1880,6 +2095,12 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       next.delete(adminId);
       return next;
     });
+    setRegionFilterByGroup(prev => {
+      if (!prev.has(adminId)) return prev;
+      const next = new Map(prev);
+      next.delete(adminId);
+      return next;
+    });
   };
 
   const resetEmployeeListFilters = (adminId: string) => {
@@ -1898,6 +2119,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setWithdrawalDropdownPos(null);
     setCreatedDateDropdownOpen(null);
     setCreatedDateDropdownPos(null);
+    setRegionDropdownOpen(null);
   };
 
   const handleActiveFilter = (adminId: string, filter: 'all' | 'active' | 'inactive') => {
@@ -1990,55 +2212,66 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     }
   };
 
-  const handleAddTag = async (employee: EmployeeWithAdmin) => {
-    if (!newTag.trim()) return;
-    const updatedTags = [...(employee.tags || []), newTag.trim()];
-    const tagToAdd = newTag.trim();
-    setEmployeeGroups(prev => prev.map(g => ({
-      ...g,
-      employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: updatedTags } : emp)
-    })));
-    if (editingTags && editingTags.id === employee.id) setEditingTags({ ...editingTags, tags: updatedTags });
+  const tagsDirty = Boolean(editingTags && (
+    JSON.stringify(editingTags.tags || []) !== JSON.stringify(initialTagsRef.current)
+    || (newTag.trim() && !editingTags.tags?.includes(newTag.trim()))
+  ));
+
+  const closeTagEditor = () => {
+    if (savingTags) return;
+    if (tagsDirty && !window.confirm('標籤尚未儲存，確定要放棄變更嗎？')) return;
+    setEditingTags(null);
     setNewTag('');
-    try {
-      const { error } = await supabase.rpc('admin_update_employee_account', {
-        p_admin_session_token: getAdminFinancialSessionToken(),
-        p_user_id: employee.id,
-        p_updates: { tags: updatedTags },
-      });
-      if (error) throw error;
-    } catch {
-      const originalTags = employee.tags || [];
-      setEmployeeGroups(prev => prev.map(g => ({
-        ...g,
-        employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: originalTags } : emp)
-      })));
-      if (editingTags && editingTags.id === employee.id) setEditingTags({ ...editingTags, tags: originalTags });
-      setNewTag(tagToAdd);
-    }
+    setTagError(null);
   };
 
-  const handleRemoveTag = async (employee: EmployeeWithAdmin, tagToRemove: string) => {
-    const updatedTags = (employee.tags || []).filter(tag => tag !== tagToRemove);
-    const originalTags = employee.tags || [];
-    setEmployeeGroups(prev => prev.map(g => ({
-      ...g,
-      employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: updatedTags } : emp)
-    })));
-    if (editingTags && editingTags.id === employee.id) setEditingTags({ ...editingTags, tags: updatedTags });
+  const handleAddTag = (employee: EmployeeWithAdmin, existingTag?: string) => {
+    const tagToAdd = existingTag ?? newTag.trim();
+    if (savingTags || !tagToAdd.trim() || employee.tags?.includes(tagToAdd)) return;
+    setEditingTags(current => current?.id === employee.id
+      ? { ...current, tags: [...(current.tags || []), tagToAdd] }
+      : current);
+    setTagError(null);
+    if (existingTag === undefined) setNewTag('');
+  };
+
+  const handleRemoveTag = (employee: EmployeeWithAdmin, tagToRemove: string) => {
+    if (savingTags) return;
+    setEditingTags(current => current?.id === employee.id
+      ? { ...current, tags: (current.tags || []).filter(tag => tag !== tagToRemove) }
+      : current);
+    setTagError(null);
+  };
+
+  const handleSaveTags = async () => {
+    if (!editingTags || savingTags || !tagsDirty) return;
+    const employeeId = editingTags.id;
+    const typedTag = newTag.trim();
+    const tags = [...(editingTags.tags || [])];
+    if (typedTag && !tags.includes(typedTag)) tags.push(typedTag);
+    setSavingTags(true);
+    setTagError(null);
     try {
       const { error } = await supabase.rpc('admin_update_employee_account', {
         p_admin_session_token: getAdminFinancialSessionToken(),
-        p_user_id: employee.id,
-        p_updates: { tags: updatedTags },
+        p_user_id: employeeId,
+        p_updates: { tags },
       });
       if (error) throw error;
-    } catch {
-      setEmployeeGroups(prev => prev.map(g => ({
-        ...g,
-        employees: g.employees.map(emp => emp.id === employee.id ? { ...emp, tags: originalTags } : emp)
+      setEmployeeGroups(prev => prev.map(group => ({
+        ...group,
+        employees: group.employees.map(employee => employee.id === employeeId ? { ...employee, tags } : employee),
       })));
-      if (editingTags && editingTags.id === employee.id) setEditingTags({ ...editingTags, tags: originalTags });
+      setEditingTags(null);
+      setNewTag('');
+    } catch (error) {
+      if (isFinancialAdminSessionError(error)) {
+        void logout(false);
+        return;
+      }
+      setTagError('儲存標籤失敗，變更已保留，請重試。');
+    } finally {
+      setSavingTags(false);
     }
   };
 
@@ -2049,6 +2282,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     group.employees.forEach(emp => (emp.tags || []).forEach(tag => tagsSet.add(tag)));
     return Array.from(tagsSet).sort();
   };
+
+  const existingTagOptions = editingTags ? getGroupTags(editingTags.created_by).filter(tag => tag.trim()) : [];
 
   const getSelectedTagsForGroup = (groupId: string): string[] => selectedTagsByGroup.get(groupId) || [];
 
@@ -2103,6 +2338,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     const workStatusFilter = workStatusFilterByGroup.get(group.admin.id) || new Set<'online' | 'offline' | 'never_started'>();
     const summaryFilter = summaryFilterByGroup.get(group.admin.id) || null;
     const createdDateFilter = createdDateFilterByGroup.get(group.admin.id) || null;
+    const regionFilter = regionFilterByGroup.get(group.admin.id) || null;
     const financialFilter = ignoreFinancialFilter ? null : financialFilterByGroup.get(group.admin.id) || null;
     const inactiveDaysRange = ignoreInactiveDaysFilter ? null : inactiveDaysFilterByGroup.get(group.admin.id) || null;
     const searchLower = searchTerm.toLowerCase();
@@ -2153,11 +2389,13 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               ? emp.hasPendingWithdrawal
               : emp.pendingWithdrawals?.some(withdrawal => formatWithdrawalDate(withdrawal.created_at) === withdrawalFilter));
         const matchesCreatedDate = !createdDateFilter || getUTCDateKey(emp.created_at) === createdDateFilter;
+        const matchesRegion = !regionFilter
+          || (regionFilter === UNASSIGNED_REGION_FILTER ? !emp.region_id : emp.region_id === regionFilter);
         const matchesFinancial = !financialFilter
           || (financialFilter === 'wallet' && (emp.walletBalance || 0) > 0)
           || (financialFilter === 'today_commission' && emp.todayCommission > 0);
 
-        return matchesSearch && matchesTags && matchesActive && matchesWorkStatus && matchesSummary && matchesInactiveDays && matchesWithdrawal && matchesCreatedDate && matchesFinancial;
+        return matchesSearch && matchesTags && matchesActive && matchesWorkStatus && matchesSummary && matchesInactiveDays && matchesWithdrawal && matchesCreatedDate && matchesRegion && matchesFinancial;
       }),
       group.admin.id
     );
@@ -2166,6 +2404,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     createdDateFilterByGroup,
     financialFilterByGroup,
     inactiveDaysFilterByGroup,
+    regionFilterByGroup,
     withdrawalFilterByGroup,
     searchTerm,
     selectedTagsByGroup,
@@ -2220,9 +2459,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     });
   }, [searchTerm, filteredEmployeeGroups]);
 
-  const flatFilteredEmployees = admin.role === 'secondary_admin' && filteredGroups.length > 0
-    ? filteredGroups[0].employees
-    : [];
+  const flatFilteredEmployees = useMemo(() => (
+    admin.role === 'secondary_admin' && filteredGroups.length > 0 ? filteredGroups[0].employees : []
+  ), [admin.role, filteredGroups]);
 
   const flatAdminId = admin.id;
 
@@ -2539,9 +2778,36 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setIdleDaysDropdownPos(null);
     setWithdrawalDropdownOpen(null);
     setWithdrawalDropdownPos(null);
+    setRegionDropdownOpen(null);
     setCreatedDateDropdownPos({ top, left });
     setCreatedDateDropdownOpen(adminId);
   };
+
+  const handleRegionDropdownOpenChange = (adminId: string, open: boolean) => {
+    if (open) {
+      setInactiveDaysDropdownOpen(null);
+      setIdleDaysDropdownPos(null);
+      setWithdrawalDropdownOpen(null);
+      setWithdrawalDropdownPos(null);
+      setCreatedDateDropdownOpen(null);
+      setCreatedDateDropdownPos(null);
+    }
+    setRegionDropdownOpen(current => (open ? adminId : current === adminId ? null : current));
+  };
+
+  const getRegionCounts = (employees: EmployeeWithAdmin[]) => {
+    const counts = new Map<string, number>();
+    let unassigned = 0;
+    employees.forEach(employee => {
+      if (employee.region_id) counts.set(employee.region_id, (counts.get(employee.region_id) || 0) + 1);
+      else unassigned += 1;
+    });
+    return { counts, unassigned };
+  };
+
+  const getGroupRegionCounts = (adminId: string) => getRegionCounts(
+    employeeGroups.find(group => group.admin.id === adminId)?.employees || [],
+  );
 
   const getWithdrawalDateOptions = (adminId: string) => {
     const groupEmployees = employeeGroups.find(group => group.admin.id === adminId)?.employees || [];
@@ -2669,6 +2935,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     setIdleDaysDropdownPos(null);
     setCreatedDateDropdownOpen(null);
     setCreatedDateDropdownPos(null);
+    setRegionDropdownOpen(null);
     setWithdrawalDropdownPos({ top, left });
     setWithdrawalDropdownOpen(adminId);
   };
@@ -2773,6 +3040,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       setCreatedDateDropdownPos(null);
       setWithdrawalDropdownOpen(null);
       setWithdrawalDropdownPos(null);
+      setRegionDropdownOpen(null);
       const rect = e.currentTarget.getBoundingClientRect();
       const menuWidth = 190;
       const menuHeight = 194;
@@ -2786,7 +3054,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   };
 
   const renderStatusFilterButtons = (adminId: string) => {
-    const groupEmployees = employeeGroups.find(group => group.admin.id === adminId)?.employees || [];
+    const statusGroup = employeeGroups.find(group => group.admin.id === adminId);
+    const groupEmployees = statusGroup?.employees || [];
     if (groupEmployees.some(employee => !employee.statsLoaded)) {
       return <span className="px-2 text-[10px] font-medium text-slate-500">統計資料載入中……</span>;
     }
@@ -2797,6 +3066,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     const selectedWithdrawal = withdrawalFilterByGroup.get(adminId);
     const selectedCreatedDate = createdDateFilterByGroup.get(adminId);
     const pendingWithdrawalCount = groupEmployees.filter(employee => employee.hasPendingWithdrawal).length;
+    const regionCounts = getRegionCounts(groupEmployees);
 
     const on = 'text-white font-semibold shadow-md border border-transparent';
     const dim = 'bg-slate-800/60 border border-slate-600/50 font-medium';
@@ -2891,7 +3161,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
         {/* Withdrawing */}
         <div data-withdrawal-dropdown className="ml-2 inline-flex items-center">
-          <div className={`inline-flex h-8 w-[180px] shrink-0 overflow-hidden rounded-lg border shadow-md transition-all ${selectedWithdrawal ? 'border-orange-200 bg-orange-600 shadow-orange-950/50' : 'border-orange-500/70 bg-orange-950/55 shadow-orange-950/30 hover:border-orange-300/90 hover:bg-orange-900/75'}`}>
+          <div className={`inline-flex h-8 w-[172px] shrink-0 overflow-hidden rounded-lg border shadow-md transition-all ${selectedWithdrawal ? 'border-orange-200 bg-orange-600 shadow-orange-950/50' : 'border-orange-500/70 bg-orange-950/55 shadow-orange-950/30 hover:border-orange-300/90 hover:bg-orange-900/75'}`}>
             <button
               type="button"
               onClick={event => handleWithdrawalClick(adminId, event)}
@@ -2930,7 +3200,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
         {/* Idle Days */}
         <div data-inactive-days-dropdown className="ml-2 inline-flex items-center">
-          <div className={`inline-flex h-8 w-[180px] shrink-0 overflow-hidden rounded-lg border shadow-sm transition-all ${
+          <div className={`inline-flex h-8 w-[164px] shrink-0 overflow-hidden rounded-lg border shadow-sm transition-all ${
             hasIdleFilter
               ? 'border-emerald-400/90 bg-emerald-900/90 shadow-emerald-950/40'
               : inactiveDaysDropdownOpen === adminId
@@ -2986,7 +3256,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         {renderIdleDaysPortal(adminId)}
 
         <div data-created-date-dropdown className="ml-2 inline-flex items-center">
-          <div className={`inline-flex h-8 w-[178px] shrink-0 overflow-hidden rounded-lg border shadow-sm transition-all ${
+          <div className={`inline-flex h-8 w-[160px] shrink-0 overflow-hidden rounded-lg border shadow-sm transition-all ${
             selectedCreatedDate
               ? 'border-sky-300/90 bg-sky-800 shadow-sky-950/40'
               : createdDateDropdownOpen === adminId
@@ -3032,6 +3302,25 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           </div>
         </div>
         {renderCreatedDatePortal(adminId)}
+
+        <EmployeeRegionFilter
+          groupLabel={statusGroup?.admin.username || ''}
+          regions={regionsByAdmin.get(adminId) || []}
+          counts={regionCounts.counts}
+          unassignedCount={regionCounts.unassigned}
+          selectedId={regionFilterByGroup.get(adminId) || null}
+          open={regionDropdownOpen === adminId}
+          onOpenChange={open => handleRegionDropdownOpenChange(adminId, open)}
+          onSelect={regionId => {
+            setRegionFilterByGroup(prev => {
+              const next = new Map(prev);
+              if (regionId) next.set(adminId, regionId);
+              else next.delete(adminId);
+              return next;
+            });
+          }}
+          actions={getRegionActions(adminId)}
+        />
 
         <button
           type="button"
@@ -3588,6 +3877,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const renderEmployeeRow = useCallback((employee: EmployeeWithAdmin, index: number, isSuperAdmin: boolean) => (
     <tr
       key={employee.id}
+      data-pinned={employee.is_pinned || undefined}
+      data-super-admin={isSuperAdmin || undefined}
       className={`group border-t border-slate-700/50 transition-colors duration-75 ${
         employee.is_pinned
           ? 'bg-amber-500/10 hover:bg-amber-500/20'
@@ -3618,7 +3909,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       <td className="w-[46px] py-0.5 px-0 text-center whitespace-nowrap">
         <span className="-ml-1 inline-flex">{employee.statsLoaded ? renderWorkStatusBadge(employee.workStatus) : <span className="text-xs text-slate-500" title="統計資料載入中">—</span>}</span>
       </td>
-      <td className="group/withdrawal relative w-[104px] overflow-visible py-0.5 px-1 whitespace-nowrap cursor-pointer sm:w-[116px]" onClick={() => setViewingEmployee(employee)}>
+      <td className="group/withdrawal relative w-[116px] overflow-visible py-0.5 px-1 whitespace-nowrap cursor-pointer" onClick={() => setViewingEmployee(employee)}>
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-0.5">
             <span title={employee.username} className={`block max-w-full truncate text-xs font-medium ${!employee.is_active ? 'text-red-400' : employee.workStatus === 'online' ? 'text-green-400' : employee.hasPendingWithdrawal ? 'text-orange-400' : 'text-white'}`}>{employee.username}</span>
@@ -3663,8 +3954,11 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           )}
         </div>
       </td>
-      <td title={employee.employee_id} className="hidden w-[100px] max-w-[100px] overflow-hidden text-ellipsis py-0.5 px-1 text-xs text-slate-300 font-mono whitespace-nowrap cursor-pointer lg:table-cell" onClick={() => setViewingEmployee(employee)}>{employee.employee_id}</td>
-      <td className="hidden w-[72px] py-0.5 px-1 text-[10px] text-emerald-400 whitespace-nowrap xl:table-cell" onClick={(e) => e.stopPropagation()}>
+      <td title={employee.employee_id} className="w-[84px] max-w-[84px] overflow-hidden text-ellipsis py-0.5 px-1 text-xs text-slate-300 font-mono whitespace-nowrap cursor-pointer" onClick={() => setViewingEmployee(employee)}>{employee.employee_id}</td>
+      <td className="w-[68px] max-w-[68px] py-0.5 px-1 whitespace-nowrap">
+        <EmployeeRegionName regionId={employee.region_id || null} />
+      </td>
+      <td className="w-[72px] py-0.5 px-1 text-[10px] text-emerald-400 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
         <span>{employee.created_at ? new Date(employee.created_at).toLocaleDateString('en-CA') : '-'}</span>
         <button
           onClick={() => {
@@ -3681,7 +3975,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           <Pencil className="w-2.5 h-2.5" />
         </button>
       </td>
-      <td className="hidden w-[44px] py-0.5 pl-1 pr-0 align-middle relative group/ver xl:table-cell">
+      <td className="w-[44px] py-0.5 pl-1 pr-0 align-middle relative group/ver">
         <button
           onClick={(e) => { e.stopPropagation(); toggleVerification(employee.id, employee.is_verified, employee.username, employee.employee_id); }}
           className={`inline-flex h-5 items-center justify-center gap-0.5 px-1.5 py-0.5 align-middle leading-none rounded text-[10px] font-medium ${
@@ -3713,8 +4007,8 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           {employee.is_active ? '啟用' : '停用'}
         </button>
       </td>
-      <td className="hidden w-[66px] py-0.5 px-1 relative group/remarks 2xl:table-cell" onClick={(e) => e.stopPropagation()}>
-        <div className="flex min-w-0 items-center gap-0.5 max-w-[66px]">
+      <td className="w-[72px] py-0.5 px-1 relative group/remarks" onClick={(e) => e.stopPropagation()}>
+        <div className="flex min-w-0 items-center gap-0.5 max-w-[72px]">
           <span className="text-xs text-blue-400 truncate flex-1">{employee.remarks || '-'}</span>
           <button onClick={() => setEditingRemarksOnly(employee)} className="flex-shrink-0 rounded p-0.5 text-blue-400 opacity-0 transition-all hover:bg-blue-500/15 hover:text-cyan-300 group-hover/remarks:opacity-100">
             <Pencil className="h-2.5 w-2.5 text-blue-400 transition-colors group-hover/remarks:text-cyan-300" />
@@ -3726,7 +4020,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           </div>
         )}
       </td>
-      <td className="hidden w-[88px] py-0.5 px-1 relative group/tags 2xl:table-cell" onClick={(e) => e.stopPropagation()}>
+      <td className="w-[88px] py-0.5 px-1 relative group/tags" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-0.5 max-w-[88px] min-w-0 overflow-hidden whitespace-nowrap">
           {(employee.tags || []).length > 0 && (
             <span className="min-w-0 flex-1 px-1.5 py-0 bg-amber-500/20 text-amber-400 text-[10px] font-medium rounded-full border border-amber-500/30 truncate">
@@ -3734,7 +4028,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
             </span>
           )}
           {(employee.tags || []).length > 1 && <span className="flex-shrink-0 text-[10px] text-slate-500">+{(employee.tags || []).length - 1}</span>}
-          <button onClick={() => setEditingTags(employee)} className="ml-1 flex-shrink-0 rounded-full border border-transparent bg-slate-700 px-1 py-0 text-[10px] text-slate-400 transition-all hover:border-amber-400/75 hover:bg-amber-500/15 hover:text-amber-400 hover:shadow-[0_0_8px_rgba(245,158,11,0.28)]">
+          <button type="button" aria-label={`管理 ${employee.username} 的標籤`} onClick={() => { initialTagsRef.current = [...(employee.tags || [])]; setEditingTags(employee); setNewTag(''); setTagError(null); }} className="ml-1 flex-shrink-0 rounded-full border border-transparent bg-slate-700 px-1 py-0 text-[10px] text-slate-400 transition-all hover:border-amber-400/75 hover:bg-amber-500/15 hover:text-amber-400 hover:shadow-[0_0_8px_rgba(245,158,11,0.28)]">
             <Tag className="inline h-2.5 w-2.5 text-current" />+
           </button>
         </div>
@@ -3762,10 +4056,10 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
         {renderEmployeeStat(employee, <span className="text-red-400">{employee.failedOrders}</span>)}
       </td>
       {/* Money group */}
-      <td className="hidden py-0.5 px-1 text-[10px] text-center whitespace-nowrap xl:table-cell">
+      <td className="py-0.5 px-1 text-[10px] text-center whitespace-nowrap">
         {renderEmployeeStat(employee, <span className="text-white font-medium">${(employee.walletBalance || 0).toFixed(2)}</span>)}
       </td>
-      <td className="hidden py-0.5 px-1 text-[10px] text-center whitespace-nowrap lg:table-cell">
+      <td className="py-0.5 px-1 text-[10px] text-center whitespace-nowrap">
         {renderEmployeeStat(employee, <span className="text-blue-400 font-medium">${employee.accountBalance.toFixed(2)}</span>)}
       </td>
       <td className="py-0.5 px-1 text-[10px] text-center whitespace-nowrap">
@@ -3901,25 +4195,29 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
     });
     return rows;
   }, [expandedGroups, filteredEmployeeGroups, renderEmployeeRow]);
+  const flatEmployeeRows = useMemo(() => flatFilteredEmployees.map(
+    (employee, index) => renderEmployeeRow(employee, index, true),
+  ), [flatFilteredEmployees, renderEmployeeRow]);
 
   const renderTableHeader = (adminId: string) => (
     <thead className="sticky top-0 z-20 isolate bg-blue-900 shadow-[0_2px_4px_rgba(0,0,0,0.35)] border-b-2 border-blue-300/40">
       <tr className="h-[40px]">
         <th className="w-[40px] pl-1.5 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">#</th>
-        <th className="h-[40px] w-[46px] px-0 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">工作狀態</th>
-        <th className="w-[104px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider sm:w-[116px]">使用者</th>
-        <th className="hidden w-[100px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider lg:table-cell">員工 ID</th>
-        {renderSortableHeader(adminId, 'created_at', '建立日期', 'hidden w-[72px] xl:table-cell')}
-        <th className="hidden h-[40px] w-[44px] pl-1 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider xl:table-cell">驗證</th>
-        <th className="h-[40px] w-[48px] pl-0 pr-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">狀態</th>
-        <th className="hidden h-[40px] w-[66px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider 2xl:table-cell">備註</th>
-        <th className="hidden h-[40px] w-[88px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider 2xl:table-cell">標籤</th>
+        <th className="h-[40px] w-[46px] pl-0.5 pr-0 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">工作</th>
+        <th className="w-[116px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">使用者</th>
+        <th className="w-[84px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">員工 ID</th>
+        <th className="w-[68px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">地區</th>
+        {renderSortableHeader(adminId, 'created_at', '建立日期', 'w-[72px]')}
+        <th className="h-[40px] w-[44px] px-1 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">驗證</th>
+        <th className="h-[40px] w-[48px] pl-0 pr-4 py-1 text-center text-[10px] font-semibold text-white uppercase tracking-wider">狀態</th>
+        <th className="h-[40px] w-[72px] px-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">備註</th>
+        <th className="h-[40px] w-[88px] pl-3 pr-1 py-1 text-left text-[10px] font-semibold text-white uppercase tracking-wider">標籤</th>
         {renderSortableHeader(adminId, 'totalOrders', '總數', 'w-[41px]')}
         {renderSortableHeader(adminId, 'todayOrders', '今日', 'w-[41px]')}
         {renderSortableHeader(adminId, 'todayCompletedOrders', '成功', 'w-[45px]')}
         {renderSortableHeader(adminId, 'failedOrders', '失敗', 'w-[43px]')}
-        {renderSortableHeader(adminId, 'walletBalance', '錢包餘額', 'hidden w-[59px] xl:table-cell')}
-        {renderSortableHeader(adminId, 'accountBalance', '可用餘額', 'hidden w-[59px] lg:table-cell')}
+        {renderSortableHeader(adminId, 'walletBalance', '錢包餘額', 'w-[59px]')}
+        {renderSortableHeader(adminId, 'accountBalance', '可用餘額', 'w-[59px]')}
         {renderSortableHeader(adminId, 'todayCommission', '今日佣金', 'w-[58px]')}
         {renderSortableHeader(adminId, 'totalWorkMinutes', '總工時', 'w-[54px]')}
         {renderSortableHeader(adminId, 'todayWorkMinutes', '今日工時', 'w-[54px]')}
@@ -3932,13 +4230,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
   const renderCreateForm = (targetAdminId: string, groupAdmin?: { role: string; username: string }) => {
     if (!showCreateForm || selectedAdminForCreate !== targetAdminId) return null;
     const isSuperGroup = groupAdmin?.role === 'super_admin';
-    const activePlansForGroup = automationPlans.filter(plan => (
-      plan.status === 'active' && plan.owner_admin_id === targetAdminId
-    ));
-    const fieldFocusClasses = isSuperGroup
-      ? 'focus:border-amber-400 focus:ring-4 focus:ring-amber-400/15'
-      : 'focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/15';
-    const selectedAutomationPlan = activePlansForGroup.find(plan => plan.id === formData.automationPlanId);
+    const activePlansForGroup = automationPlans.filter(plan => plan.status === 'active' && plan.owner_admin_id === targetAdminId);
+    const sectionClasses = `relative min-w-0 overflow-hidden rounded-2xl border p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] ${isSuperGroup ? 'border-amber-200/10 bg-[linear-gradient(145deg,#211d16,#171613)]' : 'border-blue-200/10 bg-[linear-gradient(145deg,#122238,#0c1828)]'}`;
+    const fieldClasses = `mt-2 w-full rounded-xl border px-3.5 py-3 text-sm text-slate-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none transition-all placeholder:text-slate-500 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50 ${isSuperGroup ? 'border-amber-100/60 bg-[#f5f1e8] hover:border-amber-200 focus:border-amber-400 focus:bg-[#fffcf5] focus:ring-amber-300/20' : 'border-blue-100/60 bg-[#edf3f9] hover:border-blue-200 focus:border-sky-400 focus:bg-[#f8fbff] focus:ring-sky-300/20'}`;
 
     return createPortal(
       <div
@@ -3969,6 +4263,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           role="dialog"
           aria-modal="true"
           aria-labelledby="create-employee-title"
+          data-employee-create-theme={isSuperGroup ? 'warm' : 'cool'}
           onSubmit={handleCreateEmployee}
           onClick={(event) => event.stopPropagation()}
           className={`relative flex max-h-[calc(100vh-2rem)] w-full max-w-[800px] flex-col overflow-hidden rounded-[1.75rem] border shadow-[0_36px_120px_rgba(0,0,0,0.72)] ring-1 ring-inset ring-white/[0.08] animate-in zoom-in-95 duration-200 ${isSuperGroup ? 'border-amber-300/35 bg-[#11100e]' : 'border-cyan-300/30 bg-[#08111f]'}`}
@@ -4008,191 +4303,83 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
           </div>
 
           {createError && (
-            <div className="mx-5 mt-4 flex items-start gap-2.5 rounded-xl border border-red-400/40 bg-red-500/10 px-3.5 py-3 text-sm text-red-200">
+            <div role="alert" className="mx-5 mt-4 flex items-start gap-2.5 rounded-xl border border-red-400/40 bg-red-500/10 px-3.5 py-3 text-sm text-red-200">
               <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-red-400" />
               <span className="whitespace-pre-line leading-5">{createError}</span>
             </div>
           )}
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5 dark-panel-scroll">
-            <div className="grid items-start gap-4 md:grid-cols-[1.08fr_0.92fr]">
-              <div className={`rounded-2xl border p-4 shadow-inner ${isSuperGroup ? 'border-amber-300/15 bg-gradient-to-br from-amber-950/20 to-slate-950/45' : 'border-blue-300/15 bg-gradient-to-br from-blue-950/25 to-slate-950/45'}`}>
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <p className={`text-[10px] font-black uppercase tracking-[0.18em] ${isSuperGroup ? 'text-amber-300/80' : 'text-cyan-300/80'}`}>01 · 基本資料</p>
-                  <p className="mt-1 text-xs text-slate-500">建立員工專屬的登入識別資訊</p>
+          <div className="dark-panel-scroll min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+            <div className="grid items-start gap-4 md:grid-cols-[1fr_1.04fr]">
+              <section aria-labelledby="create-basic-title" className={`${sectionClasses} sm:p-5`}>
+                <div className="mb-5 flex items-center gap-3">
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${isSuperGroup ? 'border-amber-200/20 bg-gradient-to-br from-amber-300/15 to-amber-600/5 text-amber-200' : 'border-sky-200/20 bg-gradient-to-br from-sky-300/15 to-blue-600/5 text-sky-200'}`}><Key className="h-4 w-4" /></span>
+                  <div><h4 id="create-basic-title" className="text-sm font-bold text-stone-100">基本資料</h4><p className="mt-1 text-[10px] text-stone-400">建立員工專屬的登入識別資訊</p></div>
+                  <span className={`ml-auto text-[10px] font-bold tracking-widest ${isSuperGroup ? 'text-amber-200/45' : 'text-sky-200/45'}`}>01</span>
                 </div>
-                <Key className={`h-4 w-4 ${isSuperGroup ? 'text-amber-300/70' : 'text-cyan-300/70'}`} />
-              </div>
-              <div className="grid grid-cols-1 gap-3">
-              <div>
-                <label className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>使用者名稱</label>
-                <input type="text" value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} disabled={creating} required placeholder="輸入使用者名稱" className={`w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 ${fieldFocusClasses} disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100`} />
-              </div>
-              <div>
-                <label className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>密碼</label>
-                <div className="flex gap-2">
-                  <div className="relative min-w-0 flex-1">
-                    <input type={showPassword ? 'text' : 'password'} value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} disabled={creating} required minLength={6} autoComplete="new-password" placeholder="建立安全密碼" className={`w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 pr-10 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 ${fieldFocusClasses} disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100`} />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900">
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                  <button type="button" onClick={generatePassword} disabled={creating} className={`inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl border bg-white text-slate-600 shadow-sm transition-colors disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100 ${isSuperGroup ? 'border-yellow-300 hover:border-yellow-500 hover:bg-yellow-50 hover:text-yellow-700' : 'border-blue-300 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700'}`} title="產生高強度密碼">
-                    <RefreshCw className="h-4 w-4" />
-                  </button>
-                </div>
-                <p className="mt-1.5 text-[11px] text-slate-500">至少 6 個字元</p>
-              </div>
-              <div>
-                <label className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>員工 ID</label>
-                <input type="text" value={formData.employeeId} onChange={(e) => setFormData({ ...formData, employeeId: e.target.value })} disabled={creating} required placeholder="輸入員工 ID" className={`w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 ${fieldFocusClasses} disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100`} />
-              </div>
-              <div>
-                <label className={`mb-1.5 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>備註 <span className="font-normal normal-case tracking-normal text-slate-500">（選填）</span></label>
-                <input type="text" value={formData.remarks} onChange={(e) => setFormData({ ...formData, remarks: e.target.value })} disabled={creating} placeholder="新增內部備註" className={`w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 ${fieldFocusClasses} disabled:bg-slate-100 disabled:text-slate-400 disabled:opacity-100`} />
-              </div>
-              </div>
-            </div>
-
-              <div className="space-y-4">
-                <div className={`rounded-2xl border p-4 shadow-inner ${isSuperGroup ? 'border-amber-300/20 bg-gradient-to-br from-amber-950/25 to-slate-950/55' : 'border-cyan-300/20 bg-gradient-to-br from-cyan-950/25 to-slate-950/55'}`}>
-                  <label htmlFor={`create-dispatch-group-${targetAdminId}`} className={`mb-2 block text-[11px] font-semibold uppercase tracking-wide ${isSuperGroup ? 'text-yellow-100/75' : 'text-blue-100/75'}`}>
-                    02 · 派單分組 <span className="font-normal normal-case tracking-normal text-slate-400">（必填）</span>
+                <div className="space-y-4">
+                  <label htmlFor="create-employee-username" className="block text-[11px] font-semibold text-stone-200/90">使用者名稱 <span className="text-rose-400">*</span>
+                    <input id="create-employee-username" type="text" value={formData.username} onChange={event => setFormData(prev => ({ ...prev, username: event.target.value }))} disabled={creating} required autoComplete="off" placeholder="輸入使用者名稱" className={fieldClasses} />
                   </label>
-                  <select
-                    id={`create-dispatch-group-${targetAdminId}`}
-                    value={formData.dispatchGroupId}
-                    onChange={(event) => setFormData(prev => ({ ...prev, dispatchGroupId: event.target.value }))}
-                    disabled={creating || dispatchGroupsLoading || Boolean(dispatchGroupsError) || dispatchGroups.length === 0}
-                    required
-                    className={`w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors ${fieldFocusClasses} disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 disabled:opacity-100`}
-                  >
-                    <option value="">{dispatchGroupsLoading ? '載入派單分組中…' : '請選擇派單分組'}</option>
-                    {dispatchGroups.map(group => (
-                      <option key={group.id} value={group.id}>
-                        {group.group_name}{group.is_default ? '（預設分組）' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {dispatchGroupsLoading ? (
-                    <p className="mt-2 text-[11px] text-slate-400">正在載入可用的派單分組…</p>
-                  ) : dispatchGroupsError ? (
-                    <p role="alert" className="mt-2 text-[11px] text-red-300">{dispatchGroupsError}</p>
-                  ) : dispatchGroups.length === 0 ? (
-                    <p className="mt-2 text-[11px] text-amber-200">目前沒有可用的派單分組，請先建立或啟用未封存的分組。</p>
-                  ) : (
-                    <p className="mt-2 text-[11px] text-slate-400">建立後會直接加入所選派單分組。</p>
-                  )}
+                  <div>
+                    <label htmlFor="create-employee-password" className="block text-[11px] font-semibold text-stone-200/90">密碼 <span className="text-rose-400">*</span></label>
+                    <div className="relative">
+                      <input id="create-employee-password" type={showCreatePassword ? 'text' : 'password'} value={formData.password} onChange={event => setFormData(prev => ({ ...prev, password: event.target.value }))} disabled={creating} required minLength={6} autoComplete="new-password" placeholder="至少 6 個字元" className={`${fieldClasses} pr-[76px]`} />
+                      <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5">
+                        <button type="button" disabled={creating} onClick={() => setShowCreatePassword(prev => !prev)} aria-label={showCreatePassword ? '隱藏密碼' : '顯示密碼'} className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-black/5 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40">{showCreatePassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button>
+                        <button type="button" disabled={creating} aria-label="產生高強度密碼" title="產生高強度密碼" onClick={() => {
+                          const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%';
+                          const bytes = crypto.getRandomValues(new Uint8Array(16));
+                          setFormData(prev => ({ ...prev, password: Array.from(bytes, byte => chars[byte % chars.length]).join('') }));
+                        }} className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-black/5 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/40"><RefreshCw className="h-3.5 w-3.5" /></button>
+                      </div>
+                    </div>
+                  </div>
+                  <label htmlFor="create-employee-id" className="block text-[11px] font-semibold text-stone-200/90">員工 ID <span className="text-rose-400">*</span>
+                    <input id="create-employee-id" type="text" value={formData.employeeId} onChange={event => setFormData(prev => ({ ...prev, employeeId: event.target.value }))} disabled={creating} required placeholder="輸入員工 ID" className={fieldClasses} />
+                  </label>
+                  <label htmlFor="create-employee-remarks" className="block text-[11px] font-semibold text-stone-200/90">備註 <span className="font-normal text-stone-500">（選填）</span>
+                    <textarea id="create-employee-remarks" value={formData.remarks} onChange={event => setFormData(prev => ({ ...prev, remarks: event.target.value }))} disabled={creating} rows={3} placeholder="新增內部備註…" className={`${fieldClasses} resize-y`} />
+                  </label>
                 </div>
+              </section>
 
-              <div className={`rounded-2xl border p-4 shadow-inner ${isSuperGroup ? 'border-amber-300/20 bg-gradient-to-br from-amber-950/25 to-slate-950/55' : 'border-cyan-300/20 bg-gradient-to-br from-cyan-950/25 to-slate-950/55'}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className={`text-[10px] font-black uppercase tracking-[0.18em] ${isSuperGroup ? 'text-amber-300/80' : 'text-cyan-300/80'}`}>03 · 自動化通知方案</p>
-                  <p className="mt-1 text-xs leading-5 text-slate-400">員工建立後會直接加入所選方案，立即套用方案內的通知任務。</p>
-                </div>
-                <Bell className={`mt-0.5 h-4 w-4 shrink-0 ${isSuperGroup ? 'text-yellow-300' : 'text-cyan-300'}`} />
-              </div>
-              {activePlansForGroup.length > 0 ? (
-                <>
-                  <button
-                    ref={createPlanButtonRef}
-                    id={`create-automation-plan-${targetAdminId}`}
-                    type="button"
-                    aria-haspopup="listbox"
-                    aria-expanded={createPlanMenuOpen}
-                    onClick={() => toggleCreatePlanMenu(activePlansForGroup.length + 1)}
-                    disabled={creating}
-                    className={`group mt-3 flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left shadow-lg outline-none transition-all disabled:cursor-not-allowed disabled:opacity-50 ${createPlanMenuOpen ? (isSuperGroup ? 'border-amber-200/90 bg-amber-400/20 ring-2 ring-amber-300/20' : 'border-cyan-200/90 bg-cyan-400/20 ring-2 ring-cyan-300/20') : selectedAutomationPlan ? (isSuperGroup ? 'border-amber-300/75 bg-gradient-to-r from-amber-500/25 via-amber-400/15 to-yellow-500/10 shadow-amber-950/50 ring-1 ring-amber-200/20 hover:border-amber-200' : 'border-cyan-300/75 bg-gradient-to-r from-cyan-500/25 via-cyan-400/15 to-blue-500/10 shadow-cyan-950/50 ring-1 ring-cyan-200/20 hover:border-cyan-200') : 'border-slate-600/80 bg-slate-900/90 hover:border-slate-400 hover:bg-slate-800/95'}`}
-                  >
-                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${selectedAutomationPlan ? (isSuperGroup ? 'border-amber-200/60 bg-amber-300/20 text-amber-100 shadow-sm shadow-amber-950/40' : 'border-cyan-200/60 bg-cyan-300/20 text-cyan-100 shadow-sm shadow-cyan-950/40') : 'border-slate-600 bg-slate-800 text-slate-400'}`}>
-                      <Bell className="h-3.5 w-3.5" />
-                    </span>
-                    <span className={`min-w-0 flex-1 truncate text-[11px] font-extrabold ${selectedAutomationPlan ? (isSuperGroup ? 'text-amber-50' : 'text-cyan-50') : 'text-white'}`}>{selectedAutomationPlan?.name || '不指定方案'}</span>
-                    {selectedAutomationPlan && (
-                      <>
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-300/35 bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-bold text-emerald-100">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_7px_rgba(110,231,183,0.9)]" />
-                          啟用中
-                        </span>
-                        <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-bold ${isSuperGroup ? 'border-amber-200/35 bg-amber-300/15 text-amber-100' : 'border-cyan-200/35 bg-cyan-300/15 text-cyan-100'}`}>{Number(selectedAutomationPlan.selected_task_count) || 0} 個任務</span>
-                      </>
-                    )}
-                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform duration-200 ${createPlanMenuOpen ? 'rotate-180 text-white' : selectedAutomationPlan ? (isSuperGroup ? 'text-amber-200' : 'text-cyan-200') : 'text-slate-400 group-hover:text-white'}`} />
-                  </button>
-                  {selectedAutomationPlan && (
-                    <p className={`mt-2 flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-bold ${isSuperGroup ? 'border-amber-300/25 bg-amber-400/10 text-amber-100' : 'border-cyan-300/25 bg-cyan-400/10 text-cyan-100'}`}>
-                      <CheckCircle className={`h-3.5 w-3.5 shrink-0 ${isSuperGroup ? 'text-amber-300' : 'text-cyan-300'}`} />
-                      建立後直接加入此方案
-                    </p>
-                  )}
-                </>
-              ) : (
-                <p className="mt-4 rounded-xl border border-dashed border-slate-600/60 bg-slate-950/30 px-3 py-3 text-[11px] text-slate-500">此群組目前沒有可用的自動化通知方案。</p>
-              )}
-              </div>
-              </div>
-            </div>
+              <div className="min-w-0 space-y-3">
+                <section aria-labelledby="create-region-title" className={sectionClasses}>
+                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-fuchsia-300 to-indigo-400" />
+                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-violet-300/70">02</span><h4 id="create-region-title" className="flex-1 text-xs font-bold text-violet-100">所在地區</h4><span className="rounded-md border border-violet-300/15 bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-300">必填</span></div>
+                  <EmployeeRegionPicker id={`create-employee-region-${targetAdminId}`} appearance="setup" groupLabel={groupAdmin?.username || admin.username} regions={regionsByAdmin.get(targetAdminId) || []} counts={getGroupRegionCounts(targetAdminId).counts} value={formData.regionId} onChange={regionId => {
+                    setFormData(prev => ({ ...prev, regionId }));
+                    setCreateError(current => current === REGION_REQUIRED_MESSAGE ? null : current);
+                  }} actions={getRegionActions(targetAdminId)} invalid={createError === REGION_REQUIRED_MESSAGE} disabled={creating} />
+                  <p className="mt-2.5 text-[10px] leading-4 text-stone-400">依管理群組設定，可在選單中新增與編輯地區。</p>
+                </section>
 
-            <div className="mt-4 flex flex-col-reverse items-stretch justify-between gap-3 border-t border-slate-700/60 pt-4 sm:flex-row sm:items-center">
-              <p className="text-center text-[10px] leading-4 text-slate-600 sm:text-left">帳戶建立後可隨時修改方案與員工資料</p>
-              <div className="flex items-center justify-end gap-2">
-                <button type="button" onClick={closeCreateEmployeeForm} disabled={creating} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-600 bg-slate-800/80 px-4 py-2.5 text-sm font-semibold text-slate-300 transition-all hover:border-slate-500 hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">
-                  取消
-                </button>
-                <button type="submit" disabled={creating || !formData.username.trim() || !formData.password || !formData.employeeId.trim() || dispatchGroupsLoading || Boolean(dispatchGroupsError) || !dispatchGroups.some(group => group.id === formData.dispatchGroupId)} className={`inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl border px-5 py-2.5 text-sm font-bold text-white shadow-lg transition-all hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-40 ${isSuperGroup ? 'border-amber-300/60 bg-gradient-to-r from-amber-700 to-yellow-600 shadow-amber-950/40 hover:from-amber-600 hover:to-yellow-500' : 'border-cyan-300/50 bg-gradient-to-r from-blue-600 to-cyan-600 shadow-blue-950/50 hover:from-blue-500 hover:to-cyan-500'}`}>
-                  {creating ? (<><div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />建立中……</>) : (<><UserPlus className="h-4 w-4" />建立員工</>)}
-                </button>
+                <section aria-labelledby="create-dispatch-title" className={sectionClasses}>
+                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-teal-200 to-sky-400" />
+                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-teal-300/70">03</span><h4 id="create-dispatch-title" className="flex-1 text-xs font-bold text-teal-50">派單分組</h4><span className="rounded-md border border-teal-200/20 bg-teal-300/10 px-1.5 py-0.5 text-[9px] font-medium text-teal-200">必填</span></div>
+                  <EmployeeSetupSelect id={`create-dispatch-group-${targetAdminId}`} label="派單分組" placeholder={dispatchGroupsLoading ? '載入派單分組中…' : '請選擇派單分組'} value={formData.dispatchGroupId} options={dispatchGroups.map(group => ({ id: group.id, label: group.group_name, description: group.description }))} tone="teal" icon={Layers} required disabled={creating || dispatchGroupsLoading || Boolean(dispatchGroupsError) || dispatchGroups.length === 0} onChange={dispatchGroupId => setFormData(prev => ({ ...prev, dispatchGroupId }))} />
+                  {dispatchGroupsError ? <p role="alert" className="mt-2.5 text-[10px] leading-4 text-rose-300">{dispatchGroupsError}</p> : <p className="mt-2.5 text-[10px] leading-4 text-stone-400">{dispatchGroupsLoading ? '正在載入可用分組…' : dispatchGroups.length === 0 ? '目前沒有可用分組，請先建立或啟用分組。' : '建立後加入所選分組 · 長說明可懸停查看'}</p>}
+                </section>
+
+                <section aria-labelledby="create-automation-title" className={sectionClasses}>
+                  <div aria-hidden="true" className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-amber-200 to-rose-300" />
+                  <div className="mb-3 flex items-center gap-2"><span className="text-[9px] font-bold tracking-[0.18em] text-amber-200/70">04</span><h4 id="create-automation-title" className="flex-1 text-xs font-bold text-amber-50">自動化通知方案</h4><span className="rounded-md border border-amber-100/20 bg-amber-200/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-100/80">選填</span></div>
+                  <EmployeeSetupSelect id={`create-automation-plan-${targetAdminId}`} label="自動化通知方案" placeholder="不指定方案" value={formData.automationPlanId} options={[{ id: '', label: '不指定方案', meta: '暫不套用', unassigned: true }, ...activePlansForGroup.map(plan => ({ id: plan.id, label: plan.name, description: plan.description, meta: `${Number(plan.selected_task_count) || 0} 個任務` }))]} tone="amber" icon={Bell} disabled={creating} onChange={automationPlanId => setFormData(prev => ({ ...prev, automationPlanId }))} />
+                  <p className="mt-2.5 text-[10px] leading-4 text-stone-400">{activePlansForGroup.length ? '選擇方案後，員工建立時立即套用通知任務。' : '此群組目前沒有啟用中的方案，可稍後設定。'}</p>
+                </section>
               </div>
             </div>
           </div>
+
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-white/[0.07] bg-slate-950/35 px-5 py-4">
+            <span className="mr-auto hidden text-[10px] text-slate-500 sm:block">完成必填資料，即可建立員工帳戶</span>
+            <button type="button" disabled={creating} onClick={closeCreateEmployeeForm} className="rounded-xl border border-slate-600/50 bg-slate-800/50 px-4 py-2.5 text-xs font-semibold text-slate-300 transition-colors hover:border-slate-400/60 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50 disabled:opacity-50">取消</button>
+            <button type="submit" disabled={creating || !formData.username.trim() || formData.password.length < 6 || !formData.employeeId.trim() || !formData.regionId || dispatchGroupsLoading || Boolean(dispatchGroupsError) || !dispatchGroups.some(group => group.id === formData.dispatchGroupId)} className={`inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl border px-5 py-2.5 text-xs font-bold shadow-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-not-allowed disabled:opacity-35 ${isSuperGroup ? 'border-amber-300/50 bg-gradient-to-r from-amber-500 to-yellow-400 text-amber-950 shadow-amber-950/30 hover:from-amber-400 hover:to-yellow-300' : 'border-cyan-300/50 bg-gradient-to-r from-blue-500 to-cyan-400 text-white shadow-cyan-950/30 hover:from-blue-400 hover:to-cyan-300'}`}>
+              {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}{creating ? '建立中……' : '建立員工'}
+            </button>
+          </div>
         </form>
-        {createPlanMenuOpen && createPlanMenuPosition && createPortal(
-          <div
-            ref={createPlanMenuRef}
-            role="listbox"
-            aria-label="自動化通知方案"
-            className={`fixed z-[10050] overflow-hidden rounded-2xl border bg-[#08111f]/98 p-1.5 shadow-[0_24px_70px_rgba(0,0,0,0.72)] backdrop-blur-xl ring-1 ring-inset ring-white/[0.08] animate-in fade-in zoom-in-95 duration-150 ${isSuperGroup ? 'border-amber-300/35' : 'border-cyan-300/35'}`}
-            style={{ top: createPlanMenuPosition.top, left: createPlanMenuPosition.left, width: createPlanMenuPosition.width }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="max-h-[264px] space-y-0.5 overflow-y-auto dark-panel-scroll">
-              {[null, ...activePlansForGroup].map(plan => {
-                const value = plan?.id || '';
-                const selected = formData.automationPlanId === value;
-                return (
-                  <button
-                    key={value || 'none'}
-                    type="button"
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => {
-                      setFormData(prev => ({ ...prev, automationPlanId: value }));
-                      setCreatePlanMenuOpen(false);
-                      setCreatePlanMenuPosition(null);
-                    }}
-                    className={`flex h-8 w-full items-center gap-2 rounded-lg border px-2 text-left transition-all ${selected ? (isSuperGroup ? 'border-amber-300/45 bg-gradient-to-r from-amber-500/20 to-yellow-500/5' : 'border-cyan-300/45 bg-gradient-to-r from-cyan-500/20 to-blue-500/5') : 'border-transparent hover:border-slate-600 hover:bg-slate-800/90'}`}
-                  >
-                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${selected ? (isSuperGroup ? 'border-amber-300/35 bg-amber-400/15 text-amber-200' : 'border-cyan-300/35 bg-cyan-400/15 text-cyan-200') : 'border-slate-700 bg-slate-900 text-slate-500'}`}>
-                      {plan ? <Bell className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                    </span>
-                    <span className={`min-w-0 flex-1 truncate text-[11px] font-bold ${selected ? 'text-white' : 'text-slate-300'}`}>{plan?.name || '不指定方案'}</span>
-                    {plan && (
-                      <span className="inline-flex shrink-0 items-center gap-1 text-[9px] font-bold text-emerald-200">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                        啟用
-                      </span>
-                    )}
-                    <span className={`shrink-0 text-[9px] font-bold ${selected ? (isSuperGroup ? 'text-amber-200' : 'text-cyan-200') : 'text-slate-300'}`}>{plan ? `${Number(plan.selected_task_count) || 0} 個任務` : '不加入'}</span>
-                    {selected && <CheckCircle className={`h-3.5 w-3.5 shrink-0 ${isSuperGroup ? 'text-amber-300' : 'text-cyan-300'}`} />}
-                  </button>
-                );
-              })}
-            </div>
-          </div>,
-          document.body,
-        )}
       </div>,
       document.body,
     );
@@ -4440,7 +4627,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
       <div
         ref={employeeGroupsScrollRef}
-        className={`${admin.role === 'super_admin' ? 'employee-super-admin-scrollbar overflow-y-auto' : 'dark-panel-scroll overflow-hidden'} flex min-h-0 min-w-0 w-full flex-1 flex-col overscroll-contain`}
+        className={`${admin.role === 'super_admin' ? 'employee-super-admin-scrollbar overflow-x-hidden overflow-y-auto' : 'dark-panel-scroll overflow-hidden'} flex min-h-0 min-w-0 w-full flex-1 flex-col overscroll-contain`}
         style={{ scrollbarGutter: 'stable' }}
       >
         {/* Content */}
@@ -4648,11 +4835,13 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               {renderCreateForm(admin.id)}
 
               {/* Table - fixed ~22 rows */}
-              <div className="-ml-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 pl-1 dark-panel-scroll">
-                <table className="w-full min-w-0 shrink-0 table-fixed">
+              <EmployeeTableScroll label="員工資料列表" className="flex-1">
+                <table className="employee-data-table w-full min-w-[1320px] shrink-0 table-fixed">
                   {renderTableHeader(flatAdminId)}
                   <tbody>
-                    {flatFilteredEmployees.map((emp, idx) => renderEmployeeRow(emp, idx, true))}
+                    <EmployeeRegionNamesContext.Provider value={regionNameById}>
+                      {flatEmployeeRows}
+                    </EmployeeRegionNamesContext.Provider>
                   </tbody>
                 </table>
                 {flatFilteredEmployees.length === 0 && (
@@ -4678,8 +4867,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                     )}
                   </div>
                 )}
-                <div aria-hidden="true" className="h-4 shrink-0 border-t border-blue-300/35 bg-gradient-to-r from-blue-950/10 via-blue-500/35 to-blue-950/10 shadow-[inset_0_1px_0_rgba(96,165,250,0.55),0_-4px_14px_rgba(59,130,246,0.18)]" />
-              </div>
+              </EmployeeTableScroll>
             </div>
       ) : filteredGroups.length === 0 ? (
         <div className="text-center py-8 text-slate-400">找不到員工</div>
@@ -4863,13 +5051,16 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                       </div>
                     </div>
                     {group.employees.length > 0 ? (
-                      <div className={`-ml-1 pl-1 overflow-x-auto overflow-y-auto overscroll-contain bg-slate-900/50 min-h-[300px] dark-panel-scroll ${selectedAdminFilter !== 'all' ? 'min-h-0 flex-1' : 'max-h-[calc(100vh-160px)]'}`}>
-                        <table className="w-full min-w-0 table-fixed">
+                      <EmployeeTableScroll label={`${group.admin.username} 員工資料列表`} className={selectedAdminFilter !== 'all' ? 'flex-1' : 'min-h-[300px] max-h-[calc(100vh-160px)]'}>
+                        <table className="employee-data-table w-full min-w-[1320px] shrink-0 table-fixed">
                           {renderTableHeader(group.admin.id)}
-                          <tbody>{employeeRowsByGroup.get(group.admin.id)}</tbody>
+                          <tbody>
+                            <EmployeeRegionNamesContext.Provider value={regionNameById}>
+                              {employeeRowsByGroup.get(group.admin.id)}
+                            </EmployeeRegionNamesContext.Provider>
+                          </tbody>
                         </table>
-                        <div aria-hidden="true" className="h-4 shrink-0 border-t border-blue-300/35 bg-gradient-to-r from-blue-950/10 via-blue-500/35 to-blue-950/10 shadow-[inset_0_1px_0_rgba(96,165,250,0.55),0_-4px_14px_rgba(59,130,246,0.18)]" />
-                      </div>
+                      </EmployeeTableScroll>
                     ) : (
                       <div className={`py-8 text-center ${selectedAdminFilter !== 'all' ? `flex flex-1 flex-col items-center justify-center ${isSuperGroup ? 'bg-yellow-500/5' : 'bg-blue-500/5'}` : isSuperGroup ? 'bg-yellow-500/5' : 'bg-blue-500/5'}`}>
                         <p className="text-slate-400 text-sm">沒有員工符合目前的篩選條件</p>
@@ -4893,221 +5084,245 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
 
       {/* ===== MODALS ===== */}
 
-      {editingEmployee && createPortal(
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md animate-in fade-in duration-200"
-          onPointerDown={(event) => {
-            editBackdropPressRef.current = event.target === event.currentTarget
-              ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
-              : null;
-          }}
-          onPointerUp={(event) => {
-            const press = editBackdropPressRef.current;
-            editBackdropPressRef.current = null;
-            if (
-              !press
-              || press.pointerId !== event.pointerId
-              || event.target !== event.currentTarget
-              || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6
-            ) return;
-            closeEmployeeEditor();
-          }}
-          onPointerCancel={() => {
-            editBackdropPressRef.current = null;
-          }}
-        >
-          <div className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-[820px] flex-col overflow-hidden rounded-[1.75rem] border border-blue-300/25 bg-gradient-to-b from-slate-900 via-slate-900 to-blue-950/35 shadow-[0_30px_110px_rgba(2,6,23,0.82)] ring-1 ring-inset ring-white/10 animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
-            <div className="relative shrink-0 overflow-hidden rounded-t-[1.75rem] border-b border-blue-300/15 bg-gradient-to-r from-blue-950/80 via-cyan-950/35 to-slate-900/80 px-5 py-4 sm:px-6">
-              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-500 via-cyan-300 to-blue-500" />
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-blue-300/35 bg-blue-400/15 text-blue-100 shadow-lg shadow-blue-950/35 ring-1 ring-inset ring-white/10">
+      {editingEmployee && (() => {
+        const group = employeeGroups.find(group => group.admin.id === editingEmployee.created_by);
+        const sectionClasses = 'relative min-w-0 overflow-hidden rounded-2xl border border-purple-200/10 bg-[linear-gradient(145deg,#241c2c,#19141f)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]';
+        const fieldClasses = 'mt-2 w-full rounded-xl border border-purple-100/60 bg-[#f5eff8] px-3.5 py-3 text-sm text-[#25152f] shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none transition-all placeholder:text-slate-500 hover:border-purple-200 focus:border-purple-400 focus:bg-[#fcf8ff] focus:ring-2 focus:ring-purple-300/20 disabled:cursor-not-allowed disabled:opacity-50';
+        const activeOwnerPlans = automationPlans.filter(plan => (
+          plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
+        ));
+        const currentAssignment = automationAssignmentsByEmployee.get(editingEmployee.id);
+        const selectedActivePlan = activeOwnerPlans.find(plan => plan.id === editingAutomationPlanId);
+        const selectedDispatchGroup = dispatchGroups.find(group => group.id === editingDispatchGroupId);
+
+        return createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-[#020617]/88 p-3 backdrop-blur-xl sm:p-6 animate-in fade-in duration-200"
+            onPointerDown={(event) => {
+              editBackdropPressRef.current = event.target === event.currentTarget
+                ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+                : null;
+            }}
+            onPointerUp={(event) => {
+              const press = editBackdropPressRef.current;
+              editBackdropPressRef.current = null;
+              if (
+                !press
+                || press.pointerId !== event.pointerId
+                || event.target !== event.currentTarget
+                || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6
+              ) return;
+              closeEmployeeEditor();
+            }}
+            onPointerCancel={() => {
+              editBackdropPressRef.current = null;
+            }}
+            onKeyDown={event => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                closeEmployeeEditor();
+              }
+            }}
+          >
+            <div aria-hidden="true" className="pointer-events-none absolute -left-32 top-[-10rem] h-[32rem] w-[32rem] rounded-full bg-purple-500/10 blur-[100px]" />
+            <div aria-hidden="true" className="pointer-events-none absolute -bottom-48 right-[-8rem] h-[36rem] w-[36rem] rounded-full bg-fuchsia-700/10 blur-[120px]" />
+            <div
+              ref={employeeEditDialogRef}
+              role="dialog"
+              aria-modal={!showDiscardEmployeeEdit}
+              aria-labelledby="edit-employee-title"
+              aria-busy={savingEmployeeEdit}
+              data-employee-edit-theme="plum"
+              onClick={event => event.stopPropagation()}
+              className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-[800px] flex-col overflow-hidden rounded-[1.75rem] border border-purple-300/35 bg-[#16111e] shadow-[0_36px_120px_rgba(0,0,0,0.72)] ring-1 ring-inset ring-purple-100/[0.08] animate-in zoom-in-95 duration-200"
+            >
+              <div className="relative flex shrink-0 items-start justify-between gap-4 overflow-hidden border-b border-purple-300/15 bg-[linear-gradient(110deg,#362046_0%,#21172f_48%,#17121e_100%)] px-5 py-4 sm:px-6">
+                <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-purple-700 via-fuchsia-300 to-purple-600" />
+                <div aria-hidden="true" className="absolute right-16 top-[-5rem] h-44 w-44 rounded-full bg-fuchsia-400/10 blur-3xl" />
+                <div className="relative flex min-w-0 items-center gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-purple-300/35 bg-gradient-to-br from-purple-400/25 to-fuchsia-800/20 text-purple-100 shadow-lg shadow-purple-950/40 ring-1 ring-inset ring-white/10">
                     <Pencil className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-300">帳戶資料</p>
-                    <h3 className="mt-1 text-xl font-bold tracking-tight text-white">編輯員工</h3>
-                    <p className="mt-1 text-xs text-blue-100/60">更新帳戶資料與自動化通知方案。</p>
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <span className="h-1.5 w-1.5 rounded-full bg-fuchsia-300 shadow-[0_0_10px_rgba(232,121,249,0.65)]" />
+                      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-purple-300/85">帳戶資料</p>
+                    </div>
+                    <h3 id="edit-employee-title" className="text-xl font-black tracking-tight text-white">編輯員工</h3>
+                    <p className="mt-1 truncate text-xs text-purple-100/60">
+                      更新帳戶資料、派單分組與自動化通知方案
+                    </p>
                   </div>
                 </div>
-                <button type="button" onClick={closeEmployeeEditor} disabled={savingEmployeeEdit} aria-label="關閉編輯員工" className="rounded-xl border border-blue-300/15 bg-slate-950/35 p-2 text-slate-400 transition-colors hover:border-blue-300/40 hover:bg-blue-400/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">
+                <button
+                  type="button"
+                  onClick={closeEmployeeEditor}
+                  disabled={savingEmployeeEdit}
+                  aria-label="關閉編輯員工"
+                  className="rounded-xl border border-purple-300/15 bg-purple-950/20 p-2 text-purple-200/65 transition-colors hover:border-purple-300/40 hover:bg-purple-400/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-200/50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
                   <X className="h-4 w-4" />
                 </button>
               </div>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5 dark-panel-scroll">
-              <div className="grid items-start gap-4 md:grid-cols-[1.08fr_0.92fr]">
-                <div className="rounded-2xl border border-blue-300/15 bg-gradient-to-br from-blue-950/30 to-slate-950/50 p-4 shadow-inner shadow-black/20">
-                  <div className="mb-4 flex items-center gap-3 rounded-xl border border-blue-300/15 bg-slate-950/45 px-3 py-2.5">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-300/25 bg-cyan-400/10 text-cyan-200">
-                  <Users className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-cyan-300/75">01 · 基本資料</p>
-                  <p className="mt-1 truncate text-sm font-bold text-white" title={editingEmployee.username}>{editingEmployee.username}</p>
-                  <p className="mt-0.5 truncate text-[11px] font-medium tracking-wide text-cyan-200/70">目前 ID：{editingEmployee.employee_id}</p>
-                </div>
-                  </div>
-                  <div className="space-y-3">
-                <div>
-                  <label className="mb-2 flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-username">
-                    使用者名稱
-                    <span className="rounded-full border border-blue-300/20 bg-blue-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-blue-200">登入識別</span>
-                  </label>
-                  <input id="edit-employee-username" type="text" value={editingEmployee.username} onChange={(e) => setEditingEmployee({ ...editingEmployee, username: e.target.value })} disabled={savingEmployeeEdit} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
-                </div>
-                <div>
-                  <label className="mb-2 flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-id">
-                    員工 ID
-                    <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-cyan-200">內部識別</span>
-                  </label>
-                  <input id="edit-employee-id" type="text" value={editingEmployee.employee_id} onChange={(e) => setEditingEmployee({ ...editingEmployee, employee_id: e.target.value })} disabled={savingEmployeeEdit} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 font-mono text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
-                </div>
-                <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-[0.14em] text-blue-100" htmlFor="edit-employee-remarks">備註</label>
-                  <input id="edit-employee-remarks" type="text" value={editingEmployee.remarks || ''} onChange={(e) => setEditingEmployee({ ...editingEmployee, remarks: e.target.value })} disabled={savingEmployeeEdit} placeholder="輸入管理員備註……" className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)] outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
-                </div>
-                  </div>
-                </div>
-              {(() => {
-                const currentAssignment = automationAssignmentsByEmployee.get(editingEmployee.id);
-                const activeOwnerPlans = automationPlans.filter(plan => (
-                  plan.status === 'active' && plan.owner_admin_id === editingEmployee.created_by
-                ));
-                const selectedActivePlan = activeOwnerPlans.find(plan => plan.id === editingAutomationPlanId);
-                const selectedPlanName = selectedActivePlan?.name || '不指定方案';
-                const selectedPlanTaskCount = selectedActivePlan
-                  ? Number(selectedActivePlan.selected_task_count) || 0
-                  : null;
-                const planOptions = [
-                  { id: '', name: '不指定方案', meta: '不加入', disabled: false },
-                  ...activeOwnerPlans.map(plan => ({
-                    id: plan.id,
-                    name: plan.name,
-                    meta: `${Number(plan.selected_task_count) || 0} 個任務`,
-                    disabled: false,
-                  })),
-                ];
 
-                return (
-                  <div className="rounded-2xl border border-cyan-300/20 bg-gradient-to-br from-cyan-950/30 to-slate-950/55 p-4 shadow-inner shadow-black/20">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <label htmlFor="edit-employee-automation-plan" className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300/80">02 · 自動化通知方案</label>
-                        <p className="mt-2 truncate text-[11px] font-medium text-slate-400">
-                          目前方案：
-                          <span className="ml-1 font-bold text-cyan-100">{currentAssignment ? currentAssignment.plan_name : '不指定方案'}</span>
-                        </p>
-                      </div>
-                      <Bell className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
+              <div className="dark-panel-scroll min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+                <div className="grid items-start gap-4 md:grid-cols-[1fr_1.04fr]">
+                  <section aria-labelledby="edit-basic-title" className={`${sectionClasses} sm:p-5`}>
+                    <div className="mb-5 flex items-center gap-3">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-purple-200/20 bg-gradient-to-br from-purple-300/15 to-fuchsia-600/5 text-purple-200"><Key className="h-4 w-4" /></span>
+                      <div><h4 id="edit-basic-title" className="text-sm font-bold text-stone-100">基本資料</h4><p className="mt-1 text-[10px] text-stone-400">更新員工專屬的登入識別資訊</p></div>
+                      <span className="ml-auto text-[10px] font-bold tracking-widest text-purple-200/45">01</span>
                     </div>
-                    <button
-                      ref={editPlanButtonRef}
-                      id="edit-employee-automation-plan"
-                      type="button"
-                      aria-haspopup="listbox"
-                      aria-expanded={editPlanMenuOpen}
-                      onClick={() => toggleEditPlanMenu(planOptions.length)}
-                      disabled={savingEmployeeEdit}
-                      className={`group mt-3 flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left shadow-lg outline-none transition-all disabled:cursor-not-allowed disabled:opacity-50 ${editPlanMenuOpen ? 'border-cyan-200/90 bg-cyan-400/20 ring-2 ring-cyan-300/20' : selectedActivePlan ? 'border-cyan-300/75 bg-gradient-to-r from-cyan-500/25 via-cyan-400/15 to-blue-500/10 shadow-cyan-950/50 ring-1 ring-cyan-200/20 hover:border-cyan-200' : 'border-slate-600/80 bg-slate-900/90 hover:border-slate-400 hover:bg-slate-800/95'}`}
-                    >
-                      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${selectedActivePlan ? 'border-cyan-200/60 bg-cyan-300/20 text-cyan-100 shadow-sm shadow-cyan-950/40' : 'border-slate-600 bg-slate-800 text-slate-400'}`}>
-                        <Bell className="h-3.5 w-3.5" />
-                      </span>
-                      <span className={`min-w-0 flex-1 truncate text-[11px] font-extrabold ${selectedActivePlan ? 'text-cyan-50' : 'text-white'}`}>{selectedPlanName}</span>
-                      {selectedPlanTaskCount !== null && (
-                        <>
-                          <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-300/35 bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-bold text-emerald-100">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_7px_rgba(110,231,183,0.9)]" />
-                            啟用中
-                          </span>
-                          <span className="shrink-0 rounded-md border border-cyan-200/35 bg-cyan-300/15 px-1.5 py-0.5 text-[9px] font-bold text-cyan-100">{selectedPlanTaskCount} 個任務</span>
-                        </>
+                    <div className="space-y-4">
+                      <label htmlFor="edit-employee-username" className="block text-[11px] font-semibold text-stone-200/90">使用者名稱 <span className="text-rose-400">*</span>
+                        <input id="edit-employee-username" type="text" value={editingEmployee.username} onChange={event => setEditingEmployee({ ...editingEmployee, username: event.target.value })} disabled={savingEmployeeEdit} required autoComplete="off" placeholder="輸入使用者名稱" className={fieldClasses} />
+                      </label>
+                      <label htmlFor="edit-employee-id" className="block text-[11px] font-semibold text-stone-200/90">員工 ID <span className="text-rose-400">*</span>
+                        <input id="edit-employee-id" type="text" value={editingEmployee.employee_id} onChange={event => setEditingEmployee({ ...editingEmployee, employee_id: event.target.value })} disabled={savingEmployeeEdit} required placeholder="輸入員工 ID" className={fieldClasses} />
+                      </label>
+                      <label htmlFor="edit-employee-remarks" className="block text-[11px] font-semibold text-stone-200/90">備註 <span className="font-normal text-stone-500">（選填）</span>
+                        <textarea id="edit-employee-remarks" value={editingEmployee.remarks || ''} onChange={event => setEditingEmployee({ ...editingEmployee, remarks: event.target.value })} disabled={savingEmployeeEdit} rows={3} placeholder="輸入管理員備註……" className={`${fieldClasses} resize-y`} />
+                      </label>
+                    </div>
+                  </section>
+
+                  <div className="min-w-0 space-y-3">
+                    <section aria-labelledby="edit-region-title" data-setup-tone="violet" className={`${sectionClasses} employee-edit-setup-card`}>
+                      <div aria-hidden="true" className="employee-edit-setup-rail absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-fuchsia-300 to-indigo-400" />
+                      <div className="mb-3 flex items-center gap-2"><span className="employee-edit-setup-step text-[9px] font-bold tracking-[0.18em] text-violet-300/70">02</span><h4 id="edit-region-title" className="flex-1 text-xs font-bold text-violet-100">所在地區</h4><span className="rounded-md border border-violet-300/15 bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-medium text-violet-300">必填</span></div>
+                      <EmployeeRegionPicker
+                        id="edit-employee-region"
+                        appearance="setup"
+                        groupLabel={editingEmployee.admin?.username || group?.admin.username || ''}
+                        regions={regionsByAdmin.get(editingEmployee.created_by) || []}
+                        counts={getGroupRegionCounts(editingEmployee.created_by).counts}
+                        value={editingEmployee.region_id || ''}
+                        onChange={regionId => {
+                          setEditingEmployee(current => (current ? { ...current, region_id: regionId || null } : current));
+                          setEditEmployeeError(current => (current === `${REGION_REQUIRED_MESSAGE}。` ? null : current));
+                        }}
+                        actions={getRegionActions(editingEmployee.created_by)}
+                        invalid={editEmployeeError === `${REGION_REQUIRED_MESSAGE}。`}
+                        disabled={savingEmployeeEdit}
+                      />
+                      <p className="mt-2.5 text-[10px] leading-4 text-stone-400">依管理群組設定，可在選單中新增與編輯地區。</p>
+                    </section>
+
+                    <section aria-labelledby="edit-dispatch-title" data-setup-tone="teal" className={`${sectionClasses} employee-edit-setup-card`}>
+                      <div aria-hidden="true" className="employee-edit-setup-rail absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-teal-200 to-sky-400" />
+                      <div className="mb-3 flex items-center gap-2"><span className="employee-edit-setup-step text-[9px] font-bold tracking-[0.18em] text-teal-300/70">03</span><h4 id="edit-dispatch-title" className="flex-1 text-xs font-bold text-teal-50">派單分組</h4><span className="rounded-md border border-teal-200/20 bg-teal-300/10 px-1.5 py-0.5 text-[9px] font-medium text-teal-200">可保留現況</span></div>
+                      <EmployeeSetupSelect
+                        id="edit-employee-dispatch-group"
+                        label="派單分組"
+                        placeholder={currentDispatchGroup?.name || (dispatchGroupsLoading ? '載入派單分組中…' : '未分組')}
+                        value={editingDispatchGroupId}
+                        options={dispatchGroups.map(group => ({ id: group.id, label: group.group_name, description: group.description }))}
+                        tone="teal"
+                        icon={Layers}
+                        disabled={savingEmployeeEdit || dispatchGroupsLoading || Boolean(dispatchGroupsError) || dispatchGroups.length === 0}
+                        onChange={setEditingDispatchGroupId}
+                      />
+                      {dispatchGroupsError ? <p role="alert" className="mt-2.5 text-[10px] leading-4 text-rose-300">{dispatchGroupsError}</p> : (
+                        <p className="mt-2.5 text-[10px] leading-4 text-stone-400">
+                          {dispatchGroupsLoading ? '正在載入可用分組…' : currentDispatchGroup && !selectedDispatchGroup ? '目前分組已停用或封存，僅保留、不改動；可改選啟用中的分組。' : dispatchGroups.length === 0 ? '目前沒有可用分組，可保留未分組狀態。' : selectedDispatchGroup ? '儲存後同步所選分組 · 長說明可懸停查看' : '可保持未分組，或選擇啟用中的派單分組。'}
+                        </p>
                       )}
-                      <ChevronDown className={`h-4 w-4 shrink-0 transition-transform duration-200 ${editPlanMenuOpen ? 'rotate-180 text-white' : selectedActivePlan ? 'text-cyan-200' : 'text-slate-400 group-hover:text-white'}`} />
-                    </button>
-                    {activeOwnerPlans.length === 0 && !currentAssignment && (
-                      <p className="mt-2 text-[11px] text-slate-500">此員工所屬群組目前沒有可指定的啟用方案。</p>
-                    )}
-                    {selectedActivePlan && (
-                      <p className="mt-2 flex items-center gap-1.5 rounded-lg border border-cyan-300/25 bg-cyan-400/10 px-2 py-1.5 text-[10px] font-bold text-cyan-100">
-                        <CheckCircle className="h-3.5 w-3.5 shrink-0 text-cyan-300" />
-                        儲存後直接加入此方案
+                    </section>
+
+                    <section aria-labelledby="edit-automation-title" data-setup-tone="amber" className={`${sectionClasses} employee-edit-setup-card`}>
+                      <div aria-hidden="true" className="employee-edit-setup-rail absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-gradient-to-b from-amber-200 to-rose-300" />
+                      <div className="mb-3 flex items-center gap-2"><span className="employee-edit-setup-step text-[9px] font-bold tracking-[0.18em] text-amber-200/70">04</span><h4 id="edit-automation-title" className="flex-1 text-xs font-bold text-amber-50">自動化通知方案</h4><span className="rounded-md border border-amber-100/20 bg-amber-200/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-100/80">選填</span></div>
+                      <EmployeeSetupSelect
+                        id="edit-employee-automation-plan"
+                        label="自動化通知方案"
+                        placeholder={editingAutomationPlanId ? `${currentAssignment?.plan_name || '目前方案'}（保留原方案）` : '不指定方案'}
+                        value={editingAutomationPlanId}
+                        options={[{ id: '', label: '不指定方案', meta: '暫不套用', unassigned: true }, ...activeOwnerPlans.map(plan => ({ id: plan.id, label: plan.name, description: plan.description, meta: `${Number(plan.selected_task_count) || 0} 個任務` }))]}
+                        tone="amber"
+                        icon={Bell}
+                        disabled={savingEmployeeEdit}
+                        onChange={planId => {
+                          setEditingAutomationPlanId(planId);
+                          setEditingAutomationPlanTouched(true);
+                        }}
+                      />
+                      <p className="mt-2.5 text-[10px] leading-4 text-stone-400">
+                        {editingAutomationPlanId && !selectedActivePlan ? '目前方案已暫停、封存或不可用；不更換時保留原方案，無法重新選用。' : activeOwnerPlans.length ? '儲存後套用所選方案；既有發送與執行歷史保留。' : '此群組目前沒有啟用中的方案，可保留不指定方案。'}
                       </p>
-                    )}
-                    <p className="mt-3 border-t border-cyan-300/10 pt-3 text-[11px] leading-5 text-slate-400">變更會同步方案員工名單並影響後續通知任務；既有發送與執行歷史都會保留。</p>
-                    {editPlanMenuOpen && editPlanMenuPosition && createPortal(
-                      <div
-                        ref={editPlanMenuRef}
-                        role="listbox"
-                        aria-label="編輯員工自動化通知方案"
-                        className="fixed z-[10050] overflow-hidden rounded-2xl border border-cyan-300/35 bg-[#08111f]/98 p-1.5 shadow-[0_24px_70px_rgba(0,0,0,0.72)] backdrop-blur-xl ring-1 ring-inset ring-white/[0.08] animate-in fade-in zoom-in-95 duration-150"
-                        style={{ top: editPlanMenuPosition.top, left: editPlanMenuPosition.left, width: editPlanMenuPosition.width }}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <div className="max-h-[264px] space-y-0.5 overflow-y-auto dark-panel-scroll">
-                          {planOptions.map(option => {
-                            const selected = editingAutomationPlanId === option.id;
-                            return (
-                              <button
-                                key={option.id || 'none'}
-                                type="button"
-                                role="option"
-                                aria-selected={selected}
-                                disabled={option.disabled || savingEmployeeEdit}
-                                onClick={() => {
-                                  setEditingAutomationPlanId(option.id);
-                                  setEditingAutomationPlanTouched(true);
-                                  setEditPlanMenuOpen(false);
-                                  setEditPlanMenuPosition(null);
-                                }}
-                                className={`flex h-8 w-full items-center gap-2 rounded-lg border px-2 text-left transition-all disabled:cursor-not-allowed ${selected ? 'border-cyan-300/45 bg-gradient-to-r from-cyan-500/20 to-blue-500/5' : option.disabled ? 'border-transparent bg-slate-900/45 opacity-60' : 'border-transparent hover:border-slate-600 hover:bg-slate-800/90'}`}
-                              >
-                                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${selected ? 'border-cyan-300/35 bg-cyan-400/15 text-cyan-200' : 'border-slate-700 bg-slate-900 text-slate-500'}`}>
-                                  {option.id ? <Bell className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                                </span>
-                                <span className={`min-w-0 flex-1 truncate text-[11px] font-bold ${selected ? 'text-white' : 'text-slate-300'}`}>{option.name}</span>
-                                {option.id && (
-                                  <span className="inline-flex shrink-0 items-center gap-1 text-[9px] font-bold text-emerald-200">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                                    啟用
-                                  </span>
-                                )}
-                                <span className={`shrink-0 text-[9px] font-bold ${selected ? 'text-cyan-200' : 'text-slate-300'}`}>{option.meta}</span>
-                                {selected && <CheckCircle className="h-3.5 w-3.5 shrink-0 text-cyan-300" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>,
-                      document.body,
-                    )}
+                    </section>
                   </div>
-                );
-              })()}
-              </div>
-              {editEmployeeError && (
-                <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-xl border border-red-400/35 bg-red-500/10 px-3.5 py-2.5 text-xs leading-5 text-red-200">
-                  <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span>{editEmployeeError}</span>
                 </div>
-              )}
-              <div className="mt-3 flex items-start gap-2.5 rounded-xl border border-blue-300/15 bg-blue-500/5 px-3.5 py-2.5 text-[11px] leading-5 text-slate-400">
-                <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-300" />
-                <span>儲存後，員工清單與相關管理檢視會從伺服器重新載入最新資料。</span>
+                {editEmployeeError && (
+                  <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-xl border border-red-400/35 bg-red-500/10 px-3.5 py-2.5 text-xs leading-5 text-red-200">
+                    <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span className="whitespace-pre-line">{editEmployeeError}</span>
+                  </div>
+                )}
+                <p className="mt-3 text-[10px] leading-4 text-stone-400">儲存會同步派單分組與方案員工名單，無須到其他頁面再次分派；員工清單與相關管理檢視將重新載入最新資料。</p>
+              </div>
+
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-white/[0.07] bg-slate-950/35 px-5 py-4">
+                <span className="mr-auto hidden text-[10px] text-slate-500 sm:block">確認資料與分組設定後儲存變更</span>
+                <button type="button" disabled={savingEmployeeEdit} onClick={closeEmployeeEditor} className="rounded-xl border border-slate-600/50 bg-slate-800/50 px-4 py-2.5 text-xs font-semibold text-slate-300 transition-colors hover:border-slate-400/60 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50 disabled:cursor-not-allowed disabled:opacity-50">取消</button>
+                <button type="button" onClick={() => void handleSaveEmployeeEdit()} disabled={savingEmployeeEdit || !editingEmployee.username.trim() || !editingEmployee.employee_id.trim() || !editingEmployee.region_id || dispatchGroupsLoading || Boolean(dispatchGroupsError)} className="inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl border border-purple-300/50 bg-gradient-to-r from-purple-600 to-fuchsia-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-purple-950/30 transition-all hover:from-purple-500 hover:to-fuchsia-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-100/60 disabled:cursor-not-allowed disabled:opacity-35">
+                  {savingEmployeeEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                  {savingEmployeeEdit ? '儲存中…' : '儲存變更'}
+                </button>
               </div>
             </div>
-            <div className="flex shrink-0 flex-col-reverse gap-2 overflow-hidden rounded-b-[1.75rem] border-t border-blue-300/15 bg-gradient-to-r from-slate-950/70 via-blue-950/25 to-slate-950/70 px-5 py-3.5 sm:flex-row sm:justify-end sm:px-6">
-              <button type="button" onClick={closeEmployeeEditor} disabled={savingEmployeeEdit} className="rounded-xl border border-slate-600/80 bg-slate-800/70 px-5 py-2.5 text-sm font-semibold text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">取消</button>
-              <button type="button" onClick={() => void handleSaveEmployeeEdit()} disabled={savingEmployeeEdit || !editingEmployee.username.trim() || !editingEmployee.employee_id.trim()} className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/45 bg-gradient-to-r from-blue-600 to-cyan-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-950/40 transition-all hover:-translate-y-0.5 hover:from-blue-500 hover:to-cyan-500 active:translate-y-0 disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-50">
-                {savingEmployeeEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                {savingEmployeeEdit ? '儲存中…' : '儲存變更'}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+            {showDiscardEmployeeEdit && (
+              <div
+                className="absolute inset-0 z-10 flex items-center justify-center bg-[#100b19]/80 p-4 backdrop-blur-sm"
+                onPointerDown={event => event.stopPropagation()}
+                onPointerUp={event => event.stopPropagation()}
+                onClick={event => {
+                  event.stopPropagation();
+                  if (event.target === event.currentTarget) setShowDiscardEmployeeEdit(false);
+                }}
+                onKeyDown={event => {
+                  event.stopPropagation();
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setShowDiscardEmployeeEdit(false);
+                  } else if (event.key === 'Tab') {
+                    const buttons = Array.from(discardEmployeeEditDialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []);
+                    const first = buttons[0];
+                    const last = buttons[buttons.length - 1];
+                    if (event.shiftKey && document.activeElement === first) {
+                      event.preventDefault();
+                      last?.focus();
+                    } else if (!event.shiftKey && document.activeElement === last) {
+                      event.preventDefault();
+                      first?.focus();
+                    }
+                  }
+                }}
+              >
+                <div ref={discardEmployeeEditDialogRef} role="alertdialog" aria-modal="true" aria-labelledby="discard-employee-edit-title" aria-describedby="discard-employee-edit-description" className="relative max-h-[calc(100vh-2rem)] w-full max-w-[440px] overflow-y-auto rounded-2xl border border-purple-300/35 bg-[#21172d] shadow-[0_24px_80px_rgba(0,0,0,0.65)]">
+                  <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-purple-600 via-fuchsia-300 to-purple-600" />
+                  <div className="flex items-start gap-3 px-5 pb-4 pt-6">
+                    <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-purple-300/30 bg-purple-400/15 text-purple-200"><Pencil className="h-5 w-5" /></span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] font-semibold tracking-widest text-purple-300">尚未儲存</p>
+                      <h4 id="discard-employee-edit-title" className="mt-1 text-base font-bold leading-6 text-white">要放棄尚未儲存的變更嗎？</h4>
+                    </div>
+                    <button type="button" aria-label="返回編輯員工" onClick={() => setShowDiscardEmployeeEdit(false)} className="shrink-0 rounded-lg p-1.5 text-purple-200/65 transition-colors hover:bg-purple-300/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-200/60"><X className="h-4 w-4" /></button>
+                  </div>
+                  <div className="px-5 pb-5">
+                    <p className="break-all rounded-xl border border-purple-300/15 bg-purple-950/30 px-3 py-2.5 text-xs font-semibold text-purple-100">{editingEmployee.username} <span className="ml-1 font-normal text-purple-200/60">· {editingEmployee.employee_id}</span></p>
+                    <p id="discard-employee-edit-description" className="mt-3 text-xs leading-6 text-stone-300">關閉後，尚未儲存的員工資料與分組設定將不會套用；已儲存的項目不受影響。繼續編輯可保留目前內容。</p>
+                  </div>
+                  <div className="flex flex-col-reverse gap-2 border-t border-purple-300/10 bg-black/15 px-5 py-4 sm:flex-row sm:justify-end">
+                    <button type="button" onClick={resetEmployeeEditor} className="rounded-xl border border-rose-300/30 bg-rose-950/20 px-4 py-2.5 text-xs font-semibold text-rose-200 transition-colors hover:border-rose-300/60 hover:bg-rose-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/60">放棄變更並關閉</button>
+                    <button type="button" data-continue-editing onClick={() => setShowDiscardEmployeeEdit(false)} className="rounded-xl border border-purple-300/45 bg-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-purple-950/25 transition-colors hover:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-100/70">繼續編輯</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>,
+          document.body,
+        );
+      })()}
 
       {editingRemarksOnly && createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={() => setEditingRemarksOnly(null)}>
@@ -5564,39 +5779,60 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
       )}
 
       {editingTags && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={() => { setEditingTags(null); setNewTag(''); }}>
-          <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-amber-400/30 bg-slate-900 shadow-[0_24px_80px_rgba(2,6,23,0.65)]" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={closeTagEditor} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeTagEditor(); } }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="employee-tags-heading" aria-busy={savingTags} className="flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-amber-400/30 bg-slate-900 shadow-[0_24px_80px_rgba(2,6,23,0.65)]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between gap-4 border-b border-amber-400/20 bg-gradient-to-r from-amber-950/70 via-slate-900 to-slate-900 px-5 py-4">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-300/35 bg-amber-500/15 text-amber-200">
                   <Tag className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">員工標籤</p>
+                  <p id="employee-tags-heading" className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300/80">員工標籤</p>
                   <h3 title={editingTags.username} className="truncate text-lg font-bold text-white">{editingTags.username}</h3>
                   <p className="truncate text-xs text-slate-400">Employee ID: {editingTags.employee_id}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded-full border border-amber-400/25 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200">{(editingTags.tags || []).length} 個啟用</span>
-                <button type="button" onClick={() => { setEditingTags(null); setNewTag(''); }} aria-label="關閉標籤管理" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-700/80 hover:text-white">
+                <button type="button" onClick={closeTagEditor} disabled={savingTags} aria-label="關閉標籤管理" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-700/80 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50">
                   <X className="h-5 w-5" />
                 </button>
               </div>
             </div>
-            <div className="space-y-4 p-5">
-              <div className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-4">
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-amber-200">新增標籤</label>
+            <div className="min-h-0 space-y-4 overflow-y-auto p-5 dark-panel-scroll">
+              {tagError && <p role="alert" className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{tagError}</p>}
+              <section aria-labelledby="existing-employee-tags-heading" className="rounded-xl border border-amber-400/20 bg-amber-500/5 p-4">
+                <h4 id="existing-employee-tags-heading" className="text-xs font-semibold tracking-wide text-amber-200">選用已有標籤</h4>
+                <p className="mt-1 text-[11px] text-slate-400">點選同群組已有標籤，完成後按「儲存」套用。</p>
+                {existingTagOptions.length > 0 ? (
+                  <div className="mt-3 flex max-h-40 flex-wrap gap-2 overflow-y-auto p-0.5 dark-panel-scroll">
+                    {existingTagOptions.map(tag => {
+                      const applied = (editingTags.tags || []).includes(tag);
+                      return (
+                        <button key={tag} type="button" aria-pressed={applied} aria-label={`${applied ? '已套用' : '套用'} ${tag}`} disabled={savingTags || applied} onClick={() => void handleAddTag(editingTags, tag)} className={`inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed ${applied ? 'border-amber-400/30 bg-amber-500/15 text-amber-200' : 'border-slate-600 bg-slate-800/70 text-slate-300 hover:border-amber-400/60 hover:bg-amber-500/10 hover:text-amber-100 disabled:opacity-50'}`}>
+                          {applied ? <CheckCircle className="h-3.5 w-3.5 shrink-0" /> : <Tag className="h-3.5 w-3.5 shrink-0 text-amber-400" />}
+                          <span className="min-w-0 break-all">{tag}</span>
+                          {applied && <span className="shrink-0 text-[10px] font-normal text-amber-300/70">已套用</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : <p className="mt-3 text-xs text-slate-500">此群組尚無標籤，可在下方新增。</p>}
+              </section>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/45 p-4">
+                <label htmlFor="new-employee-tag" className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">新增標籤</label>
                 <div className="flex gap-2">
                   <input
+                    id="new-employee-tag"
                     type="text"
                     value={newTag}
+                    disabled={savingTags}
                     onChange={(e) => setNewTag(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleAddTag(editingTags); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void handleAddTag(editingTags); } }}
                     placeholder="輸入標籤名稱……"
                     className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15"
                   />
-                  <button type="button" onClick={() => handleAddTag(editingTags)} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-amber-400/60 bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-amber-950/30 transition-all hover:bg-amber-500 active:bg-amber-700">
+                  <button type="button" onClick={() => void handleAddTag(editingTags)} disabled={savingTags || !newTag.trim() || (editingTags.tags || []).includes(newTag.trim())} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-amber-400/60 bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-amber-950/30 transition-all hover:bg-amber-500 active:bg-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50">
                     <Tag className="h-4 w-4" />
                     新增
                   </button>
@@ -5605,7 +5841,7 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
               <div className="rounded-xl border border-slate-700/80 bg-slate-950/45 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <label className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">目前標籤</label>
-                  <span className="text-[11px] text-slate-500">變更會立即儲存</span>
+                  <span role="status" className="inline-flex items-center gap-1.5 text-[11px] text-slate-500">{savingTags && <Loader2 className="h-3 w-3 animate-spin" />}{savingTags ? '正在儲存…' : tagsDirty ? '尚未儲存' : '沒有未儲存變更'}</span>
                 </div>
                 <div className="flex min-h-[92px] flex-wrap content-start gap-2">
                   {(editingTags.tags || []).length === 0 ? (
@@ -5615,9 +5851,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                     </div>
                   ) : (
                     (editingTags.tags || []).map((tag, idx) => (
-                      <span key={idx} className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-sm font-semibold text-amber-200">
-                        {tag}
-                        <button type="button" onClick={() => handleRemoveTag(editingTags, tag)} aria-label={`移除 ${tag}`} className="rounded-md p-0.5 text-amber-300 transition-colors hover:bg-amber-400/25 hover:text-white">
+                      <span key={idx} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-amber-400/35 bg-amber-500/15 px-2.5 py-1.5 text-sm font-semibold text-amber-200">
+                        <span className="min-w-0 break-all">{tag}</span>
+                        <button type="button" onClick={() => void handleRemoveTag(editingTags, tag)} disabled={savingTags} aria-label={`移除 ${tag}`} className="shrink-0 rounded-md p-0.5 text-amber-300 transition-colors hover:bg-amber-400/25 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50">
                           <X className="h-3.5 w-3.5" />
                         </button>
                       </span>
@@ -5626,7 +5862,9 @@ export default function EmployeeManagement({ admin, isActive = true, onQuickActi
                 </div>
               </div>
               <div className="flex justify-end border-t border-slate-700/70 pt-4">
-                <button type="button" onClick={() => { setEditingTags(null); setNewTag(''); }} className="rounded-lg border border-slate-600 bg-slate-800 px-5 py-2 text-sm font-semibold text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-700 hover:text-white">關閉</button>
+                <button type="button" onClick={tagsDirty ? () => void handleSaveTags() : closeTagEditor} disabled={savingTags} className={`inline-flex items-center gap-2 rounded-lg border px-5 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50 ${tagsDirty ? 'border-amber-400/60 bg-amber-600 text-white hover:bg-amber-500' : 'border-slate-600 bg-slate-800 text-slate-300 hover:border-slate-500 hover:bg-slate-700 hover:text-white'}`}>
+                  {savingTags && <Loader2 className="h-4 w-4 animate-spin" />}{savingTags ? '儲存中…' : tagsDirty ? '儲存' : '關閉'}
+                </button>
               </div>
             </div>
           </div>

@@ -43,6 +43,7 @@ export type StoredAuth =
 type FinancialLoginResult<T> = {
   success?: boolean;
   error?: string;
+  code?: string;
   locked_until?: string;
   session_token?: string;
   session_marker?: string;
@@ -56,6 +57,13 @@ export class AccountLockedError extends Error {
     super('Account is temporarily locked.');
     this.name = 'AccountLockedError';
     this.lockedUntil = lockedUntil;
+  }
+}
+
+export class EmployeeLoginMaintenanceError extends Error {
+  constructor() {
+    super('Employee login is temporarily unavailable during maintenance.');
+    this.name = 'EmployeeLoginMaintenanceError';
   }
 }
 
@@ -118,6 +126,9 @@ export async function login(credentials: LoginCredentials): Promise<StoredAuth> 
     if (error) throw error;
 
     const result = data as FinancialLoginResult<Employee>;
+    if (result.code === 'employee_login_maintenance') {
+      throw new EmployeeLoginMaintenanceError();
+    }
     if (!result.success || !result.session_token || !result.session_marker || !result.user) {
       if (result.error === 'Account is temporarily locked.') {
         throw new AccountLockedError(result.locked_until);
@@ -337,7 +348,7 @@ export async function resumeRememberedSession(): Promise<StoredAuth | null> {
   });
   const [validation, profile] = await Promise.all([
     Promise.race([
-      supabase.rpc('validate_employee_session', {
+      supabase.rpc('get_employee_maintenance_status', {
         p_user_id: remembered.user.id,
         p_session_token: remembered.financialSessionToken,
         p_tab_id: remembered.tabId,
@@ -356,7 +367,7 @@ export async function resumeRememberedSession(): Promise<StoredAuth | null> {
   window.clearTimeout(timer);
 
   // Only a definite "invalid" answer drops the session; network trouble lets the dashboard recover on its own.
-  if (validation && !validation.error && validation.data !== true) {
+  if (validation && !validation.error && !validation.data.maintenance && !validation.data.session_valid) {
     forgetRememberedSession(remembered.sessionToken);
     return null;
   }

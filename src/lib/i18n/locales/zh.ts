@@ -257,6 +257,8 @@ const zh = {
     activeAssignment: '当前任务',
     activeAssignmentDesc: '请提交此任务的订单详情',
     assignmentExpired: '此任务已过期，请返回订单分配页面。',
+    noActiveGroup: '您尚未被分配到已启用的订单分组，请联系管理员。',
+    assignmentAwaiting: '有新订单正等待您接收，请先在订单分配页面接收。',
   },
   orderList: {
     title: '订单记录',
@@ -708,6 +710,13 @@ const zh = {
   },
   // Login page
   login: {
+    maintenanceTitle: '系统维护与升级',
+    maintenanceSessionMessage: '您所属的团队正在进行系统维护与升级，工作已自动停止，当前登录已失效。请点击下方按钮确认退出，并在维护完成后重新登录。',
+    maintenanceSessionAction: '确认并退出登录',
+    maintenanceMessage: '系统正在进行维护与升级，工作平台暂时无法使用。请在维护完成后再次登录。',
+    maintenanceContact: '如有疑问或需紧急协助，请直接联系您的部门经理。',
+    maintenanceAction: '回到登录',
+    maintenanceClose: '关闭维护提示',
     employeeWorkPlatform: '员工工作平台',
     welcomeBack: '欢迎回来',
     signInToAccess: '登录以访问您的工作空间',

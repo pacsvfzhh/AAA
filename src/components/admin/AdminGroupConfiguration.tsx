@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Save, Building2, CheckCircle, XCircle, Shield, Loader2, Pencil, X } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { getAdminFinancialSessionToken } from '../../lib/auth';
+import EmployeeLoginMaintenanceSettings from './EmployeeLoginMaintenanceSettings';
 
 interface AdminGroup {
   id: string;
@@ -26,6 +27,7 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
   const [loading, setLoading] = useState(true);
   const [savingGroupId, setSavingGroupId] = useState<string | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
   const [editValues, setEditValues] = useState<ConfigFormValues>({ company_name: '', currency_unit: '' });
   const [editBrandingMode, setEditBrandingMode] = useState<'custom' | 'global'>('global');
   const [globalDefaults, setGlobalDefaults] = useState<ConfigFormValues>({
@@ -41,6 +43,16 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
   const [savingLoginSettings, setSavingLoginSettings] = useState(false);
   const loginTitleRef = useRef<HTMLTextAreaElement>(null);
   const loginSubtitleRef = useRef<HTMLTextAreaElement>(null);
+  const editDialogRef = useRef<HTMLFormElement>(null);
+
+  useLayoutEffect(() => {
+    if (!editingGroupId) return;
+    const previousFocus = document.activeElement;
+    editDialogRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+    };
+  }, [editingGroupId]);
 
   useLayoutEffect(() => {
     const resizeTextareas = () => {
@@ -412,7 +424,7 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
                       <span className="block truncate text-sm font-medium text-slate-100 lg:leading-8" title={activeValues.currency_unit}>{activeValues.currency_unit || '未設定'}</span>
                     </div>
                     <div className="flex items-center sm:col-span-2 lg:col-span-1">
-                      <button type="button" onClick={() => openEditGroup(group)} disabled={savingGroupId !== null} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 px-3 text-xs font-semibold text-white shadow-sm shadow-blue-950/40 transition-all hover:from-cyan-400 hover:to-blue-500 hover:shadow-md hover:shadow-cyan-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:opacity-50"><Pencil className="h-3.5 w-3.5" aria-hidden="true" />編輯</button>
+                      <button type="button" onClick={() => openEditGroup(group)} disabled={savingGroupId !== null || maintenanceSaving} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 px-3 text-xs font-semibold text-white shadow-sm shadow-blue-950/40 transition-all hover:from-cyan-400 hover:to-blue-500 hover:shadow-md hover:shadow-cyan-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 disabled:opacity-50"><Pencil className="h-3.5 w-3.5" aria-hidden="true" />編輯</button>
                     </div>
                   </div>
                 );
@@ -425,14 +437,19 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
       {editingGroup && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm sm:p-5">
           <form
+            ref={editDialogRef}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-labelledby="edit-group-title"
-            onSubmit={(event) => void handleSave(event, editingGroup.id)}
-            onKeyDown={(event) => { if (event.key === 'Escape' && savingGroupId === null) setEditingGroupId(null); }}
-            className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-cyan-300/25 bg-[#17283d] shadow-2xl shadow-slate-950/70"
+            onSubmit={(event) => {
+              if (maintenanceSaving) { event.preventDefault(); return; }
+              void handleSave(event, editingGroup.id);
+            }}
+            onKeyDown={(event) => { if (event.key === 'Escape' && savingGroupId === null && !maintenanceSaving) setEditingGroupId(null); }}
+            className="flex h-[90dvh] max-h-[820px] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-cyan-300/25 bg-[#17283d] shadow-2xl shadow-slate-950/70 outline-none"
           >
-            <div className="flex items-start justify-between gap-4 border-b border-cyan-300/20 bg-gradient-to-r from-[#253565] via-[#215075] to-[#155867] px-5 py-4 sm:px-6">
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-cyan-300/20 bg-gradient-to-r from-[#253565] via-[#215075] to-[#155867] px-5 py-4 sm:px-6">
               <div className="flex min-w-0 items-center gap-3">
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-cyan-100"><Building2 className="h-5 w-5" aria-hidden="true" /></span>
                 <div className="min-w-0">
@@ -440,57 +457,67 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
                   <p className="break-words text-sm text-cyan-100">{editingGroup.username} · {editingGroup.role === 'super_admin' ? '超級管理員' : '二級管理員'}</p>
                 </div>
               </div>
-              <button type="button" onClick={() => setEditingGroupId(null)} disabled={savingGroupId !== null} aria-label="關閉編輯面板" className="rounded-lg p-1.5 text-cyan-100/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"><X className="h-5 w-5" /></button>
+              <button type="button" onClick={() => setEditingGroupId(null)} disabled={savingGroupId !== null || maintenanceSaving} aria-label="關閉編輯面板" className="rounded-lg p-1.5 text-cyan-100/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"><X className="h-5 w-5" /></button>
             </div>
 
-            <div className="space-y-5 px-5 py-5 sm:px-7 sm:py-6">
-              {editingGroup.role !== 'super_admin' && (
-                <section>
-                  <h3 className="text-sm font-semibold text-white">設定來源</h3>
-                  <p className="mt-1 text-xs text-slate-300">目前使用{editingGroup.brandingMode === 'global' ? '超管設定' : '自己設定'}；選擇後按「儲存設定」才會生效。</p>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <button type="button" aria-pressed={editBrandingMode === 'global'} disabled={savingGroupId !== null} onClick={() => setEditBrandingMode('global')} className={`min-h-[82px] rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-50 ${editBrandingMode === 'global' ? 'border-amber-300 bg-gradient-to-br from-amber-500/35 via-amber-500/20 to-yellow-400/15 text-amber-50 shadow-lg shadow-amber-950/30 ring-2 ring-amber-300/55' : 'border-slate-600/45 bg-slate-950/25 text-slate-400 hover:border-amber-400/40 hover:bg-amber-400/[0.06] hover:text-amber-100'}`}>
-                      <span className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><Shield className="h-4 w-4 shrink-0" aria-hidden="true" />使用超管設定</span><span className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-300 px-2 py-0.5 text-[10px] font-bold text-amber-950 ${editBrandingMode === 'global' ? '' : 'invisible'}`}><CheckCircle className="h-3 w-3" aria-hidden="true" />已選擇</span></span>
-                      <span className="mt-1.5 block text-xs opacity-80">顯示超管的品牌與幣別</span>
-                    </button>
-                    <button type="button" aria-pressed={editBrandingMode === 'custom'} disabled={savingGroupId !== null} onClick={() => setEditBrandingMode('custom')} className={`min-h-[82px] rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-50 ${editBrandingMode === 'custom' ? 'border-blue-300 bg-gradient-to-br from-blue-500/40 via-blue-500/25 to-cyan-400/15 text-blue-50 shadow-lg shadow-blue-950/30 ring-2 ring-blue-300/55' : 'border-slate-600/45 bg-slate-950/25 text-slate-400 hover:border-blue-400/40 hover:bg-blue-400/[0.06] hover:text-blue-100'}`}>
-                      <span className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><Building2 className="h-4 w-4 shrink-0" aria-hidden="true" />使用自己設定</span><span className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-300 px-2 py-0.5 text-[10px] font-bold text-blue-950 ${editBrandingMode === 'custom' ? '' : 'invisible'}`}><CheckCircle className="h-3 w-3" aria-hidden="true" />已選擇</span></span>
-                      <span className="mt-1.5 block text-xs opacity-80">顯示此管理員的自訂內容</span>
-                    </button>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:grid lg:grid-cols-2 lg:overflow-hidden">
+              <fieldset disabled={savingGroupId !== null} className="min-w-0 px-5 py-5 sm:p-6 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-gutter:stable]">
+                <EmployeeLoginMaintenanceSettings
+                  key={editingGroup.id}
+                  ownerAdminId={editingGroup.id}
+                  ownerName={editingGroup.username}
+                  onSavingChange={setMaintenanceSaving}
+                />
+              </fieldset>
+              <div className="min-w-0 space-y-5 border-t border-cyan-300/15 px-5 py-5 sm:p-6 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:border-l lg:border-t-0 lg:[scrollbar-gutter:stable]">
+                {editingGroup.role !== 'super_admin' && (
+                  <section>
+                    <h3 className="text-sm font-semibold text-white">設定來源</h3>
+                    <p className="mt-1 text-xs text-slate-300">目前使用{editingGroup.brandingMode === 'global' ? '超管設定' : '自己設定'}；選擇後按「儲存設定」才會生效。</p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                      <button type="button" aria-pressed={editBrandingMode === 'global'} disabled={savingGroupId !== null || maintenanceSaving} onClick={() => setEditBrandingMode('global')} className={`min-h-[82px] rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-50 ${editBrandingMode === 'global' ? 'border-amber-300 bg-gradient-to-br from-amber-500/35 via-amber-500/20 to-yellow-400/15 text-amber-50 shadow-lg shadow-amber-950/30 ring-2 ring-amber-300/55' : 'border-slate-600/45 bg-slate-950/25 text-slate-400 hover:border-amber-400/40 hover:bg-amber-400/[0.06] hover:text-amber-100'}`}>
+                        <span className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><Shield className="h-4 w-4 shrink-0" aria-hidden="true" />使用超管設定</span><span className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-300 px-2 py-0.5 text-[10px] font-bold text-amber-950 ${editBrandingMode === 'global' ? '' : 'invisible'}`}><CheckCircle className="h-3 w-3" aria-hidden="true" />已選擇</span></span>
+                        <span className="mt-1.5 block text-xs opacity-80">顯示超管的品牌與幣別</span>
+                      </button>
+                      <button type="button" aria-pressed={editBrandingMode === 'custom'} disabled={savingGroupId !== null || maintenanceSaving} onClick={() => setEditBrandingMode('custom')} className={`min-h-[82px] rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-50 ${editBrandingMode === 'custom' ? 'border-blue-300 bg-gradient-to-br from-blue-500/40 via-blue-500/25 to-cyan-400/15 text-blue-50 shadow-lg shadow-blue-950/30 ring-2 ring-blue-300/55' : 'border-slate-600/45 bg-slate-950/25 text-slate-400 hover:border-blue-400/40 hover:bg-blue-400/[0.06] hover:text-blue-100'}`}>
+                        <span className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><Building2 className="h-4 w-4 shrink-0" aria-hidden="true" />使用自己設定</span><span className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-300 px-2 py-0.5 text-[10px] font-bold text-blue-950 ${editBrandingMode === 'custom' ? '' : 'invisible'}`}><CheckCircle className="h-3 w-3" aria-hidden="true" />已選擇</span></span>
+                        <span className="mt-1.5 block text-xs opacity-80">顯示此管理員的自訂內容</span>
+                      </button>
+                    </div>
+                  </section>
+                )}
+                <section className={editingGroup.role === 'super_admin' ? '' : 'border-t border-slate-500/40 pt-5'}>
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-blue-100"><Pencil className="h-4 w-4" aria-hidden="true" />{editingGroup.role === 'super_admin' ? '超管自己的設定' : '此管理員自己的設定'}</h3>
+                  {editingGroup.role !== 'super_admin' && <p className="mt-1 text-xs leading-5 text-blue-200/80">自己的品牌與幣別會保留，切換設定來源也不會刪除。</p>}
+                  <div className="mt-4 grid grid-cols-1 gap-4">
+                    <label className="block min-w-0 text-xs font-semibold text-slate-200">品牌名稱
+                      <input type="text" value={editValues.company_name} onChange={(event) => setEditValues(current => ({ ...current, company_name: event.target.value }))} required={editingGroup.role === 'super_admin' || editBrandingMode === 'custom'} maxLength={50} disabled={savingGroupId !== null || maintenanceSaving} placeholder="輸入品牌名稱" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-60" />
+                    </label>
+                    <label className="block min-w-0 text-xs font-semibold text-slate-200">顯示幣別
+                      <input type="text" value={editValues.currency_unit} onChange={(event) => setEditValues(current => ({ ...current, currency_unit: event.target.value.replace(/\s+/g, '') }))} required={editingGroup.role === 'super_admin' || editBrandingMode === 'custom'} maxLength={10} disabled={savingGroupId !== null || maintenanceSaving} placeholder="例如 USDC" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-60" />
+                    </label>
                   </div>
                 </section>
-              )}
-              <section className={editingGroup.role === 'super_admin' ? '' : 'border-t border-slate-500/40 pt-5'}>
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-blue-100"><Pencil className="h-4 w-4" aria-hidden="true" />{editingGroup.role === 'super_admin' ? '超管自己的設定' : '此管理員自己的設定'}</h3>
-                {editingGroup.role !== 'super_admin' && <p className="mt-1 text-xs leading-5 text-blue-200/80">自己的品牌與幣別會保留，切換設定來源也不會刪除。</p>}
-                <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,2.5fr)_minmax(150px,1fr)]">
-                  <label className="block min-w-0 text-xs font-semibold text-slate-200">品牌名稱
-                    <input type="text" autoFocus value={editValues.company_name} onChange={(event) => setEditValues(current => ({ ...current, company_name: event.target.value }))} required={editingGroup.role === 'super_admin' || editBrandingMode === 'custom'} maxLength={50} disabled={savingGroupId !== null} placeholder="輸入品牌名稱" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-60" />
-                  </label>
-                  <label className="block min-w-0 text-xs font-semibold text-slate-200">顯示幣別
-                    <input type="text" value={editValues.currency_unit} onChange={(event) => setEditValues(current => ({ ...current, currency_unit: event.target.value.replace(/\s+/g, '') }))} required={editingGroup.role === 'super_admin' || editBrandingMode === 'custom'} maxLength={10} disabled={savingGroupId !== null} placeholder="例如 USDC" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-60" />
-                  </label>
-                </div>
-              </section>
 
-              <section className="border-t border-slate-500/40 pt-5">
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-100"><Shield className="h-4 w-4" aria-hidden="true" />超管設定 · 對照</h3>
-                <div className="mt-3 grid gap-4 sm:grid-cols-[minmax(0,2.5fr)_minmax(150px,1fr)]">
-                  <div className="min-w-0">
-                    <p className="text-xs text-amber-100/70">品牌名稱</p>
-                    <p className="mt-1 break-words text-sm font-medium text-slate-100">{globalDefaults.company_name || '未設定'}</p>
+                <section className="border-t border-slate-500/40 pt-5">
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-100"><Shield className="h-4 w-4" aria-hidden="true" />超管設定 · 對照</h3>
+                  <div className="mt-3 grid grid-cols-1 gap-4">
+                    <div className="min-w-0">
+                      <p className="text-xs text-amber-100/70">品牌名稱</p>
+                      <p className="mt-1 break-words text-sm font-medium text-slate-100">{globalDefaults.company_name || '未設定'}</p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-amber-100/70">顯示幣別</p>
+                      <p className="mt-1 break-words text-sm font-medium text-slate-100">{globalDefaults.currency_unit || '未設定'}</p>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-xs text-amber-100/70">顯示幣別</p>
-                    <p className="mt-1 break-words text-sm font-medium text-slate-100">{globalDefaults.currency_unit || '未設定'}</p>
-                  </div>
-                </div>
-              </section>
+                </section>
+              </div>
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-white/10 bg-slate-950/25 px-5 py-4 sm:px-6">
-              <button type="button" onClick={() => setEditingGroupId(null)} disabled={savingGroupId !== null} className="h-9 rounded-lg border border-slate-500/60 px-4 text-sm font-medium text-slate-200 hover:bg-white/10 disabled:opacity-50">取消</button>
-              <button type="submit" disabled={savingGroupId !== null} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 px-4 text-sm font-semibold text-white hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50">{savingGroupId === editingGroup.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}{savingGroupId === editingGroup.id ? '儲存中…' : '儲存設定'}</button>
+            <div className="flex shrink-0 justify-end gap-2 border-t border-white/10 bg-slate-950/25 px-5 py-4 sm:px-6">
+              <button type="button" onClick={() => setEditingGroupId(null)} disabled={savingGroupId !== null || maintenanceSaving} className="h-9 rounded-lg border border-slate-500/60 px-4 text-sm font-medium text-slate-200 hover:bg-white/10 disabled:opacity-50">取消</button>
+              <button type="submit" disabled={savingGroupId !== null || maintenanceSaving} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 px-4 text-sm font-semibold text-white hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50">{savingGroupId === editingGroup.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}{savingGroupId === editingGroup.id ? '儲存中…' : '儲存設定'}</button>
             </div>
           </form>
         </div>

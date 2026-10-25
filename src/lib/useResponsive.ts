@@ -8,6 +8,10 @@ import {
 const sameValues = <T extends object>(a: T, b: T) =>
   (Object.keys(b) as (keyof T)[]).every(key => Object.is(a[key], b[key]));
 
+// Mobile toolbars collapsing while scrolling change innerHeight every frame; only a bucket change (> 520 is Login's phone-layout cut) may re-render.
+const layoutSignature = (config: ReturnType<typeof getDeviceConfig>) =>
+  [config.width, config.category, config.pixelRatio, config.heightCategory, config.isShortScreen, config.isTallScreen, config.isNotchDevice, config.height > 520].join('|');
+
 /**
  * Hook for responsive design based on real device dimensions
  */
@@ -20,7 +24,7 @@ export function useResponsive() {
     const handleResize = () => {
       const nextConfig = getDeviceConfig();
       const nextAdjustments = needsLayoutAdjustment();
-      setDeviceConfig(prev => (sameValues(prev, nextConfig) ? prev : nextConfig));
+      setDeviceConfig(prev => (layoutSignature(prev) === layoutSignature(nextConfig) ? prev : nextConfig));
       setLayoutAdjustments(prev => (sameValues(prev, nextAdjustments) ? prev : nextAdjustments));
     };
 

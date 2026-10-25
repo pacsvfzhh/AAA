@@ -257,6 +257,8 @@ const es = {
     activeAssignment: 'Asignación Activa',
     activeAssignmentDesc: 'Envíe los detalles del pedido para esta asignación',
     assignmentExpired: 'Esta asignación ha expirado. Regrese a la página de Asignación de Pedidos.',
+    noActiveGroup: 'No tiene un grupo de pedidos activo asignado. Contacte a su administrador.',
+    assignmentAwaiting: 'Hay un pedido pendiente de aceptar. Acéptelo primero en Asignación de Pedidos.',
   },
   orderList: {
     title: 'Historial de pedidos',
@@ -638,6 +640,13 @@ const es = {
   },
   // Login page
   login: {
+    maintenanceTitle: 'Mantenimiento y actualización del sistema',
+    maintenanceSessionMessage: 'Tu equipo está en mantenimiento y actualización del sistema. Tu trabajo se ha detenido y esta sesión ha finalizado. Confirma abajo para cerrar sesión y vuelve a iniciarla cuando termine el mantenimiento.',
+    maintenanceSessionAction: 'Confirmar y cerrar sesión',
+    maintenanceMessage: 'El sistema está en mantenimiento y actualización. La plataforma de trabajo no está disponible temporalmente. Vuelve a iniciar sesión cuando finalice el mantenimiento.',
+    maintenanceContact: 'Si tienes alguna pregunta o necesitas ayuda urgente, contacta directamente con el responsable de tu departamento.',
+    maintenanceAction: 'Volver al inicio de sesión',
+    maintenanceClose: 'Cerrar aviso de mantenimiento',
     employeeWorkPlatform: 'Plataforma de Trabajo',
     welcomeBack: 'Bienvenido',
     signInToAccess: 'Inicia sesión para acceder a tu espacio de trabajo',

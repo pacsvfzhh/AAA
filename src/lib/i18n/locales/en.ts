@@ -270,6 +270,8 @@ const en = {
     activeAssignment: 'Active Assignment',
     activeAssignmentDesc: 'Submit order details for this assignment',
     assignmentExpired: 'This assignment has expired. Please return to Order Assignment.',
+    noActiveGroup: 'No active order group is assigned to you. Please contact your manager.',
+    assignmentAwaiting: 'An order is awaiting your acceptance. Please accept it in Order Assignment first.',
   },
 
   // Order list
@@ -782,6 +784,13 @@ const en = {
 
   // Login page
   login: {
+    maintenanceTitle: 'System maintenance & upgrades',
+    maintenanceSessionMessage: 'Your team is undergoing system maintenance and upgrades. Your work has been stopped and this session has ended. Confirm below to sign out, then sign in again once maintenance is complete.',
+    maintenanceSessionAction: 'Confirm and sign out',
+    maintenanceMessage: 'The system is undergoing maintenance and upgrades. The work platform is temporarily unavailable. Please sign in again once maintenance is complete.',
+    maintenanceContact: 'If you have any questions or need urgent assistance, please contact your department manager directly.',
+    maintenanceAction: 'Back to sign in',
+    maintenanceClose: 'Close maintenance notice',
     employeeWorkPlatform: 'Employee Work Platform',
     welcomeBack: 'Welcome Back',
     signInToAccess: 'Sign in to access your workspace',

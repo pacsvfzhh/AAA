@@ -20,9 +20,10 @@ interface OrderSubmissionProps {
   isActive: boolean;
   adminId?: string | null;
   onNavigateToDispatch?: () => void;
+  onSessionInvalid?: () => void;
 }
 
-export default function OrderSubmission({ employeeId, isActive, adminId: propAdminId, onNavigateToDispatch }: OrderSubmissionProps) {
+export default function OrderSubmission({ employeeId, isActive, adminId: propAdminId, onNavigateToDispatch, onSessionInvalid }: OrderSubmissionProps) {
   const { t } = useLanguage();
   const [adminId, setAdminId] = useState<string | null>(propAdminId || null);
   const currencyUnit = useCurrencyUnit(adminId);
@@ -32,6 +33,7 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedProductType, setSelectedProductType] = useState<ProductType | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const productTypeButtonRef = useRef<HTMLButtonElement>(null);
 
   const [formData, setFormData] = useState({
     userNumber: '',
@@ -292,6 +294,14 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
     setShowDropdown(false);
   };
 
+  const handleProductTypeClear = () => {
+    setSelectedProductType(null);
+    setFormData(prev => ({ ...prev, productTypeId: '' }));
+    setSearchQuery('');
+    setShowDropdown(false);
+    productTypeButtonRef.current?.focus();
+  };
+
   const showValidationError = (message: string) => {
     setValidationMessage(message);
     setShowValidationAlert(true);
@@ -439,7 +449,9 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
       ]);
       if (timingError) throw timingError;
       if (!timing?.available || timing.min_seconds == null || timing.max_seconds == null) {
-        throw new Error(timing?.message || '請先將員工指派至已啟用的訂單分組。');
+        const blockedKey = blockedSubmitKey(timing?.message);
+        if (blockedKey) throw new SubmitBlockedError(blockedKey);
+        throw new Error(timing?.message || 'Submit wait is unavailable.');
       }
       if (timing.assignment_id && timing.assignment_code) {
         submissionAssignment = { id: timing.assignment_id, assignment_id: timing.assignment_code };
@@ -541,9 +553,21 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
           },
         );
         if (markError || !markedSubmitted) {
+          const { data: sessionStatus, error: statusError } = await supabase.rpc('get_employee_maintenance_status', {
+            p_user_id: auth.user.id,
+            p_session_token: auth.financialSessionToken,
+            p_tab_id: auth.tabId,
+          });
+          if (sessionStatus?.maintenance) {
+            animation.cancel();
+            setShowSubmitAnimation(false);
+            onSessionInvalid?.();
+            return;
+          }
+          if (statusError) throw statusError;
           await supabase.from('used_order_data').delete().eq('order_id', orderData.id);
           await supabase.from('orders').delete().eq('id', orderData.id);
-          throw markError || new Error('The dispatch assignment is no longer active.');
+          throw markError || new SubmitBlockedError('assignmentExpired');
         }
       }
 
@@ -582,12 +606,20 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
 
     } catch (error: unknown) {
       console.error('Order submission error:', error);
+      const blocked = error instanceof SubmitBlockedError ? error : null;
       animation?.cancel();
       if (animation) setSubmissionProgress(100);
       setShowSubmitAnimation(false);
       closeConfirmSheet();
+      const rawMessage = error instanceof Error ? error.message : '';
       setResultType('error');
-      setResultMessage(error instanceof Error ? error.message : t.orderSubmission.failedRetry);
+      setResultMessage(
+        blocked
+          ? t.orderSubmission[blocked.key]
+          : /session (has expired|is invalid or expired)/i.test(rawMessage)
+            ? `${t.session.noLongerActive} ${t.session.signInAgain}`
+            : t.orderSubmission.failedRetry,
+      );
       setShowResultModal(true);
     } finally {
       setLoading(false);
@@ -650,17 +682,28 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
             <div className="relative">
               <button
                 type="button"
+                ref={productTypeButtonRef}
                 onClick={() => setShowDropdown(!showDropdown)}
                 aria-expanded={showDropdown}
                 className={`${FIELD_INPUT} flex items-center justify-between text-left ${
                   showDropdown ? '!border-blue-500 shadow-[0_0_0_3px_rgba(37,99,235,0.12)]' : ''
                 } ${selectedProductType ? '!text-blue-700 font-semibold' : '!text-slate-400'}`}
               >
-                <span className="truncate">
+                <span className={`truncate ${selectedProductType ? 'pr-10' : ''}`}>
                   {selectedProductType ? selectedProductType.name : t.orderSubmission.selectProduct}
                 </span>
                 <ChevronDown className={`w-4 h-4 sm:w-5 sm:h-5 text-slate-400 transition-transform duration-300 flex-shrink-0 ${showDropdown ? 'rotate-180 text-blue-600' : ''}`} />
               </button>
+              {selectedProductType && (
+                <button
+                  type="button"
+                  onClick={handleProductTypeClear}
+                  aria-label="Clear product type"
+                  className="absolute right-8 sm:right-10 top-1/2 flex !h-[28px] !w-[28px] !min-h-[28px] !min-w-[28px] -translate-y-1/2 items-center justify-center rounded-full bg-blue-50 !p-0 text-blue-600 transition-colors hover:bg-blue-100 hover:text-blue-700 active:bg-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                >
+                  <X className="h-4 w-4" strokeWidth={2.5} aria-hidden="true" />
+                </button>
+              )}
 
               {showDropdown && (
                 <div
@@ -888,17 +931,17 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                     { label: t.orderSubmission.productNumber, value: formData.orderNumber, mono: true },
                     { label: t.orderSubmission.transactionId, value: formData.transactionId, mono: true },
                   ].map(({ label, value, mono }, index) => (
-                    <div key={label} className={`confirm-field flex min-w-0 flex-col justify-center border-slate-200 py-3 pl-4 pr-3 sm:py-4 sm:pl-7 sm:pr-6 ${index % 2 === 0 ? 'border-r' : ''} ${index >= 2 ? 'border-t' : ''}`}>
+                    <div key={label} className={`confirm-field relative z-10 flex min-w-0 flex-col justify-center border-slate-200 py-3 pl-4 pr-3 sm:py-4 sm:pl-7 sm:pr-6 ${index % 2 === 0 ? 'border-r' : ''} ${index >= 2 ? 'border-t' : ''}`}>
                       <dt className="flex min-w-0 items-center gap-1.5">
                         <span className="flex-shrink-0 rounded bg-[#12356d] px-1 py-px font-mono text-[9px] font-bold leading-tight text-white">{String(index + 1).padStart(2, '0')}</span>
                         <span className="truncate text-[11px] font-semibold text-slate-500 sm:text-[13px]">{label}</span>
                       </dt>
-                      <dd className={`mt-1.5 truncate text-sm font-semibold text-[#12356d] sm:mt-2.5 sm:text-xl ${mono ? 'font-mono tracking-wide' : ''}`}>{value}</dd>
+                      <dd className={`mt-1.5 truncate text-sm font-bold text-[#12356d] sm:mt-2.5 sm:text-xl ${mono ? 'font-mono tracking-wide' : ''}`}>{value}</dd>
                     </div>
                   ))}
                   <span
                     key={confirmPhase === 'idle' ? 'pending' : 'sealed'}
-                    className={`confirm-stamp pointer-events-none absolute bottom-1 right-1 h-16 w-16 mix-blend-multiply sm:bottom-3 sm:right-5 sm:h-28 sm:w-28 ${confirmPhase === 'idle' ? 'text-blue-700/50' : 'is-sealed text-blue-700/80'}`}
+                    className={`confirm-stamp pointer-events-none absolute z-0 bottom-1 right-1 h-32 w-32 mix-blend-multiply sm:bottom-3 sm:right-5 sm:h-56 sm:w-56 ${confirmPhase === 'idle' ? 'text-blue-700/15' : 'is-sealed text-blue-700/25'}`}
                   >
                     <ConfirmStamp
                       ring={t.orderSubmission.stampRing}
@@ -917,9 +960,11 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                 </div>
               </section>
 
-              <aside className="confirm-amount relative order-first flex flex-col justify-between overflow-hidden bg-gradient-to-br from-[#12356d] via-[#1b4b8f] to-blue-600 p-4 text-white sm:px-7 sm:py-5 lg:order-last lg:px-6">
+              <aside className="confirm-amount relative order-first flex flex-col justify-between overflow-hidden bg-gradient-to-br from-[#12356d] via-[#1b4b8f] to-blue-600 px-4 py-3.5 text-white sm:px-7 sm:py-5 lg:order-last lg:justify-center lg:px-6 lg:py-5">
                 <span className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rotate-[18deg] rounded-[30%] bg-white/10" aria-hidden="true" />
-                <svg className="pointer-events-none absolute -bottom-1 right-3 h-14 w-24 text-white/15 sm:h-20 sm:w-36" viewBox="0 0 120 64" fill="none" aria-hidden="true">
+                <span className="pointer-events-none absolute -bottom-10 -left-8 h-28 w-28 -rotate-[18deg] rounded-[30%] bg-white/10" aria-hidden="true" />
+                <span className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-cyan-300/70 via-white/30 to-transparent lg:hidden" aria-hidden="true" />
+                <svg className="pointer-events-none absolute -bottom-1 right-3 h-14 w-24 text-white/15 sm:h-16 sm:w-28 lg:h-20 lg:w-36" viewBox="0 0 120 64" fill="none" aria-hidden="true">
                   <g stroke="currentColor" strokeWidth="1.5">
                     <rect x="4" y="34" width="54" height="26" rx="2" />
                     <rect x="60" y="34" width="54" height="26" rx="2" />
@@ -928,30 +973,24 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
                   </g>
                 </svg>
                 <div className="relative">
-                  <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-100/80 sm:text-[11px]">
-                    <span className="rounded bg-white/15 px-1 py-px font-mono text-[9px] font-bold tracking-normal text-white">05</span>
-                    {t.orderSubmission.totalAmount}
-                  </p>
-                  <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                    <span className="text-[28px] font-semibold leading-none tracking-tight tabular-nums sm:text-4xl">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-2 text-base font-semibold tracking-wide text-blue-50 sm:text-lg">
+                      <span className="rounded bg-white/15 px-1.5 py-px font-mono text-[10px] font-bold tracking-normal text-white">05</span>
+                      {t.orderSubmission.totalAmount}
+                    </p>
+                    {selectedProductType?.name ? (
+                      <span className="max-w-[45%] truncate rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-medium text-blue-100 ring-1 ring-white/20 lg:hidden">{selectedProductType.name}</span>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 flex flex-nowrap items-baseline gap-x-2 lg:mt-3">
+                    <span className="text-[30px] font-semibold leading-none tracking-tight tabular-nums sm:text-4xl">
                       {parseFloat(formData.productValue).toFixed(2)}
                     </span>
-                    <span className="rounded-md bg-white/15 px-2 py-0.5 text-xs font-semibold tracking-wider ring-1 ring-white/20">{currencyUnit}</span>
+                    <span className="text-base font-semibold leading-none tracking-wider text-blue-100 sm:text-xl">{currencyUnit}</span>
                   </div>
-                  <p className="mt-2 hidden truncate text-xs text-blue-100/80 sm:block">{selectedProductType?.name}</p>
+                  <p className="mt-2 hidden truncate text-xs text-blue-100/80 lg:block">{selectedProductType?.name}</p>
                 </div>
-                <ol className="relative my-3 grid grid-cols-4 gap-1 sm:my-5">
-                  {[t.orderSubmission.encrypt, t.orderSubmission.validate, t.orderSubmission.broadcast, t.orderSubmission.confirm].map((label, index) => (
-                    <li key={label} className="relative flex min-w-0 flex-col items-center gap-1.5 text-center">
-                      {index > 0 && <span className="absolute left-[calc(-50%+10px)] right-[calc(50%+10px)] top-[7px] h-px bg-white/25" aria-hidden="true" />}
-                      <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full border border-white/50 bg-[#163f7c]" aria-hidden="true">
-                        <span className="h-1 w-1 rounded-full bg-cyan-300" />
-                      </span>
-                      <span className="w-full truncate text-[10px] font-medium text-blue-100/85 sm:text-[11px]">{label}</span>
-                    </li>
-                  ))}
-                </ol>
-                <div className="relative mt-3 flex items-center gap-3 border-t border-white/15 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-100/90 sm:mt-5 sm:pt-3 sm:text-[11px]">
+                <div className="relative mt-3 flex items-center gap-3 border-t border-white/15 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-100/90 sm:pt-3 sm:text-[11px] lg:mt-5">
                   <span className="inline-flex items-center gap-1.5">
                     <Lock className="h-3 w-3" strokeWidth={2.5} aria-hidden="true" />
                     {t.orderSubmission.encrypted}
@@ -1181,6 +1220,22 @@ export default function OrderSubmission({ employeeId, isActive, adminId: propAdm
       `}</style>
     </div>
   );
+}
+
+type BlockedSubmitKey = 'noActiveGroup' | 'assignmentAwaiting' | 'assignmentExpired';
+
+class SubmitBlockedError extends Error {
+  constructor(readonly key: BlockedSubmitKey) {
+    super(key);
+  }
+}
+
+function blockedSubmitKey(message: unknown): BlockedSubmitKey | null {
+  if (typeof message !== 'string') return null;
+  if (message.includes('awaiting acceptance')) return 'assignmentAwaiting';
+  if (message.includes('No active dispatch group')) return 'noActiveGroup';
+  if (message.includes('no longer available for submission')) return 'assignmentExpired';
+  return null;
 }
 
 type NoticeTone = 'error' | 'warning';
