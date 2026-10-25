@@ -489,7 +489,7 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
                 <section className={editingGroup.role === 'super_admin' ? '' : 'border-t border-slate-500/40 pt-5'}>
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-blue-100"><Pencil className="h-4 w-4" aria-hidden="true" />{editingGroup.role === 'super_admin' ? '超管自己的設定' : '此管理員自己的設定'}</h3>
                   {editingGroup.role !== 'super_admin' && <p className="mt-1 text-xs leading-5 text-blue-200/80">自己的品牌與幣別會保留，切換設定來源也不會刪除。</p>}
-                  <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,2.5fr)_minmax(150px,1fr)]">
+                  <div className="mt-4 grid grid-cols-1 gap-4">
                     <label className="block min-w-0 text-xs font-semibold text-slate-200">品牌名稱
                       <input type="text" value={editValues.company_name} onChange={(event) => setEditValues(current => ({ ...current, company_name: event.target.value }))} required={editingGroup.role === 'super_admin' || editBrandingMode === 'custom'} maxLength={50} disabled={savingGroupId !== null || maintenanceSaving} placeholder="輸入品牌名稱" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-60" />
                     </label>
@@ -501,7 +501,7 @@ export default function AdminGroupConfiguration({ isActive }: { isActive: boolea
 
                 <section className="border-t border-slate-500/40 pt-5">
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-100"><Shield className="h-4 w-4" aria-hidden="true" />超管設定 · 對照</h3>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-[minmax(0,2.5fr)_minmax(150px,1fr)]">
+                  <div className="mt-3 grid grid-cols-1 gap-4">
                     <div className="min-w-0">
                       <p className="text-xs text-amber-100/70">品牌名稱</p>
                       <p className="mt-1 break-words text-sm font-medium text-slate-100">{globalDefaults.company_name || '未設定'}</p>
