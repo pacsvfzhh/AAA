@@ -19,6 +19,7 @@
 2. `prepare_content_audit_change` 取快照与 hash → 把相关图片复制到私有存储桶 `content-audit-evidence` → `commit_content_audit_change` 重新核对 hash、权限与附件清单，写入证据后再修改或移除即时数据。
 3. 公开原图只有在不再被任何内容引用时才删除（`recheck_content_audit_public_media`，每批核对 5 个）。
 - 只接受本项目 Storage 的公开路径（`chat-images`、`template-images`、`announcement-images`、`super-customer-avatars`），拒绝外部 URL 与含 `.`、`..` 的路径。
+- 长通知正文：迁移 `20261103000003_remove_rich_content_length_limits.sql` 仅取消 `notification_edit` 的100000字上限，继续验证非空、标题、操作者、预检hash及媒体清单，完整记录修改前后内容；经用户确认已于2026-10-26（UTC+8）部署正式AAA库，版本 `20261025205517`。富卡 `template_edit`／`auto_edit` 本就没有正文上限，普通文字聊天上限不变，无需修改或部署content-audit Edge Function。
 
 ## 超管永久删除（两段式）
 1. 准备：`prepare_content_audit_delete`（单条或按筛选批量）、`prepare_content_audit_conversation_delete`（整段对话）、`prepare_deleted_employee_archive_delete`、`prepare_unpurged_archived_employee_delete` → 生成确认任务（job），绑定管理员与会话 token hash，并有过期时间。
