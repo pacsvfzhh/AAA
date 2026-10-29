@@ -1,0 +1,958 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>公告媒体文件：复制 / 下载 / 上传</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p.note { color: #94a3b8; font-size: 14px; line-height: 1.6; margin: 8px 0 0; }
+  label { display: block; font-size: 14px; margin: 14px 0 6px; color: #cbd5e1; }
+  input[type=text], input[type=password] { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #f8fafc; font-size: 14px; }
+  input:focus-visible, button:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+  .modes label { margin: 0; display: flex; gap: 8px; align-items: flex-start; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 10px; cursor: pointer; line-height: 1.4; }
+  .modes label:has(input:checked) { border-color: #38bdf8; background: #0c4a6e; }
+  .modes small { display: block; color: #94a3b8; font-size: 12px; }
+  .folder { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .folder span { color: #94a3b8; font-size: 14px; word-break: break-all; }
+  .row { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+  button { padding: 10px 18px; border-radius: 8px; border: 0; font-size: 14px; cursor: pointer; background: #0ea5e9; color: #fff; }
+  button.secondary { background: #334155; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  [hidden] { display: none !important; }
+  .bar { height: 10px; background: #1e293b; border-radius: 999px; overflow: hidden; margin-top: 20px; }
+  .bar > div { height: 100%; width: 0; background: #22c55e; transition: width .2s; }
+  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 12px; font-size: 13px; }
+  .stats div { background: #1e293b; border-radius: 8px; padding: 8px; text-align: center; }
+  .stats b { display: block; font-size: 18px; margin-top: 2px; }
+  #status { margin-top: 16px; font-size: 15px; line-height: 1.6; }
+  #status.ok { color: #4ade80; } #status.err { color: #f87171; }
+  #log { margin-top: 12px; background: #020617; border-radius: 8px; padding: 10px; font: 12px/1.6 ui-monospace, Consolas, monospace; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  @media (max-width: 560px) { .stats, .modes { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>公告媒体文件：复制 / 下载 / 上传</h1>
+  <p class="note">仅处理公告正文引用的图片、视频、封面等文件；不处理聊天、富媒体卡片、通知、头像或其他资料，也不搬运桶内未被公告引用的文件。公告粘贴的其他公开媒体桶链接也会按引用处理。</p>
+  <p class="note">按「存储桶＋文件路径」逐文件处理。同一路径的多个来源会核对实际文件 SHA-256；内容一致才复用或复制，来源缺失／不可读、内容不同或目标内容不同时只阻断该文件，不会猜测或覆盖。04 只接受 03 写入的完整核验凭据。</p>
+  <p class="note">请用电脑版 Chrome 或 Edge 打开。密钥只在本页面内存中使用，不会保存，关闭页面即清除。已经完成的文件会自动跳过，中途停止后重新点开始即可接着做。</p>
+
+  <div class="modes" role="radiogroup" aria-label="选择做什么">
+    <label><input type="radio" name="mode" value="copy" checked><span>直接复制<small>旧项目 → 新项目</small></span></label>
+    <label><input type="radio" name="mode" value="download"><span>下载到电脑<small>项目 → 电脑文件夹</small></span></label>
+    <label><input type="radio" name="mode" value="upload"><span>从电脑上传<small>电脑文件夹 → 新项目</small></span></label>
+  </div>
+  <p class="note" id="modeNote"></p>
+
+  <div id="srcField">
+    <label for="srcUrl" id="srcLabel">旧项目地址</label>
+    <input id="srcUrl" type="text" autocomplete="off" spellcheck="false" placeholder="https://xxxxxxxxxxxxxxxxxxxx.supabase.co">
+  </div>
+
+  <div id="newField">
+    <label for="newUrl">新项目地址</label>
+    <input id="newUrl" type="text" autocomplete="off" spellcheck="false" placeholder="https://xxxxxxxxxxxxxxxxxxxx.supabase.co">
+  </div>
+
+  <div id="sourceKeyField">
+    <label for="sourceKey">旧项目的 service_role 密钥（或 sb_secret_ 开头的 Secret key）</label>
+    <input id="sourceKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴旧项目密钥">
+  </div>
+
+  <label for="key" id="keyLabel">新项目的 service_role 密钥（或 sb_secret_ 开头的 Secret key）</label>
+  <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 service_role 密钥">
+
+  <div id="folderField" hidden>
+    <label>电脑文件夹</label>
+    <div class="folder">
+      <button id="pick" class="secondary" type="button">选择文件夹</button>
+      <span id="folderName">还没有选择</span>
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="start">开始复制</button>
+    <button id="check" class="secondary">只检查，不复制</button>
+    <button id="stop" class="secondary" disabled>停止</button>
+    <button id="report" class="secondary" disabled>下载检查报告</button>
+  </div>
+  <p class="note">只检查时，「待复制／下载／上传」表示尚未完成或还需补迁移凭据，不是操作失败；「检查异常」表示暂时无法确认。存在待处理、异常或中途停止时，先不要运行 04。报告不含密钥，也不会自动忽略问题文件。</p>
+
+  <div class="bar"><div id="bar"></div></div>
+  <div class="stats">
+    <div>文件总数<b id="sTotal">0</b></div>
+    <div id="sPresentLabel">目标已存在<b id="sPresent">0</b></div>
+    <div id="sCopiedLabel">本次已复制<b id="sCopied">0</b></div>
+    <div id="sPendingLabel">待复制<b id="sPending">0</b></div>
+    <div id="sFailLabel">检查异常<b id="sFail">0</b></div>
+    <div>已处理<b id="sSeen">0</b></div>
+  </div>
+  <div id="status" role="status" aria-live="polite"></div>
+  <div id="log" aria-label="运行记录"></div>
+</main>
+
+<script id="core">
+const PROJECT_URL = /^https:\/\/([a-z0-9]{20})\.supabase\.co$/;
+const MANIFEST = 'storage-manifest.json';
+const MANIFEST_FORMAT = 'supabase-storage-backup';
+
+function projectRef(url) {
+  const match = PROJECT_URL.exec(url);
+  return match ? match[1] : null;
+}
+
+function keyProblem(key, ref, label = '新项目') {
+  if (!key) return `请填写${label}的 service_role 密钥。`;
+  if (key.startsWith('sb_publishable_')) return '这是公开密钥（publishable），请改填 service_role 或 sb_secret_ 开头的密钥。';
+  if (key.startsWith('sb_secret_')) return null;
+  const parts = key.split('.');
+  if (parts.length !== 3) return '密钥格式不对，请完整复制 service_role 密钥。';
+  let payload;
+  try {
+    payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(parts[1].length / 4) * 4, '=')));
+  } catch {
+    return '密钥格式不对，请完整复制 service_role 密钥。';
+  }
+  if (payload.role === 'anon') return '这是 anon 公开密钥，请改填 service_role 密钥。';
+  if (payload.role !== 'service_role') return '这不是 service_role 密钥。';
+  if (payload.ref && payload.ref !== ref) return `这个密钥属于项目 ${payload.ref}，不是${label} ${ref}。`;
+  return null;
+}
+
+function encodePath(path) {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
+// Large videos on slow connections need far more than 2 minutes; allow at least ~20 KB/s.
+const transferTimeout = (size) => 120000 + Math.ceil((size || 0) / 20000) * 1000;
+const retryable = (message, retry) => Object.assign(new Error(message), { retry });
+
+function makeClient({ key, fetchImpl = fetch, signal }) {
+  const auth = { apikey: key, Authorization: `Bearer ${key}` };
+  const call = async (url, init = {}, timeoutMs = 120000, read) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const stop = () => controller.abort();
+    signal?.addEventListener('abort', stop);
+    try {
+      const res = await fetchImpl(url, { ...init, signal: controller.signal });
+      return read ? await read(res) : res;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
+    }
+  };
+  const readError = async (res) => {
+    const text = await res.text().catch(() => '');
+    let body;
+    try { body = JSON.parse(text); } catch { body = {}; }
+    if (!body || typeof body !== 'object') body = {};
+    const redact = value => (key ? String(value).split(key).join('[密钥已隐藏]') : String(value)).slice(0, 600);
+    return { status: res.status, code: redact(body.code || body.error || ''), message: redact(body.message || body.error || text || res.statusText) };
+  };
+  const errorText = async (res) => (await readError(res)).message;
+  return { auth, call, errorText, readError };
+}
+
+function objectNotFound(error) {
+  return (error.status === 404 && /^(?:Object )?not found[.!]?$/i.test(error.message))
+    || ([400, 404].includes(error.status)
+      && (error.code === 'NoSuchKey' || (['', 'not_found', 'Not found'].includes(error.code) && /^Object not found[.!]?$/i.test(error.message))));
+}
+
+async function readStorageFile({ file, url, client, timeout, signal, probe = false, label = '来源' }) {
+  const origin = file.sourceUrl ? new URL(file.sourceUrl).origin : url;
+  const objectPath = `${encodeURIComponent(file.bucket)}/${encodePath(file.path)}`;
+  const authenticated = { url: `${url}/storage/v1/object/authenticated/${objectPath}`, headers: client.auth, endpoint: `${label}授权读取` };
+  const publicRead = { url: `${origin}/storage/v1/object/public/${objectPath}`, headers: {}, endpoint: `${label}公开读取` };
+  const candidates = file.sourceUrl
+    ? [publicRead, ...(origin === url ? [authenticated] : [])]
+    : [authenticated, ...(file.bucketPublic === true ? [publicRead] : [])];
+  const diagnostics = [];
+  for (const candidate of candidates) {
+    if (signal?.aborted) throw new Error('已停止。');
+    try {
+      const response = await client.call(candidate.url, { headers: { ...candidate.headers, ...(probe && file.size !== 0 ? { Range: 'bytes=0-0' } : {}) }, redirect: 'error' }, timeout, async res => {
+        if (!res.ok) return { error: await client.readError(res) };
+        if (probe) {
+          const length = res.status === 206 ? (res.headers.get('content-range') || '').split('/')[1] : res.headers.get('content-length');
+          await res.body?.cancel?.().catch(() => {});
+          return { readable: true, size: length == null ? null : Number(length) };
+        }
+        return { blob: await res.blob() };
+      });
+      if (response.readable) return response;
+      if (response.blob) {
+        if (!file.size || response.blob.size === file.size) return response.blob;
+        diagnostics.push({ endpoint: candidate.endpoint, url: candidate.url, status: 200, code: 'SizeMismatch', message: `下载的大小不对：${response.blob.size}，应为 ${file.size}` });
+      } else {
+        diagnostics.push({ endpoint: candidate.endpoint, url: candidate.url, ...response.error });
+      }
+    } catch (error) {
+      if (signal?.aborted) throw new Error('已停止。');
+      diagnostics.push({ endpoint: candidate.endpoint, url: candidate.url, status: null, code: error.name, message: error.name === 'AbortError' ? '请求超时' : '网络读取失败' });
+    }
+  }
+  const missing = diagnostics.every(objectNotFound);
+  const transient = diagnostics.some(error => error.status === null || error.status === 429 || error.status >= 500
+    || ['DatabaseTimeout', 'InternalError', 'SlowDown', 'SizeMismatch'].includes(error.code));
+  const details = diagnostics.map(error => `${error.endpoint} HTTP ${error.status ?? '网络异常'}${error.code ? ` / ${error.code}` : ''}：${error.message}`).join('；');
+  throw Object.assign(retryable(`${label}${missing ? '返回文件不存在（仍需核实权限或备份）' : '文件无法下载，不能判定为文件丢失'}；${details}`, transient), {
+    failureType: `${label === '目标' ? 'target' : 'source'}_${missing ? 'not_found' : 'download_error'}`, objectMissing: missing, diagnostics,
+  });
+}
+
+async function listProject({ client, url, label, signal, onEvent, referencedMedia }) {
+  const { auth, call, errorText } = client;
+  const bucketsRes = await call(`${url}/storage/v1/bucket`, { headers: auth });
+  if (bucketsRes.status === 401 || bucketsRes.status === 403) throw new Error(`${label}拒绝了这个密钥：请确认填的是${label}的 service_role 密钥。`);
+  if (!bucketsRes.ok) throw new Error(`读取${label}存储桶失败（HTTP ${bucketsRes.status}）：${await errorText(bucketsRes)}`);
+  const buckets = (await bucketsRes.json()).filter(b => referencedMedia.some(file => file.bucket === b.id))
+    .map(b => ({ id: b.id, public: b.public })).sort((a, b) => a.id.localeCompare(b.id));
+  const referenced = new Set(referencedMedia.map(file => `${file.bucket}/${file.path}`));
+
+  const files = [];
+  const seen = new Set();
+  const listFolder = async (bucket, prefix) => {
+    for (let offset = 0; ; offset += 100) {
+      if (signal?.aborted) throw new Error('已停止。');
+      const res = await call(`${url}/storage/v1/object/list/${encodeURIComponent(bucket.id)}`, {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefix, limit: 100, offset, sortBy: { column: 'name', order: 'asc' } }),
+      });
+      if (!res.ok) throw new Error(`读取${label}文件清单失败（${bucket.id}，HTTP ${res.status}）：${await errorText(res)}`);
+      const entries = await res.json();
+      onEvent({ type: 'listing', count: files.length, folder: prefix ? `${bucket.id}/${prefix}` : bucket.id, label });
+      for (const entry of entries) {
+        const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (!safeStoragePath(bucket.id) || bucket.id.includes('/') || !safeStoragePath(path)) throw new Error('存储清单包含不安全的文件路径，已停止。');
+        if (!entry.name || seen.has(`${bucket.id}/${path}`)) throw new Error(`读取文件清单时出现重复内容（${bucket.id}/${path}），已停止，请把这条信息发给技术人员。`);
+        seen.add(`${bucket.id}/${path}`);
+        if (entry.id === null || !entry.metadata) {
+          if (referencedMedia.some(file => file.bucket === bucket.id && file.path.startsWith(`${path}/`))) await listFolder(bucket, path);
+        } else if (referenced.has(`${bucket.id}/${path}`)) {
+          const receipt = entry.user_metadata?.storageMigration;
+          const targetVerified = receipt?.target === url
+            && Number(receipt.bytes) === Number(entry.metadata.size)
+            && receipt.version === 3
+            && /^[a-f0-9]{64}$/.test(receipt.sha256 || '');
+          files.push({ bucket: bucket.id, bucketPublic: bucket.public, path, size: Number(entry.metadata.size), mime: entry.metadata.mimetype || 'application/octet-stream', cache: entry.metadata.cacheControl || 'max-age=3600', targetVerified, targetSha256: targetVerified ? receipt.sha256 : null });
+        }
+      }
+      if (entries.length < 100) return;
+    }
+  };
+  for (const bucket of buckets) await listFolder(bucket, '');
+  onEvent({ type: 'listed', total: files.length, bytes: files.reduce((sum, f) => sum + (f.size || 0), 0), buckets: buckets.map(b => b.id), label });
+  return { buckets, files };
+}
+
+async function processFiles({ files, concurrency, signal, onEvent, handle }) {
+  const result = { total: files.length, present: 0, copied: 0, missing: 0, missingFiles: [], failed: [] };
+  let next = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      if (signal?.aborted) return;
+      const file = files[next++];
+      let outcome;
+      try {
+        outcome = await handle(file, async (action) => {
+          for (let attempt = 1; ; attempt += 1) {
+            try { return await action(); }
+            catch (error) {
+              if (signal?.aborted) throw new Error('已停止。');
+              if (error.retry === false || attempt === 3) throw error;
+              await new Promise(r => setTimeout(r, 1000 * attempt));
+            }
+          }
+        });
+      } catch (error) {
+        outcome = 'failed';
+        result.failed.push({ ...file, reason: error.name === 'AbortError' ? (signal?.aborted ? '已停止' : '请求超时') : error.message,
+          failureType: error.failureType || 'transfer_error', diagnostics: error.diagnostics || [] });
+      }
+      if (outcome === 'present') result.present += 1;
+      if (outcome === 'copied') result.copied += 1;
+      if (outcome === 'missing') {
+        result.missing += 1;
+        result.missingFiles.push(file);
+      }
+      onEvent({ type: 'file', outcome, file, result });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, files.length || 1) }, worker));
+  result.stopped = Boolean(signal?.aborted);
+  return result;
+}
+
+async function blobHash(blob) {
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function readVerifiedSourceCopies({ file, origins, url, client, timeout, signal, label = '来源' }) {
+  const candidates = [...new Set([...origins, file.localOrigin].filter(origin => origin && origin !== file.excludeOrigin))];
+  const readable = [];
+  const failures = [];
+  const missing = [];
+  let selected = null;
+  for (const origin of candidates) {
+    const sourceUrl = `${origin}/storage/v1/object/public/${encodeURIComponent(file.bucket)}/${encodePath(file.path)}`;
+    try {
+      const blob = await readStorageFile({ file: { bucket: file.bucket, path: file.path, size: file.sourceSizes?.[origin], sourceUrl }, url, client, timeout, signal, label });
+      const sha256 = await blobHash(blob);
+      readable.push({ origin, sha256 });
+      if (!selected) selected = { origin, blob, sha256 };
+    } catch (error) {
+      if (error.objectMissing) missing.push({ origin, error });
+      else failures.push({ origin, error });
+    }
+  }
+  if (failures.length) {
+    const error = retryable(`${label}文件无法完整核对，拒绝选择来源：${file.bucket}/${file.path}。${failures.map(item => `${item.origin}：${item.error.message}`).join('；')}`, failures.some(item => item.error.retry === true));
+    error.failureType = 'source_download_error';
+    error.diagnostics = failures.flatMap(item => item.error.diagnostics || []);
+    throw error;
+  }
+  if (!readable.length || (missing.length && candidates.length > 1)) {
+    const sources = missing.map(item => item.origin).join('、') || candidates.join('、');
+    const allMissing = readable.length === 0;
+    const error = retryable(`${label}文件来源无法完整核实，仍有来源返回文件不存在：${file.bucket}/${file.path}。${sources}`, false);
+    error.objectMissing = allMissing;
+    error.failureType = allMissing ? 'source_not_found' : 'source_download_error';
+    error.diagnostics = missing.flatMap(item => item.error.diagnostics || []);
+    throw error;
+  }
+  const different = readable.find(copy => copy.sha256 !== selected.sha256);
+  if (different) {
+    const originsInvolved = readable.map(copy => `${copy.origin}（SHA-256 ${copy.sha256}）`).join('；');
+    const refs = (file.sources || []).map(source => `${source.sourceUrl}（公告 ID：${(source.references || []).slice(0, 5).map(reference => reference.rowId).join('、') || '未取得'}）`).join('；');
+    throw Object.assign(retryable(`同一路径的可读取文件内容不同，已停止该文件且未覆盖：${file.bucket}/${file.path}。来源：${originsInvolved}。公告引用：${refs || '未取得'}。`, false), { failureType: 'source_content_conflict' });
+  }
+  return selected;
+}
+
+async function runTransfer({ newUrl, key, checkOnly, getBlob, files, fetchImpl = fetch, concurrency = 4, signal, onEvent = () => {} }) {
+  const client = makeClient({ key, fetchImpl, signal });
+  const { auth, call, errorText } = client;
+
+  const existsInNew = async (file) => {
+    let target;
+    try {
+      target = await readStorageFile({ file: { ...file, sourceUrl: undefined }, url: newUrl, client, timeout: 30000, signal, probe: true, label: '目标' });
+    } catch (error) {
+      if (error.objectMissing === true) return false;
+      throw error;
+    }
+    if (file.requiresReceipt && !file.targetVerified) {
+      const info = await call(`${newUrl}/storage/v1/object/info/${encodeURIComponent(file.bucket)}/${encodePath(file.path)}`, { headers: auth }, 30000);
+      if (info.ok) {
+        const details = await info.json();
+        const receipt = details.metadata?.storageMigration;
+        file.targetVerified = receipt?.target === newUrl && Number(receipt.bytes) === Number(details.size)
+          && receipt.version === 3 && /^[a-f0-9]{64}$/.test(receipt.sha256 || '');
+        file.targetSha256 = file.targetVerified ? receipt.sha256 : null;
+      } else {
+        await info.body?.cancel?.().catch(() => {});
+      }
+    }
+    return true;
+  };
+
+  const uploadOne = async (file, sourceBlob) => {
+    const timeout = transferTimeout(file.size);
+    const blob = sourceBlob || await getBlob(file, client, timeout);
+    file.size = blob.size;
+    const sha256 = file.sha256 || await blobHash(blob);
+    file.sha256 = sha256;
+    const up = await call(`${newUrl}/storage/v1/object/${encodeURIComponent(file.bucket)}/${encodePath(file.path)}`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': file.mime || blob.type || 'application/octet-stream', 'cache-control': file.cache || 'max-age=3600', 'x-upsert': 'true', 'x-metadata': btoa(JSON.stringify({ storageMigration: { target: newUrl, bytes: blob.size, sha256, version: 3 } })) },
+      body: blob,
+    }, timeout);
+    if (!up.ok) {
+      const reason = await errorText(up);
+      throw retryable(`上传到新项目失败（HTTP ${up.status}）：${reason}`, up.status >= 500 || up.status === 429);
+    }
+    file.targetVerified = false;
+    if (!(await existsInNew(file))) throw retryable('上传后核对失败：新项目里仍读不到这个文件', true);
+    const uploaded = await readStorageFile({ file: { ...file, size: undefined, sourceUrl: undefined }, url: newUrl, client, timeout, signal, label: '目标' });
+    if (await blobHash(uploaded) !== sha256) throw retryable('上传后内容哈希核对失败，不能切换链接。', false);
+    if (file.requiresReceipt && (!file.targetVerified || file.targetSha256 !== sha256)) throw retryable('上传后未读回正确的目标迁移凭据，不能切换链接。', false);
+  };
+
+  return processFiles({
+    files, concurrency, signal, onEvent,
+    async handle(file, withRetry) {
+      if (file.backupSourceMismatch) throw Object.assign(retryable('备份文件来源与公告链接来源不一致，拒绝上传；请重新备份正确来源的公告文件。', false), { failureType: 'backup_source_mismatch' });
+      const exists = await withRetry(() => existsInNew(file));
+      file.targetReadable = exists;
+      let sourceBlob;
+      if (exists && !file.requiresReceipt && !file.compareSource) return 'present';
+      if (checkOnly && !exists && !file.verifyOnCheck) return 'missing';
+      if (exists || !checkOnly || file.verifyOnCheck) {
+        try {
+          await withRetry(async () => {
+            sourceBlob = await getBlob(file, client, transferTimeout(file.size));
+            file.sha256 = file.sha256 || await blobHash(sourceBlob);
+            if (exists) {
+              const current = await readStorageFile({ file: { ...file, size: undefined, sourceUrl: undefined }, url: newUrl, client, timeout: transferTimeout(file.size), signal, label: '目标' });
+              if (await blobHash(current) !== file.sha256) throw retryable('目标已有同路径但内容不同的文件，拒绝覆盖；请先确认。', false);
+            }
+          });
+        } catch (error) {
+          throw error;
+        }
+      }
+      if (exists && !file.requiresReceipt) return 'present';
+      if (exists && file.requiresReceipt && file.targetVerified && file.targetSha256 === file.sha256) return 'present';
+      if (checkOnly) return 'missing';
+      await withRetry(() => uploadOne(file, sourceBlob));
+      return 'copied';
+    },
+  });
+}
+
+const PUBLIC_MEDIA_BUCKETS = new Set(['announcement-images', 'template-images', 'chat-images', 'super-customer-avatars', 'verification-documents', 'website-icons']);
+const CONTENT_TABLES = [['announcements', ['content']]];
+
+function safeStoragePath(path) {
+  return typeof path === 'string' && path.length > 0 && !/[\\\x00-\x1f]/.test(path)
+    && path.split('/').every(part => part && part !== '.' && part !== '..');
+}
+
+function extractStorageUrls(text) {
+  const pattern = /https:\/\/[a-z0-9]{20}\.supabase\.co\/storage\/v1\/[^"'<>\\\s]+/gi;
+  const urls = [];
+  for (let match; (match = pattern.exec(text));) {
+    let url = match[0];
+    const before = text.slice(0, match.index).trimEnd();
+    if (/\]\($|\burl\($/i.test(before)) {
+      let depth = 0;
+      for (let i = 0; i < url.length; i += 1) {
+        if (url[i] === '(') depth += 1;
+        if (url[i] === ')') {
+          if (depth === 0) { url = url.slice(0, i); break; }
+          depth -= 1;
+        }
+      }
+    }
+    urls.push(url);
+    pattern.lastIndex = match.index + url.length;
+  }
+  return urls;
+}
+
+function parsePublicMediaUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl.replace(/&amp;/g, '&'));
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || !/^[a-z0-9]{20}\.supabase\.co$/i.test(url.hostname)) return null;
+    const match = url.pathname.match(/^\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
+    if (!match) return null;
+    const bucket = decodeURIComponent(match[1]);
+    const path = match[2].split('/').map(decodeURIComponent).join('/');
+    return PUBLIC_MEDIA_BUCKETS.has(bucket) && safeStoragePath(path)
+      ? { bucket, path, sourceUrl: `${url.origin}${url.pathname}`, bucketPublic: true } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function listContentMediaReferences({ url, client, signal, onEvent }) {
+  const { auth, call, errorText } = client;
+  const files = new Map();
+  for (const [table, columns, cursor = 'id'] of CONTENT_TABLES) {
+    let last = null;
+    while (true) {
+      if (signal?.aborted) throw new Error('已停止。');
+      const query = new URLSearchParams({ select: [cursor, ...columns].join(','), order: `${cursor}.asc`, limit: '500' });
+      if (last) query.set(cursor, `gt.${last}`);
+      const res = await call(`${url}/rest/v1/${table}?${query}`, { headers: auth });
+      if (!res.ok) throw new Error(`读取媒体引用失败（${table}，HTTP ${res.status}）：${await errorText(res)}`);
+      const rows = await res.json();
+      if (!Array.isArray(rows)) throw new Error(`媒体引用返回格式错误：${table}`);
+      if (!rows.length) break;
+      for (const row of rows) {
+        for (const column of columns) {
+          const text = typeof row[column] === 'string' ? row[column] : JSON.stringify(row[column] || '');
+          for (const rawUrl of extractStorageUrls(text)) {
+            if (!/^https:\/\/[^/]+\/storage\/v1\/object\/public\//i.test(rawUrl)) continue;
+            const media = parsePublicMediaUrl(rawUrl);
+            if (!media) throw new Error(`不安全或不支持的 Storage 路径：${table}.${column}`);
+            const id = `${media.bucket}/${media.path}`;
+    const existing = files.get(id) || { bucket: media.bucket, path: media.path, sources: [], referenceCount: 0 };
+    let source = existing.sources.find(item => item.sourceUrl === media.sourceUrl);
+    if (!source) {
+      source = { sourceUrl: media.sourceUrl, references: [], referenceCount: 0 };
+      existing.sources.push(source);
+    }
+    if (source.references.length < 20) source.references.push({ project: url, table, column, rowId: String(row[cursor]) });
+    source.referenceCount += 1;
+    existing.referenceCount += 1;
+    files.set(id, existing);
+          }
+        }
+      }
+      const next = rows.at(-1)[cursor];
+      if (!next || next === last) throw new Error(`读取媒体引用游标没有前进：${table}`);
+      last = next;
+      onEvent({ type: 'listing', count: files.size, folder: `${table} 媒体引用`, label: '项目' });
+    }
+  }
+  return mergeMediaReferences([...files.values()]);
+}
+
+function mergeMediaReferences(...groups) {
+  const merged = new Map();
+  for (const media of groups.flat()) {
+    const id = `${media.bucket}/${media.path}`;
+    const existing = merged.get(id) || { bucket: media.bucket, path: media.path, sources: [], referenceCount: 0 };
+    for (const source of media.sources || []) {
+      let destination = existing.sources.find(item => item.sourceUrl === source.sourceUrl);
+      if (!destination) {
+        destination = { sourceUrl: source.sourceUrl, references: [], referenceCount: 0 };
+        existing.sources.push(destination);
+      }
+      destination.references = [...destination.references, ...(source.references || [])].slice(0, 20);
+      destination.referenceCount += source.referenceCount || 0;
+    }
+    existing.referenceCount += media.referenceCount || 0;
+    merged.set(id, existing);
+  }
+  return [...merged.values()].map(media => ({
+    ...media,
+    sourceUrls: media.sources.map(source => source.sourceUrl),
+    sourceUrl: media.sources[0]?.sourceUrl || null,
+    references: media.sources.flatMap(source => source.references).slice(0, 20),
+  }));
+}
+
+async function runStorageCopy({ oldUrl, sourceKey, ...options }) {
+  const sourceClient = makeClient({ key: sourceKey, fetchImpl: options.fetchImpl, signal: options.signal });
+  const targetClient = makeClient({ key: options.key, fetchImpl: options.fetchImpl, signal: options.signal });
+  const onEvent = options.onEvent || (() => {});
+  const [sourceMedia, targetMedia] = await Promise.all([
+    listContentMediaReferences({ url: oldUrl, client: sourceClient, signal: options.signal, onEvent }),
+    listContentMediaReferences({ url: options.newUrl, client: targetClient, signal: options.signal, onEvent }),
+  ]);
+  const referencedMedia = mergeMediaReferences(sourceMedia, targetMedia);
+  const [source, target] = await Promise.all([
+    listProject({ client: sourceClient, url: oldUrl, label: '旧项目', signal: options.signal, onEvent, referencedMedia }),
+    listProject({ client: targetClient, url: options.newUrl, label: '新项目', signal: options.signal, onEvent, referencedMedia }),
+  ]);
+  const sourceFiles = new Map(source.files.map(file => [`${file.bucket}/${file.path}`, file]));
+  const targetFiles = new Map(target.files.map(file => [`${file.bucket}/${file.path}`, file]));
+  const targetBuckets = new Map(target.buckets.map(bucket => [bucket.id, bucket]));
+  const files = referencedMedia.map(media => {
+    const id = `${media.bucket}/${media.path}`;
+    const sourceFile = sourceFiles.get(id);
+    const targetFile = targetFiles.get(id);
+    const sourceUrls = media.sourceUrls;
+    const sourceOrigins = sourceUrls.map(sourceUrl => new URL(sourceUrl).origin).filter(origin => origin !== options.newUrl);
+    const requiresReceipt = sourceOrigins.length > 0;
+    return {
+      ...media,
+      size: undefined,
+      mime: null,
+      bucketPublic: targetBuckets.get(media.bucket)?.public === true,
+      cache: 'max-age=3600',
+      sourceSizes: { ...(sourceFile ? { [oldUrl]: sourceFile.size } : {}), ...(targetFile ? { [options.newUrl]: targetFile.size } : {}) },
+      sourceMimes: { ...(sourceFile ? { [oldUrl]: sourceFile.mime } : {}), ...(targetFile ? { [options.newUrl]: targetFile.mime } : {}) },
+      sourceCaches: { ...(sourceFile ? { [oldUrl]: sourceFile.cache } : {}), ...(targetFile ? { [options.newUrl]: targetFile.cache } : {}) },
+      targetVerified: targetFile?.targetVerified || false,
+      targetSha256: targetFile?.targetSha256 || null,
+      sourceUrls,
+      sourceUrl: sourceUrls[0] || media.sourceUrl,
+      requiresReceipt,
+      compareSource: new Set(sourceOrigins).size > 1,
+      verifyOnCheck: true,
+    };
+  }).sort((a, b) => `${a.bucket}/${a.path}`.localeCompare(`${b.bucket}/${b.path}`));
+  onEvent({ type: 'listed', total: files.length, bytes: files.reduce((sum, file) => sum + (sourceFiles.get(`${file.bucket}/${file.path}`)?.size || targetFiles.get(`${file.bucket}/${file.path}`)?.size || 0), 0), buckets: [...new Set(files.map(file => file.bucket))], label: '公告媒体清单' });
+
+  return runTransfer({
+    ...options,
+    files,
+    async getBlob(file, _client, timeout) {
+      const verified = await readVerifiedSourceCopies({ file, origins: file.sourceUrls.map(sourceUrl => new URL(sourceUrl).origin).filter(origin => origin !== options.newUrl), url: oldUrl, client: sourceClient, timeout, signal: options.signal });
+      file.sha256 = verified.sha256;
+      file.mime = file.sourceMimes[verified.origin] || verified.blob.type || file.mime;
+      file.cache = file.sourceCaches[verified.origin] || file.cache;
+      return verified.blob;
+    },
+  });
+}
+
+const localPath = file => `files/${file.bucket}/${file.path}`;
+
+async function runStorageUpload({ folder, ...options }) {
+  const manifestFile = await folder.read(MANIFEST);
+  let manifest = null;
+  try { manifest = manifestFile && JSON.parse(await manifestFile.text()); } catch { /* reported below */ }
+  if (manifest?.format !== MANIFEST_FORMAT || ![1, 2].includes(manifest.version)) {
+    throw new Error(`这个文件夹不是用本工具下载的文件备份（找不到 ${MANIFEST}）。请选择当时下载时选的那个文件夹。`);
+  }
+  const client = makeClient({ key: options.key, fetchImpl: options.fetchImpl, signal: options.signal });
+  const onEvent = options.onEvent || (() => {});
+  const targetMedia = await listContentMediaReferences({ url: options.newUrl, client, signal: options.signal, onEvent });
+  const target = await listProject({ client, url: options.newUrl, label: '新项目', signal: options.signal, onEvent, referencedMedia: targetMedia });
+  if (!Array.isArray(manifest.files)) throw new Error('备份清单的文件列表格式不正确。');
+  const backupById = new Map(manifest.files.filter(file => file && typeof file === 'object').map(file => [`${file.bucket}/${file.path}`, file]));
+  const targetById = new Map(target.files.map(file => [`${file.bucket}/${file.path}`, file]));
+  const files = targetMedia.map(reference => {
+    const id = `${reference.bucket}/${reference.path}`;
+    const backup = backupById.get(id);
+    const targetFile = targetById.get(id);
+    const referenceOrigins = reference.sourceUrls.map(sourceUrl => new URL(sourceUrl).origin);
+    const requiresReceipt = referenceOrigins.some(origin => origin !== options.newUrl);
+    const backupSources = backup?.sourceUrls || (backup?.sourceUrl ? [backup.sourceUrl] : []);
+    const backupSourceMatches = backupSources.length
+      ? backupSources.some(sourceUrl => {
+        const backupMedia = parsePublicMediaUrl(sourceUrl);
+        return backupMedia && referenceOrigins.includes(new URL(backupMedia.sourceUrl).origin)
+          && backupMedia.bucket === reference.bucket && backupMedia.path === reference.path;
+      })
+      : referenceOrigins.includes(manifest.project);
+    return { ...targetFile, ...backup, bucket: reference.bucket, path: reference.path, sourceUrl: reference.sourceUrl, sourceUrls: reference.sourceUrls,
+      sources: reference.sources, bucketPublic: true,
+      backupSourceMismatch: Boolean(backup && requiresReceipt && !backupSourceMatches), compareSource: Boolean(backup && targetFile),
+      verifyOnCheck: new Set(referenceOrigins.filter(origin => origin !== options.newUrl)).size > 1,
+      backupVerified: Boolean(backup && (manifest.version === 1 || (backup.downloaded === true && /^[a-f0-9]{64}$/.test(backup.sha256) && Number.isFinite(backup.size)))),
+      targetVerified: targetFile?.targetVerified || false, targetSha256: targetFile?.targetSha256 || null, requiresReceipt,
+      references: reference.references, referenceCount: reference.referenceCount };
+  });
+  onEvent({ type: 'listed', total: files.length, bytes: files.reduce((sum, file) => sum + (file.size || 0), 0), buckets: [...new Set(files.map(file => file.bucket))], label: '公告媒体清单' });
+  const result = await runTransfer({
+    ...options,
+    files,
+    async getBlob(file, _client, timeout) {
+      if (file.backupVerified === false) throw retryable('这份备份没有成功下载该文件，请先重新下载，不能用文件夹里残留的旧文件。', false);
+      const local = await folder.read(localPath(file));
+      if (!local) throw retryable('电脑文件夹里没有这个文件（可能是下载备份之后才上传的）', false);
+      if (file.sha256 && await blobHash(local) !== file.sha256) throw retryable('电脑里的文件内容哈希与备份清单不一致，拒绝上传。', false);
+      const sourceOrigins = file.sourceUrls.map(sourceUrl => new URL(sourceUrl).origin).filter(origin => origin !== options.newUrl);
+      if (new Set(sourceOrigins).size > 1) {
+        const verified = await readVerifiedSourceCopies({ file, origins: sourceOrigins, url: options.newUrl, client, timeout, signal: options.signal, label: '公告引用来源' });
+        if (verified.sha256 !== await blobHash(local)) throw retryable(`备份文件与公告引用来源的实际内容不同，拒绝上传：${file.bucket}/${file.path}。`, false);
+      }
+      return local;
+    },
+  });
+  return { ...result, manifest };
+}
+
+async function runStorageDownload({ url, key, folder, checkOnly, fetchImpl = fetch, concurrency = 4, signal, onEvent = () => {} }) {
+  const client = makeClient({ key, fetchImpl, signal });
+  const referencedMedia = await listContentMediaReferences({ url, client, signal, onEvent });
+  const { buckets, files: storageFiles } = await listProject({ client, url, label: '项目', signal, onEvent, referencedMedia });
+  const filesById = new Map(storageFiles.map(file => [`${file.bucket}/${file.path}`, file]));
+  const files = referencedMedia.map(media => {
+    const storedFile = filesById.get(`${media.bucket}/${media.path}`);
+    const hasLocalSource = media.sourceUrls.some(sourceUrl => new URL(sourceUrl).origin === url);
+    return {
+      ...storedFile,
+      ...media,
+      sourceUrl: media.sourceUrl,
+      sourceUrls: media.sourceUrls,
+      size: hasLocalSource ? storedFile?.size : undefined,
+      localOrigin: hasLocalSource && storedFile ? url : null,
+      sourceSizes: hasLocalSource && storedFile ? { [url]: storedFile.size } : {},
+      sourceMimes: hasLocalSource && storedFile ? { [url]: storedFile.mime } : {},
+      sourceCaches: hasLocalSource && storedFile ? { [url]: storedFile.cache } : {},
+    };
+  });
+  const previousFile = await folder.read(MANIFEST);
+  let previous = null;
+  try { previous = previousFile && JSON.parse(await previousFile.text()); } catch { previous = null; }
+  const previousFiles = new Map((previous?.format === MANIFEST_FORMAT && previous.project === url && Array.isArray(previous.files) ? previous.files : []).map(file => [`${file.bucket}/${file.path}`, file]));
+  onEvent({ type: 'listed', total: files.length, bytes: files.reduce((sum, file) => sum + (file.size || 0), 0), buckets: buckets.map(bucket => bucket.id), label: '公告媒体清单' });
+
+  const result = await processFiles({
+    files, concurrency, signal, onEvent,
+    async handle(file, withRetry) {
+      const local = await folder.read(localPath(file));
+      const prior = previousFiles.get(`${file.bucket}/${file.path}`);
+      const priorSources = prior?.sourceUrls || (prior?.sourceUrl ? [prior.sourceUrl] : []);
+      const sameSource = JSON.stringify(priorSources) === JSON.stringify(file.sourceUrls);
+      const priorValid = local && prior?.downloaded && prior.sha256 && sameSource
+        && local.size === prior.size && await blobHash(local) === prior.sha256;
+      let verified;
+      await withRetry(async () => {
+        verified = await readVerifiedSourceCopies({ file, origins: file.sourceUrls.map(sourceUrl => new URL(sourceUrl).origin), url, client, timeout: transferTimeout(file.size), signal });
+      });
+      if (priorValid && verified.sha256 === prior.sha256) {
+        Object.assign(file, { size: prior.size, mime: prior.mime, sha256: prior.sha256, downloaded: true });
+        return 'present';
+      }
+      if (checkOnly) return 'missing';
+      const blob = verified.blob;
+      file.size = blob.size;
+      file.mime = file.sourceMimes[verified.origin] || blob.type || file.mime || 'application/octet-stream';
+      file.cache = file.sourceCaches[verified.origin] || file.cache;
+      await folder.write(localPath(file), blob);
+      file.sha256 = verified.sha256;
+      file.downloaded = true;
+      return 'copied';
+    },
+  });
+
+  if (!checkOnly) {
+    const manifest = {
+      format: MANIFEST_FORMAT,
+      version: 2,
+      scope: 'announcements',
+      project: url,
+      downloadedAt: new Date().toISOString(),
+      complete: !result.stopped && result.failed.length === 0,
+      buckets,
+      files: files.map(({ bucket, path, size, mime, cache, sourceUrl, sourceUrls, sha256, downloaded }) => ({ bucket, path, size, mime, cache, sourceUrl, sourceUrls, sha256, downloaded: downloaded === true })),
+    };
+    await folder.write(MANIFEST, new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' }));
+  }
+  return result;
+}
+
+function transferLabels(mode, checkOnly) {
+  const action = { copy: '复制', download: '下载', upload: '上传' }[mode];
+  return {
+    action,
+    present: checkOnly
+      ? mode === 'download' ? '电脑已有并核对' : '目标已有并核对'
+      : mode === 'download' ? '电脑中已存在' : '目标已存在',
+    copied: checkOnly ? '本次未执行' : `本次${action}成功`,
+    pending: `待${action}`,
+    issue: checkOnly ? '检查异常' : `${action}失败`,
+  };
+}
+
+function transferReport({ result, mode, source, target, checkOnly }) {
+  return {
+    format: 'supabase-storage-transfer-report', version: 1, checkedAt: new Date().toISOString(),
+    scope: 'announcements', mode, source, target, checkOnly,
+    labels: transferLabels(mode, checkOnly),
+    readyForLinkSwitch: mode !== 'download' && !result.stopped && result.failed.length === 0 && result.missing === 0,
+    summary: { total: result.total, present: result.present, copied: result.copied, missing: result.missing, failed: result.failed.length, stopped: result.stopped },
+    missingFiles: result.missingFiles.map(file => ({ bucket: file.bucket, path: file.path, sourceUrl: file.sourceUrl || null, sourceUrls: file.sourceUrls || [], references: file.references || [], referenceCount: file.referenceCount || 0 })),
+    failures: result.failed.map(file => ({
+      bucket: file.bucket, path: file.path, sourceUrl: file.sourceUrl || null, sourceUrls: file.sourceUrls || [],
+      targetReadable: file.targetReadable ?? null, failureType: file.failureType,
+      reason: file.reason, diagnostics: file.diagnostics, references: file.references || [], referenceCount: file.referenceCount || 0,
+    })),
+    nextStep: '本报告仅针对公告正文引用的文件，不代表其他资料已迁移。公告文件存在待处理、检查异常、操作失败或中途停止时不要运行04；处理后重跑03。请配套使用公告专用版04，运行后查看结果表，再用03复检。即使来源返回不存在，也不能自动加入04缺失白名单。',
+  };
+}
+</script>
+
+<script>
+const $ = id => document.getElementById(id);
+let controller = null;
+let folderHandle = null;
+let lastReport = null;
+
+const MODES = {
+  copy: {
+    note: '每次重新扫描两站公告正文，只核对和复制被公告引用的图片、视频、封面等文件；不复制公告数据库记录，不处理其他内容或未引用文件。请配套使用公告专用版04。',
+    start: '开始复制', check: '只检查，不复制', src: '旧项目地址',
+    key: '新项目的 service_role 密钥（或 sb_secret_ 开头的 Secret key）',
+  },
+  download: {
+    note: '只下载这个项目当前公告正文引用的媒体文件，包含粘贴进公告的跨站公开媒体，并更新公告文件清单；不下载其他资料或公告正文。文件夹里的东西不要改动。',
+    start: '开始下载', check: '只检查，不下载', src: '要下载的项目地址',
+    key: '这个项目的 service_role 密钥（或 sb_secret_ 开头的 Secret key）',
+  },
+  upload: {
+    note: '先同步公告数据库记录，再上传新站当前公告引用且备份清单登记的文件；旧版全站备份里的其他文件、未被公告引用的文件和手动放入的文件都不会上传。',
+    start: '开始上传', check: '只检查，不上传', src: '',
+    key: '新项目的 service_role 密钥（或 sb_secret_ 开头的 Secret key）',
+  },
+};
+const currentMode = () => document.querySelector('input[name=mode]:checked').value;
+
+function applyMode() {
+  const mode = currentMode();
+  const m = MODES[mode];
+  $('modeNote').textContent = m.note;
+  $('start').textContent = m.start;
+  $('check').textContent = m.check;
+  const labels = transferLabels(mode, false);
+  $('sPresentLabel').firstChild.textContent = labels.present;
+  $('sCopiedLabel').firstChild.textContent = labels.copied;
+  $('sPendingLabel').firstChild.textContent = labels.pending;
+  $('sFailLabel').firstChild.textContent = labels.issue;
+  for (const id of ['sTotal', 'sPresent', 'sCopied', 'sPending', 'sFail', 'sSeen']) $(id).textContent = '0';
+  $('log').textContent = '';
+  $('bar').style.width = '0';
+  setStatus('');
+  $('srcLabel').textContent = m.src;
+  $('keyLabel').textContent = m.key;
+  $('sourceKeyField').hidden = mode !== 'copy';
+  $('srcField').hidden = mode === 'upload';
+  $('newField').hidden = mode === 'download';
+  $('folderField').hidden = mode === 'copy';
+  folderHandle = null;
+  lastReport = null;
+  $('report').disabled = true;
+  $('folderName').textContent = '还没有选择';
+}
+
+function browserFolder(root) {
+  const locate = async (path, create) => {
+    const parts = path.split('/');
+    let dir = root;
+    for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part, { create });
+    return dir.getFileHandle(parts.at(-1), { create });
+  };
+  return {
+    async read(path) {
+      try { return await (await locate(path, false)).getFile(); }
+      catch (error) { if (error.name === 'NotFoundError' || error.name === 'TypeMismatchError') return null; throw error; }
+    },
+    async write(path, blob) {
+      const writable = await (await locate(path, true)).createWritable();
+      try { await writable.write(blob); await writable.close(); }
+      catch (error) { await writable.abort().catch(() => {}); throw error; }
+    },
+  };
+}
+
+function log(line) {
+  const el = $('log');
+  el.textContent += line + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(text, kind) {
+  $('status').textContent = text;
+  $('status').className = kind || '';
+}
+
+function mb(bytes) { return (bytes / 1048576).toFixed(1) + ' MB'; }
+const norm = value => value.trim().replace(/\/+$/, '');
+
+async function pickFolder() {
+  if (!window.showDirectoryPicker) return setStatus('当前浏览器不支持选择文件夹，请用电脑版 Chrome 或 Edge 打开本文件。', 'err');
+  try {
+    folderHandle = await window.showDirectoryPicker({ id: 'storage-backup', mode: currentMode() === 'download' ? 'readwrite' : 'read' });
+    $('folderName').textContent = folderHandle.name;
+    setStatus('');
+  } catch (error) {
+    if (error.name !== 'AbortError') setStatus('无法使用这个文件夹：' + error.message, 'err');
+  }
+}
+
+async function start(checkOnly) {
+  const mode = currentMode();
+  const m = MODES[mode];
+  const srcUrl = norm($('srcUrl').value);
+  const newUrl = norm($('newUrl').value);
+  const key = $('key').value.trim();
+  const sourceKey = $('sourceKey').value.trim();
+  const srcRef = projectRef(srcUrl);
+  const newRef = projectRef(newUrl);
+  const badUrl = '项目地址格式不对，应类似 https://xxxxxxxxxxxxxxxxxxxx.supabase.co';
+  if (mode !== 'upload' && !srcRef) return setStatus(badUrl, 'err');
+  if (mode !== 'download' && !newRef) return setStatus(badUrl, 'err');
+  if (mode === 'copy' && srcRef === newRef) return setStatus('旧项目和新项目是同一个地址，请检查。', 'err');
+  const problem = mode === 'download' ? keyProblem(key, srcRef, '这个项目') : keyProblem(key, newRef);
+  if (problem) return setStatus(problem, 'err');
+  if (mode === 'copy') {
+    const sourceProblem = keyProblem(sourceKey, srcRef, '旧项目');
+    if (sourceProblem) return setStatus(sourceProblem, 'err');
+  }
+  if (mode !== 'copy' && !folderHandle) return setStatus('请先点「选择文件夹」。', 'err');
+
+  controller = new AbortController();
+  lastReport = null;
+  $('report').disabled = true;
+  for (const id of ['start', 'check', 'pick']) $(id).disabled = true;
+  for (const el of document.querySelectorAll('input[name=mode]')) el.disabled = true;
+  $('stop').disabled = false;
+  $('log').textContent = '';
+  $('bar').style.width = '0';
+  const labels = transferLabels(mode, checkOnly);
+  $('sPresentLabel').firstChild.textContent = labels.present;
+  $('sCopiedLabel').firstChild.textContent = labels.copied;
+  $('sPendingLabel').firstChild.textContent = labels.pending;
+  $('sFailLabel').firstChild.textContent = labels.issue;
+  for (const id of ['sTotal', 'sPresent', 'sCopied', 'sPending', 'sFail', 'sSeen']) $(id).textContent = '0';
+  setStatus('正在读取文件清单…');
+  window.onbeforeunload = () => '正在处理文件，确定要离开吗？';
+
+  let seen = 0;
+  const onEvent = (event) => {
+    if (event.type === 'listing') {
+      setStatus(`正在读取${event.label}的文件清单…已读取 ${event.count} 个（${event.folder}）`);
+      return;
+    }
+    if (event.type === 'listed') {
+      $('sTotal').textContent = event.total;
+      log(`${event.label}共有 ${event.total} 个文件记录（约 ${mb(event.bytes)}），存储桶：${event.buckets.join('、')}`);
+      setStatus(checkOnly ? '正在逐个检查…' : `正在${m.start.slice(2)}…`);
+      return;
+    }
+    seen += 1;
+    const r = event.result;
+    $('sSeen').textContent = seen;
+    $('sPresent').textContent = r.present;
+    $('sCopied').textContent = r.copied;
+    $('sPending').textContent = r.missing;
+    $('sFail').textContent = r.failed.length;
+    $('bar').style.width = (r.total ? (seen / r.total) * 100 : 100) + '%';
+    if (event.outcome === 'failed') log(`${labels.issue}  ${event.file.bucket}/${event.file.path}  —  ${r.failed[r.failed.length - 1].reason}`);
+    if (event.outcome === 'missing') log(`${labels.pending}  ${event.file.bucket}/${event.file.path}（尚未完成或需补迁移凭据，本次未执行${labels.action}）`);
+  };
+
+  try {
+    const signal = controller.signal;
+    let result;
+    if (mode === 'copy') result = await runStorageCopy({ oldUrl: srcUrl, sourceKey, newUrl, key, checkOnly, signal, onEvent });
+    if (mode === 'download') result = await runStorageDownload({ url: srcUrl, key, folder: browserFolder(folderHandle), checkOnly, signal, onEvent });
+    if (mode === 'upload') {
+      result = await runStorageUpload({ newUrl, key, folder: browserFolder(folderHandle), checkOnly, signal, onEvent });
+      log(`文件备份来自 ${result.manifest.project}，下载时间 ${new Date(result.manifest.downloadedAt).toLocaleString('zh-CN')}${result.manifest.complete ? '' : '（当时下载未全部完成）'}`);
+    }
+    lastReport = transferReport({ result, mode, source: mode === 'upload' ? result.manifest.project : srcUrl, target: mode === 'download' ? null : newUrl, checkOnly });
+    $('report').disabled = false;
+    const action = m.start.slice(2);
+    const where = mode === 'download' ? '电脑文件夹' : '新项目';
+    const summary = checkOnly
+      ? `检查完成：共 ${result.total} 个，${where}已核对 ${result.present} 个，${labels.pending} ${result.missing} 个，检查异常 ${result.failed.length} 个。本次未执行${action}。`
+      : `${action}结束：共 ${result.total} 个，目标原本已存在 ${result.present} 个，本次${action}成功 ${result.copied} 个，${labels.pending} ${result.missing} 个，${labels.issue} ${result.failed.length} 个。`;
+    log(summary);
+    if (result.stopped) setStatus(`已停止。先不要运行 04；重新点击「${m.start}」可继续核对已完成文件。`, 'err');
+    else if (!result.failed.length && !result.missing) setStatus(summary + (mode === 'download' ? ' 文件备份检查通过不代表新项目已完成上传。' : ' 文件核对通过；运行04后还须查看结果表，再用本工具「只检查」复检实际文件。'), 'ok');
+    else setStatus(summary + ` 先不要运行 04 地址切换。请下载检查报告，完成待处理文件或排除异常后重跑；不要把 HTTP 400 直接当成文件已丢失。`, 'err');
+  } catch (error) {
+    setStatus(`${checkOnly ? '检查未完成' : `${labels.action}未完成`}：${error.message} 先不要运行04。`, 'err');
+    log(`${labels.issue}：` + error.message);
+  } finally {
+    window.onbeforeunload = null;
+    for (const id of ['start', 'check', 'pick']) $(id).disabled = false;
+    for (const el of document.querySelectorAll('input[name=mode]')) el.disabled = false;
+    $('stop').disabled = true;
+    controller = null;
+  }
+}
+
+for (const el of document.querySelectorAll('input[name=mode]')) el.addEventListener('change', applyMode);
+$('pick').addEventListener('click', pickFolder);
+$('start').addEventListener('click', () => start(false));
+$('check').addEventListener('click', () => start(true));
+$('stop').addEventListener('click', () => controller?.abort());
+$('report').addEventListener('click', () => {
+  if (!lastReport) return;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(lastReport, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'storage-transfer-report.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+applyMode();
+</script>
+</body>
+</html>
