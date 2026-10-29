@@ -5,6 +5,7 @@ import BlockchainBackground from './components/BlockchainBackground';
 import ErrorBoundary from './components/ErrorBoundary';
 import PhoneLandscapeGuard from './components/PhoneLandscapeGuard';
 import EmployeeBootScreen from './components/employee/EmployeeBootScreen';
+import EmployeeSessionGuard from './components/employee/EmployeeSessionGuard';
 import { LanguageProvider } from './lib/i18n';
 import {
   AUTH_HANDOVER_EVENT,
@@ -41,25 +42,25 @@ function App() {
       document.documentElement.style.setProperty('--vh', `${vh}px`);
     };
     setVH();
-    window.addEventListener('resize', setVH);
-    window.addEventListener('orientationchange', setVH);
-
-    let ticking = false;
-    const handleScroll = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(() => {
-          setVH();
-          ticking = false;
-        });
-        ticking = true;
-      }
+    // Scrolling collapses the mobile toolbar and changes innerHeight; resizing body/#root min-height on each of
+    // those re-lays out the whole page mid-scroll, so only a real width change (rotation, window resize) updates --vh.
+    let lastWidth = window.innerWidth;
+    const handleResize = () => {
+      if (window.innerWidth === lastWidth) return;
+      lastWidth = window.innerWidth;
+      setVH();
     };
-    window.addEventListener('scroll', handleScroll, { passive: true });
+    const handleOrientation = () => {
+      lastWidth = window.innerWidth;
+      setVH();
+      window.setTimeout(setVH, 300);
+    };
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleOrientation);
 
     return () => {
-      window.removeEventListener('resize', setVH);
-      window.removeEventListener('orientationchange', setVH);
-      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleOrientation);
     };
   }, []);
 
@@ -169,12 +170,17 @@ function App() {
   }
 
   if (authState.userType === 'employee') {
+    const employee = authState.user;
     return (
       <LanguageProvider>
         <ErrorBoundary>
-          <Suspense fallback={<EmployeeBootScreen />}>
-            <EmployeeDashboard employee={authState.user} />
-          </Suspense>
+          <EmployeeSessionGuard key={employee.id} employeeId={employee.id}>
+            {onSessionInvalid => (
+              <Suspense fallback={<EmployeeBootScreen />}>
+                <EmployeeDashboard employee={employee} onSessionInvalid={onSessionInvalid} />
+              </Suspense>
+            )}
+          </EmployeeSessionGuard>
         </ErrorBoundary>
       </LanguageProvider>
     );

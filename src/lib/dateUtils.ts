@@ -103,3 +103,12 @@ export function formatTimeUTC(dateStr: string | Date): string {
 export function formatDateTimeUTC(dateStr: string | Date): string {
   return `${formatDateUTC(dateStr)}, ${formatTimeUTC(dateStr)}`;
 }
+
+export function getServerDeadline(dueAt: string, serverNow: string, receivedAt = performance.now()): number {
+  const due = Date.parse(dueAt);
+  const server = Date.parse(serverNow);
+  if (!Number.isFinite(due) || !Number.isFinite(server)) {
+    throw new Error('The dispatch server returned an invalid due time.');
+  }
+  return receivedAt + Math.max(0, due - server);
+}

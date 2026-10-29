@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Shield, Lock, Globe, Package, ClipboardCheck, ArrowRight, AlertTriangle, ShieldAlert, Clock, Info, Check, Eye, EyeOff } from 'lucide-react';
 import {
   AccountLockedError,
+  EmployeeLoginMaintenanceError,
   clearOpenedElsewhereNotice,
   getRememberedUsername,
   hasOpenedElsewhereNotice,
@@ -19,6 +20,7 @@ import { LANGUAGES } from '../lib/i18n/types';
 import { LanguageModal } from '../components/LanguageSwitcher';
 import type { Language } from '../lib/i18n/types';
 import LoginDecorations from '../components/LoginDecorations';
+import EmployeeMaintenanceDialog from '../components/EmployeeMaintenanceDialog';
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -65,13 +67,34 @@ function getLoginErrorKind(error: unknown): LoginErrorKind {
   return 'failed';
 }
 
+const stripWhitespace = (value: string) => value.replace(/[\s\u200B-\u200D\u2060\uFEFF]+/g, '');
+
+interface LoginBranding {
+  title: string;
+  subtitle: string;
+}
+
+const LOGIN_BRANDING_CACHE_KEY = `login_branding:v1:${import.meta.env.VITE_SUPABASE_URL}`;
+
+function readLoginBranding(): LoginBranding | null {
+  try {
+    const cached = JSON.parse(localStorage.getItem(LOGIN_BRANDING_CACHE_KEY) || 'null');
+    return cached && typeof cached.title === 'string' && typeof cached.subtitle === 'string'
+      ? { title: cached.title, subtitle: cached.subtitle }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Login({ onLoginSuccess }: LoginProps) {
-  const [username, setUsername] = useState(getRememberedUsername);
+  const [username, setUsername] = useState(() => stripWhitespace(getRememberedUsername()));
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(() => getRememberedUsername() !== '');
   const [openedElsewhere, setOpenedElsewhere] = useState(hasOpenedElsewhereNotice);
   const [loading, setLoading] = useState(false);
+  const [showMaintenance, setShowMaintenance] = useState(false);
   const [error, setError] = useState<LoginErrorKind | null>(null);
   const [warning, setWarning] = useState<{ attempts?: number } | null>(null);
   const [lockInfo, setLockInfo] = useState<{
@@ -80,14 +103,16 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     lockUntil?: string;
   } | null>(null);
   const [mounted, setMounted] = useState(false);
-  const { companyName } = useCompanyName();
+  const { companyName, loading: companyNameLoading } = useCompanyName();
   const { isMobile, isTablet, width: viewportWidth, height: viewportHeight } = useResponsive();
   // The two-column tablet layout needs at least 660px, unless the screen is a short landscape one.
   const phoneLayout = isMobile || (isTablet && viewportWidth < 660 && viewportHeight > 520);
   const { t, language, setLanguage, dateLocale } = useLanguage();
   const [showLanguageModal, setShowLanguageModal] = useState(false);
-  const [loginTitle, setLoginTitle] = useState('');
-  const [loginSubtitle, setLoginSubtitle] = useState('');
+  const [branding, setBranding] = useState<LoginBranding | null>(readLoginBranding);
+  const loginTitle = branding?.title || (!companyNameLoading ? companyName : '');
+  const loginSubtitle = branding?.subtitle || '';
+  const brandingReady = branding !== null && Boolean(loginTitle);
 
   useEffect(() => {
     setMounted(true);
@@ -96,7 +121,10 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   }, []);
 
   const loadLoginPageSettings = async () => {
-    if (supabaseConfigurationError) return;
+    if (supabaseConfigurationError) {
+      setBranding(previous => previous ?? { title: '', subtitle: '' });
+      return;
+    }
 
     try {
       const { data, error } = await supabase
@@ -106,14 +134,20 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
       if (error) throw error;
 
-      data?.forEach(config => {
-        if (config.key === 'login_title' && config.value) {
-          setLoginTitle(config.value as string);
-        } else if (config.key === 'login_subtitle' && config.value) {
-          setLoginSubtitle(config.value as string);
-        }
-      });
+      const title = data?.find(config => config.key === 'login_title')?.value;
+      const subtitle = data?.find(config => config.key === 'login_subtitle')?.value;
+      const nextBranding = {
+        title: typeof title === 'string' ? title : '',
+        subtitle: typeof subtitle === 'string' ? subtitle : '',
+      };
+      setBranding(nextBranding);
+      try {
+        localStorage.setItem(LOGIN_BRANDING_CACHE_KEY, JSON.stringify(nextBranding));
+      } catch {
+        // Storage restrictions must not prevent the brand from rendering.
+      }
     } catch (error) {
+      setBranding(previous => previous ?? { title: '', subtitle: '' });
       if (!isSupabaseAbortError(error)) {
         console.error('Error loading login page settings:', formatSupabaseError(error));
       }
@@ -160,7 +194,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     e.preventDefault();
     setError(null);
     setOpenedElsewhere(false);
-    const normalizedUsername = username.trim();
+    const normalizedUsername = stripWhitespace(username);
 
     if (supabaseConfigurationError) {
       console.error('[Login]', supabaseConfigurationError);
@@ -204,6 +238,14 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       onLoginSuccess();
     } catch (err) {
       if (isSupabaseAbortError(err)) return;
+
+      if (err instanceof EmployeeLoginMaintenanceError) {
+        setWarning(null);
+        setLockInfo(null);
+        setError(null);
+        setShowMaintenance(true);
+        return;
+      }
 
       if (err instanceof AccountLockedError) {
         const remainingSeconds = err.lockedUntil
@@ -363,12 +405,15 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     );
   };
 
+  const maintenanceDialog = showMaintenance && (
+    <EmployeeMaintenanceDialog onClose={() => setShowMaintenance(false)} />
+  );
+
   // Phone layout (phones and narrow portrait tablets)
   if (phoneLayout) {
     const phoneColumn = 'w-full max-w-[520px] self-center';
     return (
-      <div className="login-page flex flex-col relative overflow-hidden" style={{ background: 'linear-gradient(170deg, #1e40af 0%, #2563eb 25%, #3b82f6 40%, #93c5fd 52%, #dbeafe 58%, #f0f5ff 65%, #f8fafc 80%, #ffffff 100%)' }}>
-        {/* Decorative elements - layered geometric shapes with trade/logistics theme */}
+      <div className="login-page login-phone flex flex-col relative overflow-hidden" style={{ background: 'linear-gradient(170deg, #1e40af 0%, #2563eb 25%, #3b82f6 40%, #93c5fd 52%, #dbeafe 58%, #f0f5ff 65%, #f8fafc 80%, #ffffff 100%)' }}>
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           {/* Large overlapping soft-edge color blocks creating depth */}
           <div className="absolute top-[-5%] right-[-15%] w-[70vw] h-[35vh] rounded-[3rem] bg-gradient-to-bl from-sky-200/[0.12] to-blue-300/[0.05] rotate-[15deg]" />
@@ -376,100 +421,54 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           <div className="absolute top-[30%] right-[-8%] w-[45vw] h-[22vh] rounded-[2rem] bg-gradient-to-l from-blue-100/[0.09] to-transparent rotate-[6deg]" />
           <div className="absolute top-[18%] left-[10%] w-[35vw] h-[18vh] rounded-[2rem] bg-gradient-to-br from-sky-100/[0.08] to-cyan-200/[0.03] rotate-[20deg]" />
 
-          {/* Subtle grid pattern suggesting logistics/trade network */}
-          <svg className="absolute top-[3%] right-[2%] w-[50vw] h-[45vh] opacity-[0.04]" viewBox="0 0 200 200" fill="none" stroke="white" strokeWidth="0.6">
-            <line x1="0" y1="40" x2="200" y2="40" />
-            <line x1="0" y1="80" x2="200" y2="80" />
-            <line x1="0" y1="120" x2="200" y2="120" />
-            <line x1="0" y1="160" x2="200" y2="160" />
-            <line x1="40" y1="0" x2="40" y2="200" />
-            <line x1="80" y1="0" x2="80" y2="200" />
-            <line x1="120" y1="0" x2="120" y2="200" />
-            <line x1="160" y1="0" x2="160" y2="200" />
-          </svg>
-
-          {/* Trade route connecting lines with nodes */}
-          <svg className="absolute top-[5%] left-[5%] w-[90vw] h-[48vh] opacity-100" viewBox="0 0 360 200" fill="none">
-            <path d="M20 160 C80 140 120 60 180 80 C240 100 280 40 340 50" stroke="white" strokeWidth="0.8" strokeOpacity="0.06" strokeDasharray="4 3" />
-            <path d="M40 180 C100 120 160 140 220 100 C280 60 320 80 350 30" stroke="white" strokeWidth="0.6" strokeOpacity="0.05" strokeDasharray="3 4" />
-            <rect x="170" y="72" width="20" height="16" rx="2" fill="white" fillOpacity="0.04" stroke="white" strokeWidth="0.8" strokeOpacity="0.07" />
-            <rect x="174" y="76" width="5" height="4" rx="0.5" fill="white" fillOpacity="0.05" />
-            <rect x="270" y="42" width="16" height="14" rx="2" fill="white" fillOpacity="0.03" stroke="white" strokeWidth="0.8" strokeOpacity="0.06" />
-            <rect x="60" y="148" width="18" height="14" rx="2" fill="white" fillOpacity="0.04" stroke="white" strokeWidth="0.8" strokeOpacity="0.06" />
-            <rect x="64" y="151" width="4" height="4" rx="0.5" fill="white" fillOpacity="0.06" />
-            <rect x="70" y="151" width="4" height="4" rx="0.5" fill="white" fillOpacity="0.06" />
-          </svg>
-
-          {/* Stacked container shapes - representing cargo/trade */}
-          <svg className="absolute top-[8%] right-[6%] w-[22vw] h-[22vw] opacity-100" viewBox="0 0 100 100" fill="none">
-            <rect x="10" y="50" width="80" height="22" rx="3" stroke="white" strokeWidth="1.2" strokeOpacity="0.07" fill="white" fillOpacity="0.02" />
-            <rect x="15" y="30" width="70" height="20" rx="3" stroke="white" strokeWidth="1" strokeOpacity="0.06" fill="white" fillOpacity="0.015" />
-            <rect x="20" y="12" width="60" height="18" rx="3" stroke="white" strokeWidth="0.8" strokeOpacity="0.05" fill="white" fillOpacity="0.01" />
-            <line x1="30" y1="50" x2="30" y2="72" stroke="white" strokeWidth="0.6" strokeOpacity="0.05" />
-            <line x1="50" y1="50" x2="50" y2="72" stroke="white" strokeWidth="0.6" strokeOpacity="0.05" />
-            <line x1="70" y1="50" x2="70" y2="72" stroke="white" strokeWidth="0.6" strokeOpacity="0.05" />
-            <line x1="35" y1="30" x2="35" y2="50" stroke="white" strokeWidth="0.5" strokeOpacity="0.04" />
-            <line x1="65" y1="30" x2="65" y2="50" stroke="white" strokeWidth="0.5" strokeOpacity="0.04" />
-          </svg>
-
-          {/* Abstract wave pattern - ocean/shipping lanes */}
-          <svg className="absolute top-[36%] left-0 w-full h-[12vh] opacity-100" viewBox="0 0 400 60" fill="none" preserveAspectRatio="none">
-            <path d="M0 30 C40 20 80 40 120 30 C160 20 200 40 240 30 C280 20 320 40 360 30 C380 25 400 35 400 30" stroke="white" strokeWidth="1" strokeOpacity="0.05" />
-            <path d="M0 42 C50 32 90 52 140 42 C190 32 230 52 280 42 C330 32 370 52 400 42" stroke="white" strokeWidth="0.8" strokeOpacity="0.04" />
-            <path d="M0 18 C60 10 100 26 150 18 C200 10 250 26 300 18 C350 10 380 26 400 18" stroke="white" strokeWidth="0.6" strokeOpacity="0.03" />
-          </svg>
-
-          {/* Large diamond accent blocks */}
-          <div className="absolute top-[22%] right-[12%] w-[10vw] h-[10vw] bg-white/[0.03] rotate-45 rounded-md" />
-          <div className="absolute top-[40%] left-[8%] w-[8vw] h-[8vw] bg-white/[0.025] rotate-45 rounded-sm" />
         </div>
 
         {/* Vertical spacing grows with screen height and shrinks to small minimums, so short phones fit without scrolling */}
-        <div className={`${phoneColumn} relative z-10 px-6 pt-[max(calc(env(safe-area-inset-top)_+_8px),clamp(16px,6vh,56px))]`}>
+        <div className={`${phoneColumn} login-phone-brand relative z-10 px-6 pt-[max(calc(env(safe-area-inset-top)_+_8px),clamp(16px,6vh,56px))]`}>
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 flex-shrink-0 bg-white/15 rounded-xl flex items-center justify-center border border-white/20">
+            <div className="login-phone-brand-icon w-10 h-10 flex-shrink-0 bg-white/15 rounded-xl flex items-center justify-center border border-white/20">
               <Globe className="w-5 h-5 text-white" />
             </div>
-            <div className="min-w-0">
-              <span className="line-clamp-2 text-[15px] font-bold leading-snug text-white">{loginTitle || companyName}</span>
-              {loginSubtitle && <span className="line-clamp-2 text-[11px] leading-snug text-white/50 low:hidden">{loginSubtitle}</span>}
+            <div className="min-w-0" aria-busy={!brandingReady} style={{ visibility: brandingReady ? 'visible' : 'hidden' }}>
+              <span className="login-phone-brand-name line-clamp-2 text-[15px] font-bold leading-snug text-white">{loginTitle || '\u00a0'}</span>
+              {(!brandingReady || loginSubtitle) && <span className="login-phone-brand-subtitle line-clamp-2 text-[11px] leading-snug text-white/50 low:hidden">{loginSubtitle || '\u00a0'}</span>}
             </div>
           </div>
         </div>
 
-        <div aria-hidden="true" className="min-h-[14px] max-h-[96px] flex-[3_1_0%] low:min-h-[8px]" />
+        <div aria-hidden="true" className="login-phone-brand-gap min-h-[14px] max-h-[96px] flex-[3_1_0%] low:min-h-[8px]" />
 
-        <div className={`${phoneColumn} relative z-10 px-6`}>
-          <h1 className="text-[26px] font-bold text-white leading-tight tracking-tight short:text-[22px] low:text-[20px]">
-            {t.login.employeeWorkPlatform}
+        <div className={`${phoneColumn} login-phone-heading relative z-10 px-6`}>
+          <h1 className="login-hero-title login-hero-title--phone text-[26px] font-bold text-white leading-tight tracking-tight short:text-[22px] low:text-[20px]">
+            <span className="login-hero-title-text">{t.login.employeeWorkPlatform}</span>
           </h1>
         </div>
 
-        <div aria-hidden="true" className="min-h-[16px] flex-[2_1_0%] low:min-h-[10px]" />
+        <div aria-hidden="true" className="login-phone-form-gap min-h-[16px] flex-[2_1_0%] low:min-h-[10px]" />
 
         {/* Login form */}
-        <div className={`${phoneColumn} relative z-10 px-5`}>
+        <div className={`${phoneColumn} login-phone-card-wrap relative z-10 px-5`}>
           {/* The panel sits ~16px from the screen edges, so the shadow is pulled in with negative spread to avoid a clipped gray band at the edges. */}
-          <div className="relative bg-white/95 backdrop-blur-sm rounded-2xl overflow-hidden" style={{ boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.04), 0 16px 28px -20px rgba(30, 64, 175, 0.26)' }}>
+          <div className="login-phone-card relative bg-white/95 backdrop-blur-sm rounded-2xl overflow-hidden" style={{ boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.04), 0 16px 28px -20px rgba(30, 64, 175, 0.26)' }}>
             {/* Panel header */}
-            <div className="flex items-center justify-between gap-3 pb-[10px] pl-6 pr-[14px] pt-[14px] short:pb-[6px] short:pt-[10px]">
+            <div className="login-phone-card-header flex items-center justify-between gap-3 pb-[10px] pl-6 pr-[14px] pt-[14px] short:pb-[6px] short:pt-[10px]">
               <h3 className="min-w-0 text-[15px] font-bold text-slate-800">{t.login.employeeSignIn}</h3>
               {languageToggle}
             </div>
 
-            <div className="px-6 pb-6 short:pb-4">
-            <form onSubmit={handleSubmit} className="space-y-5 short:space-y-3">
+            <div className="login-phone-form-body px-6 pb-6 short:pb-4">
+            <form onSubmit={handleSubmit} className="login-phone-form space-y-5 short:space-y-3">
               {openedElsewhereNotice}
               <div>
                 <label htmlFor="username" className="block text-[12px] font-semibold text-slate-600 mb-2 short:mb-1">
                   {t.login.username}
                 </label>
-                <div className="relative">
+                <div className="login-phone-input-wrap relative">
                   <input
                     id="username"
                     type="text"
                     value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    onChange={(e) => setUsername(stripWhitespace(e.target.value))}
                     autoComplete="username"
                     required
                     className="w-full pl-11 pr-4 py-3.5 short:py-2.5 bg-white border-2 border-slate-100 rounded-xl text-slate-800 placeholder-slate-400 text-[15px] focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all"
@@ -485,7 +484,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                 <label htmlFor="password" className="block text-[12px] font-semibold text-slate-600 mb-2 short:mb-1">
                   {t.login.password}
                 </label>
-                <div className="relative">
+                <div className="login-phone-input-wrap relative">
                   <input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
@@ -533,16 +532,17 @@ export default function Login({ onLoginSuccess }: LoginProps) {
             </div>
           </div>
         </div>
-        <div aria-hidden="true" className="min-h-[12px] flex-[2_1_0%] low:min-h-[8px]" />
+        <div aria-hidden="true" className="login-phone-bottom-gap min-h-[12px] flex-[2_1_0%] low:min-h-[8px]" />
 
         {/* Minimal footer */}
-        <div className="relative z-10 flex items-center justify-center pt-[clamp(6px,1.5vh,16px)] pb-[max(env(safe-area-inset-bottom),clamp(12px,3.5vh,32px))] low:hidden">
+        <div className="login-phone-footer relative z-10 flex items-center justify-center pt-[clamp(6px,1.5vh,16px)] pb-[max(env(safe-area-inset-bottom),clamp(12px,3.5vh,32px))] low:hidden">
           <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
             <Lock className="w-3 h-3" />
             <span>{t.login.securedConnection}</span>
           </div>
         </div>
 
+        {maintenanceDialog}
         {showLanguageModal && (
           <LanguageModal
             currentLanguage={language}
@@ -558,7 +558,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   // Tablet layout
   if (isTablet) {
     return (
-      <div className="login-page flex relative overflow-hidden" style={{ background: 'linear-gradient(160deg, #1e40af 0%, #2563eb 20%, #3b82f6 35%, #60a5fa 45%, #93c5fd 52%, #dbeafe 60%, #f0f9ff 70%, #ffffff 85%)' }}>
+      <div className="login-page login-tablet flex relative overflow-hidden" style={{ background: 'linear-gradient(160deg, #1e40af 0%, #2563eb 20%, #3b82f6 35%, #60a5fa 45%, #93c5fd 52%, #dbeafe 60%, #f0f9ff 70%, #ffffff 85%)' }}>
         {/* Decorative background elements */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           {/* Large layered gradient blocks */}
@@ -566,71 +566,27 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           <div className="absolute top-[20%] right-[-5%] w-[40%] h-[35%] rounded-[3rem] bg-gradient-to-bl from-cyan-100/[0.08] to-transparent -rotate-[6deg]" />
           <div className="absolute bottom-[-5%] left-[5%] w-[45%] h-[30%] rounded-[3rem] bg-gradient-to-tr from-blue-100/[0.07] to-transparent rotate-[8deg]" />
 
-          {/* Trade route network lines */}
-          <svg className="absolute top-0 left-0 w-full h-full opacity-100" viewBox="0 0 800 600" fill="none" preserveAspectRatio="xMidYMid slice">
-            <path d="M50 200 C150 180 250 100 400 120 C550 140 650 80 750 100" stroke="white" strokeWidth="0.8" strokeOpacity="0.05" strokeDasharray="6 4" />
-            <path d="M0 350 C100 320 200 380 350 340 C500 300 600 360 800 320" stroke="white" strokeWidth="0.6" strokeOpacity="0.04" strokeDasharray="4 5" />
-            <path d="M100 500 C250 470 400 520 550 480 C700 440 750 500 800 480" stroke="white" strokeWidth="0.7" strokeOpacity="0.04" strokeDasharray="5 4" />
-            {/* Cargo nodes along routes */}
-            <rect x="380" y="112" width="40" height="18" rx="3" fill="white" fillOpacity="0.03" stroke="white" strokeWidth="0.8" strokeOpacity="0.06" />
-            <rect x="386" y="116" width="8" height="6" rx="1" fill="white" fillOpacity="0.04" />
-            <rect x="396" y="116" width="8" height="6" rx="1" fill="white" fillOpacity="0.04" />
-            <rect x="320" y="332" width="36" height="16" rx="3" fill="white" fillOpacity="0.025" stroke="white" strokeWidth="0.7" strokeOpacity="0.05" />
-            <rect x="600" y="310" width="32" height="14" rx="2" fill="white" fillOpacity="0.02" stroke="white" strokeWidth="0.7" strokeOpacity="0.05" />
-          </svg>
-
-          {/* Subtle grid overlay */}
-          <svg className="absolute top-[5%] right-[5%] w-[35%] h-[40%] opacity-[0.03]" viewBox="0 0 200 200" fill="none" stroke="white" strokeWidth="0.5">
-            <line x1="0" y1="40" x2="200" y2="40" />
-            <line x1="0" y1="80" x2="200" y2="80" />
-            <line x1="0" y1="120" x2="200" y2="120" />
-            <line x1="0" y1="160" x2="200" y2="160" />
-            <line x1="40" y1="0" x2="40" y2="200" />
-            <line x1="80" y1="0" x2="80" y2="200" />
-            <line x1="120" y1="0" x2="120" y2="200" />
-            <line x1="160" y1="0" x2="160" y2="200" />
-          </svg>
-
-          {/* Stacked containers - right side */}
-          <svg className="absolute top-[12%] right-[8%] w-[18%] h-[18%] opacity-100" viewBox="0 0 100 100" fill="none">
-            <rect x="10" y="55" width="80" height="20" rx="3" stroke="white" strokeWidth="1" strokeOpacity="0.06" fill="white" fillOpacity="0.015" />
-            <rect x="15" y="35" width="70" height="20" rx="3" stroke="white" strokeWidth="0.8" strokeOpacity="0.05" fill="white" fillOpacity="0.01" />
-            <rect x="20" y="17" width="60" height="18" rx="3" stroke="white" strokeWidth="0.7" strokeOpacity="0.04" fill="white" fillOpacity="0.008" />
-            <line x1="35" y1="55" x2="35" y2="75" stroke="white" strokeWidth="0.5" strokeOpacity="0.04" />
-            <line x1="55" y1="55" x2="55" y2="75" stroke="white" strokeWidth="0.5" strokeOpacity="0.04" />
-            <line x1="75" y1="55" x2="75" y2="75" stroke="white" strokeWidth="0.5" strokeOpacity="0.04" />
-          </svg>
-
-          {/* Wave pattern - bottom area */}
-          <svg className="absolute bottom-[15%] left-0 w-full h-[10%] opacity-100" viewBox="0 0 800 60" fill="none" preserveAspectRatio="none">
-            <path d="M0 30 C80 18 160 42 240 30 C320 18 400 42 480 30 C560 18 640 42 720 30 C760 24 800 36 800 30" stroke="white" strokeWidth="1" strokeOpacity="0.04" />
-            <path d="M0 45 C100 33 200 55 300 43 C400 31 500 53 600 43 C700 33 750 48 800 43" stroke="white" strokeWidth="0.7" strokeOpacity="0.03" />
-          </svg>
-
-          {/* Diamond accents */}
-          <div className="absolute top-[60%] right-[15%] w-16 h-16 bg-white/[0.02] rotate-45 rounded-md" />
-          <div className="absolute top-[75%] left-[10%] w-12 h-12 bg-white/[0.015] rotate-45 rounded-sm" />
         </div>
 
         {/* Left panel - Branding & info. It may shrink (min-w-0) so the card column always keeps its minimum width; `low:` is the compact landscape-phone version. */}
-        <div className="relative z-10 flex w-[52%] min-w-0 flex-col justify-between py-10 pl-[clamp(24px,4vw,32px)] pr-[clamp(20px,4vw,40px)] short:py-7 low:w-[42%] low:justify-center low:gap-4 low:py-5 low:pl-[max(24px,env(safe-area-inset-left))] low:pr-4">
+        <div className="login-tablet-info relative z-10 flex w-[52%] min-w-0 flex-col justify-between py-10 pl-[clamp(24px,4vw,32px)] pr-[clamp(20px,4vw,40px)] short:py-7 low:w-[42%] low:justify-center low:gap-4 low:py-5 low:pl-[max(24px,env(safe-area-inset-left))] low:pr-4">
           {/* Brand - top left */}
-          <div className={`transition-all duration-1000 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-8'}`}>
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 bg-white/15 backdrop-blur-sm rounded-lg flex items-center justify-center border border-white/20 flex-shrink-0">
+          <div className={`login-tablet-brand transition-all duration-1000 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-8'}`}>
+            <div className="login-tablet-brand-row flex items-center gap-2.5">
+              <div className="login-tablet-brand-icon w-9 h-9 bg-white/15 backdrop-blur-sm rounded-lg flex items-center justify-center border border-white/20 flex-shrink-0">
                 <Globe className="w-4.5 h-4.5 text-white" />
               </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-[13px] font-bold text-white block break-words">{loginTitle || companyName}</span>
-                {loginSubtitle && <p className="text-[10px] text-white/50 mt-0.5 break-words">{loginSubtitle}</p>}
+              <div className="flex-1 min-w-0" aria-busy={!brandingReady} style={{ visibility: brandingReady ? 'visible' : 'hidden' }}>
+                <span className="login-tablet-brand-name text-[13px] font-bold text-white block break-words">{loginTitle || '\u00a0'}</span>
+                {(!brandingReady || loginSubtitle) && <p className="login-tablet-brand-subtitle text-[10px] text-white/50 mt-0.5 break-words">{loginSubtitle || '\u00a0'}</p>}
               </div>
             </div>
           </div>
 
           {/* Center content */}
-          <div className={`transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
-            <h1 className="text-[length:clamp(22px,3.4vw,32px)] min-[800px]:text-[length:clamp(28px,3.75vw,32px)] font-bold text-white leading-tight mb-4 break-words low:mb-2">
-              {t.login.employeeWorkPlatform}
+          <div className={`login-tablet-intro transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
+            <h1 className="login-hero-title login-hero-title--tablet text-[length:clamp(22px,3.4vw,32px)] min-[800px]:text-[length:clamp(28px,3.75vw,32px)] font-bold text-white leading-tight mb-4 break-words low:mb-2">
+              <span className="login-hero-title-text">{t.login.employeeWorkPlatform}</span>
             </h1>
             <p className="text-sm text-white/60 leading-relaxed max-w-[340px] max-[699px]:low:hidden">
               {t.login.description}
@@ -638,7 +594,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           </div>
 
           {/* Status - bottom left */}
-          <div className={`transition-all duration-1000 delay-500 low:hidden ${mounted ? 'opacity-100' : 'opacity-0'}`}>
+          <div className={`login-tablet-status transition-all duration-1000 delay-500 low:hidden ${mounted ? 'opacity-100' : 'opacity-0'}`}>
             {/* The bottom of the left column sits on the light part of the gradient, so the text is slate rather than translucent white */}
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
               <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></div>
@@ -651,8 +607,8 @@ export default function Login({ onLoginSuccess }: LoginProps) {
         </div>
 
         {/* Right panel - Login form */}
-        <div className="relative z-10 flex flex-1 items-center justify-center px-[clamp(20px,4vw,32px)] py-8 short:py-5 low:py-2 low:pl-2 low:pr-[max(16px,env(safe-area-inset-right))]">
-          <div className={`w-full max-w-[400px] min-w-[340px] low:min-w-[296px] transition-all duration-700 delay-200 ${mounted ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
+        <div className="login-tablet-form-panel relative z-10 flex flex-1 items-center justify-center px-[clamp(20px,4vw,32px)] py-8 short:py-5 low:py-2 low:pl-2 low:pr-[max(16px,env(safe-area-inset-right))]">
+          <div className={`login-tablet-card-wrap w-full max-w-[400px] min-w-[340px] low:min-w-[296px] transition-all duration-700 delay-200 ${mounted ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
             <div className="relative bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl shadow-blue-900/10 border border-white/80 overflow-hidden">
               {/* Top accent */}
               <div className="h-1 bg-gradient-to-r from-blue-500 via-sky-400 to-blue-500"></div>
@@ -678,7 +634,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                       id="username"
                       type="text"
                       value={username}
-                      onChange={(e) => setUsername(e.target.value)}
+                      onChange={(e) => setUsername(stripWhitespace(e.target.value))}
                       autoComplete="username"
                       required
                       className="w-full px-4 py-3.5 short:py-3 low:py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 text-[15px] focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all hover:border-slate-300"
@@ -734,7 +690,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
                 {/* Footer */}
                 <div className="mt-8 pt-5 border-t border-slate-100 short:mt-5 short:pt-4 low:hidden">
-                  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-slate-400">
+                  <div className="login-tablet-security flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-slate-400">
                     <div className="flex items-center gap-1.5">
                       <Lock className="w-3.5 h-3.5" />
                       <span>{t.login.encrypted}</span>
@@ -756,6 +712,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           </div>
         </div>
 
+        {maintenanceDialog}
         {showLanguageModal && (
           <LanguageModal
             currentLanguage={language}
@@ -803,15 +760,15 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               <div className="w-11 h-11 bg-gradient-to-br from-blue-600 to-blue-700 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/15">
                 <Globe className="w-5.5 h-5.5 text-white" />
               </div>
-              <div>
-                <h2 className="text-lg font-bold text-slate-800">{loginTitle || companyName}</h2>
-                {loginSubtitle && <p className="text-xs text-slate-500 mt-0.5">{loginSubtitle}</p>}
+              <div aria-busy={!brandingReady} style={{ visibility: brandingReady ? 'visible' : 'hidden' }}>
+                <h2 className="text-lg font-bold text-slate-800">{loginTitle || '\u00a0'}</h2>
+                {(!brandingReady || loginSubtitle) && <p className="text-xs text-slate-500 mt-0.5">{loginSubtitle || '\u00a0'}</p>}
               </div>
             </div>
 
             {/* Headline */}
-            <h1 className="text-4xl xl:text-[44px] font-bold text-slate-800 leading-tight mb-5">
-              {t.login.employeeWorkPlatform}
+            <h1 className="login-hero-title login-hero-title--desktop text-4xl xl:text-[44px] font-bold text-slate-800 leading-tight mb-5">
+              <span className="login-hero-title-text">{t.login.employeeWorkPlatform}</span>
             </h1>
 
             <p className="text-base text-slate-500 leading-relaxed mb-10 max-w-md [@media(max-height:800px)]:mb-7">
@@ -906,7 +863,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                       id="username"
                       type="text"
                       value={username}
-                      onChange={(e) => setUsername(e.target.value)}
+                      onChange={(e) => setUsername(stripWhitespace(e.target.value))}
                       autoComplete="username"
                       required
                       className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all hover:border-slate-300"
@@ -989,6 +946,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
         </div>
       </div>
 
+      {maintenanceDialog}
       {showLanguageModal && (
         <LanguageModal
           currentLanguage={language}

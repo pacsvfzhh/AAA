@@ -1,59 +1,40 @@
 import { useState, useEffect } from 'react';
 import { devicePerformance, DeviceCapabilities, PerformanceConfig } from './devicePerformance';
 
+const readState = () => ({
+  capabilities: devicePerformance.detectCapabilities(),
+  config: devicePerformance.getPerformanceConfig(),
+});
+
 /**
  * React Hook for device-specific optimizations
  *
- * Automatically detects device capabilities and provides optimized settings
+ * Every caller shares one detector. isLowEnd covers weak hardware, Save-Data and a measured frame-rate drop,
+ * so components should gate decorative effects on it rather than on phone / iOS checks.
  */
 export function useDeviceOptimization() {
-  const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
-  const [config, setConfig] = useState<PerformanceConfig | null>(null);
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [{ capabilities, config }, setState] = useState<{ capabilities: DeviceCapabilities; config: PerformanceConfig }>(readState);
 
   useEffect(() => {
-    const detectAndApply = () => {
-      devicePerformance.resetCapabilities();
-      const detectedCapabilities = devicePerformance.detectCapabilities();
-      const performanceConfig = devicePerformance.getPerformanceConfig();
-
-      setCapabilities(detectedCapabilities);
-      setConfig(performanceConfig);
-      setIsInitialized(true);
-
-      devicePerformance.applyCSSOptimizations();
-    };
-
-    detectAndApply();
-
-    // Mobile toolbars collapsing while scrolling fire height-only resizes; the device class can only change with width.
-    let lastWidth = window.innerWidth;
-    const handleResize = () => {
-      if (window.innerWidth === lastWidth) return;
-      lastWidth = window.innerWidth;
-      detectAndApply();
-    };
-
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
-    };
+    const update = () => setState(readState());
+    const unsubscribe = devicePerformance.subscribe(update);
+    devicePerformance.start();
+    update();
+    return unsubscribe;
   }, []);
 
   return {
     capabilities,
     config,
-    isInitialized,
-    isLowEnd: capabilities?.isLowEndDevice || false,
-    isMobile: capabilities?.isMobile || false,
-    isTablet: capabilities?.isTablet || false,
-    deviceType: capabilities?.deviceType || 'desktop',
-    tier: capabilities?.tier || 'mid',
+    isInitialized: true,
+    isLowEnd: capabilities.isLowEndDevice,
+    isMobile: capabilities.isMobile,
+    isTablet: capabilities.isTablet,
+    isIOS: capabilities.isIOS,
+    deviceType: capabilities.deviceType,
+    tier: capabilities.tier,
     deviceName: devicePerformance.getDeviceTierName(),
-    shouldReduceAnimations: (capabilities?.deviceType === 'phone' && capabilities?.tier === 'low') || false
+    shouldReduceAnimations: capabilities.isLowEndDevice
   };
 }
 
@@ -64,11 +45,11 @@ export function useConditionalRender() {
   const { config, isInitialized } = useDeviceOptimization();
 
   return {
-    shouldRenderAnimations: config?.enableAnimations ?? true,
-    shouldRenderParticles: config?.enableParticles ?? false,
-    shouldRenderBlur: config?.enableBlur ?? false,
-    shouldRenderShadows: config?.enableShadows ?? true,
-    shouldRenderGradients: config?.enableGradients ?? true,
+    shouldRenderAnimations: config.enableAnimations,
+    shouldRenderParticles: config.enableParticles,
+    shouldRenderBlur: config.enableBlur,
+    shouldRenderShadows: config.enableShadows,
+    shouldRenderGradients: config.enableGradients,
     isReady: isInitialized
   };
 }
@@ -80,9 +61,9 @@ export function useListOptimization() {
   const { config } = useDeviceOptimization();
 
   return {
-    maxItems: config?.maxListItems ?? 50,
-    lazyLoadThreshold: config?.lazyLoadThreshold ?? 500,
-    debounceDelay: config?.debounceDelay ?? 200
+    maxItems: config.maxListItems,
+    lazyLoadThreshold: config.lazyLoadThreshold,
+    debounceDelay: config.debounceDelay
   };
 }
 
@@ -93,7 +74,7 @@ export function useImageOptimization() {
   const { config } = useDeviceOptimization();
 
   const getImageQuality = () => {
-    switch (config?.imageQuality) {
+    switch (config.imageQuality) {
       case 'high':
         return 0.95;
       case 'medium':
@@ -105,7 +86,7 @@ export function useImageOptimization() {
   };
 
   const getImageMaxWidth = () => {
-    switch (config?.imageQuality) {
+    switch (config.imageQuality) {
       case 'high':
         return 1920;
       case 'medium':

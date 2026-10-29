@@ -45,16 +45,27 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       setTranslations(cached);
       return;
     }
+    let cancelled = false;
     loaders[language]().then((mod) => {
+      if (cancelled) return;
       const loadedTranslations = mod.default as Translations;
       cache.set(language, loadedTranslations);
       setTranslations(loadedTranslations);
+    }).catch(() => {
+      // A failed chunk load (flaky mobile network) keeps the current texts instead of an unhandled rejection.
     });
+    return () => {
+      cancelled = true;
+    };
   }, [language]);
 
   const setLanguage = useCallback((lang: Language) => {
     setLanguageState(lang);
-    localStorage.setItem(STORAGE_KEY, lang);
+    try {
+      localStorage.setItem(STORAGE_KEY, lang);
+    } catch {
+      // The language still applies for this visit when storage is unavailable.
+    }
   }, []);
 
   const dateLocale = dateLocaleMap[language];

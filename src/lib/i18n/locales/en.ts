@@ -29,6 +29,13 @@ const en = {
   },
 
   // Session expired
+  moduleLoadError: {
+    title: 'Unable to load this page',
+    description: 'The site may have been updated, or the connection was interrupted. Refresh to load the latest page.',
+    reload: 'Refresh page',
+    notice: 'Refreshing discards unsaved input. Saved data will not be changed.',
+    support: 'If this continues, check your connection or contact support.',
+  },
   session: {
     expired: 'Session Expired',
     noLongerActive: 'Your login session is no longer valid.',
@@ -119,6 +126,7 @@ const en = {
     noticeFrozen: 'Your funds will be placed on hold during the verification process.',
     noticeContact: 'We will send you further instructions shortly; once received, please contact your department manager.',
     verificationComplete: 'Verification Complete. You are officially on board.',
+    verificationCompleteMobile: 'Verified. You are officially on board.',
     verificationMotivation: 'Results define your success here. High efficiency translates directly to higher earnings through performance bonuses, commissions, and profit-sharing.',
     verificationUnderReview: 'Verification Under Review',
     verificationReviewMsg: 'Your verification application is under review. Please wait patiently for approval.',
@@ -270,6 +278,8 @@ const en = {
     activeAssignment: 'Active Assignment',
     activeAssignmentDesc: 'Submit order details for this assignment',
     assignmentExpired: 'This assignment has expired. Please return to Order Assignment.',
+    noActiveGroup: 'No active order group is assigned to you. Please contact your manager.',
+    assignmentAwaiting: 'An order is awaiting your acceptance. Please accept it in Order Assignment first.',
   },
 
   // Order list
@@ -755,6 +765,20 @@ const en = {
     cancelledByUser: 'Cancelled by user',
   },
 
+  // Media
+  media: {
+    playVideo: 'Play video',
+    loadingVideo: 'Loading video…',
+    videoUnavailable: 'This video cannot be played right now.',
+    openVideo: 'Open original video',
+    pauseVideo: 'Pause video',
+    muteVideo: 'Mute',
+    unmuteVideo: 'Unmute',
+    enterFullscreen: 'Full screen',
+    exitFullscreen: 'Exit full screen',
+    videoProgress: 'Video progress',
+  },
+
   // Common
   common: {
     loading: 'Loading...',
@@ -782,7 +806,16 @@ const en = {
 
   // Login page
   login: {
-    employeeWorkPlatform: 'Employee Work Platform',
+    maintenanceTitle: 'Maintenance',
+    maintenanceSessionMessage: 'The website is under maintenance. Your work has stopped and this session has ended.',
+    maintenanceSessionNextStep: 'Confirm below to sign out, then sign in again once maintenance is complete.',
+    maintenanceSessionAction: 'Confirm and sign out',
+    maintenanceMessage: 'The website is under maintenance.',
+    maintenanceNextStep: 'Please sign in again once maintenance is complete.',
+    maintenanceContact: 'For questions or urgent help, contact your department manager.',
+    maintenanceAction: 'Back to sign in',
+    maintenanceStatus: 'Website under maintenance',
+    employeeWorkPlatform: 'Employee Work Website',
     welcomeBack: 'Welcome Back',
     signInToAccess: 'Sign in to access your workspace',
     employeeSignIn: 'Employee Sign In',

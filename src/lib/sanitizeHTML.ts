@@ -116,7 +116,7 @@ export function sanitizeAnnouncementContent(html: string): string {
   const sanitized = sanitizeHTML(html, {
     allowedTags: [
       'p', 'br', 'div', 'span',
-      'h1', 'h2', 'h3', 'h4',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
       'strong', 'em', 'u', 'b', 'i', 's', 'strike', 'del', 'font',
       'ul', 'ol', 'li',
       'blockquote', 'code', 'pre',
@@ -127,14 +127,12 @@ export function sanitizeAnnouncementContent(html: string): string {
     allowedAttributes: [
       'href', 'src', 'alt', 'title', 'class', 'style',
       'target', 'rel', 'width', 'height', 'size', 'color', 'loading', 'decoding',
-      'controls', 'autoplay', 'loop', 'muted', 'poster', 'preload', 'playsinline',
+      'controls', 'loop', 'muted', 'poster', 'preload', 'playsinline',
       'crossorigin', 'type', 'data-video-processed'
     ]
   });
 
-  // Keep controls so contexts without the custom play-button overlay (e.g. admin preview)
-  // still have a working player. The employee board removes controls at runtime and wraps
-  // each video with its own play button.
+  // Native controls remain available if the enhanced player cannot initialize.
   let processed = sanitized;
 
   processed = processed.replace(/<img(?![^>]*loading=)/gi, '<img loading="lazy"');

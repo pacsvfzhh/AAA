@@ -46,6 +46,7 @@ export interface Employee {
   remarks: string;
   tags: string[];
   is_pinned: boolean;
+  region_id?: string | null;
   automation_plan_id?: string | null;
   automation_plan_name?: string | null;
   current_session_token?: string | null;
