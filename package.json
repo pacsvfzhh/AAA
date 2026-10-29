@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "allowScripts": {
+    "esbuild@0.21.5": true
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,8 +13,16 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "test:audit-cleanup": "node --test supabase/tests/audit-cleanup.test.mjs",
+    "test:employee-regions": "node --test supabase/tests/employee-regions.test.mjs",
+    "test:employee-login-maintenance": "node --test supabase/tests/employee-login-maintenance.test.mjs",
     "test:service-chat": "node --test supabase/tests/service-chat-scale.test.mjs",
-    "test:work-session": "node --test supabase/tests/work-session-stop.test.mjs"
+    "test:work-session": "node --test supabase/tests/work-session-stop.test.mjs",
+    "test:dispatch-timing": "node --test supabase/tests/dispatch-timing.test.mjs supabase/tests/employee-login-maintenance.test.mjs",
+    "test:rich-content": "node --test supabase/tests/rich-content-length.test.mjs",
+    "test:module-recovery": "node --test supabase/tests/module-load-recovery.test.mjs",
+    "test:migration-check": "node --test supabase/tests/migration-check.test.mjs supabase/tests/storage-copy-tool.test.mjs supabase/tests/storage-origin-switch.test.mjs",
+    "test:wallet-deadlock": "node --test --test-concurrency=1 supabase/tests/wallet-reconciliation-deadlock.test.mjs",
+    "test:admin-session": "node --test supabase/tests/admin-session-expiry.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
