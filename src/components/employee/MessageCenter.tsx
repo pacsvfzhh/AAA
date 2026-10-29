@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Bell, Eye, AlertCircle, CheckCircle, Clock, Zap, Shield, Radio, ChevronRight, MailOpen, Sparkles, Gift, Wallet } from 'lucide-react';
+import { X, Bell, Eye, AlertCircle, CheckCircle, Clock, Zap, Shield, Radio, ChevronRight, Sparkles, Gift, Wallet } from 'lucide-react';
 import { formatSupabaseError, isSupabaseTransientError, supabase } from '../../lib/supabase';
 import { getEmployeeFinancialSession } from '../../lib/auth';
 import { Employee, MessageWithRecipient } from '../../types';
@@ -8,6 +8,8 @@ import { useResponsive } from '../../lib/useResponsive';
 import { useLanguage } from '../../lib/i18n/context';
 import QuickCopyRichContent from './QuickCopyRichContent';
 import PageLoader from './PageLoader';
+import PanelColorBlocks from './PanelColorBlocks';
+import { NOTIFICATION_DETAIL_THEMES, getNotificationDetailTone } from './notificationDetailTheme';
 
 interface MessageCenterProps {
   employee: Employee;
@@ -19,6 +21,19 @@ interface MessageCenterProps {
 const getDeliveredMessageType = (message: MessageWithRecipient): 'realtime' | 'login_popup' =>
   message.delivery_channel
     || (message.messages.delivery_mode === 'realtime_only' ? 'realtime' : 'login_popup');
+
+const MESSAGE_PANEL_ANIMATION_MS = 520;
+const MESSAGE_PANEL_ANIMATED_QUERY = '(min-width: 1024px) and (prefers-reduced-motion: no-preference)';
+
+const canScrollInside = (element: Element | null) => {
+  let current = element;
+  while (current && current !== document.body && current !== document.documentElement) {
+    const { overflowY } = getComputedStyle(current);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && current.scrollHeight > current.clientHeight) return true;
+    current = current.parentElement;
+  }
+  return false;
+};
 
 export default function MessageCenter({ employee, initialMessage, onClose, onSessionExpired }: MessageCenterProps) {
   const { t, dateLocale } = useLanguage();
@@ -36,6 +51,29 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
   const { isDesktop } = useResponsive();
   const loadMessagesRef = useRef<(() => Promise<void>) | null>(null);
   const loadRequestIdRef = useRef(0);
+  const [isClosing, setIsClosing] = useState(false);
+  const [panelReady, setPanelReady] = useState(() => !window.matchMedia(MESSAGE_PANEL_ANIMATED_QUERY).matches);
+  const closeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (panelReady) return;
+    const timer = window.setTimeout(() => setPanelReady(true), MESSAGE_PANEL_ANIMATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [panelReady]);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
+  const requestClose = () => {
+    if (isClosing) return;
+    if (!window.matchMedia(MESSAGE_PANEL_ANIMATED_QUERY).matches) {
+      onClose();
+      return;
+    }
+    setIsClosing(true);
+    closeTimerRef.current = window.setTimeout(onClose, MESSAGE_PANEL_ANIMATION_MS);
+  };
 
   useEffect(() => {
     void loadMessagesRef.current?.();
@@ -55,30 +93,35 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
       left: body.style.left,
       right: body.style.right,
       overflow: body.style.overflow,
-      paddingRight: body.style.paddingRight,
     };
 
-    html.style.setProperty('overflow-y', 'hidden', 'important');
     if (root) root.inert = true;
 
     if (isDesktop) {
-      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
-      body.style.overflow = 'hidden';
-      if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`;
-    } else {
-      body.style.position = 'fixed';
-      body.style.top = `-${scrollY}px`;
-      body.style.left = '0';
-      body.style.right = '0';
-      body.style.overflow = 'hidden';
+      // Hiding the page scrollbar would resize the page when the panel opens and again when it closes, so block wheel scrolling instead.
+      const blockWheel = (event: WheelEvent) => {
+        if (!canScrollInside(event.target as Element | null)) event.preventDefault();
+      };
+      window.addEventListener('wheel', blockWheel, { passive: false });
+      return () => {
+        window.removeEventListener('wheel', blockWheel);
+        if (root) root.inert = rootWasInert;
+      };
     }
+
+    html.style.setProperty('overflow-y', 'hidden', 'important');
+    body.style.position = 'fixed';
+    body.style.top = `-${scrollY}px`;
+    body.style.left = '0';
+    body.style.right = '0';
+    body.style.overflow = 'hidden';
 
     return () => {
       Object.assign(body.style, previousStyles);
       if (previousHtmlOverflowY) html.style.setProperty('overflow-y', previousHtmlOverflowY, previousHtmlOverflowYPriority);
       else html.style.removeProperty('overflow-y');
       if (root) root.inert = rootWasInert;
-      if (!isDesktop) window.scrollTo(0, scrollY);
+      window.scrollTo(0, scrollY);
     };
   }, [isDesktop]);
 
@@ -191,11 +234,19 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     }
   };
 
-  const getCardStyle = (priority: string, messageType: string, isUnread: boolean, index: number, isReward: boolean) => {
+  const getUnreadLine = (priority: string, isReward: boolean) => {
+    const [from, to] = isReward ? ['#f59e0b', '#facc15']
+      : priority === 'urgent' ? ['#f43f5e', '#fb7185']
+      : priority === 'high' ? ['#10b981', '#34d399']
+      : ['#2563eb', '#60a5fa'];
+    return `linear-gradient(135deg, ${from} 0%, ${to} 45%, ${to}00 85%)`;
+  };
+
+  const getCardStyle = (priority: string, isUnread: boolean, isReward: boolean) => {
     if (isReward) {
       return isUnread
         ? {
-            card: 'bg-gradient-to-br from-amber-100 via-yellow-50 to-orange-50 ring-2 ring-amber-300 shadow-xl shadow-amber-200/60',
+            card: 'bg-gradient-to-r from-amber-200 via-amber-100 to-orange-50 shadow-xl shadow-amber-200/60',
             iconBg: 'bg-gradient-to-br from-amber-400 via-yellow-400 to-orange-400',
             iconText: 'text-amber-950',
             accent: 'from-amber-500 via-yellow-400 to-orange-400',
@@ -204,7 +255,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
             titleColor: 'text-amber-950',
           }
         : {
-            card: 'bg-gradient-to-br from-amber-50/55 via-yellow-50/45 to-orange-50/40 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
+            card: 'bg-gradient-to-br from-amber-50/70 via-yellow-50/55 to-orange-50/45 ring-1 ring-amber-200/70 shadow-sm shadow-amber-200/30',
             iconBg: 'bg-amber-50',
             iconText: 'text-amber-500',
             accent: 'from-amber-300/70 via-yellow-200/70 to-orange-200/70',
@@ -216,7 +267,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     if (isUnread) {
       if (priority === 'urgent') {
         return {
-          card: 'bg-gradient-to-br from-rose-100 via-rose-50 to-orange-50 ring-2 ring-rose-300 shadow-xl shadow-rose-300/70',
+          card: 'bg-gradient-to-r from-rose-200 via-rose-100 to-orange-50 shadow-xl shadow-rose-300/70',
           iconBg: 'bg-gradient-to-br from-rose-500 to-orange-500',
           iconText: 'text-white',
           accent: 'from-rose-500 via-red-400 to-orange-400',
@@ -227,75 +278,71 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
       }
       if (priority === 'high') {
         return {
-          card: 'bg-gradient-to-br from-amber-100 via-amber-50 to-yellow-50 ring-2 ring-amber-300 shadow-xl shadow-amber-300/70',
-          iconBg: 'bg-gradient-to-br from-amber-500 to-yellow-500',
+          card: 'bg-gradient-to-r from-emerald-200 via-emerald-100 to-green-50 shadow-xl shadow-emerald-300/70',
+          iconBg: 'bg-gradient-to-br from-emerald-500 to-green-500',
           iconText: 'text-white',
-          accent: 'from-amber-500 via-yellow-400 to-orange-300',
-          patternColor: 'border-amber-300',
-          dotColor: 'bg-amber-500',
-          titleColor: 'text-amber-900',
+          accent: 'from-emerald-500 via-green-400 to-teal-300',
+          patternColor: 'border-emerald-300',
+          dotColor: 'bg-emerald-500',
+          titleColor: 'text-emerald-900',
         };
       }
-      if (messageType === 'realtime') {
-        return {
-          card: 'bg-gradient-to-br from-blue-100 via-blue-50 to-sky-50 ring-2 ring-blue-300 shadow-xl shadow-blue-300/70',
-          iconBg: 'bg-gradient-to-br from-blue-500 to-sky-500',
-          iconText: 'text-white',
-          accent: 'from-blue-500 via-sky-400 to-cyan-400',
-          patternColor: 'border-blue-300',
-          dotColor: 'bg-blue-500',
-          titleColor: 'text-blue-900',
-        };
-      }
-      // Login notifications use a distinct cyan treatment.
-      const variants = [
-        {
-          card: 'bg-gradient-to-br from-cyan-100 via-cyan-50 to-sky-50 ring-2 ring-cyan-300 shadow-xl shadow-cyan-300/70',
-          iconBg: 'bg-gradient-to-br from-cyan-500 to-sky-500',
-          iconText: 'text-white',
-          accent: 'from-cyan-500 via-sky-400 to-blue-400',
-          patternColor: 'border-cyan-300',
-          dotColor: 'bg-cyan-500',
-          titleColor: 'text-cyan-950',
-        },
-        {
-          card: 'bg-gradient-to-br from-cyan-100 via-sky-50 to-blue-50 ring-2 ring-cyan-300 shadow-xl shadow-cyan-300/70',
-          iconBg: 'bg-gradient-to-br from-cyan-600 to-blue-500',
-          iconText: 'text-white',
-          accent: 'from-cyan-600 via-sky-400 to-blue-400',
-          patternColor: 'border-cyan-300',
-          dotColor: 'bg-cyan-600',
-          titleColor: 'text-cyan-950',
-        },
-      ];
-      return variants[index % 2];
+      return {
+        card: 'bg-gradient-to-r from-blue-200 via-blue-100 to-sky-50 shadow-xl shadow-blue-300/70',
+        iconBg: 'bg-gradient-to-br from-blue-500 to-sky-500',
+        iconText: 'text-white',
+        accent: 'from-blue-500 via-sky-400 to-cyan-400',
+        patternColor: 'border-blue-300',
+        dotColor: 'bg-blue-500',
+        titleColor: 'text-blue-900',
+      };
     }
 
-    // Read messages retain a softer type-specific color treatment.
-    if (messageType === 'realtime') {
+    // Read messages keep a softer version of the priority color.
+    if (priority === 'urgent') {
       return {
-        card: 'bg-gradient-to-br from-blue-50/55 via-white/85 to-sky-50/45 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
-        iconBg: 'bg-blue-50',
-        iconText: 'text-blue-400',
-        accent: 'from-blue-300/70 via-sky-200/70 to-cyan-200/70',
-        patternColor: 'border-blue-100',
-        dotColor: 'bg-blue-300',
-        titleColor: 'text-blue-700',
+        card: 'bg-gradient-to-br from-rose-50/70 via-white/85 to-orange-50/50 ring-1 ring-rose-200/70 shadow-sm shadow-rose-200/30',
+        iconBg: 'bg-rose-50',
+        iconText: 'text-rose-400',
+        accent: 'from-rose-300/70 via-red-200/70 to-orange-200/70',
+        patternColor: 'border-rose-100',
+        dotColor: 'bg-rose-300',
+        titleColor: 'text-rose-700',
+      };
+    }
+
+    if (priority === 'high') {
+      return {
+        card: 'bg-gradient-to-br from-emerald-50/70 via-white/85 to-green-50/50 ring-1 ring-emerald-200/70 shadow-sm shadow-emerald-200/30',
+        iconBg: 'bg-emerald-50',
+        iconText: 'text-emerald-400',
+        accent: 'from-emerald-300/70 via-green-200/70 to-teal-200/70',
+        patternColor: 'border-emerald-100',
+        dotColor: 'bg-emerald-300',
+        titleColor: 'text-emerald-700',
       };
     }
 
     return {
-      card: 'bg-gradient-to-br from-cyan-50/55 via-white/85 to-sky-50/45 ring-1 ring-slate-200/80 shadow-sm shadow-slate-200/30',
-      iconBg: 'bg-cyan-50',
-      iconText: 'text-cyan-400',
-      accent: 'from-cyan-300/70 via-sky-200/70 to-blue-200/70',
-      patternColor: 'border-cyan-100',
-      dotColor: 'bg-cyan-300',
-      titleColor: 'text-cyan-700',
+      card: 'bg-gradient-to-br from-blue-50/70 via-white/85 to-sky-50/50 ring-1 ring-blue-200/70 shadow-sm shadow-blue-200/30',
+      iconBg: 'bg-blue-50',
+      iconText: 'text-blue-400',
+      accent: 'from-blue-300/70 via-sky-200/70 to-cyan-200/70',
+      patternColor: 'border-blue-100',
+      dotColor: 'bg-blue-300',
+      titleColor: 'text-blue-700',
     };
   };
 
+  const getReadBorder = (priority: string, isReward: boolean) =>
+    isReward ? 'border-amber-200/80'
+      : priority === 'urgent' ? 'border-rose-200/80'
+      : priority === 'high' ? 'border-emerald-200/80'
+      : 'border-blue-200/80';
+
   const unreadCount = unreadMessages.length;
+  const detailTone = selectedMessage ? getNotificationDetailTone(selectedMessage.messages.priority, selectedMessage.messages.notification_category) : 'normal';
+  const detailTheme = NOTIFICATION_DETAIL_THEMES[detailTone];
 
   const sortedMessages = [...messages].sort((a, b) => {
     if (!a.is_read && b.is_read) return -1;
@@ -322,14 +369,20 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
     <>
       {/* Backdrop */}
       <div
-        className="employee-modal-backdrop fixed inset-0 bg-slate-900/50"
-        style={{ touchAction: 'none', overscrollBehavior: 'contain', zIndex: 10000 }}
-        onClick={onClose}
+        className="employee-modal-backdrop message-center-backdrop fixed inset-0 bg-slate-900/50"
+        style={{
+          touchAction: 'none',
+          overscrollBehavior: 'contain',
+          zIndex: 10000,
+          opacity: isClosing ? 0 : 1,
+          transition: `opacity ${MESSAGE_PANEL_ANIMATION_MS}ms ease`,
+        }}
+        onClick={requestClose}
       />
 
       {/* Message Center Panel - full screen on mobile/tablet with solid background */}
       <div
-        className="employee-modal-surface fixed inset-0 lg:inset-auto lg:top-0 lg:right-0 lg:h-full lg:w-full lg:max-w-2xl overflow-hidden flex flex-col"
+        className={`employee-modal-surface message-center-panel ${isClosing ? 'message-center-panel--closing' : ''} fixed inset-0 lg:inset-auto lg:top-0 lg:right-0 lg:h-full lg:w-full lg:max-w-2xl lg:rounded-l-2xl lg:shadow-[-12px_0_32px_-12px_rgba(15,23,42,0.35)] overflow-hidden flex flex-col`}
         style={{ zIndex: 10001 }}
       >
         {/* SOLID opaque background - not transparent */}
@@ -382,7 +435,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
               </div>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={requestClose}
                 className="notification-panel-list-close emp-close-btn emp-close-btn--wrap group flex shrink-0 items-center justify-center rounded-xl text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
                 style={{ WebkitTapHighlightColor: 'transparent' }}
                 aria-label={t.messages.close}
@@ -428,7 +481,9 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
         </div>
 
         {/* Message List */}
-        <div className="relative flex-1 overflow-y-auto overscroll-y-contain">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <PanelColorBlocks />
+          <div className="relative h-full overflow-y-auto overscroll-y-contain">
           <div className="emp-compact-panel flex flex-col gap-4 px-4 lg:px-6 py-4 pb-8">
             {failedReadIds.size > 0 && (
               <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
@@ -436,42 +491,51 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                 <button type="button" onClick={() => failedReadIds.forEach(id => void markAsRead(id))} className="shrink-0 rounded-lg border border-rose-200 bg-white px-2.5 py-1.5">{t.common.retry}</button>
               </div>
             )}
-            {loading ? (
+            {loading || !panelReady ? (
               <PageLoader variant="panel" label={t.messages.loading} className="!min-h-[calc(100dvh-180px)] lg:!min-h-[calc(100dvh-220px)]" />
             ) : messages.length === 0 ? (
-              <div className="flex items-center justify-center py-20">
-                <div className="text-center px-6">
-                  <div className="relative mx-auto mb-6 w-28 h-28">
-                    <div className="absolute inset-0 bg-gradient-to-br from-blue-100 to-cyan-100 rounded-3xl rotate-3 border border-blue-200" />
-                    <div className="absolute inset-0 bg-white rounded-3xl -rotate-1 border border-blue-100 shadow-lg shadow-blue-50 flex items-center justify-center">
-                      <MailOpen className="w-12 h-12 text-blue-300" />
-                    </div>
-                    <div className="absolute -top-2 -right-2 w-9 h-9 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-200">
-                      <CheckCircle className="w-5 h-5 text-white" />
-                    </div>
-                    <div className="absolute -bottom-1 -left-1 w-6 h-6 bg-cyan-100 rounded-lg border border-cyan-200" />
-                  </div>
-                  <p className="text-slate-800 text-lg font-bold mb-1.5">{t.messages.noMessages}</p>
-                  <p className="text-slate-400 text-sm">{t.messages.emptyDesc}</p>
+              <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
+                <div className="relative z-10 mb-5 h-[96px] w-[120px]" aria-hidden="true">
+                  <span className="absolute left-1/2 top-1/2 h-[84px] w-[84px] -translate-x-1/2 -translate-y-1/2 -rotate-6 rounded-[28px] border-2 border-sky-300/40"></span>
+                  <span className="absolute left-1/2 top-1/2 h-[74px] w-[74px] -translate-x-1/2 -translate-y-1/2 rotate-12 rounded-3xl border-2 border-blue-300/50"></span>
+                  <span className="absolute left-1/2 top-1/2 flex h-[64px] w-[64px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[22px] bg-gradient-to-br from-blue-400 via-sky-400 to-cyan-300 shadow-lg shadow-blue-400/20">
+                    <Bell className="h-8 w-8 text-white" strokeWidth={2} />
+                  </span>
                 </div>
+                <p className="relative z-10 text-[14px] font-semibold leading-6 text-blue-900">{t.messages.noMessages}</p>
+                <p className="relative z-10 mt-1 max-w-[250px] text-[13px] leading-5 text-blue-800/60">{t.messages.emptyDesc}</p>
               </div>
             ) : (
-              sortedMessages.map((msg, index) => {
+              <div className="message-list-fade flex flex-col gap-4">
+              {sortedMessages.map((msg) => {
                 const isUnread = !msg.is_read;
                 const isReward = msg.messages.notification_category === 'performance_reward';
                 const deliveredMessageType = getDeliveredMessageType(msg);
-                const style = getCardStyle(msg.messages.priority, deliveredMessageType, isUnread, index, isReward);
+                const style = getCardStyle(msg.messages.priority, isUnread, isReward);
                 return (
                   <div
                     key={msg.id}
                     onClick={() => openMessage(msg)}
-                    className="group relative cursor-pointer msg-force-transition msg-fade-in active:scale-[0.98]"
-                    style={{ animationDelay: `${index * 0.04}s` }}
+                    className="group relative cursor-pointer msg-force-transition active:scale-[0.98]"
                   >
                     {/* Card */}
-                    <div className={`relative rounded-2xl overflow-hidden border msg-force-transition hover:-translate-y-0.5 hover:shadow-xl ${isUnread ? 'border-2 border-white shadow-[0_10px_30px_rgba(37,99,235,0.28)] ring-offset-2 ring-offset-[#f0f5ff] brightness-[1.03]' : 'border-slate-200/85 opacity-[0.86] saturate-[0.8] hover:opacity-100 hover:saturate-100'} ${style.card}`}>
-                      {/* Left accent bar */}
-                      <div className={`absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b ${style.accent} rounded-l-2xl`} />
+                    <div className={`relative rounded-2xl overflow-hidden msg-force-transition hover:-translate-y-0.5 hover:shadow-xl ${isUnread ? 'shadow-[0_10px_30px_rgba(37,99,235,0.28)] brightness-[1.03]' : `border opacity-[0.9] saturate-[0.9] hover:opacity-100 hover:saturate-100 ${getReadBorder(msg.messages.priority, isReward)}`} ${style.card}`}>
+                      {/* Accent: unread cards get a left + top L-shaped gradient line, read cards a thin left bar */}
+                      {isUnread ? (
+                        <div
+                          className="pointer-events-none absolute inset-0 rounded-2xl"
+                          style={{
+                            padding: '3px 0 0 5px',
+                            background: getUnreadLine(msg.messages.priority, isReward),
+                            WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+                            WebkitMaskComposite: 'xor',
+                            mask: 'linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0)',
+                          }}
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <div className={`absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b ${style.accent} rounded-l-2xl`} />
+                      )}
 
                       {/* Decorative pattern blocks */}
                       <div className="absolute top-0 right-0 w-32 h-full overflow-hidden pointer-events-none opacity-[0.07]">
@@ -479,17 +543,6 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                         <div className={`absolute bottom-2 right-8 w-10 h-10 border-2 ${style.patternColor} rounded-lg -rotate-6`} />
                         <div className={`absolute top-1/2 right-2 w-6 h-6 border-2 ${style.patternColor} rounded-full`} />
                       </div>
-
-                      {/* Color accent corner block for unread */}
-                      {isUnread && (
-                        <>
-                          <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-br from-white/25 via-transparent to-transparent" />
-                          <div className={`pointer-events-none absolute inset-0 z-0 bg-gradient-to-br ${style.accent} opacity-[0.24]`} />
-                          <div className="absolute top-0 right-0 z-0 h-20 w-20 overflow-hidden pointer-events-none">
-                            <div className={`absolute -top-10 -right-10 h-20 w-20 bg-gradient-to-bl ${style.accent} opacity-[0.28] rounded-full`} />
-                          </div>
-                        </>
-                      )}
 
                       <div className="relative z-10 py-3 pr-4 pl-5 lg:py-3.5 lg:pr-5 lg:pl-6">
                         <div className="flex items-start gap-3">
@@ -546,7 +599,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                                   msg.messages.priority === 'urgent'
                                     ? 'bg-rose-100 text-rose-700 ring-1 ring-rose-200/80'
                                     : msg.messages.priority === 'high'
-                                      ? 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/80'
+                                      ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/80'
                                       : 'bg-blue-100 text-blue-700 ring-1 ring-blue-200/80'
                                 }`}>
                                   {msg.messages.priority === 'urgent' ? t.messages.priorityUrgent : msg.messages.priority === 'high' ? t.messages.priorityHigh : msg.messages.priority === 'normal' ? t.messages.priorityNormal : t.messages.priorityLow}
@@ -583,8 +636,10 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                     </div>
                   </div>
                 );
-              })
+              })}
+              </div>
             )}
+          </div>
           </div>
         </div>
       </div>
@@ -611,7 +666,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
           >
             {/* Detail Header */}
             <div className="relative flex-shrink-0 overflow-hidden">
-              <div className={`absolute inset-0 bg-gradient-to-br ${selectedMessage.messages.notification_category === 'performance_reward' ? 'from-amber-500 via-yellow-500 to-orange-500' : 'from-blue-600 via-blue-500 to-cyan-500'}`} />
+              <div className={`absolute inset-0 bg-gradient-to-br ${detailTheme.headerGradient}`} />
 
               {/* Decorative elements */}
               <div className="absolute top-0 right-0 w-48 h-48 opacity-[0.06]">
@@ -631,36 +686,36 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   type="button"
                   onClick={() => setSelectedMessage(null)}
                   aria-label={t.messages.close}
-                  className={`notification-panel-list-close emp-close-btn emp-close-btn--wrap group absolute right-2.5 top-2.5 z-10 flex items-center justify-center rounded-xl focus-visible:outline-none focus-visible:ring-2 lg:right-4 lg:top-3 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950 focus-visible:ring-amber-950/35' : 'text-white focus-visible:ring-white/60'}`}
+                  className={`notification-panel-list-close emp-close-btn emp-close-btn--wrap group absolute right-2.5 top-2.5 z-10 flex items-center justify-center rounded-xl focus-visible:outline-none focus-visible:ring-2 lg:right-4 lg:top-3 ${detailTheme.closeOuter}`}
                   style={{
                     WebkitTapHighlightColor: 'transparent',
                     top: !isDesktop ? 'calc(env(safe-area-inset-top, 0px) + 10px)' : undefined,
                   }}
                 >
-                  <span className={`flex h-9 w-9 items-center justify-center rounded-xl backdrop-blur-sm transition-all group-active:scale-95 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'border border-amber-950/20 bg-amber-950/15 group-hover:bg-amber-950/25' : 'border border-white/10 bg-white/15 group-hover:bg-white/25'}`}>
+                  <span className={`flex h-9 w-9 items-center justify-center rounded-xl backdrop-blur-sm transition-all group-active:scale-95 ${detailTheme.closeInner}`}>
                     <X className="h-4 w-4 shrink-0" strokeWidth={2.5} />
                   </span>
                 </button>
 
                 {/* Title section */}
                 <div className="flex items-start gap-2.5 pr-14">
-                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border backdrop-blur-sm sm:h-10 sm:w-10 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'border-amber-950/20 bg-amber-950/15 text-amber-950 shadow-sm shadow-amber-950/10' : 'border-white/20 bg-white/15'}`}>
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border backdrop-blur-sm sm:h-10 sm:w-10 ${detailTheme.iconBox}`}>
                     {selectedMessage.messages.notification_category === 'performance_reward'
                       ? <Gift className="h-5 w-5" strokeWidth={2} />
                       : getPriorityIcon(selectedMessage.messages.priority, 'h-5 w-5 text-white')}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className={`mb-1 break-words text-lg font-bold leading-tight lg:text-xl ${selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950' : 'text-white'}`}>
+                    <h3 className={`mb-1 break-words text-lg font-bold leading-tight lg:text-xl ${detailTheme.titleText}`}>
                       {selectedMessage.messages.title}
                     </h3>
-                    <div className={`flex flex-wrap items-center gap-2 text-sm font-medium ${selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950/75' : 'text-blue-100/90'}`}>
+                    <div className={`flex flex-wrap items-center gap-2 text-sm font-medium ${detailTheme.metaText}`}>
                       <div className="flex items-center gap-1.5">
-                        <Clock className={`h-3.5 w-3.5 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950/70' : 'text-cyan-200'}`} />
+                        <Clock className={`h-3.5 w-3.5 ${detailTheme.clockIcon}`} />
                         <span>
                           {new Date(selectedMessage.messages.created_at || 0).toLocaleDateString(dateLocale, { year: 'numeric', month: 'short', day: 'numeric' })}
                         </span>
                       </div>
-                      <span className={selectedMessage.messages.notification_category === 'performance_reward' ? 'text-amber-950/30' : 'text-white/20'}>|</span>
+                      <span className={detailTheme.metaDivider}>|</span>
                       <span>
                         {new Date(selectedMessage.messages.created_at || 0).toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })}
                       </span>
@@ -670,10 +725,10 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
 
                 {/* Tags */}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 pr-14">
-                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${selectedMessage.messages.notification_category === 'performance_reward' ? 'border-amber-950/25 bg-amber-950/15 text-amber-950' : getDeliveredMessageType(selectedMessage) === 'login_popup' ? 'border-white/20 bg-white/15 text-sky-100' : 'border-white/20 bg-white/15 text-cyan-100'}`}>
+                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${detailTheme.typeTag}`}>
                     {getDeliveredMessageType(selectedMessage) === 'login_popup' ? t.messages.loginNotification : t.messages.liveMessage}
                   </span>
-                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${selectedMessage.messages.notification_category === 'performance_reward' ? 'border-orange-800/25 bg-orange-800/20 text-orange-950' : 'border-white/15 bg-white/15 text-white'}`}>
+                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider ${detailTheme.priorityTag}`}>
                     {selectedMessage.messages.priority === 'urgent' ? t.messages.priorityUrgent : selectedMessage.messages.priority === 'high' ? t.messages.priorityHigh : selectedMessage.messages.priority === 'normal' ? t.messages.priorityNormal : t.messages.priorityLow} {t.messages.priority}
                   </span>
                 </div>
@@ -689,12 +744,13 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
               } as React.CSSProperties}
             >
               {/* Content card */}
-              <div className={`relative flex min-h-0 flex-1 flex-col overflow-hidden ${selectedMessage.messages.notification_category === 'performance_reward' ? 'bg-gradient-to-b from-amber-100 via-orange-50 to-amber-100/75' : 'bg-gradient-to-b from-blue-100/80 via-sky-50 to-blue-100/55'}`}>
+              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" style={{ background: detailTheme.contentGradient }}>
+                <PanelColorBlocks tone={detailTheme.blockTone} />
                 {/* Top accent line */}
-                <div className={`absolute left-6 right-6 top-0 h-[2px] rounded-full bg-gradient-to-r from-transparent to-transparent ${selectedMessage.messages.notification_category === 'performance_reward' ? 'via-amber-400' : 'via-blue-300'}`} />
+                <div className={`absolute left-6 right-6 top-0 z-10 h-[2px] rounded-full bg-gradient-to-r from-transparent to-transparent ${detailTheme.accentLine}`} />
 
-                {selectedMessage.messages.notification_category === 'performance_reward' && (
-                  <div className="shrink-0 border-b border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-4 lg:px-7">
+                {detailTone === 'reward' && (
+                  <div className={`relative ${detailTheme.rewardBannerClass}`}>
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-sm font-black text-amber-800">{t.messages.rewardBonusLabel}</p>
@@ -709,12 +765,12 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                   </div>
                 )}
 
-                <div className={`min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4 lg:p-5 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'reward-notification-scrollbar' : 'scrollbar-thin'}`}>
+                <div className={`relative min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4 lg:p-5 ${detailTheme.scrollbar}`}>
                   <QuickCopyRichContent
                     html={selectedMessage.messages.content}
                     copyLabel={t.messages.quickCopy}
                     copiedLabel={t.messages.copied}
-                    className="prose prose-sm lg:prose-base max-w-none leading-relaxed [&_a]:!text-blue-600 [&_a]:underline [&_img]:!rounded-xl [&_img]:!shadow-md [&_blockquote]:!border-l-blue-400 [&_blockquote]:!bg-blue-50/50 [&_blockquote]:!p-4 [&_blockquote]:!rounded-r-lg [&_h1]:!text-slate-900 [&_h2]:!text-slate-800 [&_h3]:!text-slate-700 [&_p]:!text-slate-700 [&_li]:!text-slate-700 message-content-dark"
+                    className={`notification-detail-prose max-w-none ${detailTheme.prose} [&_a]:underline [&_img]:!rounded-xl [&_img]:!shadow-md [&_blockquote]:!p-4 [&_blockquote]:!rounded-r-lg [&_h1]:!text-slate-900 [&_h2]:!text-slate-800 [&_h3]:!text-slate-700 [&_p]:!text-slate-700 [&_li]:!text-slate-700 message-content-dark`}
                     style={{ wordBreak: 'break-word', overflowWrap: 'break-word', color: '#1e293b' }}
                   />
                 </div>
@@ -722,7 +778,7 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
             </div>
 
             {/* Detail Footer */}
-            <div className="relative flex-shrink-0 bg-white border-t border-blue-100 p-4 lg:p-5">
+            <div className={`relative flex-shrink-0 bg-white border-t p-4 lg:p-5 ${detailTheme.footerBorder}`}>
               {failedReadIds.has(selectedMessage.id) && (
                 <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
                   <span>{t.messages.readSyncFailed}</span>
@@ -743,19 +799,19 @@ export default function MessageCenter({ employee, initialMessage, onClose, onSes
                     </>
                   ) : (
                     <>
-                      <div className="flex items-center justify-center w-9 h-9 bg-blue-50 rounded-xl ring-1 ring-blue-200">
-                        <Sparkles className="w-4 h-4 text-blue-600" />
+                      <div className={`flex items-center justify-center w-9 h-9 rounded-xl ring-1 ${detailTheme.unreadIconBox}`}>
+                        <Sparkles className={`w-4 h-4 ${detailTheme.unreadIcon}`} />
                       </div>
                       <div>
                         <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wide">{t.messages.notification}</p>
-                        <p className="text-sm text-blue-700 font-semibold">{t.messages.markAsRead}</p>
+                        <p className={`text-sm font-semibold ${detailTheme.unreadLabel}`}>{t.messages.markAsRead}</p>
                       </div>
                     </>
                   )}
                 </div>
                 <button
                   onClick={() => setSelectedMessage(null)}
-                  className={`min-h-[44px] px-6 py-2.5 rounded-xl font-semibold text-sm transition-all active:scale-95 ${selectedMessage.messages.notification_category === 'performance_reward' ? 'bg-gradient-to-r from-amber-500 via-yellow-500 to-orange-500 text-amber-950 shadow-lg shadow-amber-500/25 hover:from-amber-600 hover:via-yellow-600 hover:to-orange-600' : 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-lg shadow-blue-500/20 hover:from-blue-700 hover:to-cyan-600'}`}
+                  className={`min-h-[44px] px-6 py-2.5 rounded-xl font-semibold text-sm transition-all active:scale-95 ${detailTheme.footerButton}`}
                 >
                   {t.messages.close}
                 </button>

@@ -30,7 +30,7 @@ import { parse as marked, setOptions } from 'marked';
 import { supabase } from '../../lib/supabase';
 import { getAdminFinancialSessionToken } from '../../lib/auth';
 import { Announcement, Admin } from '../../types';
-import { sanitizeAnnouncementContent } from '../../lib/sanitizeHTML';
+import RichMediaContent from '../RichMediaContent';
 import { processContentImages } from '../../lib/imageOptimizer';
 import { cleanupContentImages } from '../../lib/storageCleanup';
 import AnnouncementDetailModal from '../AnnouncementDetailModal';
@@ -67,7 +67,6 @@ type AnnouncementInsert = AnnouncementUpdate & Pick<Announcement, 'created_by'>;
 type StatusFilter = 'all' | 'pinned' | 'hidden' | 'global';
 type WorkspaceMode = 'preview' | 'edit';
 type EditorMode = 'create' | 'edit';
-const MAX_ANNOUNCEMENT_CONTENT_BYTES = 500 * 1024;
 
 const emptyDraft = (): AnnouncementDraft => ({
   title: '',
@@ -494,10 +493,6 @@ export default function AnnouncementManagement({ admin }: AnnouncementManagement
     try {
       const rawContent = editorRef.current?.getContent() || draft.content;
       const editorContent = await processContentImages(rawContent, 'announcements');
-      const contentSize = new Blob([editorContent]).size;
-      if (contentSize > MAX_ANNOUNCEMENT_CONTENT_BYTES) {
-        throw new Error('公告正文资料超过 500KB，请减少内嵌内容或重新上传过大的媒体');
-      }
       const publishAtUtc = parseLocalDateTime(draft.publishAt).toISOString();
       let savedAnnouncementId = editingId;
 
@@ -1151,9 +1146,9 @@ export default function AnnouncementManagement({ admin }: AnnouncementManagement
               </div>
               <div className="dark-panel-scroll min-h-0 flex-1 overflow-y-auto bg-white">
                 <article className="min-h-full w-full bg-white p-5 text-slate-800 sm:p-8">
-                  <div
+                  <RichMediaContent
                     className="announcement-preview prose prose-slate max-w-none text-slate-800"
-                    dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementContent(renderMarkdown(selectedAnnouncement.content)) }}
+                    html={renderMarkdown(selectedAnnouncement.content)}
                   />
                 </article>
               </div>

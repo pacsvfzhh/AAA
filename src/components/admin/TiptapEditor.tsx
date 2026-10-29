@@ -31,6 +31,7 @@ import {
 import { formatSupabaseError, supabase } from '../../lib/supabase';
 import { uploadStorageObjectWithProgress } from '../../lib/storageUpload';
 import { optimizeImageForWeb } from '../../lib/imageOptimizer';
+import { getVideoPreviewTimes, isBlackVideoPreview } from '../../lib/richVideo';
 
 // Custom Video extension for Tiptap
 type VideoChain = {
@@ -112,8 +113,11 @@ function inspectVideoForUpload(file: File): Promise<VideoUploadMetadata> {
         return;
       }
 
-      video.currentTime = Math.min(Math.max(duration * 0.05, 0.1), 3);
-      video.addEventListener('seeked', () => {
+      const previewTimes = getVideoPreviewTimes(duration);
+      let previewIndex = 0;
+      video.addEventListener('seeked', async () => {
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        if (settled) return;
         const posterWidth = Math.min(width, 960);
         const posterHeight = Math.max(1, Math.round(height * (posterWidth / width)));
         const canvas = document.createElement('canvas');
@@ -126,6 +130,10 @@ function inspectVideoForUpload(file: File): Promise<VideoUploadMetadata> {
         }
 
         try {
+          if (isBlackVideoPreview(video) && previewIndex < previewTimes.length - 1) {
+            video.currentTime = previewTimes[++previewIndex];
+            return;
+          }
           context.drawImage(video, 0, 0, posterWidth, posterHeight);
         } catch {
           finishWithError('无法读取影片画面，请确认影片编码兼容浏览器');
@@ -142,7 +150,8 @@ function inspectVideoForUpload(file: File): Promise<VideoUploadMetadata> {
           cleanup();
           resolve({ duration, width, height, poster: blob });
         }, 'image/jpeg', 0.78);
-      }, { once: true });
+      });
+      video.currentTime = previewTimes[0];
     }, { once: true });
     video.src = objectUrl;
     video.load();

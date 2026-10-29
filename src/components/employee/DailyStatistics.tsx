@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { TrendingUp, Calendar, CheckCircle, XCircle, DollarSign, ListChecks, BarChart3, Gift, ChevronLeft, ChevronRight } from 'lucide-react';
+import { TrendingUp, Calendar, CalendarDays, CheckCircle, XCircle, DollarSign, ListChecks, BarChart3, Gift, ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useLanguage } from '../../lib/i18n/context';
 import PageLoader from './PageLoader';
+import PanelColorBlocks from './PanelColorBlocks';
+import PanelEmptyIcon from './PanelEmptyIcon';
 
 interface DailyStatisticsProps {
   employeeId: string;
@@ -383,14 +385,13 @@ export default function DailyStatistics({ employeeId }: DailyStatisticsProps) {
             )}
           </div>
 
-          <div className="p-4 md:p-0">
+          <div className="relative isolate p-4 md:p-0" style={{ background: 'linear-gradient(145deg, #ffffff 0%, #f0f7ff 25%, #e6f2fe 50%, #f5faff 75%, #ffffff 100%)' }}>
+          <PanelColorBlocks className="-z-10" />
           {dailyStats.length === 0 ? (
             <div className="text-center py-12 lg:py-16">
-              <div className="inline-flex items-center justify-center w-16 h-16 lg:w-20 lg:h-20 rounded-full bg-gray-50 mb-4">
-                <Calendar className="w-8 h-8 lg:w-10 lg:h-10 text-gray-400" />
-              </div>
-              <p className="text-sm lg:text-base text-gray-500 font-medium">{t.statistics.noData}</p>
-              <p className="text-xs lg:text-sm text-gray-400 mt-1">{t.statistics.noDataHint}</p>
+              <PanelEmptyIcon icon={CalendarDays} badge={BarChart3} />
+              <p className="text-sm font-semibold text-blue-900 lg:text-base">{t.statistics.noData}</p>
+              <p className="mt-1 text-xs text-blue-800/60 lg:text-sm">{t.statistics.noDataHint}</p>
             </div>
           ) : (
             <>
@@ -508,12 +509,12 @@ export default function DailyStatistics({ employeeId }: DailyStatisticsProps) {
                       {dailyStats.map((stat, index) => (
                         <tr
                           key={`${stat.date}-${index}`}
-                          className="border-b border-gray-200 hover:bg-blue-50 transition-colors"
+                          className="group border-b border-gray-200 transition-colors duration-150 hover:bg-blue-100/80"
                         >
-                          <td className="px-3 lg:px-4 py-2.5 whitespace-nowrap">
+                          <td className="px-3 lg:px-4 py-2.5 whitespace-nowrap shadow-[inset_3px_0_0_transparent] transition-shadow duration-150 group-hover:shadow-[inset_3px_0_0_#2563eb]">
                             <div className="flex items-center gap-2">
-                              <div className="w-1 h-1 rounded-full bg-blue-400"></div>
-                              <span className="text-[13px] lg:text-sm text-gray-700 font-medium">{formatDay(stat.dateKey)}</span>
+                              <div className="w-1 h-1 rounded-full bg-blue-400 transition-transform duration-150 group-hover:scale-[2] group-hover:bg-blue-600"></div>
+                              <span className="text-[13px] lg:text-sm text-gray-700 font-medium transition-colors group-hover:text-[#12356d]">{formatDay(stat.dateKey)}</span>
                             </div>
                           </td>
                           <td className="px-2 lg:px-3 py-2.5">

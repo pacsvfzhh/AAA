@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useContext, useEffect, useMemo, useRef } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
-import { sanitizeHTML } from '../../lib/sanitizeHTML';
+import { sanitizeAnnouncementContent } from '../../lib/sanitizeHTML';
+import { adminVideoLabels, enhanceRichVideos } from '../../lib/richVideo';
+import { LanguageContext } from '../../lib/i18n/context';
 
 interface QuickCopyRichContentProps {
   html: string;
@@ -10,20 +12,6 @@ interface QuickCopyRichContentProps {
   style?: CSSProperties;
   interactive?: boolean;
 }
-
-const allowedAttributes = [
-  'href',
-  'src',
-  'alt',
-  'title',
-  'class',
-  'target',
-  'rel',
-  'width',
-  'height',
-  'style',
-  'size',
-];
 
 const quickCopyGroupPrefix = 'message-quick-copy-group-';
 const blockTags = new Set([
@@ -136,10 +124,13 @@ export default function QuickCopyRichContent({
 }: QuickCopyRichContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const resetTimerRef = useRef<number | null>(null);
-  const sanitizedHtml = useMemo(
-    () => sanitizeHTML(html, { allowedAttributes }),
-    [html],
-  );
+  const languageContext = useContext(LanguageContext);
+  const videoLabels = languageContext?.t.media || adminVideoLabels;
+  const sanitizedHtml = useMemo(() => sanitizeAnnouncementContent(html), [html]);
+
+  useEffect(() => {
+    if (containerRef.current) return enhanceRichVideos(containerRef.current, videoLabels);
+  }, [sanitizedHtml, videoLabels]);
 
   useEffect(() => {
     const container = containerRef.current;

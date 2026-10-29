@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Wallet as WalletIcon, DollarSign, Lock, TrendingUp, AlertCircle, Send, Clock, History, ShieldCheck, X, Loader2, ChevronRight, Check } from 'lucide-react';
+import { Wallet as WalletIcon, DollarSign, Lock, TrendingUp, AlertCircle, CheckCircle2, Send, Clock, History, ShieldCheck, X, Loader2, ChevronRight, Check } from 'lucide-react';
 import { supabase, formatSupabaseError } from '../../lib/supabase';
 import { Wallet, Employee, VerificationRequest } from '../../types';
 import VerificationForm from './VerificationForm';
@@ -29,29 +29,70 @@ const VERIFY_TONES = {
   emerald: { title: 'text-emerald-800', body: 'text-teal-900/65', foot: 'text-emerald-700/70', line: 'from-emerald-400 via-teal-400 to-cyan-400', glow: 'bg-emerald-100/60', icon: 'from-emerald-500 to-teal-500 shadow-emerald-500/30', halo: 'ring-emerald-100', mark: 'text-emerald-500/[0.07]', button: 'from-emerald-500 to-teal-500 shadow-emerald-500/25', note: 'bg-emerald-50 text-emerald-900 ring-emerald-200/80' },
 };
 
-function VerificationStatusCard({ tone, icon: Icon, title, message, note, footnote, action }: {
+function VerificationStatusCard({ tone, icon: Icon, title, mobileTitle, message, note, footnote, action }: {
   tone: keyof typeof VERIFY_TONES;
   icon: typeof AlertCircle;
   title: string;
+  mobileTitle?: string;
   message: string;
   note?: { label: string; text: string } | null;
   footnote?: string;
   action?: { label: string; onClick: () => void };
 }) {
+  const { language } = useLanguage();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const mobileTitleRef = useRef<HTMLSpanElement>(null);
   const s = VERIFY_TONES[tone];
+
+  useLayoutEffect(() => {
+    const heading = headingRef.current;
+    const text = mobileTitleRef.current;
+    if (!mobileTitle || !heading || !text) return;
+
+    const mobile = window.matchMedia('(max-width: 639px)');
+    const fitTitle = () => {
+      heading.style.removeProperty('font-size');
+      if (!mobile.matches || !heading.clientWidth) return;
+
+      const rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const maximum = rootSize * 0.84375;
+      const minimum = rootSize * 0.71875;
+      heading.style.fontSize = `${maximum}px`;
+      text.style.whiteSpace = 'nowrap';
+      const textWidth = text.getBoundingClientRect().width;
+      if (textWidth > heading.clientWidth) {
+        heading.style.fontSize = `${Math.max(minimum, maximum * (heading.clientWidth - 1) / textWidth)}px`;
+      }
+      text.style.removeProperty('white-space');
+    };
+
+    fitTitle();
+    const observer = new ResizeObserver(fitTitle);
+    observer.observe(heading);
+    mobile.addEventListener('change', fitTitle);
+    document.fonts.addEventListener('loadingdone', fitTitle);
+    return () => {
+      observer.disconnect();
+      mobile.removeEventListener('change', fitTitle);
+      document.fonts.removeEventListener('loadingdone', fitTitle);
+      heading.style.removeProperty('font-size');
+    };
+  }, [mobileTitle]);
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white via-white to-slate-50/80 shadow-[0_12px_32px_-24px_rgba(15,40,90,0.45)]">
+    <div lang={language} className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white via-white to-slate-50/80 shadow-[0_12px_32px_-24px_rgba(15,40,90,0.45)] [container-type:inline-size]">
       <span className={`pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r ${s.line}`} aria-hidden="true" />
       <span className={`pointer-events-none absolute -left-10 -top-12 h-32 w-32 rounded-full blur-2xl ${s.glow}`} aria-hidden="true" />
-      <ShieldCheck className={`pointer-events-none absolute -bottom-6 right-3 hidden h-28 w-28 sm:block ${s.mark}`} strokeWidth={1.4} aria-hidden="true" />
+      <ShieldCheck className={`pointer-events-none absolute -bottom-4 right-2 h-[90px] w-[90px] sm:-bottom-6 sm:right-3 sm:h-28 sm:w-28 ${s.mark}`} strokeWidth={1.4} aria-hidden="true" />
       <div className="relative flex flex-col gap-3 px-3.5 pb-3.5 pt-4 sm:flex-row sm:items-center sm:gap-5 sm:px-5 sm:pb-4 sm:pt-[18px]">
         <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center sm:gap-4">
           <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-md ring-4 sm:h-11 sm:w-11 ${s.icon} ${s.halo}`}>
             <Icon className="h-[18px] w-[18px] sm:h-5 sm:w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <h3 className={`text-[13.5px] font-bold leading-snug tracking-tight sm:text-[15px] ${s.title}`}>{title}</h3>
-            <p className={`mt-0.5 text-[12px] leading-[1.55] sm:text-[13px] ${s.body}`}>{message}</p>
+            <h3 ref={headingRef} className={`hyphens-none text-[clamp(0.75rem,4cqi,0.84375rem)] font-bold leading-snug tracking-tight [overflow-wrap:anywhere] sm:text-[15px] ${s.title}`}>
+              {mobileTitle ? <><span ref={mobileTitleRef} className="sm:hidden">{mobileTitle}</span><span className="hidden sm:inline">{title}</span></> : title}
+            </h3>
+            <p className={`mt-1 hyphens-none text-[clamp(0.71875rem,4cqi,0.78125rem)] leading-[1.75] [overflow-wrap:anywhere] [text-wrap:pretty] sm:mt-0.5 sm:text-[13px] sm:leading-[1.55] ${s.body}`}>{message}</p>
             {note && (
               <div className={`mt-2 rounded-lg px-3 py-1.5 ring-1 ${s.note}`}>
                 <p className="text-[11px] font-semibold opacity-75">{note.label}</p>
@@ -76,6 +117,44 @@ function VerificationStatusCard({ tone, icon: Icon, title, message, note, footno
   );
 }
 
+const NOTICE_TONES = {
+  success: {
+    card: 'border-emerald-200/80 from-white via-emerald-50/40 to-teal-50/60',
+    line: 'from-emerald-400 via-teal-400 to-cyan-400',
+    glow: 'bg-emerald-200/40',
+    icon: 'from-emerald-500 to-teal-500 shadow-emerald-500/30 ring-emerald-100',
+    text: 'text-emerald-900/80',
+  },
+  error: {
+    card: 'border-rose-200/80 from-white via-rose-50/40 to-orange-50/50',
+    line: 'from-rose-500 via-red-400 to-orange-300',
+    glow: 'bg-rose-200/40',
+    icon: 'from-rose-500 to-red-500 shadow-rose-500/30 ring-rose-100',
+    text: 'text-rose-900/80',
+  },
+};
+
+function WithdrawalNotice({ type, text }: { type: keyof typeof NOTICE_TONES; text: string }) {
+  const { language } = useLanguage();
+  const s = NOTICE_TONES[type];
+  const Icon = type === 'success' ? CheckCircle2 : AlertCircle;
+  return (
+    <div
+      role={type === 'error' ? 'alert' : 'status'}
+      className={`relative overflow-hidden rounded-xl border bg-gradient-to-br shadow-[0_10px_28px_-20px_rgba(15,40,90,0.45)] [container-type:inline-size] sm:rounded-2xl ${s.card}`}
+    >
+      <span className={`pointer-events-none absolute inset-y-0 left-0 w-[3px] bg-gradient-to-b ${s.line}`} aria-hidden="true" />
+      <span className={`pointer-events-none absolute -left-8 -top-10 h-24 w-24 rounded-full blur-2xl ${s.glow}`} aria-hidden="true" />
+      <div className="relative flex items-start gap-3 px-4 py-3 sm:items-center sm:gap-3.5 sm:px-4 sm:py-3">
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white shadow-md ring-4 sm:h-9 sm:w-9 sm:rounded-xl ${s.icon}`}>
+          <Icon className="h-4 w-4 sm:h-[18px] sm:w-[18px]" strokeWidth={2.4} aria-hidden="true" />
+        </span>
+        <p lang={language} className={`min-w-0 flex-1 self-center hyphens-none text-left text-[clamp(0.71875rem,4cqi,0.78125rem)] font-medium leading-[1.75] [overflow-wrap:anywhere] [text-wrap:pretty] sm:text-[13px] sm:leading-[1.55] ${s.text}`}>{text}</p>
+      </div>
+    </div>
+  );
+}
+
 interface WalletOverviewProps {
   employeeId: string;
   employee: Employee;
@@ -83,7 +162,7 @@ interface WalletOverviewProps {
 }
 
 export default function WalletOverview({ employeeId, employee, onWithdrawalHistoryChange }: WalletOverviewProps) {
-  const { t, dateLocale } = useLanguage();
+  const { t, dateLocale, language } = useLanguage();
   const currencyUnit = useCurrencyUnit(employee.created_by);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [loading, setLoading] = useState(true);
@@ -692,7 +771,7 @@ export default function WalletOverview({ employeeId, employee, onWithdrawalHisto
       )}
 
       {localEmployee.is_verified && (
-        <VerificationStatusCard tone="emerald" icon={ShieldCheck} title={t.wallet.verificationComplete} message={t.wallet.verificationMotivation} />
+        <VerificationStatusCard tone="emerald" icon={ShieldCheck} title={t.wallet.verificationComplete} mobileTitle={t.wallet.verificationCompleteMobile} message={t.wallet.verificationMotivation} />
       )}
 
       {!localEmployee.is_verified && verificationRequest?.status === 'pending' && !verificationRequest.audited_at && (
@@ -1673,16 +1752,7 @@ export default function WalletOverview({ employeeId, employee, onWithdrawalHisto
                     style={{ opacity: messageLeaving ? 0 : 1 }}
                   >
                     <div className="pb-3 sm:pb-4">
-                      <div
-                        className={`rounded-lg p-2.5 sm:p-3 md:p-4 text-[11px] sm:text-xs md:text-sm flex items-start gap-1.5 sm:gap-2 md:gap-3 ${
-                          message.type === 'success'
-                            ? 'bg-green-500/10 border border-green-500/50 text-green-400'
-                            : 'bg-red-500/10 border border-red-500/50 text-red-400'
-                        }`}
-                      >
-                        <AlertCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 md:w-5 md:h-5 flex-shrink-0 mt-0.5" />
-                        <span className="flex-1 leading-tight">{message.text}</span>
-                      </div>
+                      <WithdrawalNotice type={message.type} text={message.text} />
                     </div>
                   </div>
                 </div>
@@ -1783,18 +1853,7 @@ export default function WalletOverview({ employeeId, employee, onWithdrawalHisto
                   </div>
                 </div>
 
-                {message && (
-                  <div
-                    className={`rounded-lg p-2.5 sm:p-3 md:p-4 text-[11px] sm:text-xs md:text-sm flex items-start gap-1.5 sm:gap-2 md:gap-3 ${
-                      message.type === 'success'
-                        ? 'bg-emerald-50 border border-emerald-200 text-emerald-700'
-                        : 'bg-red-50 border border-red-200 text-red-700'
-                    }`}
-                  >
-                    <AlertCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 md:w-5 md:h-5 flex-shrink-0 mt-0.5" />
-                    <span className="flex-1 leading-tight">{message.text}</span>
-                  </div>
-                )}
+                {message && <WithdrawalNotice type={message.type} text={message.text} />}
 
                 <div className="flex gap-2 sm:gap-3">
                   <button
@@ -1907,19 +1966,19 @@ export default function WalletOverview({ employeeId, employee, onWithdrawalHisto
                 </div>
               </dl>
 
-              <div className="relative overflow-hidden rounded-xl border border-amber-200/70 bg-amber-50/60 py-3.5 pl-4 pr-4 sm:py-4 sm:pl-5">
+              <div lang={language} className="relative overflow-hidden rounded-xl border border-amber-200/70 bg-amber-50/60 px-4 py-4 [container-type:inline-size] sm:py-4 sm:pl-5 sm:pr-4">
                 <div className="absolute inset-y-0 left-0 w-1 bg-amber-400" aria-hidden="true"></div>
                 <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-amber-900 sm:text-sm">
                   <Clock className="h-4 w-4 flex-shrink-0 text-amber-500" />
                   {t.wallet.importantNotice}
                 </div>
-                <ol className="space-y-2.5">
+                <ol className="space-y-3 sm:space-y-2.5">
                   {[t.wallet.noticeSubmitted, t.wallet.noticeFrozen, t.wallet.noticeContact].map((line, index) => (
-                    <li key={index} className="flex items-start gap-2.5 text-[11px] leading-relaxed text-amber-800/90 sm:text-xs">
+                    <li key={index} className="grid grid-cols-[18px_minmax(0,1fr)] items-start gap-x-2.5 text-[clamp(0.71875rem,4cqi,0.78125rem)] leading-[1.75] text-amber-800/90 sm:flex sm:gap-2.5 sm:text-xs sm:leading-relaxed">
                       <span className="mt-px flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-700 ring-1 ring-amber-200">
                         {index + 1}
                       </span>
-                      <span>{line}</span>
+                      <span className="min-w-0 hyphens-none text-left [overflow-wrap:anywhere] [text-wrap:pretty]">{line}</span>
                     </li>
                   ))}
                 </ol>

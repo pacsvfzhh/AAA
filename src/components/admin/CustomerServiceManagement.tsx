@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { Users, Plus, Send, Trash2, CreditCard as Edit2, User, MessageCircle, ArrowLeft, X, Search, Tag, Filter, Image, Star, Clock, Bold, Underline, Strikethrough, Pencil, Check, Gift, DollarSign, MessageSquarePlus, FileText, BookOpen, Highlighter, Pin, Upload, Zap, CheckCheck, Eye, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { formatSupabaseError, supabase } from '../../lib/supabase';
 import { fetchAdminChatUnreadCounts, fetchConversationSummaryRows, getCachedAdminWorkspaceData, getCachedConversationSummaries, invalidateAdminWorkspaceDataCache, invalidateConversationSummariesCache, prefetchAdminGroups, prefetchAdminWorkspaceData, prefetchConversationSummaries } from '../../lib/serviceWorkspaceCache';
 import { uniqueRealtimeChannelName } from '../../lib/realtimeChannel';
 import { stripTailwindStyles, sanitizeChatMessage } from '../../lib/sanitizeHTML';
+import { cleanupComposerImagePreviews, getComposerContentForSend, prepareComposerImagePreviews } from '../../lib/composerImagePreview';
 import AdminGroupPicker, { type AdminGroup } from './AdminGroupPicker';
 import CustomerAvatarPicker, { CustomerAvatarDisplay } from './CustomerAvatarPicker';
 import EmployeeMetadataPopover from './EmployeeMetadataPopover';
@@ -214,7 +215,6 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
   const [serviceTicketNumber, setServiceTicketNumber] = useState<string>('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const uploadingTempIdRef = useRef<string | null>(null);
   const pendingImageMessagesRef = useRef(new Map<string, Message>());
   // Sent message id -> last load request issued before its insert returned; only later loads may settle it.
   const pendingConfirmAfterRef = useRef(new Map<string, number>());
@@ -232,6 +232,7 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
   const replacingImageMsgIdRef = useRef<string | null>(null);
   const [replacingImageMsgId, setReplacingImageMsgId] = useState<string | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const imageInsertRangeRef = useRef<{ targetKey: string; range: Range | null } | null>(null);
   const [editorFontSize, setEditorFontSize] = useState<'normal' | 'large' | 'xlarge' | null>(null);
   const [isBoldActive, setIsBoldActive] = useState(false);
   const [isUnderlineActive, setIsUnderlineActive] = useState(false);
@@ -478,9 +479,9 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
     }
   };
 
-  useEffect(() => {
-    if (!selectedEmployee?.id) return;
-    employeeListRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  useLayoutEffect(() => {
+    if (!selectedEmployee?.id || !employeeListRef.current) return;
+    employeeListRef.current.scrollTop = 0;
   }, [selectedEmployee?.id]);
 
   const applyRealtimeConversation = useCallback((payload: { eventType?: string; new?: Partial<Message> }) => {
@@ -1343,20 +1344,6 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
     }
   }, [isActive, selectedEmployee?.id, selectedCustomer?.id, loadMessages, checkPendingRating]);
 
-  const scrollToBottom = useCallback((smooth: boolean = true) => {
-    const container = messagesContainerRef.current;
-    if (container) {
-      if (smooth) {
-        container.scrollTo({
-          top: 0,
-          behavior: 'smooth'
-        });
-      } else {
-        container.scrollTop = 0;
-      }
-    }
-  }, []);
-
   useEffect(() => {
     if (messages.length > 0) {
       if (isInitialLoadRef.current) {
@@ -2022,7 +2009,8 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedCustomer || !selectedEmployee) return;
+    const editor = editorRef.current;
+    if (!file || !selectedCustomer || !selectedEmployee || !editor) return;
 
     if (!file.type.startsWith('image/')) {
       setNotification({ type: 'error', text: '請選擇圖片檔案' });
@@ -2034,96 +2022,74 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
       return;
     }
 
-    const dataUrl = await new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (event) => resolve(event.target?.result as string);
-      reader.readAsDataURL(file);
-    });
+    const targetKey = `${selectedCustomer.id}:${selectedEmployee.id}`;
+    const savedInsertion = imageInsertRangeRef.current;
+    if (savedInsertion && savedInsertion.targetKey !== targetKey) {
+      imageInsertRangeRef.current = null;
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setNotification({ type: 'error', text: '工作階段已切換，請重新選擇圖片。' });
+      return;
+    }
 
-    const tempId = `temp-${Date.now()}`;
-    const tempMessage: Message = {
-      id: tempId,
-      customer_id: selectedCustomer.id,
-      employee_id: selectedEmployee.id,
-      sender_type: 'customer',
-      message_content: '[Image]',
-      message_type: 'image',
-      image_url: dataUrl,
-      is_read: false,
-      created_at: new Date().toISOString(),
-    };
-
-    pendingImageMessagesRef.current.set(tempId, tempMessage);
-    setMessages(prev => [...prev, tempMessage]);
-    scrollToBottom(false);
-    uploadingTempIdRef.current = tempId;
     setUploadingImage(true);
     setUploadProgress(0);
 
     try {
       const fileExt = file.name.split('.').pop();
       const fileName = `${selectedCustomer.id}_${selectedEmployee.id}_${Date.now()}.${fileExt}`;
-      const filePath = `${fileName}`;
 
       await uploadStorageObjectWithProgress({
         bucket: 'chat-images',
-        path: filePath,
+        path: fileName,
         body: file,
         onProgress: percentage => setUploadProgress(Math.round(percentage * 0.9)),
       });
 
       const { data: { publicUrl } } = supabase.storage
         .from('chat-images')
-        .getPublicUrl(filePath);
+        .getPublicUrl(fileName);
 
-      setUploadProgress(92);
-
-      const pendingMessage = pendingImageMessagesRef.current.get(tempId);
-      if (pendingMessage) {
-        pendingImageMessagesRef.current.set(tempId, { ...pendingMessage, image_url: publicUrl });
+      if (editor.dataset.composerTarget !== targetKey || editorRef.current !== editor) {
+        setNotification({ type: 'error', text: '工作階段已切換，圖片未加入輸入框。' });
+        return;
       }
-      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, image_url: publicUrl } : m));
 
-      justSentRef.current = true;
-      setTimeout(() => { justSentRef.current = false; }, 3000);
-
-      const { error: insertError } = await supabase
-        .from('customer_employee_conversations')
-        .insert({
-          customer_id: selectedCustomer.id,
-          employee_id: selectedEmployee.id,
-          sender_type: 'customer',
-          message_content: '[Image]',
-          message_type: 'image',
-          image_url: publicUrl,
-          is_read: false,
-          source_type: 'aaa_service',
-        });
-
-      if (insertError) throw insertError;
-
+      const image = document.createElement('img');
+      image.src = publicUrl;
+      image.alt = file.name;
+      const savedRange = savedInsertion?.range;
+      const range = savedRange && editor.contains(savedRange.commonAncestorContainer)
+        ? savedRange
+        : document.createRange();
+      if (!savedRange || !editor.contains(savedRange.commonAncestorContainer)) {
+        range.selectNodeContents(editor);
+        range.collapse(false);
+      }
+      range.deleteContents();
+      range.insertNode(image);
+      prepareComposerImagePreviews(editor, 'orange');
+      const imageFrame = image.closest('[data-composer-image-frame]') || image;
+      range.setStartAfter(imageFrame);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      editor.focus();
+      imageInsertRangeRef.current = null;
+      setMessageInput(getEditorHasContent() ? (editor.textContent || '_img_') : '');
       setUploadProgress(100);
-      uploadingTempIdRef.current = null;
-      setUploadingImage(false);
-      setUploadProgress(0);
-      void loadConversationHistory();
     } catch (error: unknown) {
-      pendingImageMessagesRef.current.delete(tempId);
       setNotification({ type: 'error', text: getCustomerServiceErrorMessage(error, '圖片上傳失敗') });
-      setMessages(prev => prev.filter(m => m.id !== tempId));
-      uploadingTempIdRef.current = null;
+    } finally {
       setUploadingImage(false);
       setUploadProgress(0);
-    } finally {
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      imageInsertRangeRef.current = null;
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   const renderMessageContent = (msg: Message) => {
     if (msg.message_type === 'image' && msg.image_url) {
-      const isUploading = uploadingImage && uploadingTempIdRef.current === msg.id;
       return (
         <div className="relative inline-flex w-fit max-w-full flex-col overflow-hidden rounded-lg" style={{ width: 'fit-content', height: 'fit-content', maxWidth: '200px', backgroundColor: 'transparent' }}>
           <img
@@ -2132,33 +2098,8 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
             className="block rounded-lg object-contain cursor-pointer hover:opacity-90 transition-opacity shadow-sm"
             style={{ width: 'auto', height: 'auto', maxWidth: '200px', maxHeight: '250px' }}
             loading="lazy"
-            onClick={(e: React.MouseEvent) => { if (!isUploading) { e.stopPropagation(); e.preventDefault(); setPreviewImage(msg.image_url || null); setAdminImageZoom(1); setAdminImageDrag({ x: 0, y: 0 }); } }}
+            onClick={(e: React.MouseEvent) => { e.stopPropagation(); e.preventDefault(); setPreviewImage(msg.image_url || null); setAdminImageZoom(1); setAdminImageDrag({ x: 0, y: 0 }); }}
           />
-          {isUploading && (
-            <div className="absolute inset-0 bg-black/20 backdrop-blur-[1px] flex flex-col items-center justify-center rounded-lg z-10">
-              <div className="relative w-14 h-14">
-                <svg className="w-14 h-14 -rotate-90" viewBox="0 0 44 44">
-                  <circle cx="22" cy="22" r="18" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
-                  <circle
-                    cx="22" cy="22" r="18" fill="none" stroke="white"
-                    strokeWidth="3"
-                    strokeDasharray={`${uploadProgress * 1.13}, 113`}
-                    strokeLinecap="round"
-                    className="drop-shadow-sm"
-                    style={{ transition: 'stroke-dasharray 0.15s ease-out' }}
-                  />
-                </svg>
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-white text-xs font-bold drop-shadow-sm">{uploadProgress}%</span>
-                </div>
-              </div>
-              <div className="text-white/80 text-[10px] font-medium mt-1.5 tracking-wide">
-                {uploadProgress < 20 ? '準備中……' :
-                 uploadProgress < 85 ? '上傳中……' :
-                 uploadProgress < 100 ? '處理中……' : '完成！'}
-              </div>
-            </div>
-          )}
         </div>
       );
     }
@@ -2357,7 +2298,7 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
 
   const getEditorContent = (): string => {
     if (!editorRef.current) return '';
-    return stripTailwindStyles(editorRef.current.innerHTML);
+    return getComposerContentForSend(editorRef.current);
   };
 
   const isEditorEmpty = (): boolean => {
@@ -2376,10 +2317,13 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCustomer || !selectedEmployee) return;
+    if (!selectedCustomer || !selectedEmployee || uploadingImage) return;
 
     const htmlContent = getEditorContent();
     if (isEditorEmpty()) return;
+    const imageOnlyUrl = extractImageOnlyUrl(htmlContent);
+    const messageContent = imageOnlyUrl ? '[Image]' : htmlContent;
+    const messageType = imageOnlyUrl ? 'image' : 'text';
 
     // Client-generated id: reloads that land before the insert returns can recognise this message.
     const tempMessage: Message = {
@@ -2387,8 +2331,9 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
       customer_id: selectedCustomer.id,
       employee_id: selectedEmployee.id,
       sender_type: 'customer',
-      message_content: htmlContent,
-      message_type: 'text',
+      message_content: messageContent,
+      message_type: messageType,
+      image_url: imageOnlyUrl,
       is_read: false,
       created_at: new Date().toISOString(),
     };
@@ -2408,8 +2353,9 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
           customer_id: selectedCustomer.id,
           employee_id: selectedEmployee.id,
           sender_type: 'customer',
-          message_content: htmlContent,
-          message_type: 'text',
+          message_content: messageContent,
+          message_type: messageType,
+          ...(imageOnlyUrl ? { image_url: imageOnlyUrl } : {}),
           is_read: false,
           source_type: 'aaa_service',
         })
@@ -3935,7 +3881,7 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
               </div>
 
               {/* Message Input */}
-              <form onSubmit={handleSendMessage} className="px-3 py-2.5 border-t border-slate-700/50 relative">
+              <form onSubmit={handleSendMessage} className="relative w-full border-t border-orange-400/25 bg-slate-950/55">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -3992,25 +3938,26 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                                     if (editorRef.current) {
                                       const content = tpl.content_type === 'richtext' ? tpl.content : tpl.content.replace(/\n/g, '<br>');
                                       editorRef.current.innerHTML = content;
+                                      prepareComposerImagePreviews(editorRef.current, 'orange');
                                       const hasText = (editorRef.current.textContent || '').trim().length > 0;
                                       const hasImgs = editorRef.current.querySelector('img') !== null;
                                       setMessageInput(hasText ? editorRef.current.textContent! : hasImgs ? '_img_' : '');
                                     }
                                     setShowTemplatePopup(false);
                                   }}
-                                  className={`group w-full rounded-xl border px-3 py-2.5 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70 ${
+                                  className={`group w-full rounded-xl border px-2.5 py-1.5 text-left shadow-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70 ${
                                     tpl.is_pinned
-                                      ? 'border-orange-400/45 bg-gradient-to-r from-orange-900/55 via-orange-950/35 to-slate-900/70 shadow-orange-950/25 hover:border-orange-300/75 hover:from-orange-800/70 hover:via-orange-900/45 hover:to-slate-900/60'
-                                      : 'border-slate-700/70 bg-slate-800/75 hover:border-orange-300/45 hover:bg-slate-800'
+                                      ? 'border-orange-300/50 bg-gradient-to-r from-orange-900/60 via-orange-950/45 to-slate-900/80 shadow-orange-950/30 hover:-translate-y-0.5 hover:border-orange-200/90 hover:from-orange-800/75 hover:via-orange-900/60 hover:to-slate-900/75 hover:shadow-[0_10px_24px_rgba(124,45,18,0.4)] hover:ring-1 hover:ring-orange-300/30'
+                                      : 'border-slate-700/80 bg-gradient-to-r from-slate-800/90 via-slate-800/75 to-slate-900/85 hover:-translate-y-0.5 hover:border-orange-300/65 hover:from-orange-950/40 hover:via-slate-800/90 hover:to-slate-900 hover:shadow-[0_8px_20px_rgba(124,45,18,0.22)]'
                                   }`}
                                 >
                                   <div className="flex items-center gap-2">
                                     {tpl.is_pinned && (
-                                      <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-orange-300/25 bg-orange-500/15">
-                                        <Pin className="h-2.5 w-2.5 text-orange-300" />
+                                      <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-md border border-orange-300/25 bg-orange-500/15">
+                                        <Pin className="h-2.5 w-2.5 fill-orange-300/20 text-orange-200" />
                                       </div>
                                     )}
-                                    <span className={`flex-1 truncate text-[13px] font-semibold ${tpl.is_pinned ? 'text-orange-100 group-hover:text-orange-50' : 'text-slate-200 group-hover:text-white'}`}>{tpl.name}</span>
+                                    <span className={`flex-1 truncate text-[12px] font-semibold ${tpl.is_pinned ? 'text-orange-100 group-hover:text-orange-50' : 'text-slate-200 group-hover:text-white'}`}>{tpl.name}</span>
                                     {hasImages && (
                                       <span className="flex items-center gap-0.5 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 flex-shrink-0">
                                         <Image className="w-2.5 h-2.5" />
@@ -4018,18 +3965,18 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                                       </span>
                                     )}
                                     {tpl.content_type === 'richtext' && (
-                                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 flex-shrink-0">富文字</span>
+                                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-orange-300/20 bg-orange-500/10 text-orange-200 flex-shrink-0">富文字</span>
                                     )}
-                                    <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg border border-orange-300/0 bg-orange-500/0 opacity-0 transition-all group-hover:border-orange-300/40 group-hover:bg-orange-500 group-hover:opacity-100" title="填入輸入框">
+                                    <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-lg border border-orange-300/0 bg-orange-500/0 opacity-0 transition-all group-hover:border-orange-300/40 group-hover:bg-orange-500 group-hover:opacity-100" title="填入輸入框">
                                       <Pencil className="w-2.5 h-2.5 text-white" />
                                     </div>
                                   </div>
-                                  <div className={`mt-1 ${tpl.is_pinned ? 'pl-7' : ''}`}>
+                                  <div className={`mt-0.5 ${tpl.is_pinned ? 'pl-6' : ''}`}>
                                     {plainPreview && (
-                                      <p className="text-[11px] text-slate-400 group-hover:text-slate-300 truncate leading-relaxed">{plainPreview.substring(0, 100)}</p>
+                                      <p className="text-[10px] text-slate-300/85 group-hover:text-white truncate leading-tight">{plainPreview.substring(0, 100)}</p>
                                     )}
                                     {hasImages && !plainPreview && (
-                                      <p className="text-[11px] text-amber-400/70 group-hover:text-amber-300/80 truncate leading-relaxed flex items-center gap-1">
+                                      <p className="text-[10px] text-amber-300 group-hover:text-amber-200 truncate leading-tight flex items-center gap-1">
                                         <Image className="w-3 h-3 inline" /> 包含圖片
                                       </p>
                                     )}
@@ -4058,10 +4005,10 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                     </div>
                   </>
                 )}
-                <div className="flex gap-2 items-end">
-                  <div className="flex-1 min-w-0 rounded-xl border border-slate-300 bg-white focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/40 transition-all shadow-sm">
+                <div className="relative w-full">
+                  <div className="relative w-full overflow-hidden rounded-t-xl border border-orange-300/25 bg-white shadow-sm transition-all focus-within:border-orange-300/70 focus-within:ring-1 focus-within:ring-orange-400/25">
                     {/* Toolbar row */}
-                    <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-slate-200 bg-slate-50/80 flex-wrap">
+                    <div className="flex min-h-[40px] w-full flex-wrap items-center gap-0.5 border-b border-slate-200 bg-slate-50/90 px-2 py-1">
                       <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('bold'); }} className={`p-1.5 rounded-md transition-all ${isBoldActive ? 'bg-blue-500 text-white shadow-sm shadow-blue-500/30' : 'text-slate-500 hover:bg-slate-200 hover:text-slate-800'}`} title="粗體（Ctrl+B）">
                         <Bold className="w-3.5 h-3.5" strokeWidth={2.5} />
                       </button>
@@ -4101,6 +4048,16 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                       <div className="w-px h-5 bg-slate-200 mx-1" />
                       <button
                         type="button"
+                        onMouseDown={() => {
+                          const editor = editorRef.current;
+                          const selection = window.getSelection();
+                          const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+                          const targetKey = selectedCustomer && selectedEmployee ? `${selectedCustomer.id}:${selectedEmployee.id}` : '';
+                          imageInsertRangeRef.current = {
+                            targetKey,
+                            range: range && editor?.contains(range.commonAncestorContainer) ? range.cloneRange() : null,
+                          };
+                        }}
                         onClick={() => fileInputRef.current?.click()}
                         disabled={uploadingImage}
                         className="p-1.5 hover:bg-slate-200 disabled:opacity-50 rounded-md text-slate-500 hover:text-slate-800 transition-colors"
@@ -4146,7 +4103,22 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                       ref={editorRef}
                       contentEditable
                       suppressContentEditableWarning
-                      onInput={() => setMessageInput(getEditorHasContent() ? (editorRef.current?.textContent || '_img_') : '')}
+                      data-composer-target={selectedCustomer && selectedEmployee ? `${selectedCustomer.id}:${selectedEmployee.id}` : ''}
+                      onInput={() => {
+                        const editor = editorRef.current;
+                        if (editor) cleanupComposerImagePreviews(editor);
+                        setMessageInput(getEditorHasContent() ? (editor?.textContent || '_img_') : '');
+                      }}
+                      onClick={(e) => {
+                        if (!(e.target instanceof Element)) return;
+                        const image = e.target.closest('img');
+                        if (!(image instanceof HTMLImageElement)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPreviewImage(image.currentSrc || image.src);
+                        setAdminImageZoom(1);
+                        setAdminImageDrag({ x: 0, y: 0 });
+                      }}
                       onSelect={() => {
                         setIsBoldActive(document.queryCommandState('bold'));
                         setIsUnderlineActive(document.queryCommandState('underline'));
@@ -4165,20 +4137,21 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                           handleSendMessage(e as unknown as React.FormEvent);
                         }
                       }}
-                      className="min-h-[40px] max-h-[216px] overflow-y-auto px-3 py-2 text-slate-800 focus:outline-none text-sm leading-5 [&_b]:font-bold [&_u]:underline [&_font[size='5']]:text-lg [&_font[size='7']]:text-xl"
+                      className="min-h-[44px] max-h-[216px] w-full overflow-y-auto px-3 py-2 pr-20 text-sm leading-5 text-slate-800 focus:outline-none [&_b]:font-bold [&_u]:underline [&_font[size='5']]:text-lg [&_font[size='7']]:text-xl [&_img]:block [&_img]:h-auto [&_img]:w-auto [&_img]:max-h-[180px] [&_img]:max-w-full [&_img]:rounded-md [&_img]:object-contain [&_img]:cursor-zoom-in"
                       data-placeholder={`以 ${selectedCustomer?.customer_name || '客戶'} 身分傳送訊息……（Ctrl+Enter 傳送）`}
                       style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                     />
                   </div>
-                  <div className="flex flex-col gap-2.5 flex-shrink-0">
-                    <button
-                      type="submit"
-                      disabled={!messageInput.trim()}
-                      className="px-8 py-2.5 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 disabled:from-slate-300 disabled:to-slate-300 disabled:text-slate-400 text-white rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-blue-600/20 disabled:shadow-none min-w-[64px]"
-                    >
-                      <Send className="w-4 h-4" />
-                    </button>
-                  </div>
+                  <button
+                    type="submit"
+                    disabled={uploadingImage || !messageInput.trim()}
+                    aria-label="發送訊息"
+                    title="發送訊息"
+                    className="absolute bottom-1 right-4 flex h-9 w-16 items-center justify-center gap-1 rounded-xl bg-gradient-to-br from-orange-500 to-amber-500 text-white shadow-lg shadow-orange-900/30 transition-all hover:from-orange-400 hover:to-amber-400 disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-400 disabled:text-slate-500 disabled:shadow-none"
+                  >
+                    <Send className="h-4 w-4" />
+                    <span className="text-xs font-semibold">發送</span>
+                  </button>
                 </div>
               </form>
             </div>
@@ -4694,43 +4667,44 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
       )}
 
       {showTemplateManager && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) { setShowTemplateManager(false); setEditingTemplate(null); setTemplateForm({ name: '', content: '', content_type: 'richtext' }); if (templateEditorRef.current) templateEditorRef.current.innerHTML = ''; } }}>
-          <div onClick={(e) => e.stopPropagation()} className="bg-slate-900 rounded-2xl border border-slate-700/50 w-full max-w-5xl h-[85vh] flex flex-col shadow-2xl">
-            {/* Header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/50 flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-teal-600/20 rounded-lg">
-                  <BookOpen className="w-5 h-5 text-teal-400" />
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md" onMouseDown={(e) => { if (e.target === e.currentTarget) { setShowTemplateManager(false); setEditingTemplate(null); setTemplateForm({ name: '', content: '', content_type: 'richtext' }); if (templateEditorRef.current) templateEditorRef.current.innerHTML = ''; } }}>
+          <div onClick={(e) => e.stopPropagation()} className="relative flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[1.75rem] border border-orange-300/25 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 shadow-2xl shadow-orange-950/40 ring-1 ring-inset ring-white/5 transition-all duration-300">
+            <div className="h-1 shrink-0 bg-gradient-to-r from-orange-600 via-amber-400 to-orange-500" />
+            <div className="flex shrink-0 items-center justify-between border-b border-orange-300/15 bg-gradient-to-r from-orange-950/70 via-slate-900 to-amber-950/40 px-5 py-3.5">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-orange-300/30 bg-orange-500/15 shadow-inner shadow-orange-950/30">
+                  <BookOpen className="h-4 w-4 text-orange-300" />
                 </div>
-                <div>
-                  <h3 className="text-lg font-bold text-white">訊息範本</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">{messageTemplates.length} 個範本</p>
+                <div className="min-w-0">
+                  <h3 className="truncate text-base font-bold tracking-wide text-white">訊息範本</h3>
+                  <p className="mt-0.5 text-[11px] font-medium text-orange-200/70">管理、編輯與建立範本</p>
                 </div>
+                <span className="ml-1 shrink-0 rounded-lg border border-orange-300/25 bg-orange-500/10 px-2.5 py-1 text-[11px] font-bold tabular-nums text-orange-100">{messageTemplates.length} 個範本</span>
               </div>
-              <button onClick={() => { setShowTemplateManager(false); setEditingTemplate(null); setTemplateForm({ name: '', content: '', content_type: 'richtext' }); if (templateEditorRef.current) templateEditorRef.current.innerHTML = ''; }} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
-                <X className="w-5 h-5 text-slate-400" />
+              <button type="button" aria-label="關閉範本管理" onClick={() => { setShowTemplateManager(false); setEditingTemplate(null); setTemplateForm({ name: '', content: '', content_type: 'richtext' }); if (templateEditorRef.current) templateEditorRef.current.innerHTML = ''; }} className="ml-3 rounded-xl border border-orange-300/20 bg-slate-900/60 p-2 text-orange-200 transition-colors hover:border-orange-300/40 hover:bg-orange-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300">
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             {/* Left/Right body */}
-            <div className="flex-1 flex min-h-0 overflow-hidden">
+            <div className="flex min-h-0 flex-1 overflow-hidden">
               {/* Left: Editor */}
-              <div className="w-1/2 flex flex-col border-r border-slate-700/50 p-4 gap-3">
-                <h4 className="text-sm font-bold text-white flex items-center gap-2 flex-shrink-0">
-                  {editingTemplate ? <Pencil className="w-3.5 h-3.5 text-blue-400" /> : <Plus className="w-3.5 h-3.5 text-teal-400" />}
+              <div className="flex w-1/2 flex-col gap-3 border-r border-orange-300/15 bg-gradient-to-br from-slate-900/60 to-orange-950/15 p-4">
+                <h4 className="flex flex-shrink-0 items-center gap-2 text-sm font-bold text-orange-100">
+                  {editingTemplate ? <Pencil className="h-3.5 w-3.5 text-orange-300" /> : <Plus className="h-3.5 w-3.5 text-orange-300" />}
                   {editingTemplate ? '編輯範本' : '新增範本'}
                 </h4>
                 <input
                   type="text"
                   value={templateForm.name}
                   onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
-                  className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-lg text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 placeholder:text-slate-400 flex-shrink-0 shadow-sm"
+                  className="w-full flex-shrink-0 rounded-lg border border-orange-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm placeholder:text-slate-400 focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-400"
                   placeholder="範本名稱（例如：歡迎訊息、常見問答、跟進……）"
                 />
                 <input ref={templateImageInputRef} type="file" accept="image/*" onChange={handleTemplateImageUpload} className="hidden" />
                 <input id="templateFileImport" type="file" accept=".txt,.doc,.docx" onChange={handleTemplateFileImport} className="hidden" />
                 {/* Unified toolbar + editor (light theme, matches chat input) */}
-                <div className="flex-1 min-h-0 rounded-xl border border-slate-300 bg-white overflow-hidden focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/40 transition-all shadow-sm flex flex-col">
+                <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm transition-all focus-within:border-orange-400 focus-within:ring-1 focus-within:ring-orange-400/40">
                   <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-slate-200 bg-slate-50/80 flex-shrink-0 flex-wrap">
                     <button type="button" onMouseDown={(e) => { e.preventDefault(); ensureEditorFocus(templateEditorRef.current!); document.execCommand('bold'); setTemplateBoldActive(prev => !prev); }} className={`p-1.5 rounded-md transition-all ${templateBoldActive ? 'bg-blue-500 text-white shadow-sm shadow-blue-500/30' : 'text-slate-500 hover:bg-slate-200 hover:text-slate-800'}`} title="粗體（Ctrl+B）">
                       <Bold className="w-3.5 h-3.5" strokeWidth={2.5} />
@@ -4813,7 +4787,7 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                     type="button"
                     onClick={editingTemplate ? handleUpdateTemplate : handleCreateTemplate}
                     disabled={!templateForm.name.trim() || isTemplateContentEmpty()}
-                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 disabled:from-slate-600 disabled:to-slate-600 disabled:text-slate-400 text-white rounded-lg font-semibold text-sm transition-all"
+                    className="flex-1 rounded-xl border border-orange-300/30 bg-gradient-to-r from-orange-600 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-950/25 transition-all hover:from-orange-500 hover:to-amber-500 disabled:from-slate-600 disabled:to-slate-600 disabled:text-slate-400"
                   >
                     {editingTemplate ? '儲存變更' : '新增範本'}
                   </button>
@@ -4830,23 +4804,24 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
               </div>
 
               {/* Right: 已儲存的範本 */}
-              <div className="w-1/2 flex flex-col p-4 overflow-hidden">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 flex-shrink-0">
-                  已儲存的範本 ({messageTemplates.length})
+              <div className="flex w-1/2 flex-col overflow-hidden bg-gradient-to-br from-orange-950/20 to-slate-950/50 p-4">
+                <h4 className="mb-3 flex flex-shrink-0 items-center justify-between rounded-xl border border-orange-300/20 bg-orange-500/10 px-3 py-2 text-xs font-bold tracking-wide text-orange-100">
+                  <span className="flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-orange-300" />已儲存的範本</span>
+                  <span className="rounded-md bg-slate-950/40 px-2 py-0.5 tabular-nums text-slate-300">{messageTemplates.length}</span>
                 </h4>
                 {messageTemplates.length > 0 ? (
                   <div className="flex-1 overflow-y-auto space-y-2 scrollbar-dark pr-1">
                     {messageTemplates.map((tpl) => (
-                      <div key={tpl.id} className={`rounded-xl border p-3 transition-all group ${tpl.is_pinned ? 'bg-teal-900/20 border-teal-700/50' : 'bg-slate-800/40 border-slate-700/50 hover:border-slate-600/50'}`}>
+                      <div key={tpl.id} className={`group rounded-xl border p-3 transition-all ${tpl.is_pinned ? 'border-orange-300/40 bg-gradient-to-br from-orange-500/10 to-orange-950/35 shadow-md shadow-orange-950/20 hover:border-orange-200/60' : 'border-slate-700/70 bg-slate-800/60 hover:border-orange-300/35 hover:bg-slate-800/90'}`}>
                         <div className="flex items-start gap-2">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1 flex-wrap">
                               {tpl.is_pinned && (
-                                <Pin className="w-3 h-3 text-teal-400 flex-shrink-0" />
+                                <Pin className="w-3 h-3 flex-shrink-0 text-orange-300" />
                               )}
                               <span className="text-sm font-bold text-white truncate">{tpl.name}</span>
                               <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase flex-shrink-0 ${
-                                tpl.content_type === 'richtext' ? 'bg-blue-500/20 text-blue-400' : 'bg-teal-500/20 text-teal-400'
+                                tpl.content_type === 'richtext' ? 'bg-orange-500/15 text-orange-200' : 'bg-slate-700/70 text-slate-300'
                               }`}>{tpl.content_type === 'richtext' ? '富文字' : '純文字'}</span>
                             </div>
                             {tpl.content_type === 'richtext' ? (
@@ -4859,7 +4834,7 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                             <button
                               type="button"
                               onClick={() => handleToggleTemplatePin(tpl)}
-                              className={`p-1.5 rounded-md transition-all ${tpl.is_pinned ? 'bg-teal-600 text-white' : 'bg-slate-700 hover:bg-teal-600 text-slate-300 hover:text-white'}`}
+                              className={`p-1.5 rounded-md transition-all ${tpl.is_pinned ? 'bg-orange-600 text-white' : 'bg-slate-700 hover:bg-orange-600 text-slate-300 hover:text-white'}`}
                               title={tpl.is_pinned ? '取消置頂' : '置頂'}
                             >
                               <Pin className="w-3 h-3" />
@@ -4871,7 +4846,7 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                                 setTemplateForm({ name: tpl.name, content: tpl.content, content_type: tpl.content_type });
                                 requestAnimationFrame(() => { if (templateEditorRef.current) templateEditorRef.current.innerHTML = tpl.content; });
                               }}
-                              className="p-1.5 bg-slate-700 hover:bg-blue-600 text-slate-300 hover:text-white rounded-md transition-all"
+                              className="p-1.5 bg-slate-700 hover:bg-orange-600 text-slate-300 hover:text-white rounded-md transition-all"
                               title="編輯"
                             >
                               <Pencil className="w-3 h-3" />
@@ -4891,7 +4866,9 @@ function CustomerServiceManagement({ adminId, isSuperAdmin, isActive, initialEmp
                   </div>
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center text-center">
-                    <FileText className="w-12 h-12 text-slate-700 mb-3" />
+                    <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-orange-300/20 bg-orange-500/10 shadow-lg shadow-orange-950/20">
+                      <FileText className="h-5 w-5 text-orange-300" />
+                    </div>
                     <p className="text-sm text-slate-500 font-medium">尚無範本</p>
                     <p className="text-xs text-slate-600 mt-1">使用左側編輯器建立您的第一個範本</p>
                   </div>

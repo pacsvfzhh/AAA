@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Building2, CheckCircle, Loader2, Pencil, Save, Shield, XCircle } from 'lucide-react';
 import { formatSupabaseError, supabase } from '../../lib/supabase';
 import { Admin } from '../../types';
+import EmployeeLoginMaintenanceSettings from './EmployeeLoginMaintenanceSettings';
 
 interface SecondaryAdminConfigurationProps {
   admin: Admin;
@@ -23,6 +24,7 @@ export default function SecondaryAdminConfiguration({ admin }: SecondaryAdminCon
   const [loginSubtitle, setLoginSubtitle] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const loadConfigs = useCallback(async () => {
@@ -154,7 +156,10 @@ export default function SecondaryAdminConfiguration({ admin }: SecondaryAdminCon
         </div>
       )}
 
-      <form onSubmit={handleSave} className="flex w-full flex-1 flex-col">
+      <form onSubmit={event => {
+        if (maintenanceSaving) { event.preventDefault(); return; }
+        void handleSave(event);
+      }} className="flex w-full flex-1 flex-col">
         <div className="flex flex-wrap items-center gap-3 border-b border-cyan-300/25 bg-gradient-to-r from-[#1d3059] via-[#194461] to-[#146071] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_30px_rgba(2,12,27,0.18)] sm:px-7 lg:px-9">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-200/35 bg-gradient-to-br from-cyan-300/25 to-blue-500/20 text-cyan-50 shadow-[0_4px_15px_rgba(8,145,178,0.2)]"><Building2 className="h-5 w-5" aria-hidden="true" /></span>
           <div className="min-w-0"><h2 className="text-base font-semibold text-white">我的設定</h2><p className="break-words text-sm text-cyan-100">{admin.username} · 二級管理員</p></div>
@@ -167,6 +172,14 @@ export default function SecondaryAdminConfiguration({ admin }: SecondaryAdminCon
         </div>
 
         <div className="mx-auto w-full max-w-6xl flex-1 space-y-5 px-4 py-5 sm:px-7 sm:py-6 lg:px-9">
+          <fieldset disabled={saving} className="min-w-0">
+            <EmployeeLoginMaintenanceSettings
+              key={admin.id}
+              ownerAdminId={admin.id}
+              ownerName={admin.username}
+              onSavingChange={setMaintenanceSaving}
+            />
+          </fieldset>
           <section>
             <h3 className="flex items-center gap-2 text-sm font-semibold text-cyan-100"><Shield className="h-4 w-4 text-cyan-300" aria-hidden="true" />登入畫面 <span className="text-xs font-medium text-slate-300">· 僅供查看</span></h3>
             <div className="mt-4 grid gap-5 sm:grid-cols-2">
@@ -185,11 +198,11 @@ export default function SecondaryAdminConfiguration({ admin }: SecondaryAdminCon
             <h3 className="text-sm font-semibold text-white">設定來源</h3>
             <p className="mt-1 text-xs text-slate-300">目前使用{brandingMode === 'global' ? '超管設定' : '自己設定'}；選擇後按「儲存設定」才會生效。</p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <button type="button" aria-pressed={editBrandingMode === 'global'} disabled={saving} onClick={() => setEditBrandingMode('global')} className={`min-h-[82px] rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-100 ${editBrandingMode === 'global' ? 'border-amber-300/85 bg-gradient-to-br from-amber-400/30 via-amber-400/15 to-[#533c24]/30 text-amber-50 shadow-[0_10px_25px_rgba(8,16,31,0.25),inset_0_1px_0_rgba(253,230,138,0.18)] ring-1 ring-amber-300/40' : 'border-slate-500/40 bg-[#102136]/65 text-slate-300 hover:border-amber-300/55 hover:bg-amber-300/[0.08] hover:text-amber-50'}`}>
+              <button type="button" aria-pressed={editBrandingMode === 'global'} disabled={saving || maintenanceSaving} onClick={() => setEditBrandingMode('global')} className={`min-h-[82px] rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-100 ${editBrandingMode === 'global' ? 'border-amber-300/85 bg-gradient-to-br from-amber-400/30 via-amber-400/15 to-[#533c24]/30 text-amber-50 shadow-[0_10px_25px_rgba(8,16,31,0.25),inset_0_1px_0_rgba(253,230,138,0.18)] ring-1 ring-amber-300/40' : 'border-slate-500/40 bg-[#102136]/65 text-slate-300 hover:border-amber-300/55 hover:bg-amber-300/[0.08] hover:text-amber-50'}`}>
                 <span className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><Shield className="h-4 w-4 shrink-0" aria-hidden="true" />使用超管設定</span><span className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-300 px-2 py-0.5 text-[10px] font-bold text-amber-950 ${editBrandingMode === 'global' ? '' : 'invisible'}`}><CheckCircle className="h-3 w-3" aria-hidden="true" />已選擇</span></span>
                 <span className="mt-1.5 block text-xs opacity-80">顯示超管的品牌與幣別</span>
               </button>
-              <button type="button" aria-pressed={editBrandingMode === 'custom'} disabled={saving} onClick={() => setEditBrandingMode('custom')} className={`min-h-[82px] rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-100 ${editBrandingMode === 'custom' ? 'border-cyan-300/85 bg-gradient-to-br from-blue-400/30 via-cyan-400/15 to-[#164753]/35 text-cyan-50 shadow-[0_10px_25px_rgba(8,16,31,0.25),inset_0_1px_0_rgba(165,243,252,0.18)] ring-1 ring-cyan-300/40' : 'border-slate-500/40 bg-[#102136]/65 text-slate-300 hover:border-cyan-300/55 hover:bg-cyan-300/[0.08] hover:text-cyan-50'}`}>
+              <button type="button" aria-pressed={editBrandingMode === 'custom'} disabled={saving || maintenanceSaving} onClick={() => setEditBrandingMode('custom')} className={`min-h-[82px] rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-100 ${editBrandingMode === 'custom' ? 'border-cyan-300/85 bg-gradient-to-br from-blue-400/30 via-cyan-400/15 to-[#164753]/35 text-cyan-50 shadow-[0_10px_25px_rgba(8,16,31,0.25),inset_0_1px_0_rgba(165,243,252,0.18)] ring-1 ring-cyan-300/40' : 'border-slate-500/40 bg-[#102136]/65 text-slate-300 hover:border-cyan-300/55 hover:bg-cyan-300/[0.08] hover:text-cyan-50'}`}>
                 <span className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-sm font-semibold"><Building2 className="h-4 w-4 shrink-0" aria-hidden="true" />使用自己設定</span><span className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-300 px-2 py-0.5 text-[10px] font-bold text-blue-950 ${editBrandingMode === 'custom' ? '' : 'invisible'}`}><CheckCircle className="h-3 w-3" aria-hidden="true" />已選擇</span></span>
                 <span className="mt-1.5 block text-xs opacity-80">顯示自己設定的品牌與幣別</span>
               </button>
@@ -201,10 +214,10 @@ export default function SecondaryAdminConfiguration({ admin }: SecondaryAdminCon
             <p className="mt-1 text-xs leading-5 text-slate-300">自己的品牌與幣別會保留，切換設定來源也不會刪除。</p>
             <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,2.5fr)_minmax(150px,1fr)]">
               <label className="block min-w-0 text-xs font-semibold text-slate-200">品牌名稱
-                <input type="text" value={formValues.company_name} onChange={event => setFormValues(current => ({ ...current, company_name: event.target.value }))} required={editBrandingMode === 'custom'} maxLength={50} disabled={saving} placeholder="輸入品牌名稱" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300/80 bg-slate-50 px-3 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-100" />
+                <input type="text" value={formValues.company_name} onChange={event => setFormValues(current => ({ ...current, company_name: event.target.value }))} required={editBrandingMode === 'custom'} maxLength={50} disabled={saving || maintenanceSaving} placeholder="輸入品牌名稱" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300/80 bg-slate-50 px-3 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-100" />
               </label>
               <label className="block min-w-0 text-xs font-semibold text-slate-200">顯示幣別
-                <input type="text" value={formValues.currency_unit} onChange={event => setFormValues(current => ({ ...current, currency_unit: event.target.value.replace(/\s+/g, '') }))} required={editBrandingMode === 'custom'} maxLength={10} disabled={saving} placeholder="例如 USDC" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300/80 bg-slate-50 px-3 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-100" />
+                <input type="text" value={formValues.currency_unit} onChange={event => setFormValues(current => ({ ...current, currency_unit: event.target.value.replace(/\s+/g, '') }))} required={editBrandingMode === 'custom'} maxLength={10} disabled={saving || maintenanceSaving} placeholder="例如 USDC" className="mt-1.5 h-10 w-full rounded-lg border border-slate-300/80 bg-slate-50 px-3 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-300/40 disabled:opacity-100" />
               </label>
             </div>
           </section>
@@ -224,7 +237,7 @@ export default function SecondaryAdminConfiguration({ admin }: SecondaryAdminCon
               <p className="text-xs font-bold text-white">確認變更</p>
               <p className="mt-0.5 text-xs text-cyan-100/85">儲存後才會套用最新設定</p>
             </div>
-            <button type="submit" disabled={saving} aria-busy={saving} className="relative ml-auto inline-flex h-10 shrink-0 items-center justify-center gap-2 overflow-hidden rounded-lg border border-blue-200/70 bg-gradient-to-r from-blue-700 to-indigo-700 px-5 text-sm font-bold text-white shadow-[0_6px_18px_rgba(6,30,49,0.4)] transition-all hover:from-blue-600 hover:to-indigo-600 hover:shadow-[0_8px_22px_rgba(6,30,49,0.5)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-wait disabled:opacity-95">{saving ? <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}{saving ? '儲存中…' : '儲存設定'}{saving && <span aria-hidden="true" className="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-cyan-200 motion-reduce:animate-none" />}</button>
+            <button type="submit" disabled={saving || maintenanceSaving} aria-busy={saving} className="relative ml-auto inline-flex h-10 shrink-0 items-center justify-center gap-2 overflow-hidden rounded-lg border border-blue-200/70 bg-gradient-to-r from-blue-700 to-indigo-700 px-5 text-sm font-bold text-white shadow-[0_6px_18px_rgba(6,30,49,0.4)] transition-all hover:from-blue-600 hover:to-indigo-600 hover:shadow-[0_8px_22px_rgba(6,30,49,0.5)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-wait disabled:opacity-95">{saving ? <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Save className="h-4 w-4" aria-hidden="true" />}{saving ? '儲存中…' : '儲存設定'}{saving && <span aria-hidden="true" className="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-cyan-200 motion-reduce:animate-none" />}</button>
           </div>
         </div>
       </form>

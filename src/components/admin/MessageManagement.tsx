@@ -137,9 +137,9 @@ const getMessagePriorityTone = (priority: Message['priority']) => {
     case 'urgent':
       return { card: 'border-red-800/90 bg-gradient-to-br from-red-950/80 via-slate-800 to-slate-900', accent: 'bg-red-400', icon: 'bg-red-900/80 text-red-200 ring-1 ring-red-700/60', label: 'text-red-200/70', value: 'text-red-100' };
     case 'high':
-      return { card: 'border-amber-800/90 bg-gradient-to-br from-amber-950/80 via-slate-800 to-slate-900', accent: 'bg-amber-400', icon: 'bg-amber-900/80 text-amber-200 ring-1 ring-amber-700/60', label: 'text-amber-200/70', value: 'text-amber-100' };
-    case 'normal':
       return { card: 'border-emerald-800/90 bg-gradient-to-br from-emerald-950/80 via-slate-800 to-slate-900', accent: 'bg-emerald-400', icon: 'bg-emerald-900/80 text-emerald-200 ring-1 ring-emerald-700/60', label: 'text-emerald-200/70', value: 'text-emerald-100' };
+    case 'normal':
+      return { card: 'border-blue-800/90 bg-gradient-to-br from-blue-950/80 via-slate-800 to-slate-900', accent: 'bg-blue-400', icon: 'bg-blue-900/80 text-blue-200 ring-1 ring-blue-700/60', label: 'text-blue-200/70', value: 'text-blue-100' };
     default:
       return { card: 'border-slate-700 bg-gradient-to-br from-slate-800 via-slate-800 to-slate-900', accent: 'bg-slate-400', icon: 'bg-slate-700 text-slate-200 ring-1 ring-slate-600', label: 'text-slate-300/70', value: 'text-slate-100' };
   }
@@ -220,6 +220,15 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
   const [templateEditorContent, setTemplateEditorContent] = useState('');
   const [templateFormTitle, setTemplateFormTitle] = useState('');
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [templateToDelete, setTemplateToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deletingTemplate, setDeletingTemplate] = useState(false);
+  const [templateDeleteError, setTemplateDeleteError] = useState<string | null>(null);
+  const deletingTemplateRef = useRef(false);
+  const deletedTemplateIdsRef = useRef(new Set<string>());
+  const templateDeleteDialogRef = useRef<HTMLElement>(null);
+  const templateDeleteReturnFocusRef = useRef<HTMLButtonElement | null>(null);
+  const templateDropdownButtonRef = useRef<HTMLButtonElement>(null);
+  const templateNameInputRef = useRef<HTMLInputElement>(null);
   const templateEditorRef2 = useRef<TiptapEditorRef>(null);
 
   const composeEditorRef = useRef<TiptapEditorRef>(null);
@@ -441,6 +450,46 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showTemplateDropdown]);
 
+  useEffect(() => {
+    if (!templateToDelete) return;
+    const dialog = templateDeleteDialogRef.current;
+    const trigger = templateDeleteReturnFocusRef.current;
+    const fallbackFocus = templateNameInputRef.current || templateDropdownButtonRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    dialog?.querySelector<HTMLButtonElement>('[data-cancel-template-delete]')?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!deletingTemplateRef.current) setTemplateToDelete(null);
+      }
+      if (event.key !== 'Tab') return;
+      const buttons = dialog?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+      if (!buttons?.length) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (!dialog?.contains(document.activeElement) || document.activeElement === dialog || (event.shiftKey && document.activeElement === first)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown, true);
+      if (trigger?.isConnected) trigger.focus();
+      else if (fallbackFocus?.isConnected) fallbackFocus.focus();
+    };
+  }, [templateToDelete]);
+
   const loadAllData = async (isBackgroundRefresh = false) => {
     if (allDataLoadingRef.current) return;
 
@@ -571,7 +620,7 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
         .order('sort_order')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      setTemplates(data || []);
+      setTemplates((data || []).filter(template => !deletedTemplateIdsRef.current.has(template.id)));
     } catch (error) {
       if (!isSupabaseAbortError(error)) {
         console.error('Error loading templates:', formatSupabaseError(error));
@@ -644,14 +693,40 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
     setNotification({ type: 'success', message: `已套用範本「${template.name}」` });
   };
 
-  const deleteTemplate = async (templateId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const requestTemplateDeletion = (template: typeof templates[0], event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (deletingTemplateRef.current || savingTemplate) return;
+    templateDeleteReturnFocusRef.current = event.currentTarget;
+    setShowTemplateDropdown(false);
+    setTemplateDeleteError(null);
+    setTemplateToDelete({ id: template.id, name: template.name });
+  };
+
+  const deleteTemplate = async () => {
+    if (!templateToDelete || deletingTemplateRef.current) return;
+    deletingTemplateRef.current = true;
+    setDeletingTemplate(true);
+    setTemplateDeleteError(null);
     try {
-      const { error } = await supabase.from('message_templates').delete().eq('id', templateId);
+      const { data, error } = await supabase.from('message_templates')
+        .delete()
+        .eq('id', templateToDelete.id)
+        .eq('admin_id', admin.id)
+        .select('id');
       if (error) throw error;
-      loadTemplates();
+      if (data?.length !== 1 || data[0].id !== templateToDelete.id) {
+        throw new Error('未能確認刪除結果，範本可能已被移除或權限已變更，請重新整理後再試。');
+      }
+      deletedTemplateIdsRef.current.add(templateToDelete.id);
+      setTemplates(previous => previous.filter(template => template.id !== templateToDelete.id));
+      if (editingTemplateId === templateToDelete.id) startNewTemplate();
+      setNotification({ type: 'success', message: `範本「${templateToDelete.name}」已刪除` });
+      setTemplateToDelete(null);
     } catch (error) {
-      console.error('Error deleting template:', error);
+      setTemplateDeleteError(formatSupabaseError(error) || '刪除範本失敗，請稍後再試。');
+    } finally {
+      deletingTemplateRef.current = false;
+      setDeletingTemplate(false);
     }
   };
 
@@ -732,7 +807,7 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
     }
 
     const content = composeEditorRef.current?.getContent() || '';
-    if (!content.trim() || content === '<p></p>') {
+    if (composeEditorRef.current?.getEditor()?.isEmpty || !content.trim() || content === '<p></p>') {
       setNotification({ type: 'error', message: '請輸入訊息內容' });
       return;
     }
@@ -1084,7 +1159,7 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
   const handleSaveEdit = async () => {
     if (!selectedMessageDetail) return;
     const htmlContent = editEditorRef.current?.getContent() || '';
-    if (!editForm.title.trim() || !htmlContent.trim() || htmlContent === '<p></p>') {
+    if (!editForm.title.trim() || editEditorRef.current?.getEditor()?.isEmpty || !htmlContent.trim() || htmlContent === '<p></p>') {
       setNotification({ type: 'error', message: '標題和內容不能為空' });
       return;
     }
@@ -1233,8 +1308,8 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
   const getPriorityColor = (priority: string) => {
     switch (priority) {
       case 'urgent': return 'text-red-400 bg-red-500/10 border-red-500/30';
-      case 'high': return 'text-amber-400 bg-amber-500/10 border-amber-500/30';
-      case 'normal': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
+      case 'high': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
+      case 'normal': return 'text-blue-400 bg-blue-500/10 border-blue-500/30';
       case 'low': return 'text-slate-400 bg-slate-500/10 border-slate-500/30';
       default: return 'text-slate-400 bg-slate-500/10 border-slate-500/30';
     }
@@ -1737,8 +1812,8 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
                   {(['normal', 'high', 'urgent'] as const).map((priority) => {
                     const isActive = messageForm.priority === priority;
                     const config: Record<string, { activeBg: string; activeBorder: string; activeShadow: string; inactiveBg: string; inactiveText: string; inactiveBorder: string; hoverBg: string; hoverBorder: string; dot: string }> = {
-                      normal: { activeBg: 'bg-emerald-600', activeBorder: 'border-emerald-400', activeShadow: 'shadow-emerald-600/30', inactiveBg: 'bg-emerald-950/30', inactiveText: 'text-emerald-400', inactiveBorder: 'border-emerald-500/30', hoverBg: 'hover:bg-emerald-900/40', hoverBorder: 'hover:border-emerald-500/50', dot: 'bg-emerald-400' },
-                      high:   { activeBg: 'bg-amber-600', activeBorder: 'border-amber-400', activeShadow: 'shadow-amber-600/30', inactiveBg: 'bg-amber-950/30', inactiveText: 'text-amber-400', inactiveBorder: 'border-amber-500/30', hoverBg: 'hover:bg-amber-900/40', hoverBorder: 'hover:border-amber-500/50', dot: 'bg-amber-400' },
+                      normal: { activeBg: 'bg-blue-600', activeBorder: 'border-blue-400', activeShadow: 'shadow-blue-600/30', inactiveBg: 'bg-blue-950/30', inactiveText: 'text-blue-400', inactiveBorder: 'border-blue-500/30', hoverBg: 'hover:bg-blue-900/40', hoverBorder: 'hover:border-blue-500/50', dot: 'bg-blue-400' },
+                      high:   { activeBg: 'bg-emerald-600', activeBorder: 'border-emerald-400', activeShadow: 'shadow-emerald-600/30', inactiveBg: 'bg-emerald-950/30', inactiveText: 'text-emerald-400', inactiveBorder: 'border-emerald-500/30', hoverBg: 'hover:bg-emerald-900/40', hoverBorder: 'hover:border-emerald-500/50', dot: 'bg-emerald-400' },
                       urgent: { activeBg: 'bg-red-600', activeBorder: 'border-red-400', activeShadow: 'shadow-red-600/30', inactiveBg: 'bg-red-950/30', inactiveText: 'text-red-400', inactiveBorder: 'border-red-500/30', hoverBg: 'hover:bg-red-900/40', hoverBorder: 'hover:border-red-500/50', dot: 'bg-red-400' },
                     };
                     const c = config[priority];
@@ -1775,6 +1850,8 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
                 </button>
                 <div className="relative">
                   <button
+                    ref={templateDropdownButtonRef}
+                    type="button"
                     onClick={() => { setShowTemplateDropdown(!showTemplateDropdown); }}
                     className={`flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-[11px] font-bold transition-all duration-200 ${
                       showTemplateDropdown
@@ -1846,12 +1923,13 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={(e) => deleteTemplate(tpl.id, e)}
+                                        onClick={(e) => requestTemplateDeletion(tpl, e)}
+                                        disabled={savingTemplate || deletingTemplate}
                                         aria-label={`刪除 ${tpl.name}`}
                                         title="刪除範本"
-                                        className="rounded-md p-1 text-emerald-200/60 transition-colors hover:bg-red-400/20 hover:text-red-200"
+                                        className="rounded-md p-1 text-emerald-200/60 transition-colors hover:bg-red-400/20 hover:text-red-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-not-allowed disabled:opacity-40"
                                       >
-                                        <X className="h-3 w-3" />
+                                        <Trash2 className="h-3 w-3" />
                                       </button>
                                     </div>
                                   </div>
@@ -2638,6 +2716,7 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
                     <span className="text-[9px] font-semibold text-emerald-200/45">必填</span>
                   </div>
                   <input
+                    ref={templateNameInputRef}
                     type="text"
                     value={newTemplateName}
                     onChange={(e) => setNewTemplateName(e.target.value.slice(0, 50))}
@@ -2731,10 +2810,11 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={(e) => deleteTemplate(tpl.id, e)}
+                                      onClick={(e) => requestTemplateDeletion(tpl, e)}
+                                      disabled={savingTemplate || deletingTemplate}
                                       aria-label={`刪除 ${tpl.name}`}
                                       title="刪除範本"
-                                      className="rounded-md p-1 text-emerald-200/60 transition-colors hover:bg-red-400/15 hover:text-red-200"
+                                      className="rounded-md p-1 text-emerald-200/60 transition-colors hover:bg-red-400/15 hover:text-red-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                       <Trash2 className="h-3 w-3" />
                                     </button>
@@ -2777,6 +2857,41 @@ export default function MessageManagement({ admin, isActive = true, initialEmplo
             </div>
           </div>
         </div>
+      )}
+
+      {templateToDelete && createPortal(
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md">
+          <section ref={templateDeleteDialogRef} role="dialog" aria-modal="true" aria-labelledby="template-delete-title" aria-describedby="template-delete-description" aria-busy={deletingTemplate} tabIndex={-1} className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-[1.75rem] border border-rose-300/25 bg-slate-900 text-slate-100 shadow-[0_28px_90px_rgba(2,6,23,0.8)] ring-1 ring-inset ring-white/5">
+            <div className="h-1 bg-gradient-to-r from-rose-600 via-red-400 to-orange-400" />
+            <header className="flex items-start gap-3 border-b border-white/10 bg-gradient-to-br from-rose-500/10 via-slate-900 to-slate-900 px-5 py-5 sm:px-6">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-rose-300/30 bg-rose-500/15 text-rose-200">
+                <Trash2 className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-bold tracking-[0.18em] text-rose-300">訊息範本 · 刪除確認</p>
+                <h3 id="template-delete-title" className="mt-1 text-lg font-bold tracking-tight text-white">刪除這個訊息範本？</h3>
+              </div>
+              <button type="button" onClick={() => setTemplateToDelete(null)} disabled={deletingTemplate} aria-label="關閉範本刪除確認" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 disabled:opacity-40"><X className="h-4 w-4" /></button>
+            </header>
+            <div className="space-y-4 px-5 py-5 sm:px-6">
+              <div className="rounded-xl border border-white/10 bg-slate-950/50 p-4">
+                <p className="text-[10px] font-bold tracking-[0.16em] text-slate-400">即將刪除的範本</p>
+                <p className="mt-2 break-all text-sm font-semibold text-white">{templateToDelete.name}</p>
+              </div>
+              <div id="template-delete-description" className="space-y-2 text-xs leading-5 text-slate-300">
+                <p>確認後會從範本庫永久移除此範本，無法復原。</p>
+                <p>不會刪除已發送通知或目前已套用的內容；圖片、影片檔案也會保留，避免影響其他內容。</p>
+              </div>
+              {templateDeleteError && <p role="alert" className="break-words rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs leading-5 text-rose-200">{templateDeleteError}</p>}
+            </div>
+            <footer className="grid grid-cols-2 gap-3 border-t border-white/10 bg-slate-950/40 px-5 py-4 sm:px-6">
+              <button type="button" data-cancel-template-delete onClick={() => setTemplateToDelete(null)} disabled={deletingTemplate} className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm font-semibold text-slate-200 transition-colors hover:border-slate-500 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-40">取消</button>
+              <button type="button" onClick={() => void deleteTemplate()} disabled={deletingTemplate} className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/40 bg-gradient-to-r from-rose-600 to-red-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-950/30 transition-colors hover:from-rose-500 hover:to-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 disabled:cursor-not-allowed disabled:opacity-50">
+                {deletingTemplate ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-hidden="true" />刪除中…</> : <><Trash2 className="h-4 w-4" aria-hidden="true" />確認刪除</>}
+              </button>
+            </footer>
+          </section>
+        </div>, document.body,
       )}
 
       {showDeleteConfirm && deleteMode && createPortal(

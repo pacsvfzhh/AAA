@@ -1,5 +1,7 @@
-import { Component, ErrorInfo, ReactNode } from 'react';
+import { Component, ErrorInfo, ReactNode, useContext } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { LanguageContext, useLanguage } from '../lib/i18n/context';
+import { isModuleLoadError, recoverFromModuleLoadError } from '../lib/moduleLoadRecovery';
 
 interface Props {
   children: ReactNode;
@@ -11,6 +13,40 @@ interface State {
   hasError: boolean;
   error: Error | null;
   errorInfo: ErrorInfo | null;
+}
+
+function ModuleLoadFailure({ onReload }: { onReload: () => void }) {
+  const languageContext = useContext(LanguageContext);
+  const { t } = useLanguage();
+  const text = languageContext ? t.moduleLoadError : {
+    title: '頁面載入未完成',
+    description: '網站可能已更新，或連線暫時中斷。請重新整理以載入最新頁面。',
+    reload: '重新整理頁面',
+    notice: '重新整理會清除尚未儲存的輸入；已儲存的資料不會因此變更。',
+    support: '若持續出現，請檢查網路連線或聯絡技術支援。',
+  };
+
+  return (
+    <div role="alert" className="flex min-h-screen items-center justify-center bg-slate-950 p-4 text-slate-100">
+      <div className="w-full max-w-lg rounded-2xl border border-cyan-800/60 bg-slate-900 p-6 shadow-2xl sm:p-8">
+        <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-400/10">
+          <RefreshCw aria-hidden="true" className="h-6 w-6 text-cyan-300" />
+        </div>
+        <h1 className="text-xl font-semibold">{text.title}</h1>
+        <p className="mt-3 text-sm leading-6 text-slate-300">{text.description}</p>
+        <p className="mt-4 rounded-lg border border-amber-400/15 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100/90">{text.notice}</p>
+        <button
+          type="button"
+          onClick={onReload}
+          className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300"
+        >
+          <RefreshCw aria-hidden="true" className="h-4 w-4" />
+          {text.reload}
+        </button>
+        <p className="mt-4 text-xs leading-5 text-slate-400">{text.support}</p>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -38,6 +74,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    recoverFromModuleLoadError(error);
     console.error('ErrorBoundary caught an error:', error, errorInfo);
 
     this.setState({
@@ -66,6 +103,10 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       if (this.props.fallback) {
         return this.props.fallback;
+      }
+
+      if (isModuleLoadError(this.state.error)) {
+        return <ModuleLoadFailure onReload={this.handleReload} />;
       }
 
       return (

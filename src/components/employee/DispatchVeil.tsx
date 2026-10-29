@@ -13,6 +13,7 @@ interface DispatchVeilProps {
   phase: 'in' | 'out';
   label: string;
   connect?: DispatchVeilConnect;
+  revealDuration?: number;
 }
 
 // From the veil mounting: the first step lands as the stage fades in (index.css); OrderDispatch decides when
@@ -40,10 +41,11 @@ interface DispatchWavesProps {
   className?: string;
   wavelengths?: [number, number, number];
   speeds?: [number, number, number];
+  intensity?: number;
 }
 
 // Wave counts are derived from the rendered width so each crest keeps the same pixel shape on every screen.
-export function DispatchWaves({ className = '', wavelengths = [460, 230, 460], speeds = [51, 66, 84] }: DispatchWavesProps) {
+export function DispatchWaves({ className = '', wavelengths = [460, 230, 460], speeds = [51, 66, 84], intensity = 1 }: DispatchWavesProps) {
   const uid = useId().replace(/:/g, '');
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -73,12 +75,12 @@ export function DispatchWaves({ className = '', wavelengths = [460, 230, 460], s
             className={`dispatch-veil-wave dispatch-veil-wave-${layer.key}`}
             viewBox="0 0 400 40"
             preserveAspectRatio="none"
-            style={{ animationDuration: `${(width / speeds[i]).toFixed(2)}s` }}
+            style={{ animationDuration: `calc(${(width / speeds[i]).toFixed(2)}s * var(--wave-slow, 1))` }}
           >
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor={layer.top} stopOpacity={layer.topOpacity} />
-                <stop offset="1" stopColor={layer.bottom} stopOpacity={layer.bottomOpacity} />
+                <stop offset="0" stopColor={layer.top} stopOpacity={Math.min(1, layer.topOpacity * intensity)} />
+                <stop offset="1" stopColor={layer.bottom} stopOpacity={Math.min(1, layer.bottomOpacity * intensity)} />
               </linearGradient>
             </defs>
             <path d={`${curve} V40 H0Z`} fill={`url(#${gradientId})`} />
@@ -106,7 +108,7 @@ function useConnectStep(state: DispatchVeilConnect['state'] | undefined) {
   return step;
 }
 
-export default function DispatchVeil({ phase, label, connect }: DispatchVeilProps) {
+export default function DispatchVeil({ phase, label, connect, revealDuration }: DispatchVeilProps) {
   const step = useConnectStep(connect?.state);
   const veilRef = useRef<HTMLDivElement>(null);
   const [stageHeight, setStageHeight] = useState<number | null>(null);
@@ -114,9 +116,9 @@ export default function DispatchVeil({ phase, label, connect }: DispatchVeilProp
 
   const [introDone, setIntroDone] = useState(false);
 
-  // Tablet/desktop panels grow from standby to waiting height under the veil; pin the stage so the ship doesn't drift.
+  // Keep the artwork fixed while the separate veil surface follows the panel's changing height.
   useLayoutEffect(() => {
-    if (connectMode && veilRef.current) setStageHeight(veilRef.current.clientHeight);
+    if (veilRef.current) setStageHeight(veilRef.current.clientHeight);
   }, [connectMode]);
 
   // CSS animations restart when the tab is shown again; after the intro, hold the end state instead of replaying it.
@@ -134,62 +136,64 @@ export default function DispatchVeil({ phase, label, connect }: DispatchVeilProp
     'dispatch-veil',
     phase === 'in' ? 'dispatch-veil-in' : 'dispatch-veil-out',
     connect ? 'dispatch-veil-connect' : '',
+    revealDuration !== undefined ? 'dispatch-veil-stop' : '',
     settled ? 'is-settled' : '',
     state === 'connected' ? 'is-connected' : '',
     introDone && phase === 'in' ? 'is-steady' : '',
   ].filter(Boolean).join(' ');
 
   return (
-    <div ref={veilRef} className={veilClass} aria-hidden="true">
-      <span className="dispatch-veil-blob dispatch-veil-blob-1" />
-      <span className="dispatch-veil-blob dispatch-veil-blob-2" />
-      <span className="dispatch-veil-blob dispatch-veil-blob-3" />
-      <span className="dispatch-veil-sweep" />
-
-      <div className="dispatch-veil-stage" style={stageHeight ? { bottom: 'auto', height: stageHeight } : undefined}>
-        {connect ? (
-          <div className="dispatch-veil-hull">
-            <span className="dispatch-veil-radar"><span /><span /><span /></span>
-            <span className="dispatch-veil-radar-done" />
-            <DispatchShip idPrefix="dispatch-veil" className="dispatch-veil-ship" />
-          </div>
-        ) : (
-          <DispatchShip idPrefix="dispatch-veil" className="dispatch-veil-ship" />
-        )}
-        <DispatchWaves />
-        <div className="dispatch-veil-caption">
-          <span className="dispatch-veil-label">{label}</span>
-          <span className="dispatch-veil-track">
-            {connect ? (
-              <span
-                className={`dispatch-veil-fill ${state === 'connected' ? 'is-connected' : state === 'failed' ? 'is-failed' : ''}`}
-                data-step={step}
-                style={{ '--veil-progress': progress } as CSSProperties}
-              />
-            ) : (
-              <span className="dispatch-veil-bar" />
-            )}
-          </span>
-          {connect && (
-            // All lines share one grid cell, so the stage keeps its height (and position) as the text changes.
-            <span className="dispatch-veil-status">
-              {[...connect.steps, connect.connectedLabel, connect.failedLabel].map((text, i) => (
-                <span
-                  key={i}
-                  className={`dispatch-veil-status-line ${i === activeLine ? 'is-active' : i < activeLine ? 'is-past' : ''} ${i === 3 ? 'is-connected' : i === 4 ? 'is-failed' : ''}`}
-                >
-                  {i < 3 ? (
-                    <span className="dispatch-veil-status-dot" />
-                  ) : (
-                    <span className="dispatch-veil-status-icon">
-                      {i === 3 ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : <X className="h-2.5 w-2.5" strokeWidth={3.5} />}
-                    </span>
-                  )}
-                  <span>{i < 3 ? `${text}…` : text}</span>
-                </span>
-              ))}
-            </span>
+    <div ref={veilRef} className={veilClass} style={revealDuration !== undefined ? { '--dispatch-stop-reveal-duration': `${revealDuration}ms` } as CSSProperties : undefined} aria-hidden="true">
+      <div className="dispatch-veil-content" style={stageHeight ? { bottom: 'auto', height: stageHeight } : undefined}>
+        <span className="dispatch-veil-blob dispatch-veil-blob-1" />
+        <span className="dispatch-veil-blob dispatch-veil-blob-2" />
+        <span className="dispatch-veil-blob dispatch-veil-blob-3" />
+        <span className="dispatch-veil-sweep" />
+        <div className="dispatch-veil-stage">
+          {connect ? (
+            <div className="dispatch-veil-hull">
+              <span className="dispatch-veil-radar"><span /><span /><span /></span>
+              <span className="dispatch-veil-radar-done" />
+              <DispatchShip idPrefix="dispatch-veil" waterline className="dispatch-veil-ship" />
+            </div>
+          ) : (
+            <DispatchShip idPrefix="dispatch-veil" waterline className="dispatch-veil-ship" />
           )}
+          <DispatchWaves intensity={1.2} />
+          <div className="dispatch-veil-caption">
+            <span className="dispatch-veil-label">{label}</span>
+            <span className="dispatch-veil-track">
+              {connect ? (
+                <span
+                  className={`dispatch-veil-fill ${state === 'connected' ? 'is-connected' : state === 'failed' ? 'is-failed' : ''}`}
+                  data-step={step}
+                  style={{ '--veil-progress': progress } as CSSProperties}
+                />
+              ) : (
+                <span className="dispatch-veil-bar" />
+              )}
+            </span>
+            {connect && (
+              // All lines share one grid cell, so the stage keeps its height (and position) as the text changes.
+              <span className="dispatch-veil-status">
+                {[...connect.steps, connect.connectedLabel, connect.failedLabel].map((text, i) => (
+                  <span
+                    key={i}
+                    className={`dispatch-veil-status-line ${i === activeLine ? 'is-active' : i < activeLine ? 'is-past' : ''} ${i === 3 ? 'is-connected' : i === 4 ? 'is-failed' : ''}`}
+                  >
+                    {i < 3 ? (
+                      <span className="dispatch-veil-status-dot" />
+                    ) : (
+                      <span className="dispatch-veil-status-icon">
+                        {i === 3 ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : <X className="h-2.5 w-2.5" strokeWidth={3.5} />}
+                      </span>
+                    )}
+                    <span>{i < 3 ? `${text}…` : text}</span>
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { Users, Plus, Send, Trash2, CreditCard as Edit2, User, MessageCircle, ArrowLeft, ChevronRight, X, Search, Tag, Filter, Image, Star, Clock, Bold, Underline, Strikethrough, Pencil, Check, Gift, DollarSign, MessageSquarePlus, FileText, BookOpen, Highlighter, Pin, Upload, Zap, CheckCheck, Eye, ZoomIn, ZoomOut, RotateCcw, Megaphone, AlignLeft, AlignCenter, AlignRight, Palette } from 'lucide-react';
-import { sanitizeAnnouncementContent } from '../../lib/sanitizeHTML';
+import RichMediaContent from '../RichMediaContent';
 import CustomerAutoMessages, { type AutoMessageDraft } from './CustomerAutoMessages';
 import CustomerAvatarPicker, { CustomerAvatarDisplay } from './CustomerAvatarPicker';
 import TiptapEditor, { TiptapEditorRef } from './TiptapEditor';
@@ -9,6 +9,7 @@ import { formatSupabaseError, supabase } from '../../lib/supabase';
 import { fetchAdminChatUnreadCounts, fetchConversationSummaryRows, getCachedAdminWorkspaceData, getCachedConversationSummaries, invalidateAdminWorkspaceDataCache, invalidateConversationSummariesCache, prefetchAdminGroups, prefetchAdminWorkspaceData, prefetchConversationSummaries } from '../../lib/serviceWorkspaceCache';
 import { uniqueRealtimeChannelName } from '../../lib/realtimeChannel';
 import { stripTailwindStyles, sanitizeChatMessage } from '../../lib/sanitizeHTML';
+import { cleanupComposerImagePreviews, getComposerContentForSend, prepareComposerImagePreviews } from '../../lib/composerImagePreview';
 import { processContentImages } from '../../lib/imageOptimizer';
 import AdminGroupPicker, { type AdminGroup } from './AdminGroupPicker';
 import EmployeeMetadataPopover from './EmployeeMetadataPopover';
@@ -27,10 +28,20 @@ function extractImageOnlyUrl(content: string): string | null {
   return images[0].getAttribute('src') || null;
 }
 
-const AdminChatImage = memo(({ src, isUploading, uploadProgress, onClickImage }: {
+function getTemplatePreview(content: string): string {
+  const container = document.createElement('div');
+  container.innerHTML = sanitizeChatMessage(content);
+  const text = (container.textContent || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+  const hasMedia = container.querySelector('img, video, iframe, source') !== null;
+  const excerpt = text.length > 72 ? `${text.slice(0, 72)}…` : text;
+
+  if (excerpt && hasMedia) return `${excerpt} · 含媒體`;
+  if (excerpt) return excerpt;
+  return hasMedia ? '包含圖片／影片內容' : '';
+}
+
+const AdminChatImage = memo(({ src, onClickImage }: {
   src: string;
-  isUploading: boolean;
-  uploadProgress: number;
   onClickImage: (url: string) => void;
 }) => {
   const [loaded, setLoaded] = useState(false);
@@ -65,33 +76,8 @@ const AdminChatImage = memo(({ src, isUploading, uploadProgress, onClickImage }:
         style={{ width: 'auto', height: 'auto', maxWidth: '200px', maxHeight: '250px' }}
         onLoad={() => setLoaded(true)}
         onError={() => setErrored(true)}
-        onClick={(e: React.MouseEvent) => { if (!isUploading && loaded) { e.stopPropagation(); e.preventDefault(); onClickImage(src); } }}
+        onClick={(e: React.MouseEvent) => { if (loaded) { e.stopPropagation(); e.preventDefault(); onClickImage(src); } }}
       />
-      {isUploading && (
-        <div className="absolute inset-0 bg-black/20 backdrop-blur-[1px] flex flex-col items-center justify-center z-10">
-          <div className="relative w-14 h-14">
-            <svg className="w-14 h-14 -rotate-90" viewBox="0 0 44 44">
-              <circle cx="22" cy="22" r="18" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="3" />
-              <circle
-                cx="22" cy="22" r="18" fill="none" stroke="white"
-                strokeWidth="3"
-                strokeDasharray={`${uploadProgress * 1.13}, 113`}
-                strokeLinecap="round"
-                className="drop-shadow-sm"
-                style={{ transition: 'stroke-dasharray 0.15s ease-out' }}
-              />
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-white text-xs font-bold drop-shadow-sm">{uploadProgress}%</span>
-            </div>
-          </div>
-          <div className="text-white/80 text-[10px] font-medium mt-1.5 tracking-wide">
-            {uploadProgress < 20 ? '準備中……' :
-             uploadProgress < 85 ? '上傳中……' :
-             uploadProgress < 100 ? '處理中……' : '完成！'}
-          </div>
-        </div>
-      )}
     </div>
   );
 });
@@ -250,6 +236,7 @@ interface MessageTemplate {
   title: string | null;
   subtitle: string | null;
   content: string;
+  preview?: string;
   content_type: 'text' | 'richtext' | 'rich_card';
   sort_order: number;
   is_pinned: boolean;
@@ -302,7 +289,6 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
   const [serviceTicketNumber, setServiceTicketNumber] = useState<string>('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const uploadingTempIdRef = useRef<string | null>(null);
   const pendingImageMessagesRef = useRef(new Map<string, Message>());
   // Sent message id -> last load request issued before its insert returned; only later loads may settle it.
   const pendingConfirmAfterRef = useRef(new Map<string, number>());
@@ -320,6 +306,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
   const replacingImageMsgIdRef = useRef<string | null>(null);
   const [replacingImageMsgId, setReplacingImageMsgId] = useState<string | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const imageInsertRangeRef = useRef<{ targetKey: string; range: Range | null } | null>(null);
   const [editorFontSize, setEditorFontSize] = useState<'normal' | 'large' | 'xlarge' | null>(null);
   const [isBoldActive, setIsBoldActive] = useState(false);
   const [isUnderlineActive, setIsUnderlineActive] = useState(false);
@@ -405,6 +392,8 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
   const [sendingTip, setSendingTip] = useState(false);
   const tipOperationIdRef = useRef<string | null>(null);
   const [messageTemplates, setMessageTemplates] = useState<MessageTemplate[]>([]);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  const templateLoadRequestRef = useRef(0);
   const [showTemplateManager, setShowTemplateManager] = useState(false);
   const [showTemplatePopup, setShowTemplatePopup] = useState(false);
   const [showRichCardPopup, setShowRichCardPopup] = useState(false);
@@ -722,9 +711,9 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
     }
   };
 
-  useEffect(() => {
-    if (!selectedEmployee?.id) return;
-    employeeListRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  useLayoutEffect(() => {
+    if (!selectedEmployee?.id || !employeeListRef.current) return;
+    employeeListRef.current.scrollTop = 0;
   }, [selectedEmployee?.id]);
 
   const applyRealtimeConversation = useCallback((payload: { eventType?: string; new?: Partial<Message> }) => {
@@ -1726,10 +1715,11 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
     }
   };
 
-  const loadTemplates = useCallback(async () => {
+  const loadTemplates = useCallback(async (includeQuickSendPreviews = false) => {
     if (!selectedAdminId) return;
+    const requestId = ++templateLoadRequestRef.current;
     try {
-      const { data, error } = await supabase
+      const templateQuery = supabase
         .from('cs_message_templates')
         .select('id, admin_id, name, title, subtitle, content_type, sort_order, is_pinned, created_at, updated_at, source_type')
         .eq('admin_id', selectedAdminId)
@@ -1737,10 +1727,33 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
         .order('is_pinned', { ascending: false })
         .order('sort_order', { ascending: true })
         .order('created_at', { ascending: false });
-      if (error) throw error;
-      setMessageTemplates((data || []).map(t => ({ ...t, content: '' })) as MessageTemplate[]);
+      const previewQuery = includeQuickSendPreviews
+        ? supabase
+          .from('cs_message_templates')
+          .select('id, content')
+          .eq('admin_id', selectedAdminId)
+          .eq('source_type', 'ccc_service')
+          .neq('content_type', 'rich_card')
+        : null;
+      const [templateResult, previewResult] = await Promise.all([templateQuery, previewQuery]);
+      if (templateResult.error) throw templateResult.error;
+      if (previewResult?.error) throw previewResult.error;
+      if (requestId !== templateLoadRequestRef.current) return;
+
+      const previews = new Map((previewResult?.data || []).map(row => [row.id, getTemplatePreview(row.content || '')]));
+      const templates = (templateResult.data || []).map(t => ({ ...t, content: '', preview: previews.get(t.id) })) as MessageTemplate[];
+      setMessageTemplates(current => {
+        const previousPreviews = new Map(current.map(template => [template.id, template.preview]));
+        return templates.map(template => ({
+          ...template,
+          preview: template.preview ?? previousPreviews.get(template.id),
+        }));
+      });
+      setTemplatesLoaded(true);
     } catch (error) {
-      console.error('Error loading templates:', formatSupabaseError(error));
+      if (requestId === templateLoadRequestRef.current) {
+        console.error('Error loading templates:', formatSupabaseError(error));
+      }
     }
   }, [selectedAdminId]);
 
@@ -1757,6 +1770,22 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
       return null;
     }
   }, []);
+
+  const resetTemplateEditor = (contentType: 'richtext' | 'rich_card' = templateManagerMode) => {
+    setEditingTemplate(null);
+    setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: contentType });
+    if (templateEditorRef.current) templateEditorRef.current.innerHTML = '';
+    setRichCardContent('');
+    const editor = richCardEditorRef.current?.getEditor();
+    if (editor) editor.commands.setContent('');
+  };
+
+  const openTemplateManager = (mode: 'richtext' | 'rich_card') => {
+    setTemplateManagerMode(mode);
+    resetTemplateEditor(mode);
+    setShowTemplateManager(true);
+    void loadTemplates();
+  };
 
   const getTemplateContent = (): string => {
     if (templateForm.content_type === 'rich_card') {
@@ -1806,11 +1835,9 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
           source_type: 'ccc_service',
         });
       if (error) throw error;
-      setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: 'richtext' });
-      if (templateEditorRef.current) templateEditorRef.current.innerHTML = '';
-      setRichCardContent(''); { const rce = richCardEditorRef.current?.getEditor(); if (rce) rce.commands.setContent(''); }
+      resetTemplateEditor();
       setNotification({ type: 'success', text: '範本已建立！' });
-      loadTemplates();
+      loadTemplates(true);
     } catch (error: unknown) {
       setNotification({ type: 'error', text: getCccErrorMessage(error, '建立範本失敗') });
     } finally {
@@ -1835,12 +1862,9 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
         content: optimizedContent,
         content_type: templateForm.content_type,
       });
-      setEditingTemplate(null);
-      setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: 'richtext' });
-      if (templateEditorRef.current) templateEditorRef.current.innerHTML = '';
-      setRichCardContent(''); { const rce = richCardEditorRef.current?.getEditor(); if (rce) rce.commands.setContent(''); }
+      resetTemplateEditor();
       setNotification({ type: 'success', text: '範本已更新！' });
-      loadTemplates();
+      loadTemplates(true);
     } catch (error: unknown) {
       setNotification({ type: 'error', text: getCccErrorMessage(error, '更新範本失敗') });
     } finally {
@@ -1852,7 +1876,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
     try {
       await mutateAuditedContent('template_delete', [id]);
       setNotification({ type: 'success', text: '刪除成功' });
-      loadTemplates();
+      loadTemplates(true);
     } catch (error: unknown) {
       setNotification({ type: 'error', text: getCccErrorMessage(error, '刪除範本失敗') });
     }
@@ -1865,7 +1889,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
         .update({ is_pinned: !tpl.is_pinned, updated_at: new Date().toISOString() })
         .eq('id', tpl.id);
       if (error) throw error;
-      loadTemplates();
+      loadTemplates(true);
     } catch (error: unknown) {
       setNotification({ type: 'error', text: getCccErrorMessage(error, '更新置頂狀態失敗') });
     }
@@ -1944,8 +1968,9 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
   };
 
   useEffect(() => {
+    setTemplatesLoaded(false);
     if (selectedAdminId) {
-      loadTemplates();
+      loadTemplates(true);
     }
   }, [selectedAdminId, loadTemplates]);
 
@@ -2404,7 +2429,8 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedCustomer || !selectedEmployee) return;
+    const editor = editorRef.current;
+    if (!file || !selectedCustomer || !selectedEmployee || !editor) return;
 
     if (!file.type.startsWith('image/')) {
       setNotification({ type: 'error', text: '請選擇圖片檔案' });
@@ -2416,90 +2442,71 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
       return;
     }
 
-    const dataUrl = await new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (event) => resolve(event.target?.result as string);
-      reader.readAsDataURL(file);
-    });
+    const customerId = selectedCustomer.id;
+    const employeeId = selectedEmployee.id;
+    const targetKey = `${customerId}:${employeeId}`;
+    const insertion = imageInsertRangeRef.current;
+    if (insertion && insertion.targetKey !== targetKey) {
+      imageInsertRangeRef.current = null;
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setNotification({ type: 'error', text: '工作階段已切換，請重新選擇圖片。' });
+      return;
+    }
 
-    const tempId = `temp-${Date.now()}`;
-    const tempMessage: Message = {
-      id: tempId,
-      customer_id: selectedCustomer.id,
-      employee_id: selectedEmployee.id,
-      sender_type: 'customer',
-      message_content: '[Image]',
-      message_type: 'image',
-      image_url: dataUrl,
-      is_read: false,
-      created_at: new Date().toISOString(),
-    };
-
-    pendingImageMessagesRef.current.set(tempId, tempMessage);
-    setMessages(prev => [...prev, tempMessage]);
-    scrollToBottom(false);
-    uploadingTempIdRef.current = tempId;
     setUploadingImage(true);
     setUploadProgress(0);
 
     try {
       const fileExt = file.name.split('.').pop();
-      const fileName = `${selectedCustomer.id}_${selectedEmployee.id}_${Date.now()}.${fileExt}`;
-      const filePath = `${fileName}`;
+      const fileName = `${customerId}_${employeeId}_${Date.now()}.${fileExt}`;
 
       await uploadStorageObjectWithProgress({
         bucket: 'chat-images',
-        path: filePath,
+        path: fileName,
         body: file,
         onProgress: percentage => setUploadProgress(Math.round(percentage * 0.9)),
       });
 
       const { data: { publicUrl } } = supabase.storage
         .from('chat-images')
-        .getPublicUrl(filePath);
-
+        .getPublicUrl(fileName);
       setUploadProgress(92);
 
-      const pendingMessage = pendingImageMessagesRef.current.get(tempId);
-      if (pendingMessage) {
-        pendingImageMessagesRef.current.set(tempId, { ...pendingMessage, image_url: publicUrl });
+      if (editor.dataset.composerTarget !== targetKey || editorRef.current !== editor) {
+        setNotification({ type: 'error', text: '工作階段已切換，圖片未加入輸入框。' });
+        return;
       }
-      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, image_url: publicUrl } : m));
 
-      justSentRef.current = true;
-      setTimeout(() => { justSentRef.current = false; }, 3000);
-
-      const { error: insertError } = await supabase
-        .from('customer_employee_conversations')
-        .insert({
-          customer_id: selectedCustomer.id,
-          employee_id: selectedEmployee.id,
-          sender_type: 'customer',
-          message_content: '[Image]',
-          message_type: 'image',
-          image_url: publicUrl,
-          is_read: false,
-          source_type: 'ccc_service',
-        });
-
-      if (insertError) throw insertError;
-
+      const image = document.createElement('img');
+      image.src = publicUrl;
+      image.alt = file.name;
+      const savedRange = insertion?.range;
+      const range = savedRange && editor.contains(savedRange.commonAncestorContainer)
+        ? savedRange
+        : document.createRange();
+      if (!savedRange || !editor.contains(savedRange.commonAncestorContainer)) {
+        range.selectNodeContents(editor);
+        range.collapse(false);
+      }
+      range.deleteContents();
+      range.insertNode(image);
+      prepareComposerImagePreviews(editor, 'emerald');
+      const imageFrame = image.closest('[data-composer-image-frame]') || image;
+      range.setStartAfter(imageFrame);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      editor.focus();
+      setMessageInput(getEditorHasContent() ? (editor.textContent || '_img_') : '');
       setUploadProgress(100);
-      uploadingTempIdRef.current = null;
-      setUploadingImage(false);
-      setUploadProgress(0);
-      void loadConversationHistory();
     } catch (error: unknown) {
-      pendingImageMessagesRef.current.delete(tempId);
       setNotification({ type: 'error', text: getCccErrorMessage(error, '圖片上傳失敗') });
-      setMessages(prev => prev.filter(m => m.id !== tempId));
-      uploadingTempIdRef.current = null;
+    } finally {
       setUploadingImage(false);
       setUploadProgress(0);
-    } finally {
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      imageInsertRangeRef.current = null;
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -2517,12 +2524,11 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
       );
     }
     if (msg.message_type === 'image' && msg.image_url) {
-      const isUploading = uploadingImage && uploadingTempIdRef.current === msg.id;
       return (
         <AdminChatImage
           src={msg.image_url}
-          isUploading={isUploading}
-          uploadProgress={uploadProgress}
+
+
           onClickImage={(url) => { setPreviewImage(url); setAdminImageZoom(1); setAdminImageDrag({ x: 0, y: 0 }); }}
         />
       );
@@ -2692,8 +2698,6 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
       return (
         <AdminChatImage
           src={imageOnlyUrl}
-          isUploading={false}
-          uploadProgress={0}
           onClickImage={(url) => { setPreviewImage(url); setAdminImageZoom(1); setAdminImageDrag({ x: 0, y: 0 }); }}
         />
       );
@@ -2753,7 +2757,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
 
   const getEditorContent = (): string => {
     if (!editorRef.current) return '';
-    return stripTailwindStyles(editorRef.current.innerHTML);
+    return getComposerContentForSend(editorRef.current);
   };
 
   const isEditorEmpty = (): boolean => {
@@ -2774,8 +2778,12 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
     e.preventDefault();
     if (!selectedCustomer || !selectedEmployee) return;
 
+    if (uploadingImage) return;
     const htmlContent = getEditorContent();
     if (isEditorEmpty()) return;
+    const imageOnlyUrl = extractImageOnlyUrl(htmlContent);
+    const messageContent = imageOnlyUrl ? '[Image]' : htmlContent;
+    const messageType = imageOnlyUrl ? 'image' : 'text';
 
     // Client-generated id: reloads that land before the insert returns can recognise this message.
     const tempMessage: Message = {
@@ -2783,8 +2791,9 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
       customer_id: selectedCustomer.id,
       employee_id: selectedEmployee.id,
       sender_type: 'customer',
-      message_content: htmlContent,
-      message_type: 'text',
+      message_content: messageContent,
+      message_type: messageType,
+      image_url: imageOnlyUrl,
       is_read: false,
       created_at: new Date().toISOString(),
     };
@@ -2804,8 +2813,9 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
           customer_id: selectedCustomer.id,
           employee_id: selectedEmployee.id,
           sender_type: 'customer',
-          message_content: htmlContent,
-          message_type: 'text',
+          message_content: messageContent,
+          message_type: messageType,
+          ...(imageOnlyUrl ? { image_url: imageOnlyUrl } : {}),
           is_read: false,
           source_type: 'ccc_service',
         })
@@ -4450,7 +4460,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
               </div>
 
               {/* Message Input */}
-              <form onSubmit={handleSendMessage} className="px-3 py-2.5 border-t border-slate-700/50 relative">
+              <form onSubmit={handleSendMessage} className="relative w-full border-t border-emerald-400/25 bg-slate-950/55">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -4472,7 +4482,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                     <div className="fixed inset-0 z-40" onMouseDown={() => setShowTemplatePopup(false)} />
                     <div className="absolute bottom-full left-0 right-0 mb-2 px-1 z-50">
                       <div className="relative flex max-h-[360px] flex-col overflow-hidden rounded-2xl border border-emerald-300/25 bg-gradient-to-b from-slate-900/98 via-slate-900/96 to-emerald-950/75 shadow-2xl shadow-emerald-950/30 ring-1 ring-emerald-200/10 backdrop-blur-xl">
-                        <div className="flex shrink-0 items-center justify-between border-b border-white/10 bg-gradient-to-r from-slate-800/70 via-slate-900/35 to-transparent px-4 py-3">
+                        <div className="flex shrink-0 items-center justify-between border-b border-emerald-200/15 bg-gradient-to-r from-emerald-500/15 via-slate-900/40 to-transparent px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-emerald-300/25 bg-emerald-500/20 shadow-lg shadow-emerald-900/20">
                               <Zap className="w-3 h-3 text-white" />
@@ -4483,7 +4493,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() => { setShowTemplatePopup(false); setTemplateManagerMode('richtext'); setShowTemplateManager(true); loadTemplates(); }}
+                              onClick={() => { setShowTemplatePopup(false); openTemplateManager('richtext'); }}
                               className="flex items-center gap-1 rounded-lg border border-emerald-300/35 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-50 shadow-sm shadow-emerald-950/20 transition-all duration-150 hover:border-emerald-200/70 hover:bg-emerald-500 hover:shadow-emerald-500/25"
                             >
                               <Pencil className="w-3 h-3" />
@@ -4507,38 +4517,46 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                                       if (!fullContent) return;
                                       const content = tpl.content_type === 'richtext' ? fullContent : fullContent.replace(/\n/g, '<br>');
                                       editorRef.current.innerHTML = content;
+                                      prepareComposerImagePreviews(editorRef.current, 'emerald');
                                       const hasText = (editorRef.current.textContent || '').trim().length > 0;
                                       const hasImgs = editorRef.current.querySelector('img') !== null;
                                       setMessageInput(hasText ? editorRef.current.textContent! : hasImgs ? '_img_' : '');
                                     }
                                     setShowTemplatePopup(false);
                                   }}
-                                  className={`group w-full rounded-xl border px-3 py-2.5 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/70 ${
+                                  className={`group w-full rounded-xl border px-2.5 py-1.5 text-left shadow-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/70 ${
                                     tpl.is_pinned
-                                      ? 'border-emerald-400/45 bg-gradient-to-r from-emerald-900/55 via-emerald-950/35 to-slate-900/70 shadow-emerald-950/25 hover:border-emerald-300/75 hover:from-emerald-800/70 hover:via-emerald-900/45 hover:to-slate-900/60'
-                                      : 'border-slate-700/70 bg-slate-800/75 hover:border-emerald-300/45 hover:bg-slate-800'
+                                      ? 'border-emerald-300/50 bg-gradient-to-r from-emerald-900/60 via-emerald-950/45 to-slate-900/80 shadow-emerald-950/30 hover:-translate-y-0.5 hover:border-emerald-200/90 hover:from-emerald-800/75 hover:via-emerald-900/60 hover:to-slate-900/75 hover:shadow-[0_10px_24px_rgba(2,44,34,0.45)] hover:ring-1 hover:ring-emerald-300/30'
+                                      : 'border-slate-700/80 bg-gradient-to-r from-slate-800/90 via-slate-800/75 to-slate-900/85 hover:-translate-y-0.5 hover:border-emerald-300/65 hover:from-emerald-950/40 hover:via-slate-800/90 hover:to-slate-900 hover:shadow-[0_8px_20px_rgba(2,44,34,0.28)]'
                                   }`}
                                 >
                                   <div className="flex items-center gap-2">
                                     {tpl.is_pinned && (
-                                      <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-emerald-300/25 bg-emerald-500/15">
-                                        <Pin className="h-2.5 w-2.5 text-emerald-300" />
+                                      <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-md border border-emerald-300/30 bg-emerald-500/20 shadow-sm shadow-emerald-950/30">
+                                        <Pin className="h-2.5 w-2.5 fill-emerald-300/20 text-emerald-200" />
                                       </div>
                                     )}
-                                    <span className={`flex-1 truncate text-[13px] font-semibold ${tpl.is_pinned ? 'text-emerald-100 group-hover:text-emerald-50' : 'text-slate-200 group-hover:text-white'}`}>{tpl.name}</span>
-                                    {tpl.content_type === 'richtext' && (
-                                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 flex-shrink-0">富文字</span>
-                                    )}
-                                    <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg border border-emerald-300/0 bg-emerald-500/0 opacity-0 transition-all group-hover:border-emerald-300/40 group-hover:bg-emerald-500 group-hover:opacity-100" title="填入輸入框">
-                                      <Pencil className="w-2.5 h-2.5 text-white" />
+                                    <span className={`flex-1 truncate text-[12px] font-semibold ${tpl.is_pinned ? 'text-emerald-100 group-hover:text-emerald-50' : 'text-slate-200 group-hover:text-white'}`}>{tpl.name}</span>
+                                    {tpl.content_type === 'richtext' && <span className="flex-shrink-0 rounded border border-emerald-300/20 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-200">富文字</span>}
+                                    <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-lg border border-emerald-300/0 bg-emerald-500/0 opacity-0 transition-all group-hover:border-emerald-300/40 group-hover:bg-emerald-500 group-hover:opacity-100" title="填入輸入框">
+                                      <Pencil className="h-2.5 w-2.5 text-white" />
                                     </div>
                                   </div>
-                                  <div className={`mt-1 ${tpl.is_pinned ? 'pl-7' : ''}`}>
-                                    <p className="text-[11px] text-slate-400 group-hover:text-slate-300 truncate leading-relaxed">{tpl.name}</p>
+                                  <div className={`mt-0.5 ${tpl.is_pinned ? 'pl-6' : ''}`}>
+                                    {tpl.preview === undefined ? (
+                                      <p className="truncate text-[10px] leading-tight text-emerald-200/75">載入內容中…</p>
+                                    ) : tpl.preview ? (
+                                      <p className="truncate text-[10px] leading-tight text-slate-300/85 group-hover:text-white">{tpl.preview}</p>
+                                    ) : null}
                                   </div>
                                 </button>
                               );
                             })}
+                          </div>
+                        ) : !templatesLoaded ? (
+                          <div className="flex items-center justify-center gap-2 p-6 text-sm text-emerald-200/80">
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-300/30 border-t-emerald-200" />
+                            載入範本中…
                           </div>
                         ) : (
                           <div className="p-6 text-center">
@@ -4549,7 +4567,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                             <p className="text-[11px] text-slate-400 mb-3">建立快速回覆範本</p>
                             <button
                               type="button"
-                              onClick={() => { setShowTemplatePopup(false); setTemplateManagerMode('richtext'); setShowTemplateManager(true); loadTemplates(); }}
+                              onClick={() => { setShowTemplatePopup(false); openTemplateManager('richtext'); }}
                               className="rounded-lg border border-emerald-300/35 bg-emerald-500/20 px-3.5 py-1.5 text-xs font-semibold text-emerald-50 shadow-sm shadow-emerald-950/20 transition-all hover:border-emerald-200/70 hover:bg-emerald-500 hover:shadow-emerald-500/25"
                             >
                               建立範本
@@ -4567,7 +4585,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                   <>
                     <div className="fixed inset-0 z-40" onMouseDown={() => setShowRichCardPopup(false)} />
                     <div className="absolute bottom-full left-0 right-0 mb-2 px-1 z-50">
-                      <div className="relative flex max-h-[360px] flex-col overflow-hidden rounded-2xl border border-sky-300/25 bg-gradient-to-b from-slate-900/98 via-slate-900/96 to-blue-950/80 shadow-2xl shadow-blue-950/35 ring-1 ring-sky-200/10 backdrop-blur-xl">
+                      <div className="relative flex max-h-[360px] flex-col overflow-hidden rounded-2xl border border-sky-300/30 bg-gradient-to-b from-slate-900/98 via-slate-900/96 to-blue-950/85 shadow-[0_24px_70px_rgba(23,37,84,0.6)] ring-1 ring-inset ring-white/5 backdrop-blur-xl">
                         <div className="flex shrink-0 items-center justify-between border-b border-white/10 bg-gradient-to-r from-slate-800/70 via-slate-900/35 to-transparent px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className="flex h-7 w-7 items-center justify-center rounded-xl border border-sky-300/25 bg-sky-500/20 shadow-lg shadow-blue-900/20">
@@ -4579,7 +4597,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() => { setShowRichCardPopup(false); setTemplateManagerMode('rich_card'); setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: 'rich_card' }); setShowTemplateManager(true); loadTemplates(); }}
+                              onClick={() => { setShowRichCardPopup(false); openTemplateManager('rich_card'); }}
                               className="flex items-center gap-1 rounded-lg border border-sky-300/35 bg-sky-500/15 px-2.5 py-1 text-[11px] font-semibold text-sky-50 shadow-sm shadow-blue-950/20 transition-all duration-150 hover:border-sky-200/70 hover:bg-sky-500 hover:shadow-sky-500/25"
                             >
                               <Pencil className="w-3 h-3" />
@@ -4591,7 +4609,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                           </div>
                         </div>
                         {richCardTemplates.length > 0 ? (
-                          <div className="overflow-y-auto bg-slate-950/25 p-2.5 space-y-2 scrollbar-dark">
+                          <div className="overflow-y-auto bg-slate-950/35 p-2 space-y-1.5 scrollbar-dark">
                             {richCardTemplates.map((tpl) => {
                               return (
                                 <button
@@ -4641,20 +4659,22 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                                       setNotification({ type: 'error', text: getCccErrorMessage(err, '富媒體卡片傳送失敗') });
                                     } finally { setSendingRichCard(false); }
                                   }}
-                                  className="group w-full rounded-xl border border-sky-400/35 bg-gradient-to-r from-sky-900/55 via-blue-950/45 to-indigo-950/50 px-3 py-2.5 text-left shadow-sm shadow-blue-950/25 transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-300/75 hover:from-sky-800/65 hover:via-blue-900/55 hover:to-indigo-900/60 hover:shadow-lg hover:shadow-blue-950/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/70"
+                                  className="group w-full rounded-lg border border-sky-400/30 bg-gradient-to-r from-sky-900/55 via-blue-950/45 to-indigo-950/50 px-2.5 py-1.5 text-left shadow-sm shadow-blue-950/25 transition-all duration-200 hover:border-sky-300/70 hover:from-sky-800/65 hover:via-blue-900/55 hover:to-indigo-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/70"
                                 >
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex min-h-6 items-center gap-1.5">
                                     {tpl.is_pinned && (
-                                      <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-sky-300/25 bg-sky-500/15">
-                                        <Pin className="h-2.5 w-2.5 text-sky-300" />
+                                      <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border border-sky-300/25 bg-sky-500/15">
+                                        <Pin className="h-2 w-2 text-sky-300" />
                                       </div>
                                     )}
-                                    <span className="flex-1 truncate text-[13px] font-semibold text-sky-100 group-hover:text-white">{tpl.name}</span>
-                                    {tpl.title && (
-                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-400/30 flex-shrink-0 truncate max-w-[120px]">{tpl.title}</span>
-                                    )}
-                                    <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg border border-sky-300/0 bg-sky-500/0 opacity-0 transition-all group-hover:border-sky-300/40 group-hover:bg-sky-500 group-hover:opacity-100" title="直接傳送">
-                                      <Send className="w-2.5 h-2.5 text-white" />
+                                    <div className="min-w-0 flex-1">
+                                      <p className="truncate text-[12px] font-semibold leading-4 text-sky-100 group-hover:text-white">{tpl.name}</p>
+                                      {(tpl.title || tpl.subtitle) && (
+                                        <p className="truncate text-[10px] leading-3.5 text-slate-400 group-hover:text-slate-300">{[tpl.title, tpl.subtitle].filter(Boolean).join(' · ')}</p>
+                                      )}
+                                    </div>
+                                    <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-sky-300/0 bg-sky-500/0 opacity-0 transition-all group-hover:border-sky-300/40 group-hover:bg-sky-500 group-hover:opacity-100" title="直接傳送">
+                                      <Send className="h-2.5 w-2.5 text-white" />
                                     </div>
                                   </div>
 
@@ -4671,7 +4691,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                             <p className="text-[11px] text-slate-400 mb-3">建立富媒體卡片範本即可直接傳送</p>
                             <button
                               type="button"
-                              onClick={() => { setShowRichCardPopup(false); setTemplateManagerMode('rich_card'); setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: 'rich_card' }); setShowTemplateManager(true); loadTemplates(); }}
+                              onClick={() => { setShowRichCardPopup(false); openTemplateManager('rich_card'); }}
                               className="rounded-lg border border-sky-300/35 bg-sky-500/20 px-3.5 py-1.5 text-xs font-semibold text-sky-50 shadow-sm shadow-blue-950/20 transition-all hover:border-sky-200/70 hover:bg-sky-500 hover:shadow-sky-500/25"
                             >
                               建立富媒體卡片
@@ -4683,10 +4703,10 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                   </>
                   );
                 })()}
-                <div className="flex gap-2 items-end">
-                  <div className="flex-1 min-w-0 rounded-xl border border-slate-300 bg-white focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/40 transition-all shadow-sm">
+                <div className="relative w-full">
+                  <div className="relative w-full overflow-hidden rounded-t-xl border border-emerald-300/25 bg-white shadow-sm transition-all focus-within:border-emerald-300/70 focus-within:ring-1 focus-within:ring-emerald-400/25">
                     {/* Toolbar row */}
-                    <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-slate-200 bg-slate-50/80 flex-wrap">
+                    <div className="flex min-h-[40px] w-full flex-wrap items-center gap-0.5 border-b border-slate-200 bg-slate-50/90 px-2 py-1">
                       <button type="button" onMouseDown={(e) => { e.preventDefault(); applyFormat('bold'); }} className={`p-1.5 rounded-md transition-all ${isBoldActive ? 'bg-blue-500 text-white shadow-sm shadow-blue-500/30' : 'text-slate-500 hover:bg-slate-200 hover:text-slate-800'}`} title="粗體（Ctrl+B）">
                         <Bold className="w-3.5 h-3.5" strokeWidth={2.5} />
                       </button>
@@ -4726,6 +4746,16 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                       <div className="w-px h-5 bg-slate-200 mx-1" />
                       <button
                         type="button"
+                        onMouseDown={() => {
+                          const editor = editorRef.current;
+                          const selection = window.getSelection();
+                          const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+                          const targetKey = selectedCustomer && selectedEmployee ? `${selectedCustomer.id}:${selectedEmployee.id}` : '';
+                          imageInsertRangeRef.current = {
+                            targetKey,
+                            range: range && editor?.contains(range.commonAncestorContainer) ? range.cloneRange() : null,
+                          };
+                        }}
                         onClick={() => fileInputRef.current?.click()}
                         disabled={uploadingImage}
                         className="p-1.5 hover:bg-slate-200 disabled:opacity-50 rounded-md text-slate-500 hover:text-slate-800 transition-colors"
@@ -4744,7 +4774,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                       </button>
                       <button
                         type="button"
-                        onClick={() => { loadTemplates(); setShowTemplatePopup(!showTemplatePopup); setShowRichCardPopup(false); }}
+                        onClick={() => { setShowTemplatePopup(!showTemplatePopup); setShowRichCardPopup(false); }}
                         className={`group flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[10px] font-extrabold uppercase tracking-[0.04em] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 ${showTemplatePopup ? 'border-emerald-300 bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md shadow-emerald-500/30' : 'border-emerald-300/70 bg-emerald-50 text-emerald-700 shadow-sm shadow-emerald-200/50 hover:-translate-y-0.5 hover:border-emerald-500 hover:bg-emerald-100 hover:text-emerald-800 hover:shadow-md hover:shadow-emerald-300/40'}`}
                         title="快速傳送範本"
                         aria-label="開啟快速傳送範本"
@@ -4786,7 +4816,23 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                       ref={editorRef}
                       contentEditable
                       suppressContentEditableWarning
-                      onInput={() => { setMessageInput(getEditorHasContent() ? (editorRef.current?.textContent || '_img_') : ''); syncMainFormatState(); }}
+                      data-composer-target={selectedCustomer && selectedEmployee ? `${selectedCustomer.id}:${selectedEmployee.id}` : ''}
+                      onInput={() => {
+                        const editor = editorRef.current;
+                        if (editor) cleanupComposerImagePreviews(editor);
+                        setMessageInput(getEditorHasContent() ? (editor?.textContent || '_img_') : '');
+                        syncMainFormatState();
+                      }}
+                      onClick={(e) => {
+                        if (!(e.target instanceof Element)) return;
+                        const image = e.target.closest('img');
+                        if (!(image instanceof HTMLImageElement)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPreviewImage(image.currentSrc || image.src);
+                        setAdminImageZoom(1);
+                        setAdminImageDrag({ x: 0, y: 0 });
+                      }}
                       onKeyUp={() => { syncMainFormatState(); setIsBoldActive(document.queryCommandState('bold')); setIsUnderlineActive(document.queryCommandState('underline')); }}
                       onMouseUp={() => { syncMainFormatState(); setIsBoldActive(document.queryCommandState('bold')); setIsUnderlineActive(document.queryCommandState('underline')); }}
                       onSelect={() => { syncMainFormatState(); setIsBoldActive(document.queryCommandState('bold')); setIsUnderlineActive(document.queryCommandState('underline')); }}
@@ -4796,20 +4842,21 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                           handleSendMessage(e as unknown as React.FormEvent);
                         }
                       }}
-                      className="min-h-[40px] max-h-[216px] overflow-y-auto px-3 py-2 text-slate-800 focus:outline-none text-sm leading-5 [&_b]:font-bold [&_u]:underline [&_font[size='5']]:text-lg [&_font[size='7']]:text-xl"
+                      className="min-h-[44px] max-h-[216px] w-full overflow-y-auto px-3 py-2 pr-20 text-sm leading-5 text-slate-800 focus:outline-none [&_b]:font-bold [&_u]:underline [&_font[size='5']]:text-lg [&_font[size='7']]:text-xl [&_img]:block [&_img]:h-auto [&_img]:w-auto [&_img]:max-h-[180px] [&_img]:max-w-full [&_img]:rounded-md [&_img]:object-contain [&_img]:cursor-zoom-in"
                       data-placeholder={`以 ${selectedCustomer?.customer_name || '經理'} 身分傳送訊息……（Ctrl+Enter 傳送）`}
                       style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                     />
                   </div>
-                  <div className="flex flex-col gap-2.5 flex-shrink-0">
-                    <button
-                      type="submit"
-                      disabled={!messageInput.trim()}
-                      className="px-8 py-2.5 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 disabled:from-slate-300 disabled:to-slate-300 disabled:text-slate-400 text-white rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-blue-600/20 disabled:shadow-none min-w-[64px]"
-                    >
-                      <Send className="w-4 h-4" />
-                    </button>
-                  </div>
+                  <button
+                    type="submit"
+                    disabled={uploadingImage || !messageInput.trim()}
+                    aria-label="發送訊息"
+                    title="發送訊息"
+                    className="absolute bottom-1 right-4 flex h-9 w-16 items-center justify-center gap-1 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-900/30 transition-all hover:from-emerald-400 hover:to-teal-400 disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-400 disabled:text-slate-500 disabled:shadow-none"
+                  >
+                    <Send className="h-4 w-4" />
+                    <span className="text-xs font-semibold">發送</span>
+                  </button>
                 </div>
               </form>
             </div>
@@ -4992,10 +5039,10 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                   </div>
                 </div>
               ) : (
-                <div
+                <RichMediaContent
                   className="announcement-content [&_img]:mx-auto [&_img]:block"
                   style={{ fontSize: '15px', lineHeight: '1.75', color: '#374151' }}
-                  dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementContent(richCardFullContent || viewingRichCard.message_content) }}
+                  html={richCardFullContent || viewingRichCard.message_content}
                 />
               )}
             </div>
@@ -5643,53 +5690,44 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
       )}
 
       {showTemplateManager && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) { setShowTemplateManager(false); setEditingTemplate(null); setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: 'richtext' }); if (templateEditorRef.current) templateEditorRef.current.innerHTML = ''; setRichCardContent(''); const rce = richCardEditorRef.current?.getEditor(); if (rce) rce.commands.setContent(''); } }}>
-          <div onClick={(e) => e.stopPropagation()} className={`bg-slate-900 rounded-2xl border border-slate-700/50 w-full h-[92vh] flex flex-col shadow-2xl transition-all duration-300 ${templateForm.content_type === 'rich_card' ? 'max-w-[90vw]' : 'max-w-5xl'}`}>
-            {/* Header */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 flex-shrink-0">
-              <div className="flex items-center gap-2">
-                <div className={`p-1.5 rounded-lg ${templateManagerMode === 'rich_card' ? 'bg-blue-600/20' : 'bg-teal-600/20'}`}>
-                  {templateManagerMode === 'rich_card' ? <Megaphone className="w-4 h-4 text-blue-400" /> : <BookOpen className="w-4 h-4 text-teal-400" />}
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md" onMouseDown={(e) => { if (e.target === e.currentTarget) { setShowTemplateManager(false); resetTemplateEditor(); } }}>
+          <div onClick={(e) => e.stopPropagation()} className={`relative flex h-[92vh] w-full flex-col overflow-hidden rounded-[1.75rem] border bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 shadow-2xl ring-1 ring-inset ring-white/5 transition-all duration-300 ${templateManagerMode === 'rich_card' ? 'border-sky-300/30 shadow-blue-950/50' : 'border-emerald-300/25 shadow-emerald-950/40'} ${templateForm.content_type === 'rich_card' ? 'max-w-[90vw]' : 'max-w-5xl'}`}>
+            <div className={`h-1 shrink-0 bg-gradient-to-r ${templateManagerMode === 'rich_card' ? 'from-sky-600 via-cyan-400 to-blue-500' : 'from-emerald-600 via-teal-400 to-cyan-500'}`} />
+            <div className={`flex shrink-0 items-center justify-between border-b px-5 py-3.5 ${templateManagerMode === 'rich_card' ? 'border-sky-300/15 bg-gradient-to-r from-sky-950/70 via-slate-900 to-blue-950/50' : 'border-emerald-300/15 bg-gradient-to-r from-emerald-950/70 via-slate-900 to-teal-950/50'}`}>
+              <div className="flex min-w-0 items-center gap-3">
+                <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border shadow-inner ${templateManagerMode === 'rich_card' ? 'border-sky-300/30 bg-sky-500/15 shadow-sky-950/30' : 'border-emerald-300/30 bg-emerald-500/15 shadow-emerald-950/30'}`}>
+                  {templateManagerMode === 'rich_card' ? <Megaphone className="h-4 w-4 text-sky-300" /> : <BookOpen className="h-4 w-4 text-emerald-300" />}
                 </div>
-                <h3 className="text-sm font-bold text-white">{templateManagerMode === 'rich_card' ? '富媒體卡片範本' : '訊息範本'}</h3>
-                <span className="text-[11px] text-slate-500 font-medium ml-1">{messageTemplates.filter(t => templateManagerMode === 'rich_card' ? t.content_type === 'rich_card' : t.content_type !== 'rich_card').length} 個範本</span>
+                <div className="min-w-0">
+                  <h3 className="truncate text-base font-bold tracking-wide text-white">{templateManagerMode === 'rich_card' ? '富媒體卡片範本' : '訊息範本'}</h3>
+                  <p className={`mt-0.5 text-[11px] font-medium ${templateManagerMode === 'rich_card' ? 'text-sky-200/70' : 'text-emerald-200/70'}`}>管理、編輯與建立範本</p>
+                </div>
+                <span className={`ml-1 shrink-0 rounded-lg border px-2.5 py-1 text-[11px] font-bold tabular-nums ${templateManagerMode === 'rich_card' ? 'border-sky-300/25 bg-sky-500/10 text-sky-100' : 'border-emerald-300/25 bg-emerald-500/10 text-emerald-100'}`}>{messageTemplates.filter(t => templateManagerMode === 'rich_card' ? t.content_type === 'rich_card' : t.content_type !== 'rich_card').length} 個範本</span>
               </div>
-              <button onClick={() => { setShowTemplateManager(false); setEditingTemplate(null); setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: 'richtext' }); if (templateEditorRef.current) templateEditorRef.current.innerHTML = ''; }} className="p-1.5 hover:bg-slate-800 rounded-lg transition-colors">
-                <X className="w-4 h-4 text-slate-400" />
+              <button type="button" aria-label="關閉範本管理" onClick={() => { setShowTemplateManager(false); resetTemplateEditor(); }} className={`ml-3 rounded-xl border p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 ${templateManagerMode === 'rich_card' ? 'border-sky-300/20 bg-slate-900/60 text-sky-200 hover:border-sky-300/40 hover:bg-sky-500/15 focus-visible:ring-sky-300' : 'border-emerald-300/20 bg-slate-900/60 text-emerald-200 hover:border-emerald-300/40 hover:bg-emerald-500/15 focus-visible:ring-emerald-300'}`}>
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             {/* Left/Right body */}
-            <div className="flex-1 flex min-h-0 overflow-hidden">
+            <div className="flex min-h-0 flex-1 overflow-hidden">
               {/* Left: Editor */}
-              <div className={`flex flex-col border-r border-slate-700/50 p-4 gap-3 ${templateForm.content_type === 'rich_card' ? 'w-[72%]' : 'w-1/2'}`}>
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  <h4 className="text-sm font-bold text-white flex items-center gap-2 whitespace-nowrap">
-                    {editingTemplate ? <Pencil className="w-3.5 h-3.5 text-blue-400" /> : <Plus className="w-3.5 h-3.5 text-teal-400" />}
+              <div className={`flex flex-col gap-3 border-r p-4 ${templateManagerMode === 'rich_card' ? 'border-sky-300/15 bg-gradient-to-br from-slate-900/60 to-blue-950/15' : 'border-emerald-300/15 bg-gradient-to-br from-slate-900/60 to-emerald-950/15'} ${templateForm.content_type === 'rich_card' ? 'w-[72%]' : 'w-1/2'}`}>
+                <div className="flex flex-shrink-0 items-center gap-3">
+                  <h4 className={`flex items-center gap-2 whitespace-nowrap text-sm font-bold ${templateManagerMode === 'rich_card' ? 'text-sky-100' : 'text-emerald-100'}`}>
+                    {editingTemplate ? <Pencil className={`h-3.5 w-3.5 ${templateManagerMode === 'rich_card' ? 'text-sky-300' : 'text-emerald-300'}`} /> : <Plus className={`h-3.5 w-3.5 ${templateManagerMode === 'rich_card' ? 'text-sky-300' : 'text-emerald-300'}`} />}
                     {editingTemplate ? '編輯範本' : '新增範本'}
                   </h4>
                   <input
                     type="text"
                     value={templateForm.name}
                     onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
-                    className="flex-1 min-w-0 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 placeholder:text-slate-400 shadow-sm"
+                    className={`min-w-0 flex-1 rounded-lg border bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 ${templateManagerMode === 'rich_card' ? 'border-sky-200 focus:border-sky-400 focus:ring-sky-400' : 'border-emerald-200 focus:border-emerald-400 focus:ring-emerald-400'}`}
                     placeholder="範本名稱（例如：歡迎訊息、常見問答、跟進……）"
                   />
                 </div>
                 <input ref={templateImageInputRef} type="file" accept="image/*" onChange={handleTemplateImageUpload} className="hidden" />
                 <input id="templateFileImport" type="file" accept=".txt,.doc,.docx" onChange={handleTemplateFileImport} className="hidden" />
-                {/* Content type toggle */}
-                {templateManagerMode !== 'rich_card' && (
-                <div className="flex items-center gap-1 p-1 bg-slate-800 rounded-lg flex-shrink-0">
-                  <button type="button" onClick={() => { setTemplateForm(f => ({ ...f, content_type: 'richtext' })); }} className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${templateForm.content_type === 'richtext' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
-                    富文字
-                  </button>
-                  <button type="button" onClick={() => { setTemplateForm(f => ({ ...f, content_type: 'rich_card' })); }} className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center justify-center gap-1.5 ${templateForm.content_type === 'rich_card' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
-                    <Megaphone className="w-3 h-3" />
-                    富媒體卡片
-                  </button>
-                </div>
-                )}
                 {templateForm.content_type === 'rich_card' ? (
                   <>
                   <div className="flex flex-row gap-3 items-center bg-blue-500 rounded-t-xl px-3 py-2 flex-shrink-0">
@@ -5870,7 +5908,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                     type="button"
                     onClick={editingTemplate ? handleUpdateTemplate : handleCreateTemplate}
                     disabled={!templateForm.name.trim() || isTemplateContentEmpty() || savingTemplate}
-                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 disabled:from-slate-600 disabled:to-slate-600 disabled:text-slate-400 text-white rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2"
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-all disabled:from-slate-600 disabled:to-slate-600 disabled:text-slate-400 ${templateManagerMode === 'rich_card' ? 'bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-500 hover:to-sky-500' : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500'}`}
                   >
                     {savingTemplate ? (
                       <>
@@ -5884,7 +5922,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                   {editingTemplate && (
                     <button
                       type="button"
-                      onClick={() => { setEditingTemplate(null); setTemplateForm({ name: '', title: '', subtitle: '', content: '', content_type: 'richtext' }); if (templateEditorRef.current) templateEditorRef.current.innerHTML = ''; setRichCardContent(''); const rce = richCardEditorRef.current?.getEditor(); if (rce) rce.commands.setContent(''); }}
+                      onClick={() => resetTemplateEditor()}
                       className="px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-semibold text-sm transition-all"
                     >
                       取消
@@ -5895,17 +5933,18 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
               </div>
 
               {/* Right: 已儲存的範本 */}
-              <div className={`flex flex-col p-4 overflow-hidden ${templateForm.content_type === 'rich_card' ? 'w-[28%]' : 'w-1/2'}`}>
+              <div className={`flex flex-col overflow-hidden p-4 ${templateManagerMode === 'rich_card' ? 'bg-gradient-to-br from-blue-950/20 to-slate-950/50' : 'bg-gradient-to-br from-emerald-950/20 to-slate-950/50'} ${templateForm.content_type === 'rich_card' ? 'w-[28%]' : 'w-1/2'}`}>
                 {(() => {
                   const filteredTpls = messageTemplates.filter(t => templateManagerMode === 'rich_card' ? t.content_type === 'rich_card' : t.content_type !== 'rich_card');
                   return (<>
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 flex-shrink-0">
-                  已儲存的範本 ({filteredTpls.length})
+                <h4 className={`mb-3 flex flex-shrink-0 items-center justify-between rounded-xl border px-3 py-2 text-xs font-bold tracking-wide ${templateManagerMode === 'rich_card' ? 'border-sky-300/20 bg-sky-500/10 text-sky-100' : 'border-emerald-300/20 bg-emerald-500/10 text-emerald-100'}`}>
+                  <span className="flex items-center gap-2"><span className={`h-1.5 w-1.5 rounded-full ${templateManagerMode === 'rich_card' ? 'bg-sky-300' : 'bg-emerald-300'}`} />已儲存的範本</span>
+                  <span className="rounded-md bg-slate-950/40 px-2 py-0.5 tabular-nums text-slate-300">{filteredTpls.length}</span>
                 </h4>
                 {filteredTpls.length > 0 ? (
-                  <div className="flex-1 overflow-y-auto space-y-2 scrollbar-dark pr-1">
+                  <div className="flex-1 space-y-2 overflow-y-auto pr-1 scrollbar-dark">
                     {filteredTpls.map((tpl) => (
-                      <div key={tpl.id} className={`rounded-xl border-2 p-3 transition-all cursor-pointer ${editingTemplate?.id === tpl.id ? 'border-blue-500 bg-blue-500/10 shadow-lg shadow-blue-500/10' : tpl.is_pinned ? 'bg-slate-800/80 border-teal-600/50 hover:border-teal-500/70' : 'bg-slate-800/50 border-slate-700/50 hover:border-slate-500/70 hover:bg-slate-800/70'}`}
+                      <div key={tpl.id} className={`group cursor-pointer rounded-xl border p-3 transition-all ${editingTemplate?.id === tpl.id ? (templateManagerMode === 'rich_card' ? 'border-sky-300/65 bg-gradient-to-br from-sky-500/15 to-blue-950/50 shadow-lg shadow-blue-950/25' : 'border-emerald-300/60 bg-gradient-to-br from-emerald-500/15 to-emerald-950/40 shadow-lg shadow-emerald-950/25') : tpl.is_pinned ? (templateManagerMode === 'rich_card' ? 'border-sky-400/30 bg-sky-950/35 hover:border-sky-300/55 hover:bg-sky-900/40' : 'border-emerald-400/30 bg-emerald-950/35 hover:border-emerald-300/55 hover:bg-emerald-900/40') : 'border-slate-700/70 bg-slate-800/60 hover:border-slate-500 hover:bg-slate-800/90'}`}
                         onClick={async () => {
                           setEditingTemplate(tpl);
                           setTemplateForm({ name: tpl.name, title: tpl.title || '', subtitle: tpl.subtitle || '', content: '', content_type: tpl.content_type as 'text' | 'richtext' | 'rich_card' });
@@ -5922,8 +5961,8 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                         }}
                       >
                         <div className="flex items-start gap-2.5">
-                          <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center mt-0.5 ${tpl.content_type === 'rich_card' ? 'bg-blue-500/20' : 'bg-teal-500/20'}`}>
-                            {tpl.content_type === 'rich_card' ? <Megaphone className="w-4 h-4 text-blue-400" /> : <FileText className="w-4 h-4 text-teal-400" />}
+                          <div className={`mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border ${templateManagerMode === 'rich_card' ? 'border-sky-300/20 bg-sky-500/15' : 'border-emerald-300/20 bg-emerald-500/15'}`}>
+                            {tpl.content_type === 'rich_card' ? <Megaphone className="h-4 w-4 text-sky-300" /> : <FileText className="h-4 w-4 text-emerald-300" />}
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
@@ -5952,7 +5991,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                                   }
                                 }
                               }}
-                              className="p-1.5 rounded-lg bg-slate-700/60 text-slate-400 hover:text-blue-400 hover:bg-blue-500/20 transition-all"
+                              className={`rounded-lg border p-1.5 transition-all ${templateManagerMode === 'rich_card' ? 'border-sky-300/10 bg-sky-500/5 text-slate-400 hover:border-sky-300/30 hover:bg-sky-500/20 hover:text-sky-200' : 'border-emerald-300/10 bg-emerald-500/5 text-slate-400 hover:border-emerald-300/30 hover:bg-emerald-500/20 hover:text-emerald-200'}`}
                               title="編輯"
                             >
                               <Pencil className="w-3.5 h-3.5" />
@@ -5960,7 +5999,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); handleToggleTemplatePin(tpl); }}
-                              className={`p-1.5 rounded-lg transition-all ${tpl.is_pinned ? 'bg-teal-500/20 text-teal-400 hover:text-teal-300' : 'bg-slate-700/60 text-slate-400 hover:text-teal-400 hover:bg-teal-500/20'}`}
+                              className={`rounded-lg border p-1.5 transition-all ${tpl.is_pinned ? 'border-amber-300/20 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20' : 'border-slate-600/40 bg-slate-700/60 text-slate-400 hover:border-emerald-300/25 hover:bg-emerald-500/15 hover:text-emerald-200'}`}
                               title={tpl.is_pinned ? '取消置頂' : '置頂'}
                             >
                               <Pin className="w-3.5 h-3.5" />
@@ -5968,7 +6007,7 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); setTemplateToDelete(tpl.id); }}
-                              className="p-1.5 rounded-lg bg-slate-700/60 text-slate-400 hover:text-red-400 hover:bg-red-500/20 transition-all"
+                              className="rounded-lg border border-slate-600/40 bg-slate-700/60 p-1.5 text-slate-400 transition-all hover:border-rose-300/30 hover:bg-rose-500/20 hover:text-rose-200"
                               title="刪除"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -6142,25 +6181,33 @@ function CccServiceManagement({ adminId, isSuperAdmin, isActive, initialEmployee
       </>, document.body)}
 
       {templateToDelete && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setTemplateToDelete(null)}>
-          <div className="bg-slate-800 rounded-xl p-6 max-w-sm w-full mx-4 border border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-white mb-2">刪除範本</h3>
-            <p className="text-sm text-slate-400 mb-6">確定要刪除此範本嗎？此操作無法復原。</p>
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setTemplateToDelete(null)}
-                className="px-4 py-2 text-sm rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => { handleDeleteTemplate(templateToDelete); setTemplateToDelete(null); }}
-                className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors"
-              >
-                刪除
-              </button>
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md" onClick={() => setTemplateToDelete(null)}>
+          <section role="dialog" aria-modal="true" aria-labelledby="ccc-template-delete-title" aria-describedby="ccc-template-delete-description" className="w-full max-w-md overflow-hidden rounded-[1.75rem] border border-rose-300/25 bg-slate-900 text-slate-100 shadow-[0_28px_90px_rgba(2,6,23,0.8)] ring-1 ring-inset ring-white/5" onClick={e => e.stopPropagation()}>
+            <div className="h-1 bg-gradient-to-r from-rose-600 via-red-400 to-orange-400" />
+            <header className="flex items-start gap-3 border-b border-white/10 bg-gradient-to-br from-rose-500/10 via-slate-900 to-slate-900 px-5 py-5 sm:px-6">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-rose-300/30 bg-rose-500/15 text-rose-200">
+                <Trash2 className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-bold tracking-[0.18em] text-rose-300">訊息範本 · 刪除確認</p>
+                <h3 id="ccc-template-delete-title" className="mt-1 text-lg font-bold tracking-tight text-white">刪除這個訊息範本？</h3>
+              </div>
+              <button type="button" onClick={() => setTemplateToDelete(null)} aria-label="關閉範本刪除確認" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"><X className="h-4 w-4" /></button>
+            </header>
+            <div className="space-y-4 px-5 py-5 sm:px-6">
+              <div className="rounded-xl border border-white/10 bg-slate-950/50 p-4">
+                <p className="text-[10px] font-bold tracking-[0.16em] text-slate-400">即將刪除的範本</p>
+                <p className="mt-2 break-all text-sm font-semibold text-white">{messageTemplates.find(template => template.id === templateToDelete)?.name || '所選範本'}</p>
+              </div>
+              <p id="ccc-template-delete-description" className="text-xs leading-5 text-slate-300">確認後會從範本庫永久移除此範本；已發送的富媒體卡片不受影響。</p>
             </div>
-          </div>
+            <footer className="grid grid-cols-2 gap-3 border-t border-white/10 bg-slate-950/40 px-5 py-4 sm:px-6">
+              <button type="button" onClick={() => setTemplateToDelete(null)} className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm font-semibold text-slate-200 transition-colors hover:border-slate-500 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300">取消</button>
+              <button type="button" onClick={() => { handleDeleteTemplate(templateToDelete); setTemplateToDelete(null); }} className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/40 bg-gradient-to-r from-rose-600 to-red-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-950/30 transition-colors hover:from-rose-500 hover:to-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300">
+                <Trash2 className="h-4 w-4" aria-hidden="true" />確認刪除
+              </button>
+            </footer>
+          </section>
         </div>
       , document.body)}
     </div>

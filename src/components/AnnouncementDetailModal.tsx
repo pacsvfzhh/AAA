@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bell, Calendar, Pin, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { marked } from 'marked';
 import { sanitizeAnnouncementContent } from '../lib/sanitizeHTML';
+import { adminVideoLabels, enhanceRichVideos, type VideoLabels } from '../lib/richVideo';
 import PageLoader from './employee/PageLoader';
+import PanelColorBlocks from './employee/PanelColorBlocks';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -21,6 +23,30 @@ interface AnnouncementDetailModalProps {
   contentLoading?: boolean;
   isMobileDevice?: boolean;
   isIOS?: boolean;
+  videoLabels?: VideoLabels;
+}
+
+const GATE_LOADER_DELAY_MS = 220;
+const IMAGE_PLACEHOLDER_DELAY_MS = 160;
+
+// Layout jumps once, then everything after the image slides from its old spot via transform: no per-frame
+// layout, so text neither stutters nor reflows. Skipped for images above the viewport (scroll anchoring handles those).
+function glideFollowingContent(frame: HTMLElement, delta: number, container: HTMLElement) {
+  if (Math.abs(delta) < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const scroller = container.closest('.announcement-detail-scroll');
+  if (scroller && frame.getBoundingClientRect().bottom - delta <= scroller.getBoundingClientRect().top) return;
+  const timing: KeyframeAnimationOptions = { duration: 480, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' };
+  const following: Element[] = [];
+  for (let node: Element | null = frame; node && node !== container; node = node.parentElement) {
+    for (let sibling = node.nextElementSibling; sibling; sibling = sibling.nextElementSibling) following.push(sibling);
+  }
+  const reach = window.innerHeight * 2;
+  following.filter(element => element.getBoundingClientRect().top < reach).forEach(element => {
+    element.animate(
+      [{ transform: `translateY(${-delta}px)` }, { transform: 'translateY(0)' }],
+      { ...timing, composite: 'add' },
+    );
+  });
 }
 
 export default function AnnouncementDetailModal({
@@ -36,6 +62,7 @@ export default function AnnouncementDetailModal({
   contentLoading = false,
   isMobileDevice = typeof window !== 'undefined' && window.innerWidth < 600,
   isIOS = false,
+  videoLabels = adminVideoLabels,
 }: AnnouncementDetailModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [imageLoaderHosts, setImageLoaderHosts] = useState<HTMLElement[]>([]);
@@ -45,126 +72,155 @@ export default function AnnouncementDetailModal({
     return sanitizeAnnouncementContent(typeof rendered === 'string' ? rendered : '');
   }, [content]);
 
-  useEffect(() => {
+  const [contentReady, setContentReady] = useState(false);
+  const [showGateLoader, setShowGateLoader] = useState(false);
+
+  // Images are given their exact box (aspect ratio and width) as soon as the browser knows their size, which is
+  // usually long before the pixels arrive. Content stays hidden behind the page loader until then (max 1.2s),
+  // so the reveal never moves text; images only fade in place.
+  useLayoutEffect(() => {
     const container = contentRef.current;
     if (!container) return;
 
     const imageCleanups: Array<() => void> = [];
     const loaderHosts: HTMLElement[] = [];
+    let waiting = 0;
+    let scanning = true;
+    let revealed = false;
+    let gateTimer: number | undefined;
+    let loaderTimer: number | undefined;
+    const openGate = () => {
+      if (revealed) return;
+      revealed = true;
+      window.clearTimeout(gateTimer);
+      window.clearTimeout(loaderTimer);
+      setContentReady(true);
+    };
+    imageCleanups.push(() => {
+      window.clearTimeout(gateTimer);
+      window.clearTimeout(loaderTimer);
+    });
+
     container.querySelectorAll('img').forEach(img => {
       if ((img.complete && img.naturalWidth > 0) || img.parentElement?.classList.contains('announcement-img-frame')) return;
       const frame = document.createElement('span');
       frame.className = 'announcement-img-frame';
-      const width = Number(img.getAttribute('width'));
-      const height = Number(img.getAttribute('height'));
-      if (width > 0 && height > 0) frame.style.aspectRatio = `${width} / ${height}`;
+      const shimmer = document.createElement('span');
+      shimmer.className = 'announcement-img-shimmer';
       const loaderHost = document.createElement('span');
       loaderHost.className = 'announcement-img-loader';
       img.parentNode?.insertBefore(frame, img);
-      frame.append(loaderHost, img);
+      frame.append(shimmer, loaderHost, img);
+      // Lazy images below the fold never report a size while the text is hidden, which would stall the reveal.
+      img.loading = 'eager';
       loaderHosts.push(loaderHost);
+      const placeholderHeight = frame.offsetHeight;
+      const frameCreatedAt = performance.now();
 
       let cancelled = false;
+      let sized = false;
+      let counted = true;
+      let pollId = 0;
       let unmountTimer: number | undefined;
+      waiting++;
+      const resolveGate = () => {
+        if (!counted) return;
+        counted = false;
+        waiting--;
+        if (!scanning && waiting === 0) openGate();
+      };
+      const applySize = () => {
+        if (sized || cancelled) return;
+        const attrWidth = Number(img.getAttribute('width'));
+        const attrHeight = Number(img.getAttribute('height'));
+        const useAttrs = attrWidth > 0 && attrHeight > 0;
+        const w = useAttrs ? attrWidth : img.naturalWidth;
+        const h = useAttrs ? attrHeight : img.naturalHeight;
+        if (!(w > 0 && h > 0)) return;
+        sized = true;
+        const before = frame.offsetHeight;
+        frame.style.aspectRatio = `${w} / ${h}`;
+        frame.style.maxWidth = `${w}px`;
+        frame.classList.add('has-size');
+        if (revealed) glideFollowingContent(frame, frame.offsetHeight - before, container);
+        resolveGate();
+      };
+      const pollSize = () => {
+        if (sized || cancelled) return;
+        applySize();
+        if (!sized) pollId = requestAnimationFrame(pollSize);
+      };
+      applySize();
+      if (!sized) pollId = requestAnimationFrame(pollSize);
+      // Fallback for images whose size only shows up at load: the browser sizes the <img> before decode finishes, so hold the placeholder height until the reveal.
+      const holdPlaceholder = () => { if (!sized) frame.style.height = `${placeholderHeight}px`; };
       const settle = (failed: boolean) => {
         if (cancelled) return;
+        resolveGate();
+        const startHeight = frame.offsetHeight;
+        frame.style.height = '';
+        // The loader keeps its placeholder size while fading out, so the frame resizing never stretches it.
+        frame.style.setProperty('--placeholder-height', `${startHeight}px`);
+        // While the image is held it is already laid out at its real size, so the growth is known before the class flips.
+        const growth = failed || sized ? 0 : img.offsetHeight - startHeight;
+        // Growing: the content below slides clear first, then the image crossfades with the lingering placeholder.
+        if (growth > 1) {
+          frame.style.setProperty('--img-fade-delay', '.28s');
+          frame.style.setProperty('--placeholder-fade', '.5s');
+        } else {
+          frame.style.setProperty('--placeholder-fade', sized ? '.4s' : '.2s');
+        }
+        // Cached images (reopening) finish before the delayed placeholder ever shows, so they appear without a placeholder fade.
+        if (performance.now() - frameCreatedAt < IMAGE_PLACEHOLDER_DELAY_MS) frame.classList.add('is-instant');
         frame.classList.add('is-loaded');
         if (failed) frame.classList.add('is-error');
+        if (!sized) glideFollowingContent(frame, frame.offsetHeight - startHeight, container);
         unmountTimer = window.setTimeout(() => {
           setImageLoaderHosts(prev => prev.filter(host => host !== loaderHost));
-        }, 450);
+        }, 900);
       };
       const reveal = () => {
+        holdPlaceholder();
         // Decode before fading so large images don't drop the first animation frames.
-        (img.decode ? img.decode() : Promise.resolve()).catch(() => undefined).then(() => settle(false));
+        (img.decode ? img.decode() : Promise.resolve()).catch(() => undefined)
+          .then(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+          .then(() => settle(false));
       };
-      const fail = () => settle(true);
+      const fail = () => {
+        holdPlaceholder();
+        settle(true);
+      };
       img.addEventListener('load', reveal, { once: true });
       img.addEventListener('error', fail, { once: true });
       imageCleanups.push(() => {
         cancelled = true;
+        cancelAnimationFrame(pollId);
         window.clearTimeout(unmountTimer);
         img.removeEventListener('load', reveal);
         img.removeEventListener('error', fail);
       });
     });
     setImageLoaderHosts(loaderHosts);
+    scanning = false;
+    setShowGateLoader(false);
+    if (waiting === 0) {
+      openGate();
+    } else {
+      setContentReady(false);
+      // Reopened announcements usually size their cached images within a frame or two; only a real wait shows the loader.
+      loaderTimer = window.setTimeout(() => {
+        if (!revealed) setShowGateLoader(true);
+      }, GATE_LOADER_DELAY_MS);
+      gateTimer = window.setTimeout(openGate, 1200);
+    }
 
-    container.querySelectorAll('video').forEach(video => {
-      video.controls = true;
-      video.preload = 'metadata';
-      video.playsInline = true;
-      video.setAttribute('playsinline', 'true');
-      video.setAttribute('webkit-playsinline', 'true');
-      if (video.parentElement?.classList.contains('announcement-video-shell')) return;
-
-      const shell = document.createElement('div');
-      shell.className = 'announcement-video-shell';
-      const status = document.createElement('div');
-      status.className = 'announcement-video-status';
-      status.textContent = video.poster ? '正在载入影片…' : '正在建立影片预览…';
-      video.parentNode?.insertBefore(shell, video);
-      shell.append(video, status);
-
-      const hideStatus = () => status.classList.add('is-hidden');
-      const showStatus = (message: string, isError = false) => {
-        status.replaceChildren(document.createTextNode(message));
-        if (isError && (video.currentSrc || video.src)) {
-          const fallbackLink = document.createElement('a');
-          fallbackLink.href = video.currentSrc || video.src;
-          fallbackLink.target = '_blank';
-          fallbackLink.rel = 'noopener noreferrer';
-          fallbackLink.textContent = '打开原始影片';
-          fallbackLink.className = 'announcement-video-fallback';
-          status.appendChild(fallbackLink);
-        }
-        status.classList.toggle('is-error', isError);
-        status.classList.remove('is-hidden');
-      };
-      const captureLegacyPoster = () => {
-        if (video.videoWidth > 0 && video.videoHeight > 0) {
-          shell.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
-        }
-        if (video.poster || !Number.isFinite(video.duration) || video.duration <= 0) {
-          hideStatus();
-          return;
-        }
-        const captureTime = Math.min(Math.max(video.duration * 0.05, 0.1), 2);
-        const capture = () => {
-          try {
-            const width = Math.min(video.videoWidth, 960);
-            const height = Math.max(1, Math.round(video.videoHeight * (width / video.videoWidth)));
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const context = canvas.getContext('2d');
-            if (!context || width <= 0) throw new Error('Frame unavailable');
-            context.drawImage(video, 0, 0, width, height);
-            video.poster = canvas.toDataURL('image/jpeg', 0.75);
-          } catch {
-            showStatus('影片已就绪，点击播放', false);
-            return;
-          }
-          video.currentTime = 0;
-          hideStatus();
-        };
-        video.addEventListener('seeked', capture, { once: true });
-        video.currentTime = captureTime;
-      };
-
-      video.addEventListener('loadedmetadata', captureLegacyPoster, { once: true });
-      video.addEventListener('canplay', hideStatus);
-      video.addEventListener('playing', hideStatus);
-      video.addEventListener('waiting', () => showStatus('正在缓冲影片…'));
-      video.addEventListener('error', () => showStatus('此影片无法播放，请使用 MP4（H.264/AAC）格式', true));
-      if (video.readyState >= 1) captureLegacyPoster();
-    });
+    imageCleanups.push(enhanceRichVideos(container, videoLabels));
 
     return () => {
       imageCleanups.forEach(cleanup => cleanup());
       setImageLoaderHosts([]);
     };
-  }, [sanitizedContent]);
+  }, [sanitizedContent, contentLoading, videoLabels]);
 
   return createPortal(
     <div
@@ -202,16 +258,11 @@ export default function AnnouncementDetailModal({
           }}
         >
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5 blur-2xl" />
-            <div className="absolute -bottom-8 -left-8 h-32 w-32 rounded-full bg-blue-300/10 blur-xl" />
+            <div className="absolute -left-10 -top-14 h-32 w-32 rotate-[18deg] rounded-[30%] bg-white/10" />
+            <div className="absolute -bottom-12 left-[26%] h-28 w-28 -rotate-[18deg] rounded-[30%] bg-cyan-300/15" />
+            <div className="absolute bottom-3 left-[52%] h-9 w-9 rotate-12 rounded-xl bg-white/[0.07]" />
+            <div className="absolute left-[40%] top-3 h-4 w-4 -rotate-6 rounded-md bg-sky-200/15" />
             <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-            <div
-              className="absolute inset-0 opacity-[0.04]"
-              style={{
-                backgroundImage: 'linear-gradient(to right, white 1px, transparent 1px), linear-gradient(to bottom, white 1px, transparent 1px)',
-                backgroundSize: '32px 32px',
-              }}
-            />
           </div>
 
           <button
@@ -263,6 +314,12 @@ export default function AnnouncementDetailModal({
         </div>
 
         <div
+          className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+          style={{ background: 'linear-gradient(160deg, #ffffff 0%, #f0f7ff 40%, #e6f2fe 100%)' }}
+        >
+        <PanelColorBlocks />
+        <div className="pointer-events-none absolute left-6 right-6 top-0 z-10 h-[2px] rounded-full bg-gradient-to-r from-transparent via-blue-300 to-transparent" aria-hidden="true" />
+        <div
           className="announcement-detail-scroll relative min-h-0 flex-1 overflow-y-auto"
           style={{
             WebkitOverflowScrolling: 'touch',
@@ -271,21 +328,34 @@ export default function AnnouncementDetailModal({
             padding: isMobileDevice ? '12px 16px 16px' : '20px 24px 24px',
           }}
         >
-          <div className="relative" style={{ minHeight: contentLoading ? '60vh' : 'auto' }}>
-            {contentLoading ? (
-              <div className="absolute inset-0 flex items-center justify-center">
+          <div className="relative" style={{ minHeight: contentLoading || (!contentReady && showGateLoader && sanitizedContent) ? '60vh' : 'auto' }}>
+            {contentLoading || (!contentReady && showGateLoader && sanitizedContent) ? (
+              <div className="absolute inset-0 flex items-center justify-center" style={{ animation: 'announcement-detail-fade .2s ease-out' }}>
                 <PageLoader variant="panel" className="!min-h-0" />
               </div>
-            ) : (
+            ) : null}
+            {!contentLoading && (
               <div
                 ref={contentRef}
                 className="announcement-detail-content relative"
-                style={{ fontSize: '15px', lineHeight: '1.6', color: '#374151' }}
+                style={{
+                  fontSize: '15px',
+                  lineHeight: '1.6',
+                  color: '#374151',
+                  // Behind the loader the content is laid out (so images can be measured) but takes no space; during the short
+                  // grace period before the loader it keeps its real height, invisibly, so a quick reveal does not resize the panel.
+                  height: contentReady || !showGateLoader ? 'auto' : 0,
+                  overflow: contentReady ? 'visible' : 'hidden',
+                  opacity: contentReady ? 1 : 0,
+                  pointerEvents: contentReady ? 'auto' : 'none',
+                  transition: 'opacity .18s ease-out',
+                }}
                 dangerouslySetInnerHTML={{ __html: sanitizedContent }}
               />
             )}
             {imageLoaderHosts.map(host => createPortal(<PageLoader variant="inline" className="!min-h-0 !py-0" />, host))}
           </div>
+        </div>
         </div>
 
         <div
@@ -323,19 +393,33 @@ export default function AnnouncementDetailModal({
         .announcement-detail-content h3 { font-size: 1.125rem; line-height: 1.4; }
         .announcement-detail-content h4 { font-size: 1rem; line-height: 1.4; }
         .announcement-detail-content > *:first-child { margin-top: 0; }
-        @keyframes announcement-img-shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+        @keyframes announcement-img-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
         .announcement-img-frame { position: relative; display: block; width: 100%; min-height: 200px; margin: 1rem auto; border-radius: .75rem; }
-        .announcement-img-frame::before { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 1px solid #e0ecff; background: linear-gradient(100deg, #f8fafc 20%, #eff6ff 45%, #f8fafc 70%) 0 0 / 200% 100%; animation: announcement-img-shimmer 2.4s linear infinite; transition: opacity .45s ease; }
-        .announcement-img-loader { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: inherit; transition: opacity .35s ease; }
-        .announcement-img-frame.is-loaded .announcement-img-loader { opacity: 0; pointer-events: none; }
-        .announcement-detail-content .announcement-img-frame > img { position: relative; z-index: 1; margin: 0 auto; opacity: 0; transform: scale(.985); transition: opacity .45s ease-out, transform .45s ease-out; }
-        .announcement-img-frame.is-loaded { width: fit-content; max-width: 100%; min-height: 0; aspect-ratio: auto !important; }
-        .announcement-img-frame.is-loaded::before { opacity: 0; animation: none; }
-        .announcement-detail-content .announcement-img-frame.is-loaded > img { opacity: 1; transform: none; }
+        .announcement-img-frame::before { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 1px solid #e0ecff; background: #f4f8fd; transition: opacity var(--placeholder-fade, .35s) ease; }
+        .announcement-img-shimmer { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; transition: opacity var(--placeholder-fade, .35s) ease; }
+        .announcement-img-shimmer::before { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 25%, rgb(219 234 254 / 85%) 50%, transparent 75%); animation: announcement-img-sweep 1.8s ease-in-out infinite; will-change: transform; }
+        .announcement-img-loader { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: inherit; transition: opacity var(--placeholder-fade, .35s) ease; }
+        .announcement-img-frame.is-loaded .announcement-img-loader,
+        .announcement-img-frame.is-loaded .announcement-img-shimmer { opacity: 0; pointer-events: none; bottom: auto; height: var(--placeholder-height, 100%); }
+        .announcement-detail-content .announcement-img-frame > img { position: relative; z-index: 1; margin: 0 auto; opacity: 0; will-change: opacity; transition: opacity .4s ease-out var(--img-fade-delay, 0s); }
+        .announcement-img-frame.is-loaded .announcement-img-shimmer::before { animation-play-state: paused; }
+        @keyframes announcement-placeholder-in { from { opacity: 0; } }
+        .announcement-img-frame:not(.is-loaded)::before,
+        .announcement-img-frame:not(.is-loaded) .announcement-img-shimmer,
+        .announcement-img-frame:not(.is-loaded) .announcement-img-loader { animation: announcement-placeholder-in .2s ease-out ${IMAGE_PLACEHOLDER_DELAY_MS}ms backwards; }
+        .announcement-img-frame.is-instant::before,
+        .announcement-img-frame.is-instant .announcement-img-shimmer,
+        .announcement-img-frame.is-instant .announcement-img-loader { transition: none; }
+        .announcement-detail-content .announcement-img-frame.is-instant > img { transition-duration: .15s; transition-delay: 0s; }
+        .announcement-img-frame.has-size { min-height: 0; }
+        .announcement-detail-content .announcement-img-frame.has-size > img { width: 100%; height: 100%; margin: 0; }
+        .announcement-img-frame.is-loaded:not(.has-size) { min-height: 0; }
+        .announcement-img-frame.is-loaded::before { opacity: 0; bottom: auto; height: var(--placeholder-height, 100%); }
+        .announcement-detail-content .announcement-img-frame.is-loaded > img { opacity: 1; }
         .announcement-detail-content > :first-child > .announcement-img-frame:first-child { margin-top: 0; }
         @media (prefers-reduced-motion: reduce) {
-          .announcement-img-frame::before { animation: none; }
-          .announcement-detail-content .announcement-img-frame > img { transition: none; transform: none; }
+          .announcement-img-shimmer::before { animation: none; }
+          .announcement-detail-content .announcement-img-frame > img { transition: none; }
         }
         .announcement-detail-content > :first-child > img:first-child,
         .announcement-detail-content > img:first-child { margin-top: 0; }
@@ -357,15 +441,7 @@ export default function AnnouncementDetailModal({
         .announcement-detail-content td { padding: .625rem .75rem; border-bottom: 1px solid #f3f4f6; text-align: left; }
         .announcement-detail-content th { background: #f9fafb; color: #374151; font-size: 12px; font-weight: 600; }
         .announcement-detail-content img { display: block; max-width: 100%; height: auto; margin: 1rem auto; border: 1px solid #e2e8f0; border-radius: .75rem; background: #f8fafc; box-shadow: 0 4px 8px rgba(0,0,0,.08); }
-        .announcement-detail-content .video-wrapper { display: block !important; width: fit-content !important; max-width: 100% !important; margin: 1rem auto !important; }
-        .announcement-video-shell { position: relative; width: 100%; max-width: 800px; margin: 1rem auto; overflow: hidden; border: 1px solid #cbd5e1; border-radius: .75rem; background: #0f172a; aspect-ratio: 16 / 9; box-shadow: 0 4px 12px rgba(0,0,0,.1); }
-        .announcement-detail-content .announcement-video-shell video { display: block; width: 100%; height: 100%; min-height: 180px; margin: 0; border: 0; border-radius: 0; background: #0f172a; object-fit: contain; box-shadow: none; }
-        .announcement-video-status { pointer-events: none; position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .75rem; padding: 1rem; background: linear-gradient(135deg,rgba(15,23,42,.76),rgba(30,41,59,.58)); color: #e0f2fe; font-size: 12px; font-weight: 700; text-align: center; transition: opacity .2s ease; }
-        .announcement-video-status.is-hidden { opacity: 0; visibility: hidden; }
-        .announcement-video-status.is-error { pointer-events: auto; background: linear-gradient(135deg,rgba(69,10,10,.9),rgba(127,29,29,.82)); color: #fee2e2; }
-        .announcement-video-fallback { border: 1px solid rgba(254,202,202,.45); border-radius: .5rem; background: rgba(255,255,255,.12); padding: .4rem .75rem; color: #fff; font-size: 11px; font-weight: 800; text-decoration: none; }
-        .announcement-video-fallback:hover { background: rgba(255,255,255,.2); }
-        .announcement-detail-content video:not(.announcement-video-shell video) { display: block; width: 100%; max-width: min(800px, 100%); height: auto; margin: 1rem auto; border: 1px solid #e2e8f0; border-radius: .75rem; background: #0f172a; object-fit: contain; box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+        .announcement-detail-content .video-wrapper { display: block !important; width: 100% !important; max-width: 100% !important; margin: 1rem auto !important; }
         @media (max-width: 639px) {
           .announcement-detail-content { padding: 0 4px; font-size: 15px !important; line-height: 1.6 !important; letter-spacing: .005em; }
           .announcement-detail-content h1 { font-size: 1.375rem; }
@@ -375,8 +451,6 @@ export default function AnnouncementDetailModal({
           .announcement-detail-content blockquote { padding: .75rem 1rem; font-size: 14px; }
           .announcement-detail-content table { display: block; width: 100%; overflow-x: auto; font-size: 13px; }
           .announcement-detail-content .video-wrapper { width: 100% !important; margin: 1.5rem 0 !important; }
-          .announcement-video-shell { margin: 1rem 0; }
-          .announcement-detail-content .announcement-video-shell video { min-height: 160px; }
         }
         @media (max-width: 359px) {
           .announcement-detail-content { padding: 0; font-size: 14px !important; line-height: 1.55 !important; }

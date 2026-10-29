@@ -12,11 +12,15 @@ export default function LoginDecorations() {
         }}
       />
 
-      {/* Gentle top edge: light blue fading down to white */}
       <div
-        className="absolute top-0 left-0 right-0 h-[250px]"
+        aria-hidden="true"
+        className="login-desktop-top-gradient absolute top-0 left-0 right-0 h-[clamp(360px,65vh,720px)]"
         style={{
-          background: 'linear-gradient(180deg, rgba(219,234,254,0.3) 0%, rgba(239,246,255,0.1) 60%, transparent 100%)',
+          background: `
+            radial-gradient(ellipse at 12% 0%, rgba(56,189,248,0.2) 0%, transparent 65%),
+            radial-gradient(ellipse at 88% 0%, rgba(99,102,241,0.14) 0%, transparent 60%),
+            linear-gradient(180deg, rgba(147,197,253,0.55) 0%, rgba(191,219,254,0.36) 26%, rgba(224,242,254,0.2) 56%, rgba(239,246,255,0.08) 78%, transparent 100%)
+          `,
         }}
       />
 

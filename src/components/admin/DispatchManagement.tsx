@@ -12,6 +12,7 @@ import {
   PowerOff,
   Clock3,
   AlertTriangle,
+  Archive,
   RefreshCw,
   Save,
   Search,
@@ -1855,7 +1856,8 @@ export default function DispatchManagement() {
                       ) : (
                         !selectedGroup.is_default && (
                           <button
-                            className="text-rose-400 hover:text-rose-300 disabled:opacity-50"
+                            type="button"
+                            className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-rose-300/30 bg-gradient-to-r from-rose-500/15 to-orange-400/10 px-3.5 py-2 text-sm font-semibold text-rose-100 shadow-[0_8px_24px_-16px_rgba(244,63,94,0.65)] transition-colors hover:border-rose-300/50 hover:from-rose-500/25 hover:to-orange-400/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
                             disabled={busy}
                             onClick={() =>
                               setArchiveTarget({
@@ -1865,6 +1867,7 @@ export default function DispatchManagement() {
                               })
                             }
                           >
+                            <Archive className="h-4 w-4" aria-hidden="true" />
                             封存分組
                           </button>
                         )
@@ -2720,23 +2723,54 @@ export default function DispatchManagement() {
 
       {archiveTarget &&
         createPortal(
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/75 p-4">
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
             <div
-              role="dialog"
+              role="alertdialog"
               aria-modal="true"
-              aria-label="確認封存"
-              className="w-full max-w-md rounded-xl border border-rose-500 bg-slate-800 p-5"
+              aria-labelledby="dispatch-archive-title"
+              aria-describedby="dispatch-archive-description"
+              className="w-full max-w-md overflow-hidden rounded-2xl border border-rose-300/25 bg-slate-900 text-slate-100 shadow-[0_32px_90px_rgba(2,6,23,0.75)]"
             >
-              <h3 className="mb-2 text-lg font-semibold">
-                確定封存{archiveTarget.type === 'group' ? '分組' : '訂單池'}？
-              </h3>
-              <p className="break-words text-sm text-slate-300">
-                確定封存「{archiveTarget.name}」？封存後將無法使用，但既有訂單與派單紀錄會保留。
-                {archiveTarget.type === 'group' &&
-                  ' 此分組的員工將停止接收訂單，直到重新指派分組或還原此分組。'}
-              </p>
-              <div className="mt-5 flex justify-end gap-2">
+              <div className="h-1 bg-gradient-to-r from-rose-400 via-orange-400 to-amber-300" />
+              <div className="border-b border-rose-300/15 bg-gradient-to-r from-rose-950/70 via-slate-900 to-slate-900 px-5 py-5 sm:px-6">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-rose-300/30 bg-rose-400/10 text-rose-200 shadow-[0_0_24px_rgba(244,63,94,0.12)]">
+                    <Archive className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold tracking-widest text-rose-300">派單設定</p>
+                    <h3 id="dispatch-archive-title" className="mt-1 text-xl font-semibold text-white">
+                      確定封存{archiveTarget.type === 'group' ? '分組' : '訂單池'}？
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="關閉封存確認"
+                    disabled={busy}
+                    onClick={() => setArchiveTarget(null)}
+                    className="shrink-0 rounded-lg p-2 text-rose-100/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 disabled:opacity-50"
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-4 px-5 py-5 sm:px-6">
+                <div className="rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3">
+                  <p className="text-xs text-slate-400">即將封存</p>
+                  <p className="mt-1 break-words text-base font-semibold text-white">{archiveTarget.name}</p>
+                  <p className="mt-1 text-xs text-slate-400">{archiveTarget.type === 'group' ? '派單分組' : '訂單池'}</p>
+                </div>
+                <p id="dispatch-archive-description" className="flex items-start gap-2.5 text-sm leading-relaxed text-rose-100/90">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden="true" />
+                  <span>
+                    封存後將無法使用，但既有訂單與派單紀錄會保留。
+                    {archiveTarget.type === 'group' && ' 此分組的員工將停止接收訂單，直到重新指派分組或還原此分組。'}
+                  </span>
+                </p>
+              </div>
+              <div className="flex flex-col-reverse gap-2 border-t border-rose-300/15 bg-slate-950/60 px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
                 <button
+                  type="button"
                   className={secondaryButton}
                   disabled={busy}
                   onClick={() => setArchiveTarget(null)}
@@ -2744,7 +2778,8 @@ export default function DispatchManagement() {
                   取消
                 </button>
                 <button
-                  className="rounded-lg bg-rose-600 px-3 py-2 text-sm text-white disabled:opacity-50"
+                  type="button"
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-rose-500 to-orange-500 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-rose-950/30 transition-colors hover:from-rose-400 hover:to-orange-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={busy}
                   onClick={() =>
                     void changeArchive(
@@ -2754,7 +2789,8 @@ export default function DispatchManagement() {
                     )
                   }
                 >
-                  封存
+                  {busy ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Archive className="h-4 w-4" aria-hidden="true" />}
+                  {busy ? '封存中…' : '確認封存'}
                 </button>
               </div>
             </div>

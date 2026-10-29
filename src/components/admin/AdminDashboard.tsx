@@ -4,7 +4,7 @@ import { Users, Settings, FileText, LogOut, Shield, Package, UserCheck, Zap, Dat
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Admin } from '../../types';
-import { getAdminFinancialSessionToken, logout, updateStoredUsername } from '../../lib/auth';
+import { expireFinancialAdminSession, getAdminFinancialSessionToken, getStoredAuth, logout, updateStoredUsername } from '../../lib/auth';
 import { useCompanyName } from '../../lib/useCompanyName';
 import { AdminBackground } from '../AdminBackground';
 import { formatSupabaseError, isFinancialAdminSessionError, supabase } from '../../lib/supabase';
@@ -694,16 +694,30 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
     setShowNavigationSettings(false);
   };
 
+  const adminSessionExpiredRef = useRef(false);
+  const handlePollingSessionError = useCallback((error: unknown, requestToken?: string) => {
+    if (!isFinancialAdminSessionError(error)) return false;
+    if (requestToken && expireFinancialAdminSession(requestToken)) {
+      adminSessionExpiredRef.current = true;
+    }
+    return true;
+  }, []);
+
   const loadLockedAccountsCount = useCallback(async () => {
+    if (adminSessionExpiredRef.current) return;
     const requestId = ++lockedCountsRequestRef.current;
+    let requestToken: string | undefined;
 
     try {
+      requestToken = getAdminFinancialSessionToken();
       const { data, error } = await supabase.rpc('get_account_locks_for_admin', {
-        p_admin_id: getAdminFinancialSessionToken()
+        p_admin_id: requestToken
       });
 
       if (error) throw error;
-      if (requestId !== lockedCountsRequestRef.current) return;
+      const auth = getStoredAuth();
+      if (requestId !== lockedCountsRequestRef.current || adminSessionExpiredRef.current
+        || auth?.userType !== 'admin' || auth.adminSessionToken !== requestToken) return;
 
       const employeeLocks = (data || []).filter(lock => lock.identifier_type === 'username');
       const expiryTimes = employeeLocks
@@ -713,21 +727,23 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
       setLockedAccountsCount(employeeLocks.length);
       setNextLockedAccountExpiry(expiryTimes.length > 0 ? Math.min(...expiryTimes) : null);
     } catch (error) {
-      if (isFinancialAdminSessionError(error)) {
-        void logout(false);
-        return;
-      }
-
+      if (requestId !== lockedCountsRequestRef.current) return;
+      if (handlePollingSessionError(error, requestToken)) return;
       console.warn('Locked accounts notification is temporarily unavailable:', formatRequestError(error));
     }
-  }, []);
+  }, [handlePollingSessionError]);
 
   const chatUnreadRequestRef = useRef(0);
   const loadChatUnreadCounts = useCallback(async () => {
+    if (adminSessionExpiredRef.current) return;
     const requestId = ++chatUnreadRequestRef.current;
+    let requestToken: string | undefined;
     try {
+      requestToken = getAdminFinancialSessionToken();
       const { rows } = await fetchAdminChatUnreadCounts();
-      if (requestId !== chatUnreadRequestRef.current) return;
+      const auth = getStoredAuth();
+      if (requestId !== chatUnreadRequestRef.current || adminSessionExpiredRef.current
+        || auth?.userType !== 'admin' || auth.adminSessionToken !== requestToken) return;
       let unreadAaa = 0;
       let unreadCcc = 0;
       rows.forEach(row => {
@@ -737,14 +753,19 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
       setUnreadCustomerServiceCount(unreadAaa);
       setUnreadCccServiceCount(unreadCcc);
     } catch (error) {
+      if (requestId !== chatUnreadRequestRef.current) return;
+      if (handlePollingSessionError(error, requestToken)) return;
       console.warn('Chat unread counts are temporarily unavailable:', formatRequestError(error));
     }
-  }, []);
+  }, [handlePollingSessionError]);
 
   const loadPendingCounts = useCallback(async () => {
+    if (adminSessionExpiredRef.current) return;
     const requestId = ++pendingCountsRequestRef.current;
-    void loadChatUnreadCounts();
+    let requestToken: string | undefined;
     try {
+      requestToken = getAdminFinancialSessionToken();
+      void loadChatUnreadCounts();
       // Scoped in the database: a large group's employee IDs would not fit in the request URL.
       const verificationsQuery = admin.role === 'secondary_admin'
         ? supabase
@@ -758,17 +779,20 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
           .eq('status', 'pending');
 
       const [withdrawalResult, verificationResult] = await Promise.allSettled([
-        supabase.rpc('get_pending_withdrawal_count_for_admin', { p_admin_session_token: getAdminFinancialSessionToken() }),
+        supabase.rpc('get_pending_withdrawal_count_for_admin', { p_admin_session_token: requestToken }),
         verificationsQuery,
       ]);
-      if (requestId !== pendingCountsRequestRef.current) return;
+      const auth = getStoredAuth();
+      if (requestId !== pendingCountsRequestRef.current || adminSessionExpiredRef.current
+        || auth?.userType !== 'admin' || auth.adminSessionToken !== requestToken) return;
 
       if (withdrawalResult.status === 'fulfilled' && !withdrawalResult.value.error) {
         setPendingWithdrawalsCount(Number(withdrawalResult.value.data || 0));
       } else {
-        console.warn('Pending withdrawal count is temporarily unavailable:', formatRequestError(
-          withdrawalResult.status === 'fulfilled' ? withdrawalResult.value.error : withdrawalResult.reason,
-        ));
+        const error = withdrawalResult.status === 'fulfilled'
+          ? withdrawalResult.value.error : withdrawalResult.reason;
+        if (handlePollingSessionError(error, requestToken)) return;
+        console.warn('Pending withdrawal count is temporarily unavailable:', formatRequestError(error));
       }
 
       if (verificationResult.status === 'fulfilled' && !verificationResult.value.error) {
@@ -780,9 +804,11 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
       }
 
     } catch (error) {
+      if (requestId !== pendingCountsRequestRef.current) return;
+      if (handlePollingSessionError(error, requestToken)) return;
       console.warn('Pending counts are temporarily unavailable:', formatRequestError(error));
     }
-  }, [admin.id, admin.role, loadChatUnreadCounts]);
+  }, [admin.id, admin.role, handlePollingSessionError, loadChatUnreadCounts]);
 
   const handleCustomerServiceUnreadChange = useCallback((delta: number) => {
     setUnreadCustomerServiceCount(prev => Math.max(0, prev + delta));
@@ -834,7 +860,15 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
     return () => window.clearTimeout(timeout);
   }, [nextLockedAccountExpiry, loadLockedAccountsCount]);
 
+  const invalidatePollingRequests = useCallback(() => {
+    adminSessionExpiredRef.current = true;
+    lockedCountsRequestRef.current++;
+    chatUnreadRequestRef.current++;
+    pendingCountsRequestRef.current++;
+  }, []);
+
   useEffect(() => {
+    adminSessionExpiredRef.current = false;
     void loadLockedAccountsCount();
 
     const pendingCountsTimer = window.setTimeout(() => {
@@ -934,6 +968,7 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
       });
 
     return () => {
+      invalidatePollingRequests();
       window.clearTimeout(pendingCountsTimer);
       window.clearInterval(pendingCountsFallbackTimer);
       if (chatUnreadRefreshTimer) clearTimeout(chatUnreadRefreshTimer);
@@ -944,7 +979,7 @@ export default function AdminDashboard({ admin }: AdminDashboardProps) {
       supabase.removeChannel(accountLocksChannel);
 
     };
-  }, [loadPendingCounts, loadChatUnreadCounts, loadLockedAccountsCount, admin.id, admin.role]);
+  }, [loadPendingCounts, loadChatUnreadCounts, loadLockedAccountsCount, invalidatePollingRequests, admin.id, admin.role]);
 
   const handleChangePassword = async () => {
     setPasswordError(null);
