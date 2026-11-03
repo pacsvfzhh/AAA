@@ -18,7 +18,7 @@ set transaction read only;
 with
 baseline_raw as (
   select $baseline$
-#generated 2026-10-26 21:45 UTC（旧正式库 hxpbpqoqkoiiplvdwmld）
+#generated 2026-10-29 02:00 UTC（旧正式库 hxpbpqoqkoiiplvdwmld）
 buckets|announcement-images|lim=104857600|mime=image/gif,image/jpeg,image/jpg,image/png,image/webp,video/mp4,video/ogg,video/webm|pub=true
 buckets|chat-images|lim=不限|mime=不限|pub=true
 buckets|content-audit-evidence|lim=不限|mime=不限|pub=false
@@ -548,7 +548,7 @@ functions|public.process_customer_service_tip(uuid,numeric,uuid)|a=5996d9c5|d=9e
 functions|public.process_notification_automation_queue_fast(integer)|a=5996d9c5|d=6b7ff525|o=postgres|s=definer
 functions|public.process_notification_automation_queue(integer)|a=5996d9c5|d=369527d5|o=postgres|s=definer
 functions|public.process_pending_orders()|a=5996d9c5|d=9627b5da|o=postgres|s=invoker
-functions|public.process_wallet_reconciliation_queue(integer)|a=5996d9c5|d=9ca79939|o=postgres|s=definer
+functions|public.process_wallet_reconciliation_queue(integer)|a=5996d9c5|d=204f20da|o=postgres|s=definer
 functions|public.protect_money_data()|a=5996d9c5|d=861ea4fd|o=postgres|s=definer
 functions|public.recalculate_all_users_total_income()|a=5996d9c5|d=b92b1715|o=postgres|s=invoker
 functions|public.recalculate_user_total_income(uuid)|a=5996d9c5|d=82df691a|o=postgres|s=invoker
