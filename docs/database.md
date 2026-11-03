@@ -104,15 +104,18 @@ NOTIFY pgrst, 'reload schema';
 | `reconcile_dispatch_lifecycle_every_minute` | 每分钟 | `auto_cleanup_dispatch_system()` | 派单生命周期协调与清理 | `20260918215530` |
 | `weekly_cleanup_practice_data` | 每周日 02:00 | `cleanup_all_practice_data()` | 清理练习数据（函数存在于正式库，仓库没有定义，含义待确认） | `20260502201643` |
 
-### 对账队列死锁修复（APLF10 已部署）
-- 目标为 APLF10（`ashxnuadjvhqucoobmyp`），不是本文默认的 AAA 项目。2026-10-29（UTC+8）只读日志显示，订单佣金触发器先入对账队列后更新钱包，而对账器先锁钱包、员工再删除队列；两种顺序及跨员工批次持锁产生了两次 pg_cron 死锁。
+### 对账队列死锁修复（APLF10、AAA 已部署）
+- 最初在 APLF10（`ashxnuadjvhqucoobmyp`）排查：2026-10-29（UTC+8）只读日志显示，订单佣金触发器先入对账队列后更新钱包，而对账器先锁钱包、员工再删除队列；两种顺序及跨员工批次持锁产生了两次 pg_cron 死锁。AAA（`hxpbpqoqkoiiplvdwmld`）的 worker 正文与已审核旧版完全一致，最近24小时未观察到死锁；经用户另行批准同步预防性修复。
 - 新迁移 `20261103000004_avoid_wallet_reconciliation_deadlocks.sql` 只替换 `process_wallet_reconciliation_queue(integer)` 的函数体：每名员工在子事务内以 `FOR UPDATE NOWAIT` 依次检查队列、钱包、员工行，再调用未修改的 `reconcile_wallet_from_ledger`。锁忙则该子事务回滚、保留队列且不增加失败次数，返回新增的 `skipped_busy` 计数。默认／最大批量、已有 JSON 字段、参数、所有者、SECURITY DEFINER、search_path、权限均保留。
 - 普通业务失败仍回滚该员工并按原公式增加重试次数、安排延后；记录错误前再次非阻塞锁定队列，防止异常处理本身形成第二个死锁。此时若队列也忙，只输出警告并保留队列供后续重试。该修复针对已观察到的对账 worker 行锁环，不宣称消除全库所有死锁。
 - 繁忙员工可能延后一个或多个分钟周期，不能保证固定一轮内完成；上线观察队列最早请求时间、`skipped_busy`、失败次数、cron 成功状态及新死锁。未改订单调度、成功率、佣金计算、提款规则、账本公式、索引、表、其他函数／触发器或任何历史金额，不关闭对账。
 - 迁移只接受已审核的目标库正文与仓库原版正文，未知定义一律中止；通过 `pg_get_functiondef` 定点替换函数体而不是覆盖整函数。执行前须再次比对定义／元数据并保存原完整定义；回退只恢复经核对的原函数定义，不倒回资金数据、不重放业务。若函数已被其他人修改，停止而非覆盖。
 - 上线后 2026-10-29 08:44（UTC+8）首轮订单结算和对账 cron 均成功，队列为 0、等待锁会话为 0；08:43:17–08:44:16 的初始日志窗口未见 ERROR／新死锁，仍需观察后续真实负载。部署管理接口因外层事务与 SQL 的显式 BEGIN／COMMIT 重叠，记录各一条 `25001`／`25P01` WARNING，已核对迁移记录和函数提交成功，不是业务任务错误，未为清除提示修改已部署迁移。
 - 本地 `npm run test:wallet-deadlock` 在独立 Unix socket 临时 PostgreSQL 集群执行，不读取任何 Supabase URL／密钥；需要本机 PostgreSQL 的 initdb、pg_ctl、psql（优先 17，兼容 16／15），root 环境以 postgres 用户启动，结束后清除自己创建的集群。覆盖原死锁、队列／钱包／员工忙碌、跨员工锁环、失败记录竞态、提款冻结、收入、游标、回滚、重复执行、批量上限与权限。真实资金、线上并发和长期负载未用于测试。
-- 经用户在部署确认中明确批准，本迁移已于 2026-10-29 08:43（UTC+8）部署至 APLF10，正式版本 `20261029004317 avoid_wallet_reconciliation_deadlocks`。线上函数体 MD5 `d9316355bee8a923e24086f09912f42b` 与本地已验证正文逐字一致；所有者／参数／SECURITY DEFINER／search_path／ACL 与部署前相同，其他 public/private 函数、触发器及 cron 配置指纹不变。部署后只读检查 74 个钱包，账本总额、冻结额、总收入、负余额及缺失基准异常均为 0；未手工调用线上资金函数。AAA 未部署，前端待用户发布；结构检查脚本仍以 AAA 为基线，不将其全局改成另一项目的目录。
+- 经用户在部署确认中明确批准，本迁移已于 2026-10-29 08:43（UTC+8）部署至 APLF10，正式版本 `20261029004317 avoid_wallet_reconciliation_deadlocks`。线上函数体 MD5 `d9316355bee8a923e24086f09912f42b` 与本地已验证正文逐字一致；所有者／参数／SECURITY DEFINER／search_path／ACL 与部署前相同，其他 public/private 函数、触发器及 cron 配置指纹不变。部署后只读检查 74 个钱包，账本总额、冻结额、总收入、负余额及缺失基准异常均为 0；未手工调用线上资金函数。APLF10 的后台会话失效前端修复仍待用户发布；本项数据库修复不依赖前端部署。
+
+- AAA 于 2026-10-29 09:59:56（UTC+8）部署同一迁移，正式版本 `20261029015956 avoid_wallet_reconciliation_deadlocks`。部署前记录原完整定义（正文 MD5 `0624603fc47e3655e3fd75d61031479a`），部署后正文 MD5 为 `d9316355bee8a923e24086f09912f42b`，与本地补丁一致；函数元数据、其他函数、触发器及 cron 配置指纹不变。部署后37个钱包账本总额、冻结额、收入、负余额与缺失基准异常均为0，三个相关 cron 已正常运行，队列及锁等待为0；未手工调用真实资金操作。管理接口事务包装同样产生各一条 `25001`／`25P01` WARNING，迁移和函数已正常提交；`template1` 排序版本警告未处理，仍需平台维护。
+- AAA 部署后重新计算全部609项结构基线，除 worker 内容哈希外其余608项排序摘要与原基线完全一致；更新 `01_structure_health_check.sql` 的生成时间及该函数定义哈希，对象数量未变，测试数量断言无需修改。
 
 ## Storage 存储桶（正式环境）
 | 存储桶 | 公开 | 用途 |
@@ -141,7 +144,7 @@ NOTIFY pgrst, 'reload schema';
 
 ## 迁移检测 SQL（`supabase/migration-check/`，只读）
 用于把数据库复制/转移到另一个 Supabase 项目后确认新库是否正常。两份脚本都以 `set transaction read only` 开头，只查询不修改；在 Supabase SQL Editor 粘贴全文运行。
-- `01_structure_health_check.sql`：内嵌旧正式库结构基线（2026-10-26 21:45 UTC 生成，609 项：表的字段/约束/索引/触发器/RLS 策略/表与字段权限/RLS 开关/所有者，函数内容与执行权限/所有者/SECURITY DEFINER，序列、视图、schema 权限、扩展版本与位置、anon/authenticated/authenticator 角色超时、存储桶设置、storage 策略与 `storage.objects` 上调用应用函数的触发器、Realtime 表、cron 任务、平台事件触发器、库编码/时区）。对比后按「失败/警告/提示/通过」输出，第一行为总结。另外实时检查：钱包账本公式、累计收入、冻结金额=待处理提款、负余额、员工钱包/登录凭据、启用中超管、订单状态、处理中订单/对账队列/自动通知队列积压、自动通知失败、全部外键孤儿记录、自增编号落后、索引有效、约束已验证、各 cron 任务最近成功运行与 1 小时内失败、bcrypt/SHA-256/UUID/pg_trgm 实际可用、各存储桶文件记录数、数据库中文件地址指向的项目。
+- `01_structure_health_check.sql`：内嵌旧正式库结构基线（2026-10-29 02:00 UTC 生成，609 项：表的字段/约束/索引/触发器/RLS 策略/表与字段权限/RLS 开关/所有者，函数内容与执行权限/所有者/SECURITY DEFINER，序列、视图、schema 权限、扩展版本与位置、anon/authenticated/authenticator 角色超时、存储桶设置、storage 策略与 `storage.objects` 上调用应用函数的触发器、Realtime 表、cron 任务、平台事件触发器、库编码/时区）。对比后按「失败/警告/提示/通过」输出，第一行为总结。另外实时检查：钱包账本公式、累计收入、冻结金额=待处理提款、负余额、员工钱包/登录凭据、启用中超管、订单状态、处理中订单/对账队列/自动通知队列积压、自动通知失败、全部外键孤儿记录、自增编号落后、索引有效、约束已验证、各 cron 任务最近成功运行与 1 小时内失败、bcrypt/SHA-256/UUID/pg_trgm 实际可用、各存储桶文件记录数、数据库中文件地址指向的项目。
 - `02_data_fingerprint.sql`：逐表（public/private 全部表、`storage.buckets`、`storage.objects` 文件清单、`cron.job`）计算行数与内容指纹。先在旧库运行并复制第一行「说明」（`v1;` 开头），粘贴到新库脚本的两个 `$old$` 标记之间再运行，逐表显示一致/行数不同/内容不同/缺少；脚本内的「运行记录」清单（会话、队列、日志、派单运行记录、对账基准等）迁移后会继续变化，不计入核心结论。整体转移项目（项目 ID 不变）时无需使用。
 - 重新生成结构基线：数据库结构有更新后，把 `01` 中两个 `$baseline$` 标记之间清空，在旧库运行，复制「当前结构指纹」那一格粘贴回去；并更新 `supabase/tests/migration-check.test.mjs` 中的对象数量断言。
 - SQL 无法检查：Edge Function 是否部署、存储里的实际文件内容、项目 API/上传大小设置、前端环境变量；脚本结果把这些列为人工确认项。

@@ -17,6 +17,113 @@
 
 ---
 
+## 2026-11-02 · 分担概率徽标改为单行并增加间距
+- 需求：触发概率恢复原有布局后，分担提示空间充足，可单行显示且与原数值拉开距离。
+- 改动：保持触发概率标题在上、数值在下；右侧徽标改为单行「分擔概率 +xx.xx%」，与概率数值之间增加间距。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；截图预览处于登录页，无法直接观察管理员面板。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 恢复触发概率布局并拆分分担徽标
+- 需求：触发概率保留原来的上下布局；分担概率放在数值右侧，徽标文字分成两行。
+- 改动：恢复「触发概率」标题在上、概率值在下；右侧两行显示「分擔概率」及「+xx.xx%」。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；预览截图处于登录页，无法直接观察管理员面板。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 将分担概率标签放到触发概率右侧
+- 需求：分担概率标签应显示在触发概率数值右侧，并明确命名为「分擔概率」。
+- 改动：标签与触发概率放在同一行，固定不换行，显示「分擔概率 +xx.xx%」。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；预览截图处于登录页，无法直接观察管理员面板。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 显示启用订单池的额外分担概率
+- 需求：加权派单模式下，停用有权重的订单池后，希望看到其他启用池分担增加的概率，并将小数显示至两位。
+- 改动：检测有权重的停用未封存池时，为启用池显示「分擔 +xx.xx%」；按当前整数权重计算并仅作前端展示，不写回概率或影响派单规则。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；计算示例验证 70/10 → 87.50/12.50、20/10 → 66.67/33.33、单池 → 100.00。预览截图处于登录页，无法在管理员页面确认最终显示。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 提高分组设置与成员管理按钮辨识度
+- 需求：启用分组卡片背景为绿色后，「分組設定」与「成員管理」按钮和卡片容易融合。
+- 改动：保持按钮尺寸、布局不变，分别使用靛蓝/蓝色与青色/青绿色渐变底色，增强边框、文字对比及悬停和键盘焦点反馈。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；截图预览处于登录页，无法在管理员页面确认最终视觉效果。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 按状态区分分组和订单池卡片主题
+- 需求：启用分组卡片使用绿色主题；停用或封存的分组/订单池卡片使用红色主题，并确保文字清晰易读。
+- 改动：左侧启用分组改为深绿卡片，停用/封存分组改为深红卡片；右侧停用/封存订单池改为深红卡片，保留启用基本池的琥珀色与其他启用池的蓝青色识别。卡片标题、说明与统计文字采用高对比浅色。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；预览截图处于登录页，无法在管理员页面确认视觉效果，未执行正式状态操作。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 避免订单池启停后重载整个派单面板
+- 需求：停用订单池确认后，面板短暂卡顿，随后才显示更新状态。
+- 改动：启停成功后立即更新对应订单池卡片，不再重载含员工、成员与全部池订单数的整个工作区；Realtime 对池记录 UPDATE 只同步该卡片，新增/删除仍触发完整刷新。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；未使用正式账号实际执行启停操作。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 按状态排列订单池并区分启停按钮
+- 需求：右侧订单池需将停用池排在底部（封存池仍在最末），并让启用/停用按钮标签和颜色明显区分。
+- 改动：订单池按启用、停用、封存顺序排列，基本池与普通池统一处理，组内维持原顺序；状态按钮显示绿色「已啟用」或红色「已停用」，原有切换逻辑不变。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；用户提供了管理员订单池页面上下文，但未通过正式账号执行状态切换。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 左侧已封存分组卡片移到列表末尾
+- 需求：左侧订单分组列表中的已封存分组应显示在未封存分组之后。
+- 改动：左侧分组卡片先显示未封存分组，再显示已封存分组，各自保留原有顺序；此前右侧订单池卡片排序仍独立生效。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；改动针对左侧分组卡片列表，未在预览中使用正式账号操作。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 已封存订单池卡片自动排到列表末尾
+- 需求：封存的订单卡片应自动显示在订单池列表最下方。
+- 改动：订单池列表先显示未封存卡片，再显示已封存卡片；两组内都保留原有顺序，卡片序号随显示顺序更新。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；预览当前显示登录页，无法直接操作管理员订单池列表。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 分组数量徽标改用基本池黄色主题
+- 需求：分组数量徽标改用黄色风格，与基本池卡片的主题一致。
+- 改动：将数量徽标边框、背景、文字和光晕改为琥珀黄色系；保留分组图标的青蓝底座。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；预览当前显示登录页，无法在该页面确认管理员后台的最终视觉效果。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-11-02 · 拉开分组卡片与滚动条间距并突出数量提示
+- 需求：订单指派左侧分组卡片与滚动条距离过近，标题中的分组图标和数量不够醒目。
+- 改动：将列表右侧内边距加至 16px，为卡片与滚动条拉开距离；为分组图标增加青蓝渐变底座，并强化数量徽标的边框、对比度和视觉强调。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过；预览截图显示登录页，未使用正式账号访问后台，因此无法实测管理员页面的滚动交互。构建包含仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-10-29 · 铺满订单指派分组滚动区域
+- 需求：桌面端订单指派左侧分组列表滚动区高度受限，面板底部留有空白，滚动条样式与蓝青主题不协调。
+- 改动：桌面端分组栏改为可收缩的纵向弹性布局，分组列表占满面板剩余高度；移除桌面端列表固定最大高度限制，增加与蓝青深色面板融合的专属滚动轨道、渐变滑块及悬停/按压状态。小屏保留原布局高度行为。
+- 文件：`src/components/admin/DispatchManagement.tsx`、`src/index.css`、`docs/admin-backend.md`、本记录。
+- 数据库/服务端：无变更；前端待用户部署后生效。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check` 通过。预览当前停留在登录页，未使用正式账号访问后台，因此未能进行真实管理员页面的滚动交互验收；桌面与小屏行为经布局结构检查。构建显示仓库已有的 Browserslist 数据过期与 Bluebird eval 提示。
+
+## 2026-10-29 · 提供管理员后台 AI 智能体接入说明
+- 需求：提供可直接转交后台管理智能体的读取、规划与授权操作说明，仅针对当前网站配置，不区分站点历史。
+- 改动：新增可下载 TXT，明确 HTTPS/RPC 路径、anon JWT 请求头与 UUID 管理员会话参数的区别，列出限流、登录、员工快照、详情、提款/账户变动分页及建档/修改接口；补充地区必填、统计口径、关闭验证会删除已通过实名记录、写入结果未知不盲重试、稽核及财务边界。
+- 文件：`docs/admin-ai-guide/admin-ai-integration.txt`、`AGENTS.md`、本记录。
+- 数据库/服务端：无变更或部署；仅只读核对当前授权项目的相关函数定义，未使用管理员凭据登录或测试真实业务写入；无前端变更或待部署项。
+- 验证：对照线上函数签名/正文、类型与现有组件调用检查参数、响应和副作用；文档静态检查及 `git diff --check` 通过，未执行业务接口或 UI 测试。
+
+## 2026-10-29 · 同步 AAA 钱包对账防死锁修复
+- 需求：用户明确批准，将 APLF10 已验证的钱包对账防死锁补丁同步到 AAA；不处理其他历史警告，不调整资金规则或权限。
+- 改动：复用 `20261103000004_avoid_wallet_reconciliation_deadlocks.sql`，只替换 `process_wallet_reconciliation_queue(integer)` 正文，遇队列／钱包／员工行忙碌则保留队列等待后续重试。未修改旧迁移、前端、表、索引、其他函数、触发器或定时配置；没有新增 RPC 签名／返回类型，数据库类型无需变更。
+- 文件：`supabase/migration-check/01_structure_health_check.sql`、`docs/database.md`、本记录。
+- 数据库/服务端：已于 2026-10-29 09:59:56（UTC+8）部署至 AAA（`hxpbpqoqkoiiplvdwmld`），正式版本 `20261029015956 avoid_wallet_reconciliation_deadlocks`。部署前记录原完整定义和元数据，正文 MD5 为 `0624603fc47e3655e3fd75d61031479a`；部署后为 `d9316355bee8a923e24086f09912f42b`，与本地已验证补丁一致。所有者、参数、权限、SECURITY DEFINER、search_path，以及其他函数／触发器／cron 配置指纹不变。未操作其他正式项目、Edge Function、Storage；本次不需发布前端，先前后台会话修复的前端部署状态仍待用户确认。
+- 验证：部署前原生 PostgreSQL 隔离测试17项通过，包含复现旧死锁、锁忙跳过、账本／冻结额／收入、失败回滚、并发和权限。部署后37个钱包的缺失基准、账本总额、冻结额、收入和负余额异常均为0；对账队列与锁等待为0，对账自动修正记录新增0。至10:02（UTC+8）三个相关 cron 各成功3次、失败0；未手工触发正式资金操作或测试真实员工。`typecheck`、`lint` 通过，精简输出重跑迁移检查95项通过（退出码0）。重新计算正式609项结构基线，其余608项排序摘要与原基线一致，仅更新 worker 定义哈希及基线时间，对象数量断言保持不变。
+- 日志：09:59:56–10:01:39（UTC+8）的初始窗口未见新死锁或业务错误；管理接口事务包装产生各一条 `25001`／`25P01` WARNING，迁移正常提交。一次人工只读核验误用审计表时间列产生 `42703`，已按真实列 `repaired_at` 更正查询，不涉及业务写入或函数故障。原有 `template1` 排序版本警告仍存在，未擅自刷新版本。
+- 备注：AAA 最近24小时原未观察到死锁，此次属于预防性同步；初始观察不能替代长期真实负载验证。后续关注对账队列年龄、失败次数及新死锁，不宣称消除全库所有死锁。
+
 ## 2026-10-29 · 准备 APLF10 对账死锁与后台会话失效修复
 - 需求：只读审计 APLF10 最近 24 小时错误后，按最小影响方案修复订单结算与自动对账死锁，以及管理员过期会话持续轮询。
 - 改动：新增严格校验原函数正文的迁移，仅为对账队列 worker 增加逐员工非阻塞锁定与忙碌跳过；保留原对账公式、订单／佣金／提款规则、批次范围、失败退避、权限与其他函数。后台根页面三类计数请求绑定发出时 token，明确失效则同步退出并停止轮询，旧响应不影响新管理员／员工登录；普通网络和权限错误不退出。
