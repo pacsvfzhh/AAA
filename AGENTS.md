@@ -93,6 +93,7 @@
 |---|---|
 | `docs/architecture.md` | 启动、登录与会话、数据访问与错误处理、`src/lib` 工具速查、样式与构建部署 |
 | `docs/admin-backend.md` | 后台导航与各页面：员工、搜索、登录纪录、锁定、管理员、设定、提款、身份验证、派单、产品、交单数据、历史资料 |
+| `docs/admin-ai-guide/admin-ai-integration.txt` | 可转发给后台 AI 智能体的 HTTPS/RPC 接入、会话鉴权、字段口径、授权写入与错误处理说明 |
 | `docs/employee-portal.md` | 员工端：派单接单、提交订单、统计、钱包提现、验证与密码、通知中心已读规则、多语言 |
 | `docs/notifications.md` | 后台通知发送/范本/投递、通知来源、删除员工时的通知处理、通知自动化、公告与富文本媒体 |
 | `docs/service-chat.md` | 「模擬客戶」「經理」聊天工作区、富卡与快捷消息、评分打赏、员工端聊天 |
