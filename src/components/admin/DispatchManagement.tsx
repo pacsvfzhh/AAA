@@ -583,7 +583,32 @@ export default function DispatchManagement() {
     groupDraft.withdrawal_orders_threshold !== String(selectedGroup.withdrawal_orders_threshold) ||
     groupDraft.withdrawal_condition_mode !== selectedGroup.withdrawal_condition_mode
   );
+  const orderedGroups = groups
+    .filter((group) => !group.archived_at)
+    .concat(groups.filter((group) => !!group.archived_at));
   const groupPools = pools.filter((pool) => pool.group_id === selectedGroupId);
+  const orderedGroupPools = groupPools
+    .filter((pool) => !pool.archived_at && pool.is_active)
+    .concat(
+      groupPools.filter((pool) => !pool.archived_at && !pool.is_active),
+      groupPools.filter((pool) => !!pool.archived_at),
+    );
+  const activePoolProbabilityTotal = groupPools.reduce(
+    (total, pool) => total + (pool.is_active && !pool.archived_at ? pool.trigger_probability : 0),
+    0,
+  );
+  const hasDisabledPoolProbability = groupPools.some(
+    (pool) => !pool.is_active && !pool.archived_at && pool.trigger_probability > 0,
+  );
+  const additionalPoolProbabilityById = new Map(
+    groupPools
+      .filter((pool) => pool.is_active && !pool.archived_at && pool.trigger_probability > 0 && activePoolProbabilityTotal > 0)
+      .map((pool) => {
+        const effectiveProbability = pool.trigger_probability / activePoolProbabilityTotal * 100;
+        const additionalProbability = effectiveProbability - pool.trigger_probability;
+        return [pool.id, Math.round((additionalProbability + Number.EPSILON) * 100) / 100] as const;
+      }),
+  );
   const editableProbabilityPools = groupPools.filter((pool) => !pool.archived_at);
   const probabilityTotal = editableProbabilityPools.reduce(
     (total, pool) => total + (Number(probabilityDraft[pool.id]) || 0), 0,
@@ -903,7 +928,6 @@ export default function DispatchManagement() {
     const channel = supabase.channel('dispatch-management-changes');
     for (const table of [
       'dispatch_groups',
-      'dispatch_order_pools',
       'dispatch_group_orders',
       'dispatch_group_members',
       'users',
@@ -914,6 +938,28 @@ export default function DispatchManagement() {
         refresh,
       );
     }
+    channel.on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'dispatch_order_pools' },
+      (payload) => {
+        const updatedPool = payload.new as unknown as Omit<DispatchPool, 'order_count'>;
+        setPools((current) => current.map((pool) =>
+          pool.id === updatedPool.id
+            ? { ...pool, ...updatedPool, order_count: pool.order_count }
+            : pool,
+        ));
+      },
+    );
+    channel.on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'dispatch_order_pools' },
+      refresh,
+    );
+    channel.on(
+      'postgres_changes',
+      { event: 'DELETE', schema: 'public', table: 'dispatch_order_pools' },
+      refresh,
+    );
     channel.subscribe();
     return () => {
       clearTimeout(refreshTimer);
@@ -1231,17 +1277,22 @@ export default function DispatchManagement() {
     )
       return;
     setBusy(true);
+    const nextIsActive = !pool.is_active;
     try {
       const { error } = await supabase.rpc('admin_save_dispatch_pool', {
         p_admin_session_token: getAdminFinancialSessionToken(),
         p_group_id: selectedGroup.id,
         p_pool_id: pool.id,
-        p_changes: { is_active: !pool.is_active },
+        p_changes: { is_active: nextIsActive },
       });
       if (error) throw error;
+      setPools((current) => current.map((currentPool) =>
+        currentPool.id === pool.id
+          ? { ...currentPool, is_active: nextIsActive }
+          : currentPool,
+      ));
       setPoolToggleTarget(null);
-      if (await loadWorkspace())
-        notify('success', `訂單池已${pool.is_active ? '停用' : '啟用'}。`);
+      notify('success', `訂單池已${nextIsActive ? '啟用' : '停用'}。`);
     } catch (error) {
       notify(
         'error',
@@ -1528,11 +1579,14 @@ export default function DispatchManagement() {
 
       <div className="relative grid min-h-0 min-w-0 w-full flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] lg:before:pointer-events-none lg:before:absolute lg:before:inset-y-0 lg:before:left-[279px] lg:before:z-10 lg:before:w-[2px] lg:before:bg-gradient-to-b lg:before:from-blue-400/80 lg:before:via-cyan-500/60 lg:before:to-cyan-800/30">
         <>
-            <section className="min-w-0 border-b-2 border-cyan-700/65 bg-gradient-to-b from-blue-950/65 via-slate-900/40 to-slate-950/20 px-3 py-4 sm:px-4 lg:border-b-0">
+            <section className="min-w-0 border-b-2 border-cyan-700/65 bg-gradient-to-b from-blue-950/65 via-slate-900/40 to-slate-950/20 px-3 py-4 sm:px-4 lg:flex lg:min-h-0 lg:flex-col lg:border-b-0">
               <div className="mb-4 flex min-w-0 items-center justify-between gap-2">
                 <h3 className="flex min-w-0 items-center gap-2 font-semibold text-blue-100">
-                  <Layers className="h-4 w-4 text-blue-400" />
-                  分組 <span className="rounded-full bg-blue-400/15 px-2 py-0.5 text-xs text-blue-200">{groups.length}</span>
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-cyan-300/45 bg-gradient-to-br from-cyan-400/25 to-blue-600/30 text-cyan-200 shadow-[0_0_12px_rgba(34,211,238,0.18)]">
+                    <Layers className="h-4 w-4" />
+                  </span>
+                  分組
+                  <span className="inline-flex min-w-7 items-center justify-center rounded-full border border-amber-300/45 bg-amber-400/20 px-2 py-0.5 text-xs font-bold tabular-nums text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.18)]">{groups.length}</span>
                 </h3>
                 {isSuperAdmin && (
                   <button
@@ -1556,35 +1610,35 @@ export default function DispatchManagement() {
                   </button>
                 )}
               </div>
-              <div className="max-h-[min(70vh,780px)] space-y-2.5 overflow-y-auto pr-1">
-                {groups.map((group) => (
+              <div aria-label="分組清單" className="dispatch-group-list-scroll min-h-0 space-y-2.5 overflow-y-auto pr-4 lg:flex-1">
+                {orderedGroups.map((group) => (
                   <article
                     key={group.id}
-                    className={`relative min-w-0 overflow-hidden rounded-lg border px-2.5 py-2 transition-colors ${selectedGroupId === group.id ? 'border-cyan-300 bg-gradient-to-br from-blue-900/90 via-indigo-950/95 to-cyan-900/85 shadow-[0_0_16px_rgba(34,211,238,0.2)] ring-1 ring-cyan-300/70 before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-cyan-300' : 'border-slate-700 bg-slate-950/70 hover:border-slate-500 hover:bg-slate-800/80'}`}
+                    className={`relative min-w-0 overflow-hidden rounded-lg border px-2.5 py-2 transition-colors ${group.archived_at || !group.is_active ? selectedGroupId === group.id ? 'border-rose-300 bg-gradient-to-br from-rose-900/85 via-rose-950/95 to-slate-950 shadow-[0_0_16px_rgba(244,63,94,0.2)] ring-1 ring-rose-300/70 before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-rose-300' : 'border-rose-900/70 bg-gradient-to-br from-rose-950/45 via-slate-950/85 to-slate-950/70 hover:border-rose-500/70 hover:from-rose-950/60' : selectedGroupId === group.id ? 'border-emerald-300 bg-gradient-to-br from-emerald-900/85 via-emerald-950/95 to-slate-950 shadow-[0_0_16px_rgba(16,185,129,0.2)] ring-1 ring-emerald-300/70 before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-emerald-300' : 'border-emerald-900/70 bg-gradient-to-br from-emerald-950/45 via-slate-950/85 to-slate-950/70 hover:border-emerald-500/70 hover:from-emerald-950/60'}`}
                   >
                     <button
                       type="button"
-                      className="w-full min-w-0 text-left focus-visible:rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+                      className={`w-full min-w-0 text-left focus-visible:rounded-md focus-visible:outline-none focus-visible:ring-2 ${group.archived_at || !group.is_active ? 'focus-visible:ring-rose-300' : 'focus-visible:ring-emerald-300'}`}
                       aria-pressed={selectedGroupId === group.id}
                       onClick={() => switchGroup(group.id)}
                     >
                       <span className="flex min-w-0 items-start justify-between gap-1.5">
                         <span className="min-w-0 flex-1">
                           <span className="flex min-w-0 flex-wrap items-center gap-1">
-                            <span className={`min-w-0 break-words text-sm font-semibold leading-5 ${selectedGroupId === group.id ? 'text-white' : 'text-slate-200'}`}>{groupDisplayName(group)}</span>
+                            <span className="min-w-0 break-words text-sm font-semibold leading-5 text-white">{groupDisplayName(group)}</span>
                             {group.is_default && <span className="shrink-0 rounded bg-amber-400/20 px-1 text-[10px] leading-4 text-amber-100">預設</span>}
                           </span>
-                          <span className="mt-0.5 block truncate text-[11px] leading-4 text-slate-300" title={groupDisplayDescription(group)}>{groupDisplayDescription(group)}</span>
+                          <span className="mt-0.5 block truncate text-[11px] leading-4 text-slate-200" title={groupDisplayDescription(group)}>{groupDisplayDescription(group)}</span>
                         </span>
                         <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 text-[10px] leading-5 ${group.archived_at ? 'bg-rose-500/20 text-rose-100' : group.is_active ? 'bg-emerald-500/20 text-emerald-100' : 'bg-rose-500/20 text-rose-200'}`}>
                           <span className={`h-1.5 w-1.5 rounded-full ${group.archived_at ? 'bg-rose-400' : group.is_active ? 'bg-emerald-400' : 'bg-rose-400'}`} />
                           {group.archived_at ? '已封存' : group.is_active ? '已啟用' : '未啟用'}
                         </span>
                       </span>
-                      <span className="mt-1.5 block text-[11px] leading-4 text-slate-200">
+                      <span className="mt-1.5 block text-[11px] leading-4 font-medium text-slate-100">
                         {group.member_count} 位成員 · {group.order_count} 筆訂單
                       </span>
-                      <span className={`mt-1 block text-[11px] font-medium leading-4 ${selectedGroupId === group.id ? 'text-cyan-50' : 'text-slate-300'}`}>
+                      <span className="mt-1 block text-[11px] font-medium leading-4 text-slate-100">
                         選池 · {group.pool_selection_mode === 'base' ? '固定基本池' : group.pool_selection_mode === 'weighted' ? '按池設定概率' : '隨機可派單池'}
                       </span>
                       <span className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-1 border-t border-white/15 pt-1.5 text-[11px] leading-4">
@@ -1602,8 +1656,8 @@ export default function DispatchManagement() {
                       </span>
                     </button>
                     <div className="mt-2 grid grid-cols-2 gap-1.5 border-t border-white/15 pt-2">
-                      <button type="button" className="inline-flex min-w-0 items-center justify-center gap-1 rounded-md border border-cyan-400/45 bg-cyan-500/20 px-1 py-1 text-[11px] font-medium text-cyan-50 hover:bg-cyan-500/30" onClick={() => openGroupSettings(group)}><Settings className="h-3 w-3 shrink-0" />分組設定</button>
-                      <button type="button" className="inline-flex min-w-0 items-center justify-center gap-1 rounded-md border border-emerald-400/45 bg-emerald-500/20 px-1 py-1 text-[11px] font-medium text-emerald-50 hover:bg-emerald-500/30" onClick={() => { switchGroup(group.id); setMemberPanelOpen(true); }}><Users className="h-3 w-3 shrink-0" />成員管理</button>
+                      <button type="button" className="inline-flex min-w-0 items-center justify-center gap-1 rounded-md border border-indigo-200/60 bg-gradient-to-r from-indigo-500/40 to-blue-500/40 px-1 py-1 text-[11px] font-semibold text-white shadow-sm shadow-indigo-950/40 transition-colors hover:from-indigo-400/55 hover:to-blue-400/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200" onClick={() => openGroupSettings(group)}><Settings className="h-3 w-3 shrink-0" />分組設定</button>
+                      <button type="button" className="inline-flex min-w-0 items-center justify-center gap-1 rounded-md border border-cyan-200/60 bg-gradient-to-r from-cyan-500/40 to-teal-500/40 px-1 py-1 text-[11px] font-semibold text-white shadow-sm shadow-cyan-950/40 transition-colors hover:from-cyan-400/55 hover:to-teal-400/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200" onClick={() => { switchGroup(group.id); setMemberPanelOpen(true); }}><Users className="h-3 w-3 shrink-0" />成員管理</button>
                     </div>
                   </article>
                 ))}
@@ -2172,15 +2226,15 @@ export default function DispatchManagement() {
                     <span className="text-right">操作</span>
                   </div>
                   <div className="divide-y divide-cyan-300/15">
-                    {groupPools.map((pool, index) => (
+                    {orderedGroupPools.map((pool, index) => (
                       <div
                         key={pool.id}
-                        className={`relative min-w-0 transition-colors ${pool.archived_at ? 'bg-gradient-to-r from-rose-950/30 via-slate-900/50 to-slate-950/40' : pool.is_base ? 'bg-gradient-to-r from-amber-950/35 via-blue-950/30 to-cyan-950/20 hover:from-amber-900/40 hover:via-blue-900/35' : 'bg-gradient-to-r from-blue-950/35 via-slate-900/35 to-cyan-950/15 hover:from-blue-900/40 hover:via-cyan-900/25'}`}
+                        className={`relative min-w-0 transition-colors ${pool.archived_at || !pool.is_active ? 'bg-gradient-to-r from-rose-950/55 via-rose-950/35 to-slate-950/60 hover:from-rose-950/70' : pool.is_base ? 'bg-gradient-to-r from-amber-950/35 via-blue-950/30 to-cyan-950/20 hover:from-amber-900/40 hover:via-blue-900/35' : 'bg-gradient-to-r from-blue-950/35 via-slate-900/35 to-cyan-950/15 hover:from-blue-900/40 hover:via-cyan-900/25'}`}
                       >
-                        <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 bg-gradient-to-b ${pool.archived_at ? 'from-rose-400 via-rose-600 to-transparent' : pool.is_base ? 'from-amber-300 via-amber-500 to-transparent' : 'from-cyan-300 via-blue-500 to-transparent'}`} />
+                        <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 bg-gradient-to-b ${pool.archived_at || !pool.is_active ? 'from-rose-400 via-rose-600 to-transparent' : pool.is_base ? 'from-amber-300 via-amber-500 to-transparent' : 'from-cyan-300 via-blue-500 to-transparent'}`} />
                         <div className="grid min-w-0 items-center gap-x-5 gap-y-3 px-3 py-3 pl-4 sm:px-4 sm:pl-5 xl:grid-cols-[minmax(170px,1fr)_minmax(265px,1.15fr)_minmax(320px,auto)]">
                           <div className="flex min-w-0 items-start gap-3">
-                            <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border text-[11px] font-semibold tabular-nums ${pool.is_base ? 'border-amber-300/35 bg-amber-400/15 text-amber-100' : 'border-cyan-300/25 bg-cyan-400/10 text-cyan-100'}`}>{String(index + 1).padStart(2, '0')}</span>
+                            <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border text-[11px] font-semibold tabular-nums ${pool.archived_at || !pool.is_active ? 'border-rose-300/35 bg-rose-400/15 text-rose-100' : pool.is_base ? 'border-amber-300/35 bg-amber-400/15 text-amber-100' : 'border-cyan-300/25 bg-cyan-400/10 text-cyan-100'}`}>{String(index + 1).padStart(2, '0')}</span>
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                 <h4 className="min-w-0 break-words text-sm font-semibold text-white">{poolDisplayName(pool)}</h4>
@@ -2199,7 +2253,18 @@ export default function DispatchManagement() {
                           <div className="grid min-w-0 grid-cols-3 gap-2 text-xs sm:gap-3">
                             <div className="min-w-0"><span className="block whitespace-nowrap text-[11px] text-cyan-200/70">派單間隔</span><strong className="mt-0.5 block whitespace-nowrap text-xs font-semibold tabular-nums text-slate-100 sm:text-sm">{pool.dispatch_interval_min}–{pool.dispatch_interval_max} 秒</strong></div>
                             <div className="min-w-0 border-l border-cyan-300/15 pl-2 sm:pl-3"><span className="block whitespace-nowrap text-[11px] text-cyan-200/70">池內選單</span><strong className="mt-0.5 block whitespace-nowrap text-xs font-semibold text-slate-100 sm:text-sm">{pool.dispatch_order_mode === 'random' ? '隨機選單' : '依序選單'}</strong></div>
-                            <div className="min-w-0 border-l border-amber-300/15 pl-2 sm:pl-3"><span className="block whitespace-nowrap text-[11px] text-amber-200/80">觸發概率</span><strong className="mt-0.5 block text-xs font-semibold tabular-nums text-amber-100 sm:text-sm">{pool.trigger_probability}%</strong></div>
+                            <div className="min-w-0 border-l border-amber-300/15 pl-2 sm:pl-3">
+                              <span className="block whitespace-nowrap text-[11px] text-amber-200/80">觸發概率</span>
+                              <div className="mt-0.5 flex min-w-0 items-center gap-2">
+                                <strong className="shrink-0 text-xs font-semibold tabular-nums text-amber-100 sm:text-sm">{pool.trigger_probability}%</strong>
+                                {selectedGroup.pool_selection_mode === 'weighted' && hasDisabledPoolProbability && pool.is_active && !pool.archived_at && (additionalPoolProbabilityById.get(pool.id) ?? 0) > 0 && (
+                                  <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-emerald-300/35 bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-semibold leading-tight text-emerald-100" title="停用訂單池分擔增加的概率">
+                                    <span>分擔概率</span>
+                                    <span className="tabular-nums">+{additionalPoolProbabilityById.get(pool.id)!.toFixed(2)}%</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
                           <div className="flex min-w-0 flex-wrap items-center gap-1.5 xl:justify-end">
                             <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:from-cyan-500 hover:to-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300" onClick={() => openOrders(pool.id)}><PackageSearch className="h-3.5 w-3.5" />查看訂單</button>
@@ -2220,11 +2285,11 @@ export default function DispatchManagement() {
                                   </button>
                                   <button
                                     type="button"
-                                    className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-100 transition-colors hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:opacity-50"
+                                    className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 disabled:opacity-50 ${pool.is_active ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/25 focus-visible:ring-emerald-300' : 'border-rose-400/40 bg-rose-500/15 text-rose-100 hover:bg-rose-500/25 focus-visible:ring-rose-300'}`}
                                     disabled={busy}
                                     onClick={() => pool.is_active ? setPoolToggleTarget(pool) : void togglePool(pool)}
                                   >
-                                    {pool.is_active ? '停用' : '啟用'}
+                                    {pool.is_active ? '已啟用' : '已停用'}
                                   </button>
                                 </>
                               ) : (
