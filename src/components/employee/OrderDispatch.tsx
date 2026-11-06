@@ -1301,7 +1301,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
     const generation = lifecycleGenerationRef.current;
     try {
-      const { data, error } = await supabase.rpc('update_session_heartbeat_secure', {
+      const { data, error } = await supabase.rpc('update_session_heartbeat_status_secure', {
         p_user_id: auth.user.id,
         p_session_token: auth.financialSessionToken,
         p_tab_id: auth.tabId,
@@ -1310,6 +1310,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
       if (!isCurrentDispatch(currentSessionId, generation)) return;
       if (error) throw error;
+      if (data?.session_status === 'ended') {
+        void restartSessionAfterLifecycleGap('Employee work session is invalid, offline, or stale.');
+        return;
+      }
       if (!data?.success) {
         console.error('Heartbeat rejected:', data?.reason || 'unknown reason');
         if (
@@ -2120,7 +2124,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     try {
       const auth = getStoredAuth();
       if (auth?.userType !== 'employee') throw new Error('Employee session has expired. Please sign in again.');
-      const { data, error } = await supabase.rpc('prepare_next_dispatch_order_secure', {
+      const { data, error } = await supabase.rpc('prepare_next_dispatch_order_status_secure', {
         p_user_id: auth.user.id,
         p_session_token: auth.financialSessionToken,
         p_tab_id: auth.tabId,
@@ -2129,6 +2133,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       if (!isCurrentDispatch(sessionId, generation) || membershipRevision !== membershipRevisionRef.current) return;
       if (error) throw error;
       const prepared = data;
+      if (prepared?.session_status === 'ended' || prepared?.session_status === 'stale') {
+        void restartSessionAfterLifecycleGap('Employee work session is invalid, offline, or stale.');
+        return;
+      }
       if (prepared?.auto_stopped) {
         stopLocalWorkingState(sessionId);
         setAutoStopReason('missed');
@@ -2183,7 +2191,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       if (auth?.userType !== 'employee') throw new Error('Employee session has expired. Please sign in again.');
 
       // The server's sticky selection is authoritative; legacy group/mode arguments are ignored.
-      const { data, error } = await supabase.rpc('assign_next_dispatch_order_secure', {
+      const { data, error } = await supabase.rpc('assign_next_dispatch_order_status_secure', {
         p_user_id: auth.user.id,
         p_session_token: auth.financialSessionToken,
         p_tab_id: auth.tabId,
@@ -2193,6 +2201,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       if (!isCurrentDispatch(selection.sessionId, generation) || selectedDispatchRef.current !== selection) return;
       if (error) throw error;
       const result = data;
+      if (result?.session_status === 'ended' || result?.session_status === 'stale') {
+        void restartSessionAfterLifecycleGap('Employee work session is invalid, offline, or stale.');
+        return;
+      }
       if (result?.auto_stopped) {
         stopLocalWorkingState(selection.sessionId);
         setAutoStopReason('missed');

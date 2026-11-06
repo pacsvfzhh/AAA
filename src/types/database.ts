@@ -3023,6 +3023,19 @@ export interface Database {
           assignment_code?: string | null;
         };
       };
+      prepare_next_dispatch_order_status_secure: {
+        Args: Database['public']['Functions']['prepare_next_dispatch_order_secure']['Args'];
+        Returns: Database['public']['Functions']['prepare_next_dispatch_order_secure']['Returns'] & {
+          success?: false;
+          session_status?: 'ended' | 'stale';
+        };
+      };
+      assign_next_dispatch_order_status_secure: {
+        Args: Database['public']['Functions']['assign_next_dispatch_order_secure']['Args'];
+        Returns: Database['public']['Functions']['assign_next_dispatch_order_secure']['Returns'] & {
+          session_status?: 'ended' | 'stale';
+        };
+      };
       prepare_next_dispatch_order_secure: {
         Args: { p_user_id: string; p_session_token: string; p_tab_id: string; p_session_id: string };
         Returns: {
@@ -3299,6 +3312,12 @@ export interface Database {
           stopped_count: number;
           ended_at: string | null;
           work_sessions_ended: number;
+        };
+      };
+      update_session_heartbeat_status_secure: {
+        Args: Database['public']['Functions']['update_session_heartbeat_secure']['Args'];
+        Returns: Database['public']['Functions']['update_session_heartbeat_secure']['Returns'] & {
+          session_status?: 'ended';
         };
       };
       update_session_heartbeat_secure: {
