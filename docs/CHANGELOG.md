@@ -17,6 +17,37 @@
 
 ---
 
+## 2026-11-06 · 部署APLF10派单恢复追加修复（前端待发布）
+- 需求：用户明确确认部署已补齐验收的派单恢复追加修复，目标仅APLF10。
+- 改动：复用已测试的 `20261103000006_replay_submitted_order_recovery.sql`，新增私有恢复记录的 `replay_order_snapshot jsonb` 可空字段并更新受保护恢复函数，解决已提交处理中订单恢复回包丢失后的重放误判；不改业务源码或旧迁移。
+- 文件：`docs/database.md`、`docs/employee-portal.md`、本记录。
+- 数据库/服务端：2026-11-06 23:50:47（UTC+8）已部署APLF10（`ashxnuadjvhqucoobmyp`），正式版本 `20261106155047 replay_submitted_order_recovery`。AAA、前端、Edge Function与Storage未部署／修改；前端仍待用户发布到APLF10网站。
+- 验证：部署前旧函数正文／所有者／权限／search_path及新增列前置断言通过；部署后正文MD5 `ec384221fcbaabdb4167e6d6ad78f739` 与已测本地源码一致，完整定义MD5 `bee00756caeb71043059ef6de1532053`；正式迁移记录SQL的SHA-256 `7ddd2672a25418b19bdc46a20feb8a62fda209c56371c617e1cabe8a1740f995` 与本地完整迁移逐字一致。其他430个函数定义／权限／所有者、原有字段、触发器和cron指纹不变；私有表RLS及浏览器禁访权限不变，恢复记录0行、等待锁0。23:51的订单结算、钱包对账、派单生命周期cron各成功1次、失败0；23:50:47–23:51:37初始日志窗口未见数据库WARNING／ERROR／FATAL／PANIC，不代替长期负载验收。
+- 本地复验：工作会话59项、派单／维护64项、迁移工具95项及原生PostgreSQL多连接11项通过，类型检查和Lint通过；当前容器原缺原生PG工具，补装PG15后并发复验通过。此前Chromium隔离验收仍有效，本次未重跑浏览器、构建或调用真实员工业务；真实手机系统冻结／回收尚未覆盖。仓库01内嵌AAA基线未被APLF10覆盖，两站基线须分别生成。
+
+## 2026-11-06 · 修复派单恢复的三个边界问题（仅本地）
+- 需求：全面复查断线恢复后，用户同意先修复本地复现的恢复边界，不立即改动正式环境。
+- 改动：恢复重试期间页面隐藏会记录待恢复状态，返回后续做核对；恢复流程等待中的完成／报错写入先结束，再按最新服务端状态刷新，不重放业务写入；新增向前迁移保存已提交处理中订单的最小快照，同操作重试经完整校验后复用结果，订单结算后调用现有恢复逻辑收尾。
+- 文件：`src/components/employee/OrderDispatch.tsx`、`supabase/migrations/20261103000006_replay_submitted_order_recovery.sql`、`supabase/tests/dispatch-timing.test.mjs`、`supabase/tests/work-session-stop.test.mjs`、`docs/employee-portal.md`、`docs/database.md`、本记录。
+- 数据库/服务端：新增迁移仅在本地，未部署APLF10或AAA；没有改已部署迁移、正式数据、Edge Function或定时任务。前端未发布。
+- 验证：`npm run test:dispatch-timing` 64项、`npm run test:work-session` 59项、`npm run test:migration-check` 95项、原生PostgreSQL多连接并发测试11项通过；类型检查、Lint、构建和diff检查通过。前向迁移在PGlite回放并验证处理中订单可幂等恢复、订单最终结算后自动收尾及旧缓存补建快照。Chromium隔离模拟后端实测桌面与390px手机视口的后台恢复、主动停工优先、完成／报错并发及手机弹窗无横向溢出；所有Supabase HTTP请求和WebSocket均被拦截。真实手机操作系统冻结与线上长期负载仍未覆盖。
+
+## 2026-11-06 · 获准部署APLF10派单恢复保护（前端待发布）
+- 需求：用户确认开始正式上线已完成的派单断线恢复修复。
+- 改动：本轮只部署APLF10后端，新增受保护恢复RPC、私有幂等记录表和索引；不调整原订单、钱包、派单概率或定时任务。前端仍需用户按网站发布流程上线，推送不等于发布；AAA及Edge Function未部署。
+- 文件：`docs/database.md`、`docs/employee-portal.md`、本记录；本地迁移源码与前端代码未改。
+- 数据库/服务端：2026-11-06 00:33:49（UTC+8）部署至APLF10（`ashxnuadjvhqucoobmyp`），正式版本 `20261105163349 guard_dispatch_recovery`。部署附同事务前提校验，未知函数漂移或已有新对象即拒绝执行；六项依赖与已审核版本兼容。
+- 验证：部署前再次通过56项工作会话与11项原生多连接竞态；部署后新RPC正文MD5 `4ebfc84d2053692ca7fc2233f8c4abce` 与本地一致，私有表RLS／权限／索引正确且0行。既有430个函数完整定义及ACL、原表列、触发器与cron指纹不变；正式REST无效身份探测返回HTTP400／P0001，正确拒绝且不写记录。部署后00:36（UTC+8）派单生命周期、订单结算、钱包对账cron均成功，阻塞锁0；本地95项迁移检测工具测试通过。Advisor的新对象提示与私有表＋验证自建会话RPC的设计相符，详情和修复参考链接见数据库文档。
+- 备注：未登录或操作真实员工、派单、订单或资金，真实网络与手机后台冻结仍待前端上线后观察。仓库结构检测内嵌基线属于AAA，APLF10部署前已有函数差异，未以APLF10覆盖AAA基线；后续迁移须从来源库生成对应基线，不将两库差异当成本次变更。
+
+## 2026-11-06 · 派单断线自动恢复与主动停工保护（仅本地）
+- 需求：短暂断线或切回前台后自动核对并继续有效工作，减少直接进入五分钟暂停的情况；已结束工作不得被延迟恢复请求重新开启。
+- 改动：前端先等待未完成的准备／派单请求，再用同一操作UUID有限重试恢复核对，不重放派单写入；快速恢复无提示，超过2秒仅在面板内显示十语言恢复状态。普通短暂切页只补心跳与重校等待时间；恢复有效会话后继续接单，服务器确认已结束则提示手动开始。补齐开工动画、主动停工、页面刷新与陈旧响应的保护。
+- 文件：`src/components/employee/OrderDispatch.tsx`、`src/lib/i18n/locales/*.ts`、`src/types/database.ts`、`supabase/migrations/20261103000005_guard_dispatch_recovery.sql`、`supabase/tests/{dispatch-timing,work-session-stop,dispatch-recovery-concurrency}.test.mjs`、`docs/employee-portal.md`、`docs/database.md`、`AGENTS.md`、本记录。
+- 数据库/服务端：仅本地新增受保护恢复RPC与私有幂等记录表（RLS、令牌哈希、会话与停工校验、缓存订单有效性检查）；只清理当前员工超过48小时且原令牌已失效的记录。未连接或修改正式数据库，未部署迁移／Edge Function；前端待用户部署，须先部署并核对后端，再发布前端。
+- 验证：`npm run typecheck`、`npm run lint`、`npm run build`、`git diff --check`通过；派单／维护60项、工作会话56项、原生PostgreSQL多连接竞态11项全部通过。Chromium隔离模拟后端验证短暂故障、派单回包丢失不重复派单、有限重试、服务端停工需手动开始、慢恢复内联提示、主动结束优先及手机／桌面无横向溢出；无浏览器未捕获异常，临时验收脚本已移除。
+- 备注：未用真实员工会话、正式订单或资金测试；未覆盖真实手机后台冻结与线上长期负载。构建仍含既有Browserslist数据过期及Bluebird eval提示。本地回放测试中的既有历史迁移失败不属于本次补丁修复范围，不能视为完整空库建库证明。
+
 ## 2026-11-02 · 分担概率徽标改为单行并增加间距
 - 需求：触发概率恢复原有布局后，分担提示空间充足，可单行显示且与原数值拉开距离。
 - 改动：保持触发概率标题在上、数值在下；右侧徽标改为单行「分擔概率 +xx.xx%」，与概率数值之间增加间距。

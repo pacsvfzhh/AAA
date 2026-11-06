@@ -15,7 +15,7 @@
 | 身份验证 | `verification_requests` |
 | 历史清理 | `history_cleanup_config`、`history_cleanup_log`、`data_retention_policies`、`bulk_import_log` |
 
-`private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；`anon` / `authenticated` 没有该 schema 的使用权限。
+`private` schema：内容稽核与已删员工相关表（见 `docs/content-audit.md`）及 `notification_delivery_operations`；恢复补丁另新增 `employee_dispatch_recovery_operations`（2026-11-06已部署APLF10；未部署AAA）。`anon` / `authenticated` 没有该 schema 的使用权限。
 
 ## RPC 与安全约定
 - 浏览器以 `anon` 角色执行（不用 Supabase Auth），身份在 RPC 内验证：管理员 `private.get_financial_admin_context(token)`，员工 `private.get_financial_employee_id(user_id, token, tab_id)`。
@@ -80,6 +80,19 @@ NOTIFY pgrst, 'reload schema';
 - 经用户明确确认，本迁移已于2026-10-26（UTC+8）部署到正式AAA库，正式版本为 `20261025200517 dispatch_server_clock`。部署后两个函数完整定义的MD5均与部署前计算的预期定义一致，移除新增字段后与原定义逐字一致；所有者、SECURITY DEFINER、search_path、执行权限全部保持不变，准备接口五处及派单接口七处JSON返回均带服务器时间。未使用真实员工会话或创建正式派单来测试。
 - 后端已就绪，前端仍待用户通过现有Vercel发布流程上线；Builder推送不等于部署。旧前端忽略新增字段仍能运行，新前端缺少服务器时间会暂停派单并进入原有错误重查，不回退到不可靠的设备时间。
 - `npm run test:dispatch-timing`：16项单调时钟／设备调时／任意区间／过期及非法时间单测，外加真实迁移回放后的维护与派单时钟共19项；断言两个函数移除新增JSON字段后与原定义逐字相等，权限／所有者／search_path不变，后台1秒、30–150秒、87–213秒、3000秒配置正常、已有选择不重抽、未到期及成功响应含服务器时间、无效身份仍拒绝。回放532份迁移存在12项既有历史失败，不是空库建库或完整结算验收；另运行 `test:work-session` 六项恢复回归。未访问正式订单或操作资金。
+
+### 派单断线恢复保护（APLF10后端已部署，前端待上线）
+- 新迁移 `20261103000005_guard_dispatch_recovery.sql` 仅新增私有表 `employee_dispatch_recovery_operations`、员工／创建时间索引，以及 `recover_employee_dispatch_guarded(user_id, session_token, tab_id, expected_session_id, operation_id)`；不替换现有函数、触发器、定时任务，不改资金或派单概率。原恢复RPC仍保留，旧前端不获得全部新保护。
+- 新RPC为SECURITY DEFINER、固定search_path，撤销PUBLIC执行权后仅授权anon／authenticated；函数内锁定并验证真实员工与财务会话，按既有开工／停工锁顺序串行处理。私有表启用RLS并撤销浏览器读写，令牌只存哈希。操作UUID绑定用户、令牌哈希、tab与期望工作会话，同一操作重试复用结果，不重复重建工时；不同旧操作不能替换更新的会话。
+- 缓存重放先核对会话仍在线、最新、未被明确停止，并核对派单状态、时间、内容、提交记录及超时；不能证明快照仍有效时返回 `recovered=false`，不重新开工。首次请求也检查停工标记、期望会话与候选派单，拒绝孤儿／跨员工／歧义关联；不进入旧恢复函数的无候选stop-all分支，避免旧请求误停新会话。无旧会话ID且已有明确停工标记时拒绝自动恢复，员工需手动开工。
+- 每次通过身份校验后，只清理当前员工创建超过48小时、且原令牌已无未撤销且未过期财务会话的操作；有效原令牌的旧记录保留，其他员工不受影响。无效令牌在清理前即被拒绝。清理随该员工后续调用执行，不另设cron；不活跃员工的记录不会立即回收。
+- 本地测试：`npm run test:dispatch-timing` 60项、`npm run test:work-session` 56项（含48小时清理门槛、有效令牌保留、跨员工隔离、权限及事务回滚）；`node --test supabase/tests/dispatch-recovery-concurrency.test.mjs` 11项。后者使用独立临时Unix socket原生PostgreSQL多连接，验证恢复／结束两种锁顺序、同操作重试、不同操作竞争、旧恢复不关闭新会话；不继承PostgreSQL连接变量、不连接网络库，结束后停止并清理临时实例。需要本机initdb、pg_ctl、psql（优先17，兼容16／15），root以postgres用户启动。
+- 经用户另行明确授权，迁移于2026-11-06 00:33:49（UTC+8）部署到APLF10（`ashxnuadjvhqucoobmyp`），正式版本 `20261105163349 guard_dispatch_recovery`。执行前用同事务只读断言检查新增对象不存在、六个依赖函数正文哈希未漂移；原legacy恢复、resume及end定义与已测源码相同，start／stop仅排版不同，token hash算法相同。未修改原函数或测试真实员工、订单和资金；未部署AAA、前端或Edge Function。
+- 部署后新RPC正文MD5 `4ebfc84d2053692ca7fc2233f8c4abce` 与本地完全一致，完整定义MD5 `07369c74ca88946d36b006d7d134c8a5`；所有者postgres、固定search_path、SECURITY DEFINER且无PUBLIC执行权。私有表RLS开启，anon／authenticated无表与schema访问权，表内0行。原有430个函数定义与执行权限、原表列、触发器、cron指纹均与部署前一致。正式REST用全零无效身份探测返回HTTP400／P0001「Employee session is invalid or expired.」，确认接口已进入PostgREST且鉴权生效，未产生操作记录。
+- 安全Advisor对新表提示[启用RLS但无策略](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy)，对新RPC提示[anon](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable)／[authenticated可执行SECURITY DEFINER](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable)：属于私有表仅由验证自建会话的RPC访问的既定设计，不为消除提示开放策略或取消身份核对。既有通知队列过程search_path提示未变。
+- 配套前端仍待用户发布到APLF10网站，只有发布后才启用自动恢复体验；旧前端继续可运行但不使用新保护。真实员工网络、手机后台冻结及长期负载尚未正式验收。仓库 `01_structure_health_check.sql` 内嵌基线仍明确属于AAA，APLF10在本次部署前已有430个函数，而AAA快照为429个，不能用APLF10覆盖AAA基线或把差异误当成本次变更；APLF10未来迁移前须按本节“迁移检测SQL”从该库重新生成其自身全量基线。
+- 复查发现操作重放在已提交订单状态变化后会将有效恢复误判为失效。新增本地前向迁移 `20261103000006_replay_submitted_order_recovery.sql`：私有操作记录保存处理中订单的最小快照；同一操作重试仅在员工、订单ID、关联编号、创建时间、状态、处理时间和30分钟有效期都通过核对时复用结果；订单已进入成功／失败／错误状态时重新调用现有服务端恢复逻辑完成派单状态收尾，不跳过停工、会话及快照校验。迁移以已部署函数源码哈希和新增列不存在为前置断言，拒绝未知漂移；经用户明确确认，已于2026-11-06 23:50:47（UTC+8）部署APLF10，正式版本 `20261106155047 replay_submitted_order_recovery`，AAA未部署。部署后正文MD5 `ec384221fcbaabdb4167e6d6ad78f739` 与已测源码一致，完整定义MD5 `bee00756caeb71043059ef6de1532053`；函数所有者、安全配置、ACL与私有表RLS／权限不变。其他430个函数定义／权限／所有者、原有字段（排除新增列）、触发器及cron指纹不变，恢复记录仍0行、等待锁0。PGlite真实迁移回归覆盖处理中订单幂等重放、订单结算后的自动收尾和既有停工隔离。
+- 本地恢复修复还令等待中的完成／报错写入先结算再做状态核对，避免旧会话代次丢弃已成功的迟到回包；恢复期间短暂隐藏再返回则继续核对，不丢失后续派单唤醒。派单／维护64项、工作会话／恢复59项、迁移检查95项及原生PostgreSQL多连接锁测试11项均通过；Chromium模拟后端验收桌面与390px移动视口的恢复、主动停工、完成／报错并发及弹窗布局。本次部署再次通过上述四组隔离回归及类型检查、Lint；23:51（UTC+8）订单结算、钱包对账、派单生命周期cron各成功1次、失败0，23:50:47–23:51:37日志窗口未见数据库WARNING／ERROR／FATAL／PANIC。真实手机操作系统冻结、线上长期负载未覆盖；APLF10前向迁移已部署，AAA未部署，配套前端仍未发布。本次未操作真实员工、订单或资金，也未修改Edge Function／Storage；仓库01仍保留AAA基线，不用APLF10结构覆盖它。
 
 ### 员工团队维护（后端已部署，前端待上线）
 - 迁移：`20261103000000_employee_login_maintenance.sql`。新增 `private.employee_login_maintenance`（管理员ID主键、开关、操作者、更新时间）、`private.employee_login_maintenance_confirmations`（操作者密码确认失败计数／锁定到期）和 `private.employee_login_maintenance_events`（操作审计，无密码或令牌）。均启用RLS，撤销PUBLIC／anon／authenticated直接表与序列权限，不加入Realtime。
