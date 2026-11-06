@@ -58,7 +58,7 @@
 - 改到员工建立/编辑 RPC、`get_employee_management_snapshot` 或员工地区：`npm run test:employee-regions`（回放全部迁移）。
 - 改到内容稽核/已删员工相关迁移或 Edge Function：`npm run test:audit-cleanup`；Edge Function 语法检查：`npx esbuild supabase/functions/content-audit/index.ts --format=esm --log-level=warning > /dev/null`。
 - 界面改动要在预览中实际操作。Chromium已可用于本地隔离替身测试；正式预览需登录，不能为测试调用正式资料。无法实测的路径要明确说明。
-- 改派单等待计时或服务器时间响应：`npm run test:dispatch-timing`；涉及工作会话恢复同时运行 `npm run test:work-session`。
+- 改派单等待计时或服务器时间响应：`npm run test:dispatch-timing`；涉及工作会话恢复同时运行 `npm run test:work-session`；涉及恢复／停工锁顺序再运行 `node --test supabase/tests/dispatch-recovery-concurrency.test.mjs`（临时本机原生PostgreSQL，多连接且不接触网络库，见 `docs/database.md`）。
 - 改动态模块错误边界／版本恢复（`src/lib/moduleLoadRecovery.ts`）：`npm run test:module-recovery`；按构建最多刷新一次，离线／无法存储保护标记不自动刷新，不重试业务写操作。
 - 改通知正文校验、公告正文限制或富卡保存／冻结：`npm run test:rich-content`；普通聊天与标题、媒体上传限制不要混作正文上限移除。
 - 部署数据库结构变更后，`supabase/migration-check/01_structure_health_check.sql` 的内嵌基线会过时：需在正式库重新生成（方法见 `docs/database.md`「迁移检测 SQL」），并跑 `npm run test:migration-check`。
