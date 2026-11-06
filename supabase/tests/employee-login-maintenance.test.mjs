@@ -9,6 +9,22 @@ import { uuid_ossp } from '@electric-sql/pglite/contrib/uuid_ossp';
 const loginMigration = '20261103000000_employee_login_maintenance.sql';
 const migration = '20261103000001_team_employee_maintenance.sql';
 const clockMigration = '20261103000002_dispatch_server_clock.sql';
+const statusMigration = '20261103000007_dispatch_session_status.sql';
+const dispatchStatusCalls = [
+  { name: 'prepare_next_dispatch_order_status_secure', legacy: 'prepare_next_dispatch_order_secure' },
+  { name: 'assign_next_dispatch_order_status_secure', legacy: 'assign_next_dispatch_order_secure' },
+  { name: 'update_session_heartbeat_status_secure', legacy: 'update_session_heartbeat_secure' },
+];
+const statusSignatures = [
+  'private.get_employee_dispatch_call_status(uuid,uuid,text,uuid,boolean)',
+  'public.prepare_next_dispatch_order_status_secure(uuid,uuid,text,uuid)',
+  'public.assign_next_dispatch_order_status_secure(uuid,uuid,text,uuid,uuid,text)',
+  'public.update_session_heartbeat_status_secure(uuid,uuid,text,uuid)',
+].sort();
+let statusCatalogBefore;
+let statusCatalogAfter;
+let isolatedBrowserCalls = false;
+let allTableSnapshotSQL;
 const clockSignatures = [
   'prepare_next_dispatch_order_secure(uuid,uuid,text,uuid)',
   'assign_next_dispatch_order_secure(uuid,uuid,text,uuid,uuid,text)',
@@ -56,9 +72,20 @@ let fixtureSequence = 0;
 
 async function asBrowser(sql, params = [], role = 'anon') {
   assert(['anon', 'authenticated'].includes(role));
-  await db.exec(`SET ROLE ${role}`);
-  try { return await db.query(sql, params); }
-  finally { await db.exec('RESET ROLE'); }
+  // New regressions run in rollback-only transactions. A failed real RPC must
+  // not leave that transaction aborted or prevent RESET ROLE / later assertions.
+  if (isolatedBrowserCalls) await db.exec('SAVEPOINT browser_call');
+  try {
+    await db.exec(`SET ROLE ${role}`);
+    const result = await db.query(sql, params);
+    await db.exec('RESET ROLE');
+    if (isolatedBrowserCalls) await db.exec('RELEASE SAVEPOINT browser_call');
+    return result;
+  } catch (error) {
+    if (isolatedBrowserCalls) await db.exec('ROLLBACK TO SAVEPOINT browser_call; RELEASE SAVEPOINT browser_call');
+    else await db.exec('RESET ROLE');
+    throw error;
+  }
 }
 async function call(name, args) {
   const keys = Object.keys(args);
@@ -124,6 +151,86 @@ async function validData() {
     VALUES (100, $1, $2) RETURNING id`, [`maintenance-valid-${++fixtureSequence}`, SUPER])).rows[0].id;
 }
 
+// Capture definitions and raw catalog metadata, not merely function names or
+// source text. This pins owners, ACLs, security/search_path and existing objects.
+async function catalogFingerprints() {
+  const functions = (await db.query(`SELECT p.oid::text AS oid,
+      n.nspname || '.' || p.proname || '(' || replace(oidvectortypes(p.proargtypes), ', ', ',') || ')' AS signature,
+      md5(to_jsonb(p)::text || pg_get_functiondef(p.oid)) AS fingerprint
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.prokind <> 'a'
+    ORDER BY p.oid`)).rows;
+  const catalogs = ['pg_namespace', 'pg_class', 'pg_attribute', 'pg_attrdef', 'pg_constraint',
+    'pg_index', 'pg_trigger', 'pg_policy', 'pg_type', 'pg_enum', 'pg_sequence',
+    'pg_default_acl', 'pg_publication', 'pg_publication_rel', 'pg_event_trigger', 'pg_extension'];
+  const objects = {};
+  for (const catalog of catalogs) {
+    objects[catalog] = (await db.query(`SELECT md5(to_jsonb(c)::text) AS fingerprint
+      FROM pg_catalog.${catalog} c ORDER BY to_jsonb(c)::text`)).rows;
+  }
+  objects.cron = await rowsOf('cron.job');
+  return { functions, objects };
+}
+
+// Include every application table (also audit/queue/stop-marker/recovery tables),
+// with physical tuple identity so an UPDATE writing identical values is detected.
+async function dispatchSnapshot() {
+  if (!allTableSnapshotSQL) {
+    const { rows } = await db.query(`SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS name
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname IN ('public', 'private') AND c.relkind = 'r' ORDER BY 1`);
+    allTableSnapshotSQL = rows.map(({ name }) => `SELECT '${name}' AS table_name, count(*)::int AS count,
+      md5(coalesce(string_agg(to_jsonb(t)::text || t.xmin::text || t.ctid::text,
+        E'\\n' ORDER BY to_jsonb(t)::text, t.ctid), '')) AS fingerprint FROM ${name} t`).join(' UNION ALL ');
+  }
+  return (await db.query(allTableSnapshotSQL)).rows;
+}
+function dispatchArgs(rpc, sessionId, overrides = {}) {
+  return { p_session_id: sessionId, ...(rpc.name.startsWith('assign_') ? { p_group_id: GROUP } : {}), ...overrides };
+}
+function regression(name, fn) {
+  test(name, async t => {
+    await db.exec('BEGIN');
+    isolatedBrowserCalls = true;
+    try { await fn(t); }
+    finally {
+      isolatedBrowserCalls = false;
+      await db.exec('ROLLBACK');
+    }
+  });
+}
+async function trial(fn) {
+  await db.exec('SAVEPOINT legacy_comparison');
+  try { return await fn(); }
+  finally { await db.exec('ROLLBACK TO SAVEPOINT legacy_comparison; RELEASE SAVEPOINT legacy_comparison'); }
+}
+const withoutClock = result => Object.fromEntries(Object.entries(result).filter(([key]) => key !== 'server_now'));
+async function assertClockedResult(result, expected) {
+  assert(Number.isFinite(Date.parse(result.server_now)), 'response must include the real server clock');
+  assert.deepEqual(withoutClock(result), expected);
+}
+async function assertQuietStatus(session, sessionId, expected) {
+  for (const rpc of dispatchStatusCalls) {
+    // Heartbeats deliberately have no stale cutoff; only ended is a quiet result.
+    if (expected === 'stale' && rpc.name.startsWith('update_')) continue;
+    const before = await dispatchSnapshot();
+    const result = await work(rpc.name, session, dispatchArgs(rpc, sessionId));
+    if (rpc.name.startsWith('update_')) {
+      assert.deepEqual(result, { success: false, session_status: expected, reason: 'work_session_ended',
+        session_id: sessionId, user_id: session.user.id, heartbeat_at: null, work_sessions_updated: 0 });
+    } else {
+      await assertClockedResult(result, { success: false, session_status: expected,
+        ...(rpc.name.startsWith('prepare_') ? { available: false } : { assignment: null }) });
+    }
+    assert.deepEqual(await dispatchSnapshot(), before, `${rpc.name} ${expected} must not write any application table`);
+  }
+}
+async function due(sessionId) {
+  await db.query(`UPDATE public.dispatch_pool_selections
+    SET selected_at = now() - interval '2 seconds', due_at = now() - interval '1 second'
+    WHERE session_id = $1`, [sessionId]);
+}
+
 before(async () => {
   const segments = [{ before: null, sql: '' }];
   for (const line of (await readFile(new URL('baseline.sql', supportDir), 'utf8')).split('\n')) {
@@ -134,6 +241,7 @@ before(async () => {
   await db.exec(await readFile(new URL('platform.sql', supportDir), 'utf8'));
   const files = (await readdir(migrationDir)).filter(name => name.endsWith('.sql')).sort();
   assert(files.includes(clockMigration));
+  assert(files.includes(statusMigration));
   replayedFiles = files;
   for (const [index, file] of files.entries()) {
     for (const segment of segments) if (segment.before && file.startsWith(segment.before)) await db.exec(segment.sql);
@@ -158,11 +266,13 @@ before(async () => {
       clockPermissions = (await db.query(`SELECT oid, proowner, prosecdef, proconfig, proacl::text
         FROM pg_proc WHERE oid = ANY($1::regprocedure[]) ORDER BY oid`, [clockSignatures])).rows;
     }
+    if (file === statusMigration) statusCatalogBefore = await catalogFingerprints();
     const sql = (await readFile(new URL(file, migrationDir), 'utf8')).replace(/CREATE EXTENSION IF NOT EXISTS pg_cron[^;]*;/gi, '').replace(/CREATE EXTENSION IF NOT EXISTS pg_trgm;/gi, '');
     try { await db.exec(sql); } catch (error) {
       failures.push({ file, message: String(error.message).split('\n')[0] });
       try { await db.exec('ROLLBACK'); } catch { /* historical migration may not open a transaction */ }
     }
+    if (file === statusMigration) statusCatalogAfter = await catalogFingerprints();
     if (index === 0) await db.exec(segments[0].sql);
   }
   await db.exec(`
@@ -689,3 +799,490 @@ test('server time accompanies configurable intervals, sticky selections and not-
   await assert.rejects(work('assign_next_dispatch_order_secure', session, { ...args, p_group_id: GROUP, p_session_token: INVALID_TOKEN }), /invalid|expired/i);
   await work('end_employee_dispatch_session_secure', session);
 });
+
+test('dispatch status migration adds exactly four functions without changing existing catalog fingerprints', async t => {
+  assert(statusCatalogBefore && statusCatalogAfter, 'capture immediately before and after the real status migration');
+  const previous = new Set(statusCatalogBefore.functions.map(fn => fn.oid));
+  const added = statusCatalogAfter.functions.filter(fn => !previous.has(fn.oid));
+  assert.deepEqual(added.map(fn => fn.signature).sort(), statusSignatures);
+  assert.equal(statusCatalogAfter.functions.length, statusCatalogBefore.functions.length + 4);
+  assert.deepEqual(statusCatalogAfter.functions.filter(fn => previous.has(fn.oid)), statusCatalogBefore.functions);
+  assert.deepEqual(statusCatalogAfter.objects, statusCatalogBefore.objects);
+  assert.deepEqual(failures.map(f => f.file), historicalFailures); // Never widen the twelve-item allowlist.
+  assert.deepEqual(failures.filter(f => f.file >= loginMigration), []);
+  t.diagnostic(`Status migration: ${statusCatalogBefore.functions.length} existing function definitions/ACLs unchanged; exactly 4 added; all other captured catalogs and cron unchanged.`);
+});
+
+regression('status RPC ACLs, private-helper isolation, lock order and direct legacy return paths are pinned', async () => {
+  for (const signature of statusSignatures) {
+    const privateHelper = signature.startsWith('private.');
+    const { rows: [metadata] } = await db.query(`SELECT prosecdef, proconfig,
+        EXISTS (SELECT 1 FROM aclexplode(proacl) WHERE grantee = 0 AND privilege_type = 'EXECUTE') AS public,
+        has_function_privilege('anon', oid, 'EXECUTE') AS anon,
+        has_function_privilege('authenticated', oid, 'EXECUTE') AS authenticated
+      FROM pg_proc WHERE oid = to_regprocedure($1)`, [signature]);
+    assert.deepEqual(metadata, { prosecdef: true, proconfig: ['search_path=pg_catalog, public, private, pg_temp'],
+      public: false, anon: !privateHelper, authenticated: !privateHelper });
+  }
+  const helper = await definition(statusSignatures.find(signature => signature.startsWith('private.')));
+  const identityLock = helper.indexOf('FOR UPDATE OF financial_session, employee;');
+  const dispatchRead = helper.indexOf('FROM public.dispatch_sessions AS session');
+  const dispatchLock = helper.indexOf('FOR UPDATE;', dispatchRead);
+  assert(identityLock > helper.indexOf('private.hash_financial_token(p_session_token)'));
+  assert(identityLock < dispatchRead && dispatchRead < dispatchLock);
+  assert(helper.indexOf("RETURN 'ended'") > dispatchLock);
+  assert(helper.indexOf("RETURN 'ended'") < helper.indexOf("RETURN 'stale'"));
+  for (const rpc of dispatchStatusCalls) {
+    const source = await definition(statusSignatures.find(signature => signature.startsWith(`public.${rpc.name}(`)));
+    assert(source.includes(`RETURN public.${rpc.legacy}(`), 'active branch returns the original JSON, not a reconstructed envelope');
+    assert.match(source, new RegExp(`p_session_id, ${rpc.name.startsWith('update_') ? 'false' : 'true'}\\)`));
+    assert.equal(/EXCEPTION|WHEN OTHERS/i.test(source), false, 'do not catch and relabel business errors');
+  }
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  for (const role of ['anon', 'authenticated']) {
+    await assert.rejects(asBrowser('SELECT private.get_employee_dispatch_call_status($1,$2,$3,$4,true)',
+      [session.user.id, session.session_token, TAB, started.session_id], role), { code: '42501' });
+    assert.equal((await asBrowser(`SELECT public.prepare_next_dispatch_order_status_secure($1,$2,$3,$4) AS result`,
+      [session.user.id, session.session_token, TAB, started.session_id], role)).rows[0].result.available, true);
+  }
+});
+
+for (const endedCase of ['offline', 'ended_at', 'offline_without_end']) {
+  regression(`valid identity gets ended with zero writes for all three status RPCs (${endedCase})`, async () => {
+    const session = await employee();
+    const active = await dispatch(session, true);
+    await order(session, active.assignment.assignment_id); // Protect nonempty real orders, wallets and ledger too.
+    await db.query(`UPDATE public.dispatch_sessions SET status = $2, ended_at = $3,
+      last_activity_at = now() - interval '3 minutes' WHERE id = $1`,
+    [active.session_id, endedCase === 'ended_at' ? 'online' : 'offline', endedCase === 'offline_without_end' ? null : new Date()]);
+    await assertQuietStatus(session, active.session_id, 'ended'); // Ended wins even when also stale.
+  });
+}
+
+for (const activity of ['older_than_two_minutes', 'null']) {
+  regression(`prepare and assign return stale without writes, but heartbeat still updates (${activity})`, async () => {
+    const session = await employee();
+    const started = await work('start_employee_dispatch_session_secure', session);
+    assert.equal((await work('prepare_next_dispatch_order_status_secure', session, { p_session_id: started.session_id })).available, true);
+    await due(started.session_id); // A due selection must not be consumed by the stale wrapper.
+    await db.query(`UPDATE public.dispatch_sessions SET last_activity_at =
+      ${activity === 'null' ? 'NULL' : "now() - interval '2 minutes 1 second'"} WHERE id = $1`, [started.session_id]);
+    await assertQuietStatus(session, started.session_id, 'stale');
+    const beat = await work('update_session_heartbeat_status_secure', session, { p_session_id: started.session_id });
+    assert.equal(beat.success, true);
+    assert.equal(beat.work_sessions_updated, 1);
+    assert.equal('session_status' in beat, false);
+    const { rows: [times] } = await db.query(`SELECT d.last_activity_at = w.last_heartbeat_at AS same,
+      d.last_activity_at >= now() - interval '1 second' AS fresh FROM public.dispatch_sessions d
+      JOIN public.work_sessions w ON w.user_id = d.user_id AND w.end_time IS NULL WHERE d.id = $1`, [started.session_id]);
+    assert.deepEqual(times, { same: true, fresh: true });
+    assert.equal((await work('assign_next_dispatch_order_status_secure', session,
+      { p_session_id: started.session_id, p_group_id: GROUP })).success, true);
+  });
+}
+
+regression('exactly two minutes remains active for prepare/assign; only older activity is stale', async () => {
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  // now() is fixed for this rollback-only transaction: exercise the inclusive
+  // boundary without sleeps or clock tolerance that could hide a threshold bug.
+  await db.query("UPDATE public.dispatch_sessions SET last_activity_at = now() - interval '2 minutes' WHERE id = $1", [started.session_id]);
+  const prepared = await work('prepare_next_dispatch_order_status_secure', session, { p_session_id: started.session_id });
+  assert.equal(prepared.available, true);
+  assert.equal('session_status' in prepared, false);
+  await due(started.session_id);
+  const assigned = await work('assign_next_dispatch_order_status_secure', session,
+    { p_session_id: started.session_id, p_group_id: GROUP });
+  assert.equal(assigned.success, true);
+  assert.equal('session_status' in assigned, false);
+});
+
+regression('base/random pool modes retain real eligibility filtering and sticky selection without trusting caller hints', async () => {
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  const base = (await db.query('SELECT id FROM public.dispatch_order_pools WHERE group_id = $1 AND is_base', [GROUP])).rows[0].id;
+  const alternate = (await db.query(`INSERT INTO public.dispatch_order_pools(group_id, pool_name,
+    dispatch_interval_min, dispatch_interval_max, created_by) VALUES ($1, 'Status alternate', 87, 87, $2) RETURNING id`, [GROUP, SUPER])).rows[0].id;
+  await db.query(`INSERT INTO public.dispatch_group_orders(group_id, pool_id, order_content, created_by)
+    VALUES ($1, $2, 'Status alternate real order', $3)`, [GROUP, alternate, SUPER]);
+  await db.query("UPDATE public.dispatch_groups SET pool_selection_mode = 'base' WHERE id = $1", [GROUP]);
+  const args = { p_session_id: started.session_id };
+  assert.equal((await work('prepare_next_dispatch_order_status_secure', session, args)).pool_id, base);
+  await db.query('DELETE FROM public.dispatch_pool_selections WHERE session_id = $1', [started.session_id]);
+  await db.query("UPDATE public.dispatch_groups SET pool_selection_mode = 'random' WHERE id = $1", [GROUP]);
+  await db.query('UPDATE public.dispatch_order_pools SET is_active = false WHERE id = $1', [base]);
+  const prepared = await work('prepare_next_dispatch_order_status_secure', session, args);
+  assert.equal(prepared.pool_id, alternate);
+  assert.equal(prepared.config.dispatch_interval_min, 87);
+  assert.equal(prepared.config.dispatch_interval_max, 87);
+  const legacy = await work('prepare_next_dispatch_order_secure', session, args);
+  await assertClockedResult(prepared, withoutClock(legacy));
+  await due(started.session_id);
+  const assigned = await work('assign_next_dispatch_order_status_secure', session,
+    { ...args, p_group_id: INVALID_TOKEN, p_dispatch_mode: 'sequential' });
+  assert.equal(assigned.success, true);
+  assert.equal(assigned.assignment.group_id, GROUP);
+  assert.equal(assigned.assignment.pool_id, alternate);
+  assert.equal(assigned.assignment.order_content, 'Status alternate real order');
+});
+
+for (const rpc of dispatchStatusCalls) {
+  regression(`${rpc.name}: invalid token/tab/user/marker/disabled/revoked/expired identity wins over ended and stale`, async () => {
+    const session = await employee();
+    const other = await employee();
+    const started = await work('start_employee_dispatch_session_secure', session);
+    const variants = [
+      { label: 'invalid token', overrides: { p_session_token: INVALID_TOKEN } },
+      { label: 'null token', overrides: { p_session_token: null } },
+      { label: 'marker is not token', overrides: { p_session_token: session.session_marker } },
+      { label: 'wrong user', overrides: { p_user_id: other.user.id } },
+      { label: 'null user', overrides: { p_user_id: null } },
+      ...['wrong-tab', '', '   ', null].map(tab => ({ label: `tab ${tab}`, overrides: { p_tab_id: tab } })),
+      { label: 'user marker changed', sql: 'UPDATE public.users SET current_session_token = $2 WHERE id = $1', value: INVALID_TOKEN },
+      { label: 'financial marker changed', sql: 'UPDATE public.employee_financial_sessions SET session_marker = $2 WHERE user_id = $1', value: INVALID_TOKEN },
+      { label: 'current tab changed', sql: 'UPDATE public.users SET current_tab_id = $2 WHERE id = $1', value: 'new-tab' },
+      { label: 'disabled user', sql: 'UPDATE public.users SET is_active = false WHERE id = $1' },
+      { label: 'revoked token', sql: 'UPDATE public.employee_financial_sessions SET revoked_at = now() WHERE user_id = $1' },
+      { label: 'expired token', sql: "UPDATE public.employee_financial_sessions SET expires_at = now() - interval '1 second' WHERE user_id = $1" },
+    ];
+    for (const state of ['ended', 'stale']) {
+      await db.query(`UPDATE public.dispatch_sessions SET status = $2, ended_at = $3,
+        last_activity_at = now() - interval '3 minutes' WHERE id = $1`,
+      [started.session_id, state === 'ended' ? 'offline' : 'online', state === 'ended' ? new Date() : null]);
+      for (const variant of variants) {
+        await trial(async () => {
+          if (variant.sql) await db.query(variant.sql, variant.value === undefined ? [session.user.id] : [session.user.id, variant.value]);
+          const before = await dispatchSnapshot();
+          await assert.rejects(work(rpc.name, session, dispatchArgs(rpc, started.session_id, variant.overrides)),
+            error => error.code === 'P0001' && error.message === 'Employee session is invalid or expired.', `${variant.label}, ${state}`);
+          assert.deepEqual(await dispatchSnapshot(), before, `${variant.label} must fail before any write`);
+        });
+      }
+    }
+  });
+  regression(`${rpc.name}: unknown, NULL, and another employee's dispatch session remain exceptions`, async () => {
+    const session = await employee();
+    const other = await employee();
+    const foreign = await work('start_employee_dispatch_session_secure', other);
+    await work('end_employee_dispatch_session_secure', other); // Even foreign ended sessions cannot be inspected.
+    for (const sessionId of [INVALID_TOKEN, null, foreign.session_id]) {
+      const before = await dispatchSnapshot();
+      await assert.rejects(work(rpc.name, session, dispatchArgs(rpc, sessionId)),
+        error => error.code === 'P0001' && error.message === 'Employee work session is invalid, offline, or stale.');
+      assert.deepEqual(await dispatchSnapshot(), before);
+    }
+  });
+}
+
+regression('status prepare preserves real pool selection, arbitrary intervals, sticky due times and legacy response shape', async () => {
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  const args = { p_session_id: started.session_id };
+  const pool = (await db.query('SELECT id FROM public.dispatch_order_pools WHERE group_id = $1 AND is_base', [GROUP])).rows[0].id;
+  await db.query("UPDATE public.dispatch_groups SET pool_selection_mode = 'base', grab_success_rate = 73 WHERE id = $1", [GROUP]);
+  for (const [min, max] of [[1, 1], [30, 150], [87, 213], [3000, 3000]]) {
+    await db.query('DELETE FROM public.dispatch_pool_selections WHERE session_id = $1', [started.session_id]);
+    await db.query('UPDATE public.dispatch_order_pools SET dispatch_interval_min = $2, dispatch_interval_max = $3 WHERE id = $1', [pool, min, max]);
+    const prepared = await work('prepare_next_dispatch_order_status_secure', session, args);
+    assert.equal(prepared.available, true);
+    assert.equal(prepared.pool_id, pool);
+    assert.equal(prepared.config.dispatch_interval_min, min);
+    assert.equal(prepared.config.dispatch_interval_max, max);
+    assert.equal(prepared.config.grab_success_rate, 73);
+    const { rows: [selection] } = await db.query(`SELECT pool_id, due_at, extract(epoch FROM due_at - selected_at)::float8 AS seconds
+      FROM public.dispatch_pool_selections WHERE session_id = $1`, [started.session_id]);
+    assert.equal(selection.pool_id, pool);
+    assert.equal(Date.parse(prepared.due_at), selection.due_at.getTime());
+    assert(Number.isInteger(selection.seconds) && selection.seconds >= min && selection.seconds <= max);
+    await db.query('UPDATE public.dispatch_order_pools SET dispatch_interval_min = 1, dispatch_interval_max = 1 WHERE id = $1', [pool]);
+    const before = await dispatchSnapshot();
+    const legacy = await work('prepare_next_dispatch_order_secure', session, args);
+    const repeated = await work('prepare_next_dispatch_order_status_secure', session, args);
+    await assertClockedResult(repeated, withoutClock(legacy));
+    assert.equal(repeated.due_at, prepared.due_at);
+    assert.deepEqual(await dispatchSnapshot(), before, 'sticky read must not rewrite or reselect the pool');
+  }
+});
+
+regression('status assign keeps not-due, due real assignment and duplicate prevention identical to legacy', async () => {
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  const args = { p_session_id: started.session_id, p_group_id: GROUP, p_dispatch_mode: 'sequential' };
+  await db.query("UPDATE public.dispatch_order_pools SET dispatch_interval_min = 3000, dispatch_interval_max = 3000, dispatch_order_mode = 'sequential' WHERE group_id = $1", [GROUP]);
+  assert.equal((await work('prepare_next_dispatch_order_status_secure', session, { p_session_id: started.session_id })).available, true);
+  const before = await dispatchSnapshot();
+  const earlyLegacy = await work('assign_next_dispatch_order_secure', session, args);
+  assert.equal(earlyLegacy.message, 'Dispatch order is not due yet.');
+  await assertClockedResult(await work('assign_next_dispatch_order_status_secure', session, args), withoutClock(earlyLegacy));
+  assert.deepEqual(await dispatchSnapshot(), before);
+  await due(started.session_id);
+  const legacy = await trial(() => work('assign_next_dispatch_order_secure', session, args));
+  const assigned = await work('assign_next_dispatch_order_status_secure', session, args);
+  assert.equal(assigned.success, true);
+  const { rows: [saved] } = await db.query('SELECT * FROM public.dispatch_assignments WHERE id = $1', [assigned.assignment.id]);
+  assert.equal(saved.user_id, session.user.id);
+  assert.equal(saved.status, 'pending');
+  assert.equal(saved.dispatch_session_id, started.session_id);
+  assert.equal(Date.parse(assigned.assignment.assigned_at), saved.assigned_at.getTime());
+  assert.equal(Date.parse(assigned.assignment.accept_deadline_at), saved.accept_deadline_at.getTime());
+  assert.equal(saved.accept_deadline_at.getTime() - saved.assigned_at.getTime(), 60000);
+  // Only DB-generated UUIDs / clock instants differ between independent writes.
+  await assertClockedResult(assigned, { ...withoutClock(legacy), assignment: { ...legacy.assignment,
+    id: assigned.assignment.id, assigned_at: assigned.assignment.assigned_at,
+    accept_deadline_at: assigned.assignment.accept_deadline_at } });
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM public.dispatch_pool_selections WHERE session_id = $1', [started.session_id])).rows[0].n, 0);
+  const after = await dispatchSnapshot();
+  for (const rpc of dispatchStatusCalls.slice(0, 2)) {
+    const rpcArgs = dispatchArgs(rpc, started.session_id);
+    const original = await work(rpc.legacy, session, rpcArgs);
+    assert.equal(original.message, 'An active dispatch assignment already exists.');
+    await assertClockedResult(await work(rpc.name, session, rpcArgs), withoutClock(original));
+  }
+  assert.deepEqual(await dispatchSnapshot(), after, 'repeat assign cannot create another assignment/order or consume money');
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM public.dispatch_assignments WHERE user_id = $1', [session.user.id])).rows[0].n, 1);
+});
+
+for (const grabRate of [0, 100]) {
+  regression(`status-assigned orders inherit legacy grab ${grabRate}% and immutable commission/order-success snapshots`, async () => {
+    const session = await employee();
+    await db.query(`UPDATE public.dispatch_groups SET grab_success_rate = $2, dispatch_success_rate = 37,
+      commission_rate = 0.1234, session_timeout_minutes = 13, submit_wait_min_seconds = 7, submit_wait_max_seconds = 19
+      WHERE id = $1`, [GROUP, grabRate]);
+    const started = await work('start_employee_dispatch_session_secure', session);
+    await work('prepare_next_dispatch_order_status_secure', session, { p_session_id: started.session_id });
+    await due(started.session_id);
+    const assigned = await work('assign_next_dispatch_order_status_secure', session,
+      { p_session_id: started.session_id, p_group_id: GROUP });
+    assert.equal(assigned.success, true);
+    const { rows: [snapshot] } = await db.query(`SELECT grab_success_rate_snapshot, dispatch_success_rate_snapshot,
+      commission_rate_snapshot::float8, session_timeout_minutes_snapshot, submit_wait_min_seconds_snapshot,
+      submit_wait_max_seconds_snapshot FROM public.dispatch_assignments WHERE id = $1`, [assigned.assignment.id]);
+    assert.deepEqual(snapshot, { grab_success_rate_snapshot: grabRate, dispatch_success_rate_snapshot: 37,
+      commission_rate_snapshot: 0.1234, session_timeout_minutes_snapshot: 13,
+      submit_wait_min_seconds_snapshot: 7, submit_wait_max_seconds_snapshot: 19 });
+    // Later settings must not change either the grab decision or order rate.
+    await db.query(`UPDATE public.dispatch_groups SET grab_success_rate = $2, dispatch_success_rate = 91,
+      commission_rate = 0.5, session_timeout_minutes = 20, submit_wait_min_seconds = 30, submit_wait_max_seconds = 40
+      WHERE id = $1`, [GROUP, 100 - grabRate]);
+    const code = `ASN-STATUS-${++fixtureSequence}`;
+    const accepted = await work('accept_dispatch_assignment_secure', session,
+      { p_session_id: started.session_id, p_assignment_id: assigned.assignment.id, p_assignment_code: code });
+    if (grabRate === 0) {
+      assert.deepEqual(accepted, { success: false, reason: 'grab_failed', assignment_status: 'cancelled', unaccepted_count: null });
+    } else {
+      assert.equal(accepted.success, true);
+      const savedOrder = await order(session, code);
+      assert.equal(Number(savedOrder.dispatch_commission_rate_snapshot), 0.1234);
+      assert.equal(savedOrder.dispatch_success_rate_snapshot, 37);
+      const wait = await work('get_employee_dispatch_submit_wait_secure', session);
+      // Actual order exists, so the old submission guard must reject another one.
+      assert.equal(wait.available, false);
+    }
+    assert.equal((await db.query('SELECT status FROM public.dispatch_assignments WHERE id = $1', [assigned.assignment.id])).rows[0].status,
+      grabRate === 0 ? 'cancelled' : 'accepted');
+  });
+}
+
+regression('normal status heartbeat preserves raw legacy envelope and updates both activity/work time', async () => {
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  await db.query(`UPDATE public.dispatch_sessions SET started_at = now() - interval '20 minutes',
+    last_activity_at = now() - interval '5 minutes' WHERE id = $1`, [started.session_id]);
+  await db.query(`UPDATE public.work_sessions SET start_time = now() - interval '20 minutes',
+    last_heartbeat_at = now() - interval '5 minutes' WHERE user_id = $1 AND end_time IS NULL`, [session.user.id]);
+  const args = { p_session_id: started.session_id };
+  const legacy = await trial(() => work('update_session_heartbeat_secure', session, args));
+  const beat = await work('update_session_heartbeat_status_secure', session, args);
+  assert.deepEqual(beat, { ...legacy, heartbeat_at: beat.heartbeat_at });
+  assert.equal(beat.success, true);
+  assert.equal(beat.work_sessions_updated, 1);
+  assert(Number.isFinite(Date.parse(beat.heartbeat_at)));
+  const { rows: [times] } = await db.query(`SELECT d.last_activity_at, w.last_heartbeat_at,
+    extract(epoch FROM w.last_heartbeat_at - w.start_time)::float8 AS seconds
+    FROM public.dispatch_sessions d JOIN public.work_sessions w ON w.user_id = d.user_id AND w.end_time IS NULL
+    WHERE d.id = $1`, [started.session_id]);
+  assert.equal(times.last_activity_at.getTime(), Date.parse(beat.heartbeat_at));
+  assert.equal(times.last_heartbeat_at.getTime(), Date.parse(beat.heartbeat_at));
+  assert(times.seconds >= 1200);
+  assert.equal((await work('end_employee_dispatch_session_secure', session)).success, true);
+  const { rows: [ended] } = await db.query(`SELECT duration_minutes, end_time FROM public.work_sessions
+    WHERE user_id = $1 ORDER BY start_time DESC LIMIT 1`, [session.user.id]);
+  assert.equal(ended.duration_minutes, 20);
+  assert(ended.end_time);
+  await assertQuietStatus(session, started.session_id, 'ended');
+});
+
+regression('heartbeat with no open work session returns the unchanged legacy business failure, not ended', async () => {
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  await db.query('DELETE FROM public.work_sessions WHERE user_id = $1', [session.user.id]);
+  const before = await dispatchSnapshot();
+  const args = { p_session_id: started.session_id };
+  const legacy = await work('update_session_heartbeat_secure', session, args);
+  assert.deepEqual(legacy, { success: false, reason: 'no_open_work_session', session_id: started.session_id,
+    user_id: session.user.id, heartbeat_at: null, work_sessions_updated: 0 });
+  assert.deepEqual(await work('update_session_heartbeat_status_secure', session, args), legacy);
+  assert.deepEqual(await dispatchSnapshot(), before);
+});
+
+regression('explicit end remains stopped; beacon stop still recovers inside thirty seconds and old IDs return ended', async () => {
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  await work('end_employee_dispatch_session_secure', session);
+  await assertQuietStatus(session, started.session_id, 'ended');
+  assert.equal((await work('recover_employee_dispatch_guarded', session, {
+    p_expected_session_id: started.session_id, p_operation_id: (await db.query('SELECT gen_random_uuid() AS id')).rows[0].id,
+  })).recovered, false);
+  assert.equal((await work('recover_employee_dispatch_assignment_secure', session)).recovered, false);
+  // Separate employee: backdating only a later beacon's end time on the same
+  // employee would incorrectly place it before the earlier explicit-stop marker.
+  const beacon = await employee();
+  const active = await work('start_employee_dispatch_session_secure', beacon);
+  await work('stop_employee_dispatch_session_secure', beacon, { p_session_id: active.session_id });
+  await db.query(`UPDATE public.dispatch_sessions SET started_at = now() - interval '40 seconds',
+    last_activity_at = now() - interval '29 seconds', ended_at = now() - interval '29 seconds' WHERE id = $1`, [active.session_id]);
+  await assertQuietStatus(beacon, active.session_id, 'ended');
+  const recovered = await work('recover_employee_dispatch_guarded', beacon, {
+    p_expected_session_id: active.session_id, p_operation_id: (await db.query('SELECT gen_random_uuid() AS id')).rows[0].id,
+  });
+  assert.equal(recovered.recovered, true);
+  assert.notEqual(recovered.session_id, active.session_id);
+  assert.equal((await work('update_session_heartbeat_status_secure', beacon, { p_session_id: recovered.session_id })).success, true);
+  await assertQuietStatus(beacon, active.session_id, 'ended');
+  await assertQuietStatus(session, started.session_id, 'ended');
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM public.dispatch_sessions WHERE user_id = $1 AND status = 'online' AND ended_at IS NULL", [beacon.user.id])).rows[0].n, 1);
+
+  const expired = await employee();
+  const old = await work('start_employee_dispatch_session_secure', expired);
+  await work('stop_employee_dispatch_session_secure', expired, { p_session_id: old.session_id });
+  await db.query(`UPDATE public.dispatch_sessions SET started_at = now() - interval '40 seconds',
+    last_activity_at = now() - interval '31 seconds', ended_at = now() - interval '31 seconds' WHERE id = $1`, [old.session_id]);
+  assert.equal((await work('recover_employee_dispatch_guarded', expired, {
+    p_expected_session_id: old.session_id, p_operation_id: (await db.query('SELECT gen_random_uuid() AS id')).rows[0].id,
+  })).recovered, false);
+  await assertQuietStatus(expired, old.session_id, 'ended');
+});
+
+for (const unavailable of ['no_group', 'no_orders']) {
+  regression(`status prepare/assign keep legacy ${unavailable} responses and selection cleanup`, async () => {
+    const session = await employee();
+    const started = await work('start_employee_dispatch_session_secure', session);
+    await work('prepare_next_dispatch_order_status_secure', session, { p_session_id: started.session_id });
+    await due(started.session_id);
+    if (unavailable === 'no_group') await db.query('DELETE FROM public.dispatch_group_members WHERE user_id = $1', [session.user.id]);
+    else await db.query('UPDATE public.dispatch_group_orders SET is_active = false WHERE group_id = $1', [GROUP]);
+    for (const rpc of dispatchStatusCalls.slice(0, 2)) {
+      // Restore the due selection between interfaces, so assign really reaches
+      // its no-candidate branch rather than prepare's prior cleanup hiding it.
+      await trial(async () => {
+        const args = dispatchArgs(rpc, started.session_id);
+        const legacy = await work(rpc.legacy, session, args);
+        // Restore the selected row after legacy's cleanup before comparing.
+        await db.exec('ROLLBACK TO SAVEPOINT legacy_comparison');
+        const actual = await work(rpc.name, session, args);
+        await assertClockedResult(actual, withoutClock(legacy));
+        const preparing = rpc.name.startsWith('prepare_');
+        assert.equal(preparing ? actual.available : actual.success, false);
+        assert.equal(actual.message, unavailable === 'no_group'
+          ? (preparing ? 'No active dispatch group assigned.' : 'A new dispatch pool selection is required.')
+          : (preparing ? 'No active orders in pool' : 'No active orders in selected pool.'));
+        assert.equal('session_status' in actual, false);
+        assert.equal((await db.query('SELECT count(*)::int AS n FROM public.dispatch_pool_selections WHERE session_id = $1', [started.session_id])).rows[0].n, 0);
+      });
+    }
+  });
+}
+
+for (const rpc of dispatchStatusCalls.slice(0, 2)) {
+  regression(`${rpc.name}: five-unaccepted auto-stop keeps legacy envelope and closes real work`, async () => {
+    const session = await employee();
+    const active = await dispatch(session); // Exercise the existing genuine assignment fixture.
+    assert.equal((await work('finish_dispatch_assignment_secure', session,
+      { p_assignment_id: active.assignment.id, p_status: 'cancelled' })).success, true);
+    await db.query('UPDATE public.dispatch_sessions SET consecutive_unaccepted_count = 5 WHERE id = $1', [active.session_id]);
+    const args = dispatchArgs(rpc, active.session_id);
+    const legacy = await trial(() => work(rpc.legacy, session, args));
+    const actual = await work(rpc.name, session, args);
+    await assertClockedResult(actual, withoutClock(legacy));
+    assert.equal(actual.auto_stopped, true);
+    assert.equal('session_status' in actual, false);
+    assert.equal((await db.query('SELECT status FROM public.dispatch_sessions WHERE id = $1', [active.session_id])).rows[0].status, 'offline');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM public.work_sessions WHERE user_id = $1 AND end_time IS NULL', [session.user.id])).rows[0].n, 0);
+    await assertQuietStatus(session, active.session_id, 'ended');
+  });
+}
+
+regression('five real unaccepted status assignments still auto-stop once and never reassign the same order', async () => {
+  const session = await employee();
+  const started = await work('start_employee_dispatch_session_secure', session);
+  const assignedOrders = new Set();
+  for (let missed = 1; missed <= 5; missed++) {
+    const prepared = await work('prepare_next_dispatch_order_status_secure', session, { p_session_id: started.session_id });
+    assert.equal(prepared.available, true);
+    await due(started.session_id);
+    const assigned = await work('assign_next_dispatch_order_status_secure', session,
+      { p_session_id: started.session_id, p_group_id: GROUP });
+    assert.equal(assigned.success, true);
+    assert(!assignedOrders.has(assigned.assignment.dispatch_order_id));
+    assignedOrders.add(assigned.assignment.dispatch_order_id);
+    await db.query("UPDATE public.dispatch_assignments SET accept_deadline_at = now() - interval '1 second' WHERE id = $1", [assigned.assignment.id]);
+    const expired = await work('expire_pending_dispatch_assignment_secure', session,
+      { p_session_id: started.session_id, p_assignment_id: assigned.assignment.id });
+    assert.equal(expired.success, true);
+    assert.equal(expired.reason, 'expired');
+    assert.equal(expired.unaccepted_count, missed);
+    assert.equal(expired.auto_stopped, missed === 5);
+    assert.equal(expired.schedule_next, missed < 5);
+    const beforeRepeat = await dispatchSnapshot();
+    const repeated = await work('expire_pending_dispatch_assignment_secure', session,
+      { p_session_id: started.session_id, p_assignment_id: assigned.assignment.id });
+    assert.equal(repeated.reason, 'already_resolved');
+    assert.equal(repeated.unaccepted_count, missed);
+    assert.deepEqual(await dispatchSnapshot(), beforeRepeat, 'repeated expiry must not count a missed order twice');
+  }
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM public.dispatch_assignments WHERE user_id = $1 AND status = 'cancelled'", [session.user.id])).rows[0].n, 5);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM public.work_sessions WHERE user_id = $1 AND end_time IS NULL', [session.user.id])).rows[0].n, 0);
+  await assertQuietStatus(session, started.session_id, 'ended');
+});
+
+for (const rpc of dispatchStatusCalls) {
+  regression(`${rpc.name}: real downstream trigger exception propagates unchanged and rolls every write back`, async () => {
+    const session = await employee();
+    const started = await work('start_employee_dispatch_session_secure', session);
+    if (rpc.name.startsWith('assign_')) {
+      await work('prepare_next_dispatch_order_status_secure', session, { p_session_id: started.session_id });
+      await due(started.session_id);
+    }
+    const beforeCatalog = await catalogFingerprints();
+    const before = await dispatchSnapshot();
+    await trial(async () => {
+      const table = rpc.name.startsWith('prepare_') ? 'dispatch_pool_selections'
+        : rpc.name.startsWith('assign_') ? 'dispatch_assignments' : 'work_sessions';
+      const operation = rpc.name.startsWith('update_') ? 'UPDATE' : 'INSERT';
+      // AFTER ensures real writes have run first (heartbeat also updates dispatch
+      // before work). No production function, trigger or schema is bypassed.
+      await db.exec(`CREATE FUNCTION private.qa_dispatch_status_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'qa real dispatch failure',
+          DETAIL = 'qa downstream detail', HINT = 'qa downstream hint'; END $$;
+        CREATE TRIGGER qa_dispatch_status_failure AFTER ${operation} ON public.${table}
+          FOR EACH ROW WHEN (NEW.user_id = '${session.user.id}'::uuid)
+          EXECUTE FUNCTION private.qa_dispatch_status_failure();`);
+      const errors = [];
+      for (const name of [rpc.legacy, rpc.name]) {
+        await assert.rejects(work(name, session, dispatchArgs(rpc, started.session_id)), error => {
+          errors.push({ code: error.code, message: error.message, detail: error.detail, hint: error.hint });
+          return error.code === '23514' && error.message === 'qa real dispatch failure';
+        });
+        assert.deepEqual(await dispatchSnapshot(), before, `${name} must roll back every table, not just the failing row`);
+      }
+      assert.deepEqual(errors[1], errors[0]);
+      assert.deepEqual(errors[1], { code: '23514', message: 'qa real dispatch failure',
+        detail: 'qa downstream detail', hint: 'qa downstream hint' });
+    });
+    assert.deepEqual(await catalogFingerprints(), beforeCatalog, 'isolated failing trigger/function must be rolled back');
+    assert.deepEqual(await dispatchSnapshot(), before);
+    const retry = await work(rpc.name, session, dispatchArgs(rpc, started.session_id));
+    assert.equal(rpc.name.startsWith('prepare_') ? retry.available : retry.success, true);
+  });
+}

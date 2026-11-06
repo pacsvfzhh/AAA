@@ -18,7 +18,7 @@ set transaction read only;
 with
 baseline_raw as (
   select $baseline$
-#generated 2026-10-29 02:00 UTC（旧正式库 hxpbpqoqkoiiplvdwmld）
+#generated 2026-11-06 16:18 UTC（旧正式库 hxpbpqoqkoiiplvdwmld）
 buckets|announcement-images|lim=104857600|mime=image/gif,image/jpeg,image/jpg,image/png,image/webp,video/mp4,video/ogg,video/webm|pub=true
 buckets|chat-images|lim=不限|mime=不限|pub=true
 buckets|content-audit-evidence|lim=不限|mime=不限|pub=false
@@ -107,6 +107,7 @@ tables|private.deleted_employee_accounts|a=557707b3|c=19:e432b318|i=6:a7e5ef6d|k
 tables|private.deleted_employee_delete_jobs|a=557707b3|c=14:bfa46ca8|i=2:15a1952c|k=1:1196cd75|o=postgres|p=0:-|r=rls=false,force=false,replica=d|t=0:-
 tables|private.deleted_employee_notifications|a=557707b3|c=9:a996b3fe|i=3:d1378448|k=3:80590501|o=postgres|p=0:-|r=rls=false,force=false,replica=d|t=2:6da7fc8a
 tables|private.employee_chat_image_deletion_claims|a=557707b3|c=3:da5a32ea|i=2:7e67d472|k=1:a978272b|o=postgres|p=0:-|r=rls=false,force=false,replica=d|t=0:-
+tables|private.employee_dispatch_recovery_operations|a=557707b3|c=8:790f65e3|i=2:6a18fc87|k=1:c47fe222|o=postgres|p=0:-|r=rls=true,force=false,replica=d|t=0:-
 tables|private.employee_login_maintenance_confirmations|a=557707b3|c=3:619068de|i=1:7d997224|k=3:6cc0962c|o=postgres|p=0:-|r=rls=true,force=false,replica=d|t=0:-
 tables|private.employee_login_maintenance_events|a=557707b3|c=5:d4b04993|i=1:6601992a|k=2:ee3a1a79|o=postgres|p=0:-|r=rls=true,force=false,replica=d|t=0:-
 tables|private.employee_login_maintenance|a=557707b3|c=4:9580b0df|i=1:60387571|k=3:d9dd9de6|o=postgres|p=0:-|r=rls=true,force=false,replica=d|t=0:-
@@ -559,6 +560,7 @@ functions|public.reconcile_stale_dispatch_assignments(integer,integer)|a=5996d9c
 functions|public.reconcile_wallet_from_ledger(uuid)|a=5996d9c5|d=b9ae9032|o=postgres|s=definer
 functions|public.record_login_attempt(text,text,boolean,text,text)|a=f26d0caf|d=a9c32461|o=postgres|s=definer
 functions|public.recover_employee_dispatch_assignment_secure(uuid,uuid,text)|a=f26d0caf|d=733b0802|o=postgres|s=definer
+functions|public.recover_employee_dispatch_guarded(uuid,uuid,text,uuid,uuid)|a=f26d0caf|d=bee00756|o=postgres|s=definer
 functions|public.reorder_product_types(uuid,uuid[])|a=f26d0caf|d=d5d99912|o=postgres|s=definer
 functions|public.repair_work_session_mismatches()|a=5996d9c5|d=f7f85dbc|o=postgres|s=invoker
 functions|public.request_employee_withdrawal(uuid,uuid,text,uuid)|a=f26d0caf|d=32901dcf|o=postgres|s=definer

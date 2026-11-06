@@ -87,11 +87,13 @@ test('embedded production baseline is present and well formed', async () => {
     assert.ok(parts.length > 0 && parts.every((part) => /^[a-z]+=/.test(part)), `bad attributes: ${line}`);
     sections.set(section, (sections.get(section) ?? 0) + 1);
   }
-  assert.equal(sections.get('tables'), 102);
-  assert.equal(sections.get('functions'), 429);
+  assert.equal(sections.get('tables'), 103);
+  assert.equal(sections.get('functions'), 430);
   assert.equal(sections.get('cron'), 9);
   assert.equal(sections.get('buckets'), 7);
   assert.equal(sections.get('realtime'), 24);
+  assert.ok(body.includes('functions|public.recover_employee_dispatch_guarded(uuid,uuid,text,uuid,uuid)|a=f26d0caf|d=bee00756|o=postgres|s=definer'));
+  assert.ok(body.includes('tables|private.employee_dispatch_recovery_operations|a=557707b3|c=8:790f65e3|i=2:6a18fc87|k=1:c47fe222|o=postgres|p=0:-|r=rls=true,force=false,replica=d|t=0:-'));
 });
 
 test('runs on an empty target without crashing and reports what is missing', async () => {

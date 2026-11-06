@@ -215,9 +215,9 @@ function dispatchFakeClock() {
 }
 
 const RECOVER_DISPATCH_RPC = 'recover_employee_dispatch_guarded';
-const PREPARE_DISPATCH_RPC = 'prepare_next_dispatch_order_secure';
-const ASSIGN_DISPATCH_RPC = 'assign_next_dispatch_order_secure';
-const HEARTBEAT_DISPATCH_RPC = 'update_session_heartbeat_secure';
+const PREPARE_DISPATCH_RPC = 'prepare_next_dispatch_order_status_secure';
+const ASSIGN_DISPATCH_RPC = 'assign_next_dispatch_order_status_secure';
+const HEARTBEAT_DISPATCH_RPC = 'update_session_heartbeat_status_secure';
 const END_DISPATCH_RPC = 'end_employee_dispatch_session_secure';
 const dispatchNetworkError = () => ({ name: 'SupabaseNetworkError', message: 'Failed to fetch' });
 const recoveredDispatch = (assignment = null) => ({ data: {
@@ -338,6 +338,67 @@ function dispatchRecoveryHarness(options = {}) {
     notices: () => events.filter(([name, value]) => name === 'setShowDispatchRecovery' && value === true),
   };
 }
+
+for (const [action, rpc, statuses] of [
+  ['heartbeat', HEARTBEAT_DISPATCH_RPC, ['ended']],
+  ['prepare', PREPARE_DISPATCH_RPC, ['ended', 'stale']],
+  ['assign', ASSIGN_DISPATCH_RPC, ['ended', 'stale']],
+]) {
+  for (const sessionStatus of statuses) {
+    for (const outcome of ['idle', 'accepted', 'ended']) {
+      test(`${action} ${sessionStatus} status reconciles to ${outcome} without logging or pausing`, async () => {
+        let attempts = 0;
+        const h = dispatchRecoveryHarness({ rpc: async name => {
+          if (name === rpc && attempts++ === 0) return { data: {
+            success: false, available: false, assignment: null, session_status: sessionStatus,
+          }, error: null };
+          if (name === RECOVER_DISPATCH_RPC) return outcome === 'ended'
+            ? { data: { success: true, recovered: false, assignment: null }, error: null }
+            : recoveredDispatch(outcome === 'accepted' ? dispatchAssignment('accepted') : null);
+          assert.equal(name, PREPARE_DISPATCH_RPC);
+          return preparedDispatch();
+        } });
+        if (action === 'heartbeat') await h.api.heartbeat();
+        else if (action === 'prepare') await h.api.schedule();
+        else {
+          const selection = { sessionId: 'dispatch-session', groupId: 'dispatch-group', poolId: 'dispatch-pool', deadline: 0 };
+          h.context.selectedDispatchRef.current = selection;
+          await h.api.assign(selection, 0);
+        }
+        await flushDispatchMicrotasks();
+        assert.equal(h.rpcCalls(RECOVER_DISPATCH_RPC).length, 1);
+        assert.equal(h.events.filter(([name]) => name === 'error' || name === 'notification').length, 0);
+        assert.equal(h.pauses().length, 0);
+        assert.equal(h.clock.created.some(timer => timer.delay === 300000), false);
+        assert.equal(h.context.sessionActiveRef.current, outcome !== 'ended');
+        assert.equal(h.state.setShowAutoStopModal === true, outcome === 'ended');
+        assert.equal(h.context.currentOrderRef.current?.status ?? null, outcome === 'accepted' ? 'accepted' : null);
+        assert.equal(h.rpcCalls(ASSIGN_DISPATCH_RPC).length, action === 'assign' ? 1 : 0);
+        assert.equal(h.context.preparingDispatchRef.current, null);
+        assert.equal(h.context.assigningDispatchRef.current, null);
+      });
+    }
+  }
+}
+
+test('an ended heartbeat while hidden defers reconciliation until the page returns', async () => {
+  const h = dispatchRecoveryHarness({ rpc: async name => {
+    if (name === HEARTBEAT_DISPATCH_RPC) return { data: { success: false, session_status: 'ended' }, error: null };
+    if (name === RECOVER_DISPATCH_RPC) return { data: { success: true, recovered: false, assignment: null }, error: null };
+    throw new Error(`Unexpected RPC: ${name}`);
+  } });
+  h.context.document.hidden = true;
+  h.api.handleVisibilityChange();
+  await h.api.heartbeat();
+  assert.equal(h.rpcCalls(RECOVER_DISPATCH_RPC).length, 0);
+  assert.equal(h.context.deferredVisibilityRecoveryRef.current, true);
+  h.context.document.hidden = false;
+  h.api.handleVisibilityChange();
+  await flushDispatchMicrotasks();
+  assert.equal(h.rpcCalls(RECOVER_DISPATCH_RPC).length, 1);
+  assert.equal(h.context.sessionActiveRef.current, false);
+  assert.equal(h.pauses().length, 0);
+});
 
 test('dispatch recovery uses three production attempts at [0, 2000, 5000] and a 2s panel notice', async () => {
   assert.deepEqual(Array.from(productionRecoverySettings.delays), [0, 2000, 5000]);
@@ -671,7 +732,7 @@ test('the stopping lock blocks recovery and new preparation even while the stop 
   assert.equal(h.context.stoppingSessionRef.current, false);
 });
 
-for (const lateReply of ['rejected heartbeat', 'invalid-session error', 'thrown invalid-session error']) {
+for (const lateReply of ['ended status', 'rejected heartbeat', 'invalid-session error', 'thrown invalid-session error']) {
   test(`heartbeat generation guard ignores a ${lateReply} from an older lifecycle`, async () => {
     const response = dispatchDeferred();
     const h = dispatchRecoveryHarness({ rpc: async name => {
@@ -682,7 +743,8 @@ for (const lateReply of ['rejected heartbeat', 'invalid-session error', 'thrown 
     // 同一 sessionId 仍在工作，只有 generation 改变；仅核对 sessionId 无法通过此测试。
     h.context.lifecycleGenerationRef.current += 1;
     const invalid = { message: 'Employee work session is invalid, offline, or stale.' };
-    if (lateReply === 'rejected heartbeat') response.resolve({ data: { success: false, reason: 'stale' }, error: null });
+    if (lateReply === 'ended status') response.resolve({ data: { success: false, session_status: 'ended' }, error: null });
+    else if (lateReply === 'rejected heartbeat') response.resolve({ data: { success: false, reason: 'stale' }, error: null });
     else if (lateReply === 'invalid-session error') response.resolve({ data: null, error: invalid });
     else response.reject(invalid);
     await heartbeat;
