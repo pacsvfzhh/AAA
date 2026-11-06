@@ -3147,6 +3147,16 @@ export interface Database {
           unaccepted_count: number;
         };
       };
+      recover_employee_dispatch_guarded: {
+        Args: {
+          p_user_id: string;
+          p_session_token: string;
+          p_tab_id: string;
+          p_expected_session_id: string | null;
+          p_operation_id: string;
+        };
+        Returns: Database['public']['Functions']['recover_employee_dispatch_assignment_secure']['Returns'];
+      };
       recover_employee_dispatch_assignment_secure: {
         Args: { p_user_id: string; p_session_token: string; p_tab_id: string };
         Returns: {

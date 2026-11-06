@@ -113,11 +113,24 @@ interface DispatchSelection {
   deadline: number;
 }
 
+interface DispatchRequest {
+  sessionId: string;
+  generation: number;
+  settled: Promise<void>;
+}
+
+interface FinishingDispatchRequest {
+  settled: Promise<void>;
+}
+
 type RecoveryOutcome =
   | { state: 'active'; assignment: DispatchAssignment }
   | { state: 'idle' | 'ended' | 'stale' };
 
+const DISPATCH_SESSION_STORAGE_KEY = 'work_platform_dispatch_session';
 const PAUSED_DISPATCH_CHECK_MS = 5 * 60 * 1000;
+const DISPATCH_RECOVERY_DELAYS_MS = [0, 2000, 5000];
+const DISPATCH_RECOVERY_NOTICE_MS = 2000;
 const START_VEIL_FADE_MS = 320;
 // Start plays a ~6s "connecting to the dispatch center" sequence on every layout (skipped for reduced motion). The veil
 // arrives while dispatchStandbyLeave (index.css) is still clearing; "Connected" waits for the server and the minimum time.
@@ -314,6 +327,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [dispatchPause, setDispatchPause] = useState<{ type: 'unavailable' | 'error'; message: string } | null>(null);
   const [dismissedPause, setDismissedPause] = useState<typeof dispatchPause>(null);
+  const [showDispatchRecovery, setShowDispatchRecovery] = useState(false);
   const pauseCardVisible = session.isWorking && dispatchPause !== null && dispatchPause !== dismissedPause;
   const [timeoutStopMinutes, setTimeoutStopMinutes] = useState(10);
   // Debounce states for preventing duplicate requests
@@ -500,10 +514,14 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const sessionActiveRef = useRef<boolean>(false);
   const unacceptedCountRef = useRef<number>(0);
   const selectedDispatchRef = useRef<DispatchSelection | null>(null);
-  const preparingDispatchRef = useRef<{ sessionId: string; generation: number } | null>(null);
-  const assigningDispatchRef = useRef<{ sessionId: string; generation: number } | null>(null);
+  const preparingDispatchRef = useRef<DispatchRequest | null>(null);
+  const assigningDispatchRef = useRef<DispatchRequest | null>(null);
   const dispatchPausedRef = useRef(false);
   const refreshDispatchTimingRef = useRef<() => void>(() => {});
+  const dispatchRecoveryFailuresRef = useRef({ count: 0, lastAttemptAt: 0 });
+  const deferredVisibilityRecoveryRef = useRef(false);
+  const finishingDispatchRef = useRef<FinishingDispatchRequest | null>(null);
+  const stoppingSessionRef = useRef(false);
   const configRef = useRef(config);
   configRef.current = config;
   const isMobileRef = useRef(isMobile);
@@ -514,6 +532,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const handleAcceptTimeoutRef = useRef<((assignmentId: string) => Promise<void>) | null>(null);
   const currentOrderRef = useRef<DispatchAssignment | null>(null);
   const startWorkLockRef = useRef<boolean>(false);
+  const recoveryAfterStartRef = useRef<{ failedRequest?: unknown } | null>(null);
   const componentMountedRef = useRef(false);
   const lifecycleGenerationRef = useRef(0);
   const initialCleanupPromiseRef = useRef<Promise<void> | null>(null);
@@ -564,6 +583,18 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     loadConfig();
     loadTodayOrders();
     loadTotalWorkTime();
+    const auth = getStoredAuth();
+    const storedSession = sessionStorage.getItem(DISPATCH_SESSION_STORAGE_KEY);
+    if (auth?.userType === 'employee' && storedSession) {
+      try {
+        const saved = JSON.parse(storedSession);
+        if (saved.userId === auth.user.id && saved.tabId === auth.tabId && saved.sessionMarker === auth.sessionToken && typeof saved.sessionId === 'string') {
+          sessionIdRef.current = saved.sessionId;
+        }
+      } catch {
+        sessionStorage.removeItem(DISPATCH_SESSION_STORAGE_KEY);
+      }
+    }
     const previousInitialCheck = initialCleanupPromiseRef.current;
     const initialCheckPromise = (previousInitialCheck || Promise.resolve())
       .catch(error => {
@@ -634,14 +665,16 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         pageHiddenAtRef.current = null;
 
         if (sessionActiveRef.current && hiddenAt !== null) {
-          const gapMs = performance.now() - hiddenAt;
-          const gapMinutes = gapMs / 1000 / 60;
-
-          if (gapMinutes > 1.5) {
-            // Serialize the stop/start pair so visibility and heartbeat recovery cannot race.
+          if (deferredVisibilityRecoveryRef.current) {
+            if (!visibilityRestartPromiseRef.current) {
+              deferredVisibilityRecoveryRef.current = false;
+              void restartSessionRef.current?.();
+            }
+          } else if (visibilityRestartPromiseRef.current) {
+            deferredVisibilityRecoveryRef.current = true;
+          } else if (performance.now() - hiddenAt > 90000) {
             void restartSessionRef.current?.();
           } else {
-            // Refresh the same server selection after timers may have been suspended.
             void sendHeartbeatRef.current?.();
             refreshDispatchTimingRef.current();
           }
@@ -665,6 +698,13 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       if (!e.persisted) stopDispatchSessionWithBeacon();
     };
 
+    const handleOnline = () => { void restartSessionRef.current?.(); };
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void restartSessionRef.current?.();
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('pageshow', handlePageShow);
     window.addEventListener('beforeunload', handleBeforeUnload);
     window.addEventListener('pagehide', handlePageHide);
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -683,6 +723,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       acceptRevealTimersRef.current.forEach(clearTimeout);
       if (grabTransitionTimerRef.current) clearTimeout(grabTransitionTimerRef.current);
       clearInterval(workTimeInterval);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('pageshow', handlePageShow);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handlePageHide);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -960,6 +1002,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     lifecycleGenerationRef.current += 1;
     sessionActiveRef.current = false;
     sessionIdRef.current = null;
+    sessionStorage.removeItem(DISPATCH_SESSION_STORAGE_KEY);
     stopHeartbeat();
     if (dispatchTimerRef.current) {
       clearTimeout(dispatchTimerRef.current);
@@ -967,6 +1010,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     }
     selectedDispatchRef.current = null;
     dispatchPausedRef.current = false;
+    deferredVisibilityRecoveryRef.current = false;
     if (grabFailedTimerRef.current) {
       clearTimeout(grabFailedTimerRef.current);
       grabFailedTimerRef.current = null;
@@ -998,6 +1042,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     if (componentMountedRef.current) {
       setCurrentOrder(null);
       setShowOrderDetail(false);
+      setShowDispatchRecovery(false);
       setSession({ isWorking: false, sessionId: null, startedAt: null });
       setUnacceptedCount(0);
       setHasScheduledDispatch(false);
@@ -1009,7 +1054,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     }
   };
 
-  const recoverDispatchState = async (expectedSessionId: string | null, generation: number): Promise<RecoveryOutcome> => {
+  const recoverDispatchState = async (expectedSessionId: string | null, generation: number, operationId = crypto.randomUUID()): Promise<RecoveryOutcome> => {
     const priorRecovery = recoveryInFlightRef.current;
     if (priorRecovery) {
       try { await priorRecovery; } catch { /* A fresh attempt may still succeed. */ }
@@ -1022,10 +1067,12 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     const operation = (async (): Promise<RecoveryOutcome> => {
       const auth = getStoredAuth();
       if (auth?.userType !== 'employee') throw new Error('Employee session has expired. Please sign in again.');
-      const { data, error } = await supabase.rpc('recover_employee_dispatch_assignment_secure', {
+      const { data, error } = await supabase.rpc('recover_employee_dispatch_guarded', {
         p_user_id: auth.user.id,
         p_session_token: auth.financialSessionToken,
         p_tab_id: auth.tabId,
+        p_expected_session_id: expectedSessionId,
+        p_operation_id: operationId,
       });
       if (!isCurrentRecovery()) return { state: 'stale' };
       if (error) throw error;
@@ -1050,6 +1097,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       setShowGrabFailedModal(false);
       sessionActiveRef.current = true;
       sessionIdRef.current = data.session_id;
+      sessionStorage.setItem(DISPATCH_SESSION_STORAGE_KEY, JSON.stringify({ userId: auth.user.id, tabId: auth.tabId, sessionMarker: auth.sessionToken, sessionId: data.session_id }));
       lastActivityRef.current = new Date();
       const count = Number(data.unaccepted_count || 0);
       unacceptedCountRef.current = count;
@@ -1068,44 +1116,111 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         setErrorReason('');
       }
       if (assignment) return { state: 'active', assignment };
-      void scheduleNextOrder();
       return { state: 'idle' };
     })();
     recoveryInFlightRef.current = operation;
+    let recoveredIdle = false;
     try {
-      return await operation;
+      const outcome = await operation;
+      recoveredIdle = outcome.state === 'idle';
+      return outcome;
     } finally {
-      if (recoveryInFlightRef.current === operation) recoveryInFlightRef.current = null;
+      if (recoveryInFlightRef.current === operation) {
+        recoveryInFlightRef.current = null;
+        if (recoveredIdle && componentMountedRef.current && lifecycleGenerationRef.current === generation &&
+            sessionActiveRef.current && !visibilityRestartPromiseRef.current) void scheduleNextOrder();
+      }
     }
   };
 
-  const restartSessionAfterLifecycleGap = (): Promise<void> => {
-    if (visibilityRestartPromiseRef.current) {
-      return visibilityRestartPromiseRef.current;
+  const restartSessionAfterLifecycleGap = (failedRequest?: unknown): Promise<void> => {
+    if (stoppingSessionRef.current) return Promise.resolve();
+    if (!componentMountedRef.current || !sessionActiveRef.current) return Promise.resolve();
+    if (document.hidden) {
+      deferredVisibilityRecoveryRef.current = true;
+      return visibilityRestartPromiseRef.current ?? Promise.resolve();
+    }
+    if (visibilityRestartPromiseRef.current) return visibilityRestartPromiseRef.current;
+    if (startWorkLockRef.current) {
+      recoveryAfterStartRef.current = { failedRequest };
+      return Promise.resolve();
     }
 
-    if (!componentMountedRef.current || !sessionActiveRef.current || document.hidden) return Promise.resolve();
+    if (failedRequest !== undefined) {
+      const failures = dispatchRecoveryFailuresRef.current;
+      const now = performance.now();
+      failures.count = now - failures.lastAttemptAt < 60000 ? failures.count + 1 : 1;
+      failures.lastAttemptAt = now;
+      if (failures.count > DISPATCH_RECOVERY_DELAYS_MS.length) {
+        const sessionId = sessionIdRef.current;
+        if (sessionId) pauseDispatch('error', getOrderDispatchErrorMessage(failedRequest), sessionId, lifecycleGenerationRef.current);
+        return Promise.resolve();
+      }
+    } else {
+      dispatchRecoveryFailuresRef.current.count = 0;
+    }
     const generation = ++lifecycleGenerationRef.current;
+    const oldSessionId = sessionIdRef.current;
     clearDispatchTimer();
     selectedDispatchRef.current = null;
-    const oldSessionId = sessionIdRef.current;
+    dispatchPausedRef.current = false;
+    setDispatchPause(null);
+    setHasScheduledDispatch(false);
+    const noticeTimer = setTimeout(() => {
+      if (oldSessionId && isCurrentDispatch(oldSessionId, generation)) setShowDispatchRecovery(true);
+    }, DISPATCH_RECOVERY_NOTICE_MS);
+    const pendingRequests = [
+      preparingDispatchRef.current?.settled,
+      assigningDispatchRef.current?.settled,
+      finishingDispatchRef.current?.settled,
+    ];
+    const operationId = crypto.randomUUID();
+    let recovered = false;
     const operation = (async () => {
-      if (!oldSessionId || !isCurrentDispatch(oldSessionId, generation) || document.hidden) return;
-      const outcome = await recoverDispatchState(oldSessionId, generation);
-      if (outcome.state !== 'stale' && sessionActiveRef.current) void sendHeartbeatRef.current?.();
-    })().catch(error => {
-      console.error('Failed to recover work session after lifecycle gap:', error);
-      if (oldSessionId && isCurrentDispatch(oldSessionId, generation)) {
-        showNotification({
-          type: 'error', title: t.dispatch.noticeRecoverFailed,
-          message: dispatchErrorText(error, t.dispatch.pausedRetry), duration: 5000,
-        });
-        if (currentOrderRef.current?.status === 'accepted') startTimeoutCheckRef.current?.();
-        pauseDispatch('error', getOrderDispatchErrorMessage(error), oldSessionId, generation);
+      // A lost assignment response may still have created an order; reconcile only after it settles.
+      await Promise.all(pendingRequests);
+      for (const delay of DISPATCH_RECOVERY_DELAYS_MS) {
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+        if (!oldSessionId || !isCurrentDispatch(oldSessionId, generation)) return;
+        if (document.hidden) {
+          deferredVisibilityRecoveryRef.current = true;
+          return;
+        }
+        try {
+          const outcome = await recoverDispatchState(oldSessionId, generation, operationId);
+          recovered = outcome.state === 'active' || outcome.state === 'idle';
+          if (outcome.state === 'active') dispatchRecoveryFailuresRef.current.count = 0;
+          return;
+        } catch (error) {
+          if (!isSupabaseTransientError(error) || delay === DISPATCH_RECOVERY_DELAYS_MS[DISPATCH_RECOVERY_DELAYS_MS.length - 1]) throw error;
+        }
       }
+    })().catch(async error => {
+      if (!oldSessionId || !isCurrentDispatch(oldSessionId, generation)) return;
+      const message = getOrderDispatchErrorMessage(error);
+      if (isInvalidDispatchSession(message)) {
+        await handleInvalidDispatchSession(message, oldSessionId, false);
+        return;
+      }
+      logDispatchError('Failed to recover dispatch state', error);
+      if (currentOrderRef.current?.status === 'accepted') startTimeoutCheckRef.current?.();
+      pauseDispatch('error', message, oldSessionId, generation);
     }).finally(() => {
-      if (visibilityRestartPromiseRef.current === operation) {
-        visibilityRestartPromiseRef.current = null;
+      clearTimeout(noticeTimer);
+      if (visibilityRestartPromiseRef.current !== operation) return;
+      visibilityRestartPromiseRef.current = null;
+      if (!componentMountedRef.current) return;
+      setShowDispatchRecovery(false);
+      const sessionId = sessionIdRef.current;
+      if (recovered && sessionId && isCurrentDispatch(sessionId, generation)) {
+        deferredVisibilityRecoveryRef.current = false;
+        void sendHeartbeatRef.current?.();
+        if (!currentOrderRef.current) void scheduleNextOrder();
+      } else if (!sessionActiveRef.current || stoppingSessionRef.current || dispatchPausedRef.current) {
+        deferredVisibilityRecoveryRef.current = false;
+      } else if (deferredVisibilityRecoveryRef.current && !document.hidden) {
+        deferredVisibilityRecoveryRef.current = false;
+        void restartSessionAfterLifecycleGap();
       }
     });
 
@@ -1114,12 +1229,16 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   };
   restartSessionRef.current = restartSessionAfterLifecycleGap;
 
-  const handleInvalidDispatchSession = async (message: string, currentSessionId: string) => {
+  const handleInvalidDispatchSession = async (message: string, currentSessionId: string, allowRecovery = true) => {
     if (!componentMountedRef.current || sessionIdRef.current !== currentSessionId) return;
-    stopLocalWorkingState(currentSessionId);
-    const stoppedGeneration = lifecycleGenerationRef.current;
+    const generation = lifecycleGenerationRef.current;
 
     if (!message.includes('Employee session is invalid or expired.') && !message.includes('Employee session has expired.')) {
+      if (allowRecovery) {
+        if (!document.hidden) void restartSessionAfterLifecycleGap(message);
+        return;
+      }
+      stopLocalWorkingState(currentSessionId);
       setAutoStopReason('ended');
       setShowAutoStopModal(true);
       return;
@@ -1153,7 +1272,12 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       }
     }
 
-    if (!componentMountedRef.current || lifecycleGenerationRef.current !== stoppedGeneration || sessionIdRef.current !== null) return;
+    if (!componentMountedRef.current || lifecycleGenerationRef.current !== generation || sessionIdRef.current !== currentSessionId) return;
+    if (financialSessionValid !== false && allowRecovery) {
+      if (!document.hidden) void restartSessionAfterLifecycleGap(message);
+      return;
+    }
+    stopLocalWorkingState(currentSessionId);
     if (financialSessionValid === false) {
       onSessionExpired?.();
       return;
@@ -1168,12 +1292,14 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     if (
       !componentMountedRef.current ||
       !sessionActiveRef.current ||
+      visibilityRestartPromiseRef.current ||
       !currentSessionId ||
       auth?.userType !== 'employee'
     ) {
       return;
     }
 
+    const generation = lifecycleGenerationRef.current;
     try {
       const { data, error } = await supabase.rpc('update_session_heartbeat_secure', {
         p_user_id: auth.user.id,
@@ -1182,6 +1308,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         p_session_id: currentSessionId,
       });
 
+      if (!isCurrentDispatch(currentSessionId, generation)) return;
       if (error) throw error;
       if (!data?.success) {
         console.error('Heartbeat rejected:', data?.reason || 'unknown reason');
@@ -1192,13 +1319,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           sessionIdRef.current === currentSessionId
         ) {
           await restartSessionAfterLifecycleGap();
-        } else if (sessionIdRef.current === currentSessionId) {
-          stopLocalWorkingState(currentSessionId);
-          setAutoStopReason('ended');
-          setShowAutoStopModal(true);
         }
       }
     } catch (error) {
+      if (!isCurrentDispatch(currentSessionId, generation)) return;
       const message = getOrderDispatchErrorMessage(error);
       if (isInvalidDispatchSession(message)) {
         await handleInvalidDispatchSession(message, currentSessionId);
@@ -1340,6 +1464,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       const timeSinceLastActivity = (now.getTime() - lastActivityRef.current.getTime()) / 1000 / 60;
 
       if (!currentOrderRef.current && !selectedDispatchRef.current && !dispatchPausedRef.current &&
+          !visibilityRestartPromiseRef.current && !recoveryInFlightRef.current &&
           timeSinceLastActivity >= configRef.current.session_timeout_minutes) {
         void handleStopWork(true, 'inactivity').catch(() => {
           // The handler reports the failure and preserves active state for retry.
@@ -1376,6 +1501,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     // Explicit lifecycle operations invalidate any older visibility restart.
     const startGeneration = lifecycleGenerationRef.current + 1;
     lifecycleGenerationRef.current = startGeneration;
+    deferredVisibilityRecoveryRef.current = false;
     const staleVisibilityRestart = visibilityRestartPromiseRef.current;
     const choreographStart = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const phoneLayout = window.matchMedia('(max-width: 767px)').matches;
@@ -1544,6 +1670,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       // Prepare session data but don't update state yet
       sessionActiveRef.current = true;
       sessionIdRef.current = data.id;
+      sessionStorage.setItem(DISPATCH_SESSION_STORAGE_KEY, JSON.stringify({ userId: auth.user.id, tabId: auth.tabId, sessionMarker: auth.sessionToken, sessionId: data.id }));
       lastActivityRef.current = new Date();
       unacceptedCountRef.current = 0;
 
@@ -1670,6 +1797,11 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       // Release lock after a small delay to ensure state updates complete
       setTimeout(() => {
         startWorkLockRef.current = false;
+        const recovery = recoveryAfterStartRef.current;
+        recoveryAfterStartRef.current = null;
+        if (recovery && componentMountedRef.current && lifecycleGenerationRef.current === startGeneration) {
+          void restartSessionAfterLifecycleGap(recovery.failedRequest);
+        }
       }, 100);
     }
     }, chargeButton ? START_CHARGE_MS : phoneLayout ? 0 : 150); // Phones have no press animation to wait for
@@ -1678,12 +1810,16 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   const handleStopWork = async (timeout: boolean = false, stopReason: 'order' | 'inactivity' = 'order') => {
     if (isProcessing && !timeout) return;
     const stoppingSessionId = sessionIdRef.current;
+    stoppingSessionRef.current = true;
+    deferredVisibilityRecoveryRef.current = false;
 
     // Explicit lifecycle operations invalidate any older visibility restart.
     const stopGeneration = lifecycleGenerationRef.current + 1;
     lifecycleGenerationRef.current = stopGeneration;
+    setShowDispatchRecovery(false);
     clearDispatchTimer();
     const staleVisibilityRestart = visibilityRestartPromiseRef.current;
+    const pendingFinish = finishingDispatchRef.current?.settled;
 
     // Show transition animation (unless auto-stopped by timeout)
     if (!timeout) {
@@ -1707,6 +1843,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         }
       }
 
+      if (pendingFinish) await pendingFinish;
       if (!componentMountedRef.current || lifecycleGenerationRef.current !== stopGeneration) {
         return;
       }
@@ -1736,7 +1873,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         p_user_id: userId,
         p_session_token: auth.financialSessionToken,
         p_tab_id: auth.tabId,
-        p_session_id: currentSessionId,
+        p_session_id: null,
       });
       if (!componentMountedRef.current || lifecycleGenerationRef.current !== stopGeneration ||
           sessionIdRef.current !== currentSessionId) return;
@@ -1784,6 +1921,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       // Prepare to clear state but don't update UI-affecting states yet.
       sessionActiveRef.current = false;
       sessionIdRef.current = null;
+      sessionStorage.removeItem(DISPATCH_SESSION_STORAGE_KEY);
       unacceptedCountRef.current = 0;
 
       if (timeout) {
@@ -1885,6 +2023,9 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       }
       throw error;
     } finally {
+      stoppingSessionRef.current = false;
+      if (stoppingSessionId && isCurrentDispatch(stoppingSessionId, stopGeneration) &&
+          !currentOrderRef.current && !selectedDispatchRef.current && !dispatchPausedRef.current) void scheduleNextOrder();
       if (!timeout && componentMountedRef.current) {
         setIsProcessing(false);
         setIsTransitioning(false);
@@ -1919,7 +2060,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   };
 
   const armDispatchTimer = (selection: DispatchSelection, generation: number, minimumDelay = 0) => {
-    if (!isCurrentDispatch(selection.sessionId, generation) || selectedDispatchRef.current !== selection) return;
+    if (!isCurrentDispatch(selection.sessionId, generation) || selectedDispatchRef.current !== selection ||
+        visibilityRestartPromiseRef.current || recoveryInFlightRef.current) return;
     clearDispatchTimer();
     setHasScheduledDispatch(true);
     dispatchTimerRef.current = setTimeout(() => {
@@ -1943,17 +2085,13 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     dispatchPausedRef.current = true;
     setHasScheduledDispatch(false);
     setDispatchPause({ type, message });
-    // No rapid retry when a group/pool is unavailable or a request fails.
+    // Configuration issues and exhausted recovery attempts keep the slower retry cadence.
     dispatchTimerRef.current = setTimeout(() => {
       dispatchTimerRef.current = null;
       if (!isCurrentDispatch(sessionId, generation)) return;
       dispatchPausedRef.current = false;
       if (type === 'error') {
-        // An uncertain assignment result may already have created an order.
-        void checkPendingOrderRef.current?.().catch(error => {
-          logDispatchError('Failed to check dispatch assignment after a network error', error);
-          pauseDispatch('error', getOrderDispatchErrorMessage(error), sessionId, generation);
-        });
+          void restartSessionRef.current?.();
       } else {
         void scheduleNextOrder();
       }
@@ -1964,6 +2102,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     const sessionId = sessionIdRef.current;
     const generation = lifecycleGenerationRef.current;
     if (!sessionId || !isCurrentDispatch(sessionId, generation) || dispatchPausedRef.current ||
+        visibilityRestartPromiseRef.current || recoveryInFlightRef.current || stoppingSessionRef.current ||
         (assigningDispatchRef.current?.sessionId === sessionId && assigningDispatchRef.current.generation === generation)) return;
 
     const selection = selectedDispatchRef.current;
@@ -1974,7 +2113,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     if (preparingDispatchRef.current?.sessionId === sessionId &&
         preparingDispatchRef.current.generation === generation) return;
 
-    const preparation = { sessionId, generation };
+    let settlePreparation!: () => void;
+    const preparation = { sessionId, generation, settled: new Promise<void>(resolve => { settlePreparation = resolve; }) };
     const membershipRevision = membershipRevisionRef.current;
     preparingDispatchRef.current = preparation;
     try {
@@ -1997,7 +2137,8 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       }
       if (!prepared?.available) {
         const message = prepared?.message || 'No eligible dispatch orders are available.';
-        pauseDispatch(message === 'An active dispatch assignment already exists.' ? 'error' : 'unavailable', message, sessionId, generation);
+        if (message === 'An active dispatch assignment already exists.') void restartSessionAfterLifecycleGap(message);
+        else pauseDispatch('unavailable', message, sessionId, generation);
         return;
       }
       const deadline = getServerDeadline(prepared.due_at || '', prepared.server_now);
@@ -2016,10 +2157,11 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           await handleInvalidDispatchSession(message, sessionId);
         } else {
           console.error('Failed to prepare dispatch:', message);
-          pauseDispatch('error', message, sessionId, generation);
+          void restartSessionAfterLifecycleGap(error);
         }
       }
     } finally {
+      settlePreparation();
       if (preparingDispatchRef.current === preparation) {
         preparingDispatchRef.current = null;
         if (membershipRevision !== membershipRevisionRef.current && isCurrentDispatch(sessionId, generation))
@@ -2030,8 +2172,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
 
   const dispatchNewOrder = async (selection: DispatchSelection, generation: number) => {
     if (!isCurrentDispatch(selection.sessionId, generation) || selectedDispatchRef.current !== selection ||
+        visibilityRestartPromiseRef.current || recoveryInFlightRef.current ||
         (assigningDispatchRef.current?.sessionId === selection.sessionId && assigningDispatchRef.current.generation === generation)) return;
-    const assignmentAttempt = { sessionId: selection.sessionId, generation };
+    let settleAssignment!: () => void;
+    const assignmentAttempt = { sessionId: selection.sessionId, generation, settled: new Promise<void>(resolve => { settleAssignment = resolve; }) };
     assigningDispatchRef.current = assignmentAttempt;
     let assignedSuccessfully = false;
     try {
@@ -2070,7 +2214,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
           selectedDispatchRef.current = updatedSelection;
           armDispatchTimer(updatedSelection, generation, 250);
         } else if (result?.message === 'An active dispatch assignment already exists.') {
-          pauseDispatch('error', 'An active assignment exists. Checking it again in five minutes.', selection.sessionId, generation);
+          void restartSessionAfterLifecycleGap(result.message);
         } else {
           pauseDispatch('unavailable', result?.message || 'No eligible dispatch orders are available.', selection.sessionId, generation);
         }
@@ -2093,6 +2237,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
         session_timeout_minutes: assignment.session_timeout_minutes,
       };
       assignedSuccessfully = true;
+      dispatchRecoveryFailuresRef.current.count = 0;
       currentOrderRef.current = newAssignment;
       setCurrentOrder(newAssignment);
       setShowOrderDetail(true);
@@ -2109,9 +2254,10 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     } catch (error) {
       if (isCurrentDispatch(selection.sessionId, generation)) {
         logDispatchError('Failed to dispatch order', error);
-        pauseDispatch('error', getOrderDispatchErrorMessage(error), selection.sessionId, generation);
+        void restartSessionAfterLifecycleGap(error);
       }
     } finally {
+      settleAssignment();
       if (assigningDispatchRef.current === assignmentAttempt) {
         assigningDispatchRef.current = null;
         if (membershipChangeDuringAssignmentRef.current) {
@@ -2436,21 +2582,25 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
     }
   };
 
-  const reconcileUncertainFinish = async (
-    orderId: string, sessionId: string, generation: number, title: string, failure: unknown,
-  ) => {
-    if (!isCurrentDispatch(sessionId, generation) || currentOrderRef.current?.id !== orderId) return;
+  const reconcileUncertainFinish = async (orderId: string, title: string, failure: unknown) => {
     try {
-      const outcome = await recoverDispatchState(sessionId, generation);
-      if (outcome.state === 'active' && componentMountedRef.current) {
+      await (visibilityRestartPromiseRef.current ?? restartSessionAfterLifecycleGap(failure));
+      if (!componentMountedRef.current || stoppingSessionRef.current || deferredVisibilityRecoveryRef.current) return;
+      if (sessionActiveRef.current && currentOrderRef.current?.id === orderId && !dispatchPausedRef.current) {
         showNotification({
           type: 'warning', title,
           message: dispatchErrorText(failure, t.dispatch.hintOrderStillActive),
           duration: 6000,
         });
+      } else if (dispatchPausedRef.current) {
+        showNotification({
+          type: 'error', title,
+          message: dispatchErrorText(failure, t.dispatch.hintOrderUncertain),
+          duration: 0,
+        });
       }
     } catch (recoveryError) {
-      if (!isCurrentDispatch(sessionId, generation) || currentOrderRef.current?.id !== orderId) return;
+      if (!componentMountedRef.current || stoppingSessionRef.current) return;
       console.error('Failed to verify assignment after finish request:', recoveryError);
       showNotification({
         type: 'error', title,
@@ -2461,12 +2611,19 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   };
 
   const handleCompleteOrder = async () => {
-    if (!currentOrder || isCompleting) return;
+    if (!currentOrder || isCompleting || finishingDispatchRef.current || visibilityRestartPromiseRef.current ||
+        recoveryInFlightRef.current || stoppingSessionRef.current) return;
     const orderId = currentOrder.id;
     const sessionId = sessionIdRef.current;
     const generation = lifecycleGenerationRef.current;
     if (!sessionId || !isCurrentDispatch(sessionId, generation)) return;
+    let settleFinish!: () => void;
+    const finishRequest: FinishingDispatchRequest = {
+      settled: new Promise<void>(resolve => { settleFinish = resolve; }),
+    };
+    finishingDispatchRef.current = finishRequest;
     setIsCompleting(true);
+    let finishFailure: { error: unknown } | null = null;
 
     try {
       if (currentOrder.assignment_id && !currentOrder.order_submitted) {
@@ -2510,9 +2667,14 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       void scheduleNextOrder();
     } catch (error: unknown) {
       console.error('Failed to complete order:', error);
-      await reconcileUncertainFinish(orderId, sessionId, generation, t.dispatch.noticeCompleteUnknown, error);
+      finishFailure = { error };
     } finally {
+      if (finishingDispatchRef.current === finishRequest) finishingDispatchRef.current = null;
+      settleFinish();
       if (componentMountedRef.current) setIsCompleting(false);
+    }
+    if (finishFailure) {
+      await reconcileUncertainFinish(orderId, t.dispatch.noticeCompleteUnknown, finishFailure.error);
     }
   };
 
@@ -2521,12 +2683,19 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
   };
 
   const handleSubmitError = async () => {
-    if (!currentOrder || isReporting || !errorReason.trim()) return;
+    if (!currentOrder || isReporting || !errorReason.trim() || finishingDispatchRef.current ||
+        visibilityRestartPromiseRef.current || recoveryInFlightRef.current || stoppingSessionRef.current) return;
     const orderId = currentOrder.id;
     const sessionId = sessionIdRef.current;
     const generation = lifecycleGenerationRef.current;
     if (!sessionId || !isCurrentDispatch(sessionId, generation)) return;
+    let settleFinish!: () => void;
+    const finishRequest: FinishingDispatchRequest = {
+      settled: new Promise<void>(resolve => { settleFinish = resolve; }),
+    };
+    finishingDispatchRef.current = finishRequest;
     setIsReporting(true);
+    let finishFailure: { error: unknown } | null = null;
 
     try {
       const auth = getStoredAuth();
@@ -2557,9 +2726,14 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
       void scheduleNextOrder();
     } catch (error: unknown) {
       console.error('Failed to submit error report:', error);
-      await reconcileUncertainFinish(orderId, sessionId, generation, t.dispatch.noticeReportUnknown, error);
+      finishFailure = { error };
     } finally {
+      if (finishingDispatchRef.current === finishRequest) finishingDispatchRef.current = null;
+      settleFinish();
       if (componentMountedRef.current) setIsReporting(false);
+    }
+    if (finishFailure) {
+      await reconcileUncertainFinish(orderId, t.dispatch.noticeReportUnknown, finishFailure.error);
     }
   };
 
@@ -2774,7 +2948,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                 ) : autoStopReason === 'unverified' ? (
                   'Your session could not be verified. Check your connection and start work again, or sign in again.'
                 ) : (
-                  'Your work session is no longer active. Start again to resume dispatch.'
+                  t.dispatch.reasonWorkSession
                 )}
               </p>
               <div className="mt-5 flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3.5">
@@ -3600,7 +3774,7 @@ export default function OrderDispatch({ employee, onStatusChange, onSessionExpir
                         </div>
                       </div>
                     </div>
-                    <p className="text-balance text-xs font-medium text-slate-600 max-md:min-h-8 short:max-md:min-h-0 md:text-sm">{dispatchPause ? (dispatchPause.type === 'error' ? t.dispatch.pausedUnavailable : t.dispatch.pausedNoOrders) : hasScheduledDispatch ? t.dispatch.readyToAcceptOrders : t.dispatch.preparingQueue}</p>
+                    <p role="status" className="text-balance text-xs font-medium text-slate-600 max-md:min-h-8 short:max-md:min-h-0 md:text-sm">{showDispatchRecovery ? t.dispatch.recoveringDispatch : dispatchPause ? (dispatchPause.type === 'error' ? t.dispatch.pausedUnavailable : t.dispatch.pausedNoOrders) : hasScheduledDispatch ? t.dispatch.readyToAcceptOrders : t.dispatch.preparingQueue}</p>
                   </div>
                 </div>
                 <div className="-mx-5 -mb-5 flex items-center justify-center border-t border-white/70 px-4 py-3 max-md:pb-6 short:max-md:py-2 short:max-md:pb-3 md:-mx-10 md:-mb-10 md:px-10 md:py-6">
