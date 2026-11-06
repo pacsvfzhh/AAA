@@ -521,6 +521,7 @@ const en = {
     noticeStartFailed: 'Couldn\'t start work',
     noticeStopFailed: 'Couldn\'t end work',
     noticeRecoverFailed: 'Dispatch connection interrupted',
+    recoveringDispatch: 'Restoring dispatch connection…',
     noticeTimeoutCheckFailed: 'Couldn\'t check the order time limit',
     noticeAcceptUnknown: 'Order acceptance not confirmed',
     noticeCompleteUnknown: 'Completion not confirmed',

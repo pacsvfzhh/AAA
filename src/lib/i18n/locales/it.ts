@@ -63,6 +63,7 @@ const it = {
     noticeStartFailed: 'Impossibile iniziare il lavoro',
     noticeStopFailed: 'Impossibile terminare il lavoro',
     noticeRecoverFailed: 'Connessione al centro di smistamento interrotta',
+    recoveringDispatch: 'Ripristino della connessione di assegnazione…',
     noticeTimeoutCheckFailed: 'Impossibile verificare il tempo limite dell\'ordine',
     noticeAcceptUnknown: 'Accettazione dell\'ordine non confermata',
     noticeCompleteUnknown: 'Completamento non confermato',

@@ -517,6 +517,7 @@ const hi = {
     noticeStartFailed: 'काम शुरू नहीं हो सका',
     noticeStopFailed: 'काम समाप्त नहीं हो सका',
     noticeRecoverFailed: 'डिस्पैच सेंटर से कनेक्शन टूट गया',
+    recoveringDispatch: 'डिस्पैच कनेक्शन बहाल हो रहा है…',
     noticeTimeoutCheckFailed: 'ऑर्डर की समय-सीमा जाँची नहीं जा सकी',
     noticeAcceptUnknown: 'ऑर्डर स्वीकार होने की पुष्टि नहीं हुई',
     noticeCompleteUnknown: 'पूरा होने की पुष्टि नहीं हुई',

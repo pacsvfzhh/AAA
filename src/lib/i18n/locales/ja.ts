@@ -57,6 +57,7 @@ const ja = {
     noticeStartFailed: '作業を開始できませんでした',
     noticeStopFailed: '作業を終了できませんでした',
     noticeRecoverFailed: '配信センターとの接続が途切れました',
+    recoveringDispatch: '注文配信の接続を復旧しています…',
     noticeTimeoutCheckFailed: '注文の制限時間を確認できませんでした',
     noticeAcceptUnknown: '受注結果を確認できませんでした',
     noticeCompleteUnknown: '完了結果を確認できませんでした',

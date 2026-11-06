@@ -57,6 +57,7 @@ const de = {
     noticeStartFailed: 'Arbeit konnte nicht gestartet werden',
     noticeStopFailed: 'Arbeit konnte nicht beendet werden',
     noticeRecoverFailed: 'Verbindung zur Auftragszentrale unterbrochen',
+    recoveringDispatch: 'Auftragsverbindung wird wiederhergestellt…',
     noticeTimeoutCheckFailed: 'Auftragsfrist konnte nicht geprüft werden',
     noticeAcceptUnknown: 'Auftragsannahme nicht bestätigt',
     noticeCompleteUnknown: 'Abschluss nicht bestätigt',

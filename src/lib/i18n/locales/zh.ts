@@ -463,6 +463,7 @@ const zh = {
     noticeStartFailed: '无法开始工作',
     noticeStopFailed: '无法结束工作',
     noticeRecoverFailed: '与派单中心的连接中断',
+    recoveringDispatch: '正在恢复派单连接…',
     noticeTimeoutCheckFailed: '无法确认订单处理时限',
     noticeAcceptUnknown: '未能确认接单结果',
     noticeCompleteUnknown: '未能确认完成结果',

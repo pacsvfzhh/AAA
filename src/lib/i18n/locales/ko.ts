@@ -57,6 +57,7 @@ const ko = {
     noticeStartFailed: '작업을 시작할 수 없습니다',
     noticeStopFailed: '작업을 종료할 수 없습니다',
     noticeRecoverFailed: '배정 센터와의 연결이 끊겼습니다',
+    recoveringDispatch: '주문 배정 연결을 복구하는 중…',
     noticeTimeoutCheckFailed: '주문 처리 시간을 확인할 수 없습니다',
     noticeAcceptUnknown: '주문 수락 결과를 확인하지 못했습니다',
     noticeCompleteUnknown: '완료 결과를 확인하지 못했습니다',
